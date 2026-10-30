@@ -200,6 +200,33 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def process_creation_time(pid: int) -> float | None:
+    """返回 PID 当前指向进程的 Unix 创建时间；权限不足时保守返回未知。"""
+    import psutil
+    try:
+        return psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return None
+    except (psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+
+
+def process_matches(pid: int, started_at: str | None, *, alive=process_alive) -> bool:
+    """核对活 PID 是否就是任务启动时的进程，避免 PID 复用永久占锁。"""
+    if not alive(pid):
+        return False
+    if not started_at:
+        return True
+    from datetime import datetime
+    try:
+        task_started = datetime.fromisoformat(started_at.replace('Z', '+00:00')).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return True
+    created = process_creation_time(pid)
+    # 无权读取创建时间时不误回收真实任务；允许时间戳及 Win32 精度的小幅偏差。
+    return created is None or created <= task_started + 2.0
+
+
 def _process_alive_windows(pid: int) -> bool:
     """用 OpenProcess 查存活，绝不能用 `os.kill(pid, 0)`。
 

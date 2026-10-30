@@ -189,6 +189,18 @@ class TaskRunStoreTests(unittest.TestCase):
             self.assertEqual(self.store.recover_interrupted(), [])
         self.assertEqual(self.store.get(run.id).status, "running")
 
+    def test_recovery_does_not_treat_a_reused_pid_as_the_original_worker(self):
+        run = self.store.start("library-processing", trigger="manual")
+        old_start = stamp(datetime.now(timezone.utc) - timedelta(days=1))
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute("UPDATE task_run SET pid=?,started_at=?,heartbeat_at=? WHERE id=?",
+                               (os.getpid() + 1, old_start, old_start, run.id))
+        created_after_task = datetime.now(timezone.utc).timestamp()
+        with mock.patch("peach.task_runs.process_alive", return_value=True), \
+                mock.patch("peach.jobs.process_creation_time", return_value=created_after_task):
+            self.assertEqual(self.store.recover_interrupted(), [run.id])
+        self.assertEqual(self.store.get(run.id).status, "interrupted")
+
     def test_recovery_of_another_machine_waits_for_the_lease_to_expire(self):
         run = self.store.start("demo", trigger="manual")
         stale = stamp(datetime.now(timezone.utc) - timedelta(seconds=30))

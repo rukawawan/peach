@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
-from .jobs import TaskRunConflict, process_alive
+from .jobs import TaskRunConflict, process_alive, process_matches
 from .repository import LedgerDatabase
 
 __all__ = [
@@ -665,7 +665,7 @@ class TaskRunStore:
                     continue
             local = run.host == self.host
             alive = (local and run.pid is not None and run.pid != os.getpid()
-                     and process_alive(run.pid))
+                     and process_matches(run.pid, run.started_at, alive=process_alive))
             beat = _parse(run.heartbeat_at) or _parse(run.started_at)
             expired = beat is None or beat < deadline
             if alive or (not local and not expired):

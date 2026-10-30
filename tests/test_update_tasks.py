@@ -8,11 +8,12 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from peach import desktop_installer, job_recovery, settings_file, update_tasks
 from peach.jobs import BackgroundJob
-from peach.task_runs import TaskRunStore
+from peach.task_runs import TaskRunStore, stamp
 from support.ledger import fresh_ledger
 
 
@@ -65,6 +66,24 @@ class UpdateTaskTests(unittest.TestCase):
         self.assertNotIn(run.id, self.store.recover_interrupted())
         pending = self.store.get(run.id)
         self.assertEqual((pending.status, pending.progress_current, pending.progress_total), ('pending', 3, 5))
+
+    def test_recovery_resumes_when_saved_pid_was_reused_by_another_process(self):
+        run = self.store.start('library-processing', trigger='manual')
+        old_start = stamp(datetime.now(timezone.utc) - timedelta(days=1))
+        with self.store.database.write_transaction(notify=False) as connection:
+            connection.execute('UPDATE task_run SET started_at=?,heartbeat_at=? WHERE id=?',
+                               (old_start, old_start, run.id))
+        job_recovery.save(self.db, 'library-processing', 'old-job', {'stage': 'collect'}, run_id=run.id)
+        path = update_tasks.state_for(self.db).parent / 'job-recovery/library-processing.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        data['pid'] = os.getpid()
+        path.write_text(json.dumps(data), encoding='utf-8')
+        observed = []
+        handler = {'library-processing': lambda request: (observed.append(request), {'resumed': True})[1]}
+        with patch('peach.jobs.process_creation_time', return_value=datetime.now(timezone.utc).timestamp()):
+            self.assertEqual(job_recovery.resume(self.db, handler), ['library-processing'])
+        self.assertEqual(observed, [{'stage': 'collect'}])
+        self.assertEqual(self.store.get(run.id).status, 'running')
 
     def test_terminal_checkpoint_is_readable_by_a_new_job_instance(self):
         first = BackgroundJob('resume-test', runs=self.store, task_key='link-check')

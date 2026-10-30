@@ -21,6 +21,20 @@ def _path(db: Path, key: str) -> Path:
     return state_for(db).parent / "job-recovery" / (key + ".json")
 
 
+def _worker_alive(db: Path, data: dict) -> bool:
+    from .jobs import process_alive, process_matches
+    pid = data.get('pid')
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    run_id = data.get('run_id')
+    if isinstance(run_id, int):
+        from .task_runs import TaskRunStore
+        run = TaskRunStore(db).get(run_id)
+        if run is not None and run.pid == pid:
+            return process_matches(pid, run.started_at)
+    return process_alive(pid)
+
+
 def read(db: Path, key: str) -> dict:
     try:
         data = json.loads(_path(db, key).read_text(encoding="utf-8"))
@@ -84,14 +98,12 @@ def request_pause(db: Path) -> None:
 
 
 def reconcile_paused(db: Path) -> None:
-    from .jobs import process_alive
     from .task_runs import TaskRunStore
     with _mutex(state_for(db)):
         for path in (state_for(db).parent / 'job-recovery').glob('*.json'):
             data = read(db, path.stem)
-            pid = data.get('pid')
             if (data.get('status') == 'active' and data.get('pause_requested')
-                    and isinstance(pid, int) and not process_alive(pid)):
+                    and not _worker_alive(db, data)):
                 if data.get('run_id') is not None:
                     TaskRunStore(db).suspend(data['run_id'])
                 waiting(db, path.stem, data['job_id'])
@@ -99,7 +111,6 @@ def reconcile_paused(db: Path) -> None:
 
 def resume(db: Path, handlers: dict) -> list[str]:
     """领取与起跑在同一把锁内；失败保留参数但不循环重试。"""
-    from .jobs import process_alive
     resumed = []
     for key, handler in handlers.items():
         try:
@@ -111,10 +122,10 @@ def resume(db: Path, handlers: dict) -> list[str]:
                     if user_paused(db, data.get('job_id')):
                         continue
                 if (data.get("status") != "active" or not isinstance(data.get("request"), dict)
-                        or (isinstance(pid, int) and pid != os.getpid() and process_alive(pid))):
+                        or _worker_alive(db, data)):
                     continue
                 # 当前进程自己的新任务不属于启动恢复。
-                if pid == os.getpid():
+                if pid == os.getpid() and not isinstance(data.get('run_id'), int):
                     continue
                 if key == 'library-processing' and user_cancelled(db, data.get('job_id')):
                     if data.get('run_id') is not None:
