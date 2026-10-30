@@ -78,12 +78,13 @@ class UpdateTaskTests(unittest.TestCase):
         data = json.loads(path.read_text(encoding='utf-8'))
         data['pid'] = os.getpid()
         path.write_text(json.dumps(data), encoding='utf-8')
+        self.store.suspend(run.id)
         observed = []
         handler = {'library-processing': lambda request: (observed.append(request), {'resumed': True})[1]}
         with patch('peach.jobs.process_creation_time', return_value=datetime.now(timezone.utc).timestamp()):
             self.assertEqual(job_recovery.resume(self.db, handler), ['library-processing'])
         self.assertEqual(observed, [{'stage': 'collect'}])
-        self.assertEqual(self.store.get(run.id).status, 'running')
+        self.assertEqual(self.store.get(run.id).status, 'pending')
 
     def test_terminal_checkpoint_is_readable_by_a_new_job_instance(self):
         first = BackgroundJob('resume-test', runs=self.store, task_key='link-check')

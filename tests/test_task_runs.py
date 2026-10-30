@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from peach.migrations import upgrade
+from peach.jobs import process_matches
 from peach.repository import LedgerDatabase
 from peach.task_runs import (
     TaskRunConflict,
@@ -22,6 +23,24 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
 
 class TaskRunStoreTests(unittest.TestCase):
+    def test_process_identity_preserves_owners_when_creation_time_is_unknown(self):
+        started = stamp(datetime.now(timezone.utc))
+        with mock.patch('peach.jobs.process_creation_time', return_value=None):
+            self.assertTrue(process_matches(os.getpid(), started, alive=lambda _: True))
+            self.assertFalse(process_matches(os.getpid(), started, alive=lambda _: False))
+
+    def test_a_resumed_worker_with_current_heartbeat_is_not_reclaimed(self):
+        run = self.store.start('library-processing', trigger='manual')
+        earlier = datetime.now(timezone.utc) - timedelta(days=1)
+        created = datetime.now(timezone.utc).timestamp() - 30
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute('UPDATE task_run SET pid=?,started_at=? WHERE id=?',
+                               (os.getpid() + 1, stamp(earlier), run.id))
+        with mock.patch('peach.task_runs.process_alive', return_value=True), \
+                mock.patch('peach.jobs.process_creation_time', return_value=created):
+            self.assertEqual(self.store.recover_interrupted(), [])
+        self.assertEqual(self.store.get(run.id).status, 'running')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

@@ -73,6 +73,7 @@ peach = "peach.error_reporting:cli_main"
 peach-tray = "peach.error_reporting:tray_main"
 
 [project.optional-dependencies]
+# 开发工具复用运行依赖 psutil 查询工作树进程。
 dev = [
     "filelock==4.2.8",
     "httpx2==2.16.0",

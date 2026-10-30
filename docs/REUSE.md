@@ -1148,6 +1148,10 @@ Python 源文件纳入 `src/peach/library_sharing.py` 与 `src/peach/library_pro
 
 普通 Toast 与扫描任务卡共用 Agent Progress 外框，16px 半径由通知栈内的既有 token 解析，细边框与接触阴影分别复用 `border-button-default`、`elevation-xs`，不改变内容排版。浏览器回归核对桌面、手机和明暗主题下的外框一致性，并以同一任务、同一内容回放外框基线生成对比图。
 
+## 任务恢复的进程身份
+
+任务恢复复用 psutil 7.2.2（BSD-3-Clause，Windows/macOS/Linux）查询进程创建时间，并将既有开发依赖提升为固定运行依赖；不自行解析系统进程表。PID 存活且创建时间不晚于任务最近心跳时保留所有者，已复用 PID 允许恢复原任务；暂停后的 PID 为零时仍按恢复记录核对。创建时间因权限未取得时保守保留。临时账本回归覆盖失效 PID、复用 PID、当前心跳、安装暂停及任务身份保留，不直接清理真实任务记录。
+
 ## 本地附属媒体识别
 
 附属媒体识别复用 `catalog_rules.local_extra_type`、`is_local_extra` 与现有 `scan.is_sidecar`，兼容 Plex、Kodi、Emby、Jellyfin 的显式文件标记和专用目录。规则来源、完整标记及边界见[附属媒体命名证据](reference-snapshots/local-trailer-evidence.md)。

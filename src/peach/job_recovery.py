@@ -30,8 +30,8 @@ def _worker_alive(db: Path, data: dict) -> bool:
     if isinstance(run_id, int):
         from .task_runs import TaskRunStore
         run = TaskRunStore(db).get(run_id)
-        if run is not None and run.pid == pid:
-            return process_matches(pid, run.started_at)
+        if run is not None and (run.pid == pid or (run.pid == 0 and run.status == 'pending')):
+            return process_matches(pid, run.heartbeat_at or run.started_at)
     return process_alive(pid)
 
 
