@@ -80,11 +80,18 @@ class UpdateTaskTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding='utf-8')
         self.store.suspend(run.id)
         observed = []
-        handler = {'library-processing': lambda request: (observed.append(request), {'resumed': True})[1]}
+        job = BackgroundJob('pid-reuse-test', runs=self.store, task_key='library-processing')
+        def finish(identity):
+            observed.append(job.snapshot())
+            job.update(identity, status='complete')
+        handler = {'library-processing': lambda request: job.start(finish, restart=True, recovery=request)}
         with patch('peach.jobs.process_creation_time', return_value=datetime.now(timezone.utc).timestamp()):
             self.assertEqual(job_recovery.resume(self.db, handler), ['library-processing'])
-        self.assertEqual(observed, [{'stage': 'collect'}])
-        self.assertEqual(self.store.get(run.id).status, 'pending')
+        job.thread.join(5)
+        self.assertFalse(job.thread.is_alive())
+        self.assertEqual((observed[0]['job_id'], observed[0]['run_id']), ('old-job', run.id))
+        self.assertEqual(self.store.get(run.id).status, 'succeeded')
+        self.assertIsNone(self.store.blocking('library-processing'))
 
     def test_terminal_checkpoint_is_readable_by_a_new_job_instance(self):
         first = BackgroundJob('resume-test', runs=self.store, task_key='link-check')
