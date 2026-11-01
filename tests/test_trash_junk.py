@@ -138,6 +138,15 @@ class TrashJunkTests(unittest.TestCase):
         candidates = self.trash_junk.select_candidates(self.db_path, min_score=40)
         self.assertEqual([row["id"] for row in candidates], [3])
 
+    def test_site_watermarked_cover_with_a_release_code_is_not_promotion(self):
+        self.add(1, "115", r"B:\作品\avmans.com-JUL773C.jpg", "image", 202000)
+        self.add(2, "115", r"B:\作品\aavv36.xyz@CESD629.jpg", "image", 202000)
+        self.add(3, "115", r"B:\bbsxv.xyz-DPMX-017\bbsxv.xyz-DPMX017C.jpg", "image", 201000)
+        self.add(4, "115", r"B:\作品\bbsxv.xyz.jpg", "image", 20000)
+        self.add(5, "115", r"B:\作品\kpkp69.com-JUL769C-扫码下载.jpg", "image", 20000)
+        candidates = self.trash_junk.select_candidates(self.db_path, min_score=40)
+        self.assertEqual(sorted(row["id"] for row in candidates), [4, 5])
+
     def reviewed_file(self, asset_id=1, suffix=".txt"):
         path = self.root / f"广告{asset_id}{suffix}"
         path.write_bytes(b"promotion")

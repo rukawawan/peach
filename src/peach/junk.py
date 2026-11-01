@@ -442,6 +442,20 @@ def _judgement_inputs(database, *, asset_ids, roots):
     return rows, longer, frozenset(dismissed_ids), folder_assets, folder_videos, short_attachments
 
 
+def _promo_shape(medium, stem: str, name: str) -> tuple[bool, bool]:
+    """名字带不带推广形态，以及它是不是套了站名水印的作品配图。
+
+    下载站给封面套的站名水印（`avmans.com-JUL773C.jpg`、`aavv36.xyz@CESD629.jpg`）
+    剥掉域名后剩下的是一个番号：这张图是那部片子的封面或截图，不是推广卡，
+    所以不算推广形态。名字里另有推广套话（扫码、最新地址）时照常计分。
+    """
+    promo = bool(PROMO_PHRASE.search(stem) or PROMO_DOMAIN.search(stem))
+    named_release = (medium != "video" and promo
+                     and not PROMO_PHRASE.search(PROMO_DOMAIN.sub("", stem))
+                     and bool(release_code_from_filename(name)))
+    return promo and not named_release, named_release
+
+
 def scored_candidates(database, *, asset_ids=None, roots=None) -> tuple[list[dict], frozenset[int]]:
     """候选按嫌疑分从高到低排序，连同用户已确认不是垃圾的 id。"""
     rows, longer, dismissed_ids, folder_assets, folder_videos, short_attachments = _judgement_inputs(
@@ -461,7 +475,7 @@ def scored_candidates(database, *, asset_ids=None, roots=None) -> tuple[list[dic
             else (d.get("medium") if d.get("medium") in JUNK_KINDS else "other")
         )
         residue = promo_residue(nm)
-        promo = bool(PROMO_PHRASE.search(nm) or PROMO_DOMAIN.search(nm))
+        promo, named_release = _promo_shape(d.get("medium"), nm, name)
         page_archive = suffix in PAGE_ARCHIVE_SUFFIXES
         if suffix in INTERNET_SHORTCUT_SUFFIXES:
             s += 60; why.append("网址快捷方式")
@@ -496,6 +510,7 @@ def scored_candidates(database, *, asset_ids=None, roots=None) -> tuple[list[dic
         # 名单里——两条豁免对视频都会自动成立，`AD_DIRPACK` 这条判据就没了。
         self_evident = d.get("medium") != "video" and (
             is_jav_code(d.get("code"))
+            or named_release
             or (d.get("size") or 0) >= CONTENT_BYTES
             or has_sibling_original(nm, folder_videos.get(folder, frozenset()))
         )
