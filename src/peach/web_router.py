@@ -21,7 +21,7 @@ from .web_activity import (
     w_quality_goal,
     w_watch_later,
 )
-from .web_batch import q_ads, q_duplicates, w_batch, w_empty_trash
+from .web_batch import q_ads, q_duplicates, w_batch, w_empty_trash, w_junk_bulk
 from .web_performer_delete import q_performer_delete_candidates, q_performer_delete_plan, w_performer_delete
 from .web_tags import q_tag_management, w_tag_management, w_tag_preview
 from .taste_history import history_source_count
@@ -334,6 +334,30 @@ def _get_post_setup_tutorial(contract, _args):
     return contract.cached("post-setup-tutorial", lambda: _post_setup_tutorial_progress(contract))
 
 
+def _get_western_scrape(contract, _args):
+    from . import western_tpdb
+    return western_tpdb.summary(contract)
+
+
+def _post_western_scrape(contract, body):
+    """欧美资料刮削：保存 Token、检查 Token、开始或取消一轮（`western_tpdb`）。"""
+    from . import western_tpdb
+    action = str(body.get("action") or "")
+    if action == "token":
+        token = str(body.get("token") or "").strip()
+        if token:
+            western_tpdb.TpdbClient(token).check()
+        western_tpdb.save_token(token)
+        return western_tpdb.summary(contract)
+    if action == "start":
+        western_tpdb.JOB.start(contract, retry_missing=bool(body.get("retry_missing")))
+        return western_tpdb.summary(contract)
+    if action == "cancel":
+        western_tpdb.JOB.cancel()
+        return western_tpdb.summary(contract)
+    raise ValueError("unsupported western scrape action")
+
+
 def _post_empty_trash(contract, _body):
     return w_empty_trash(contract)
 
@@ -404,6 +428,7 @@ GET_HANDLERS = {
     "/api/stats": _get_stats,
     "/api/tops": _get_tops,
     "/api/ads": _get_ads,
+    "/api/western-scrape": _get_western_scrape,
     "/api/related": _get_related,
     "/api/custom-metadata": q_custom_metadata,
     "/api/playlists": q_playlists,
@@ -462,6 +487,8 @@ POST_HANDLERS = {
     "/api/wants": w_wants,
     "/api/item-tag": w_item_tag,
     "/api/batch": w_batch,
+    "/api/ads/bulk": w_junk_bulk,
+    "/api/western-scrape": _post_western_scrape,
     "/api/search-history": w_search_history,
     "/api/taste/refresh": w_taste_refresh,
     "/api/taste/source": w_taste_source,

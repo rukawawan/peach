@@ -13,6 +13,7 @@ import { OrphanRecordsCard } from './orphan-records-card';
 import { PerformerDeleteCard } from './performer-delete-card';
 import { hasResourceRoots } from './resource-sync';
 import { ResourceSyncCard } from './resource-sync-card';
+import { WesternScrapeCard } from './western-scrape-card';
 
 function ResourceSyncPage({ toast }: Pick<DataCleanupProps, 'toast'>) {
   const sources = useQuery({ queryKey: MEDIA_SOURCES_KEY, queryFn: ({ signal }) => fetchMediaSources(signal) });
@@ -37,6 +38,7 @@ export function DataCleanupToolPage({ tool, toast, failure }: {
     case 'media-repair': content = <MediaRepairCard toast={notify} />; break;
     case 'links': content = <LinkManager />; break;
     case 'batch-delete': content = <PerformerDeleteCard toast={notify} />; break;
+    case 'western-scrape': content = <WesternScrapeCard toast={notify} />; break;
   }
   return <Page>{content}</Page>;
 }

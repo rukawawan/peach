@@ -10,6 +10,8 @@ export const CLEANUP_TOOLS = [
     description: '处理播放卡顿或打不开的视频，修复时间戳表和索引。' },
   { key: 'links', path: '/data-cleanup/links', title: '链接管理', icon: 'link',
     description: '检查官网、社交账号和资料站链接，复核并清理失效地址。' },
+  { key: 'western-scrape', path: '/data-cleanup/western-scrape', title: '欧美资料刮削', icon: 'globe',
+    description: '用 ThePornDB 为欧美作品补标题、厂牌、演员、标签和封面。' },
   { key: 'batch-delete', path: '/data-cleanup/batch-delete', title: '批量删除', icon: 'trash',
     description: '按女优勾选并永久删除关联影片，执行前确认范围与影响。' },
 ] as const;
