@@ -17,13 +17,13 @@ export const WESTERN_SCRAPE_KEY = ['western-scrape'] as const;
 interface WesternJob {
   status: 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   checked?: number; total?: number; matched?: number; missing?: number; failed?: number; covers?: number;
-  current?: string; error?: string;
+  cover_failed?: number; cover_error?: string; current?: string; error?: string;
 }
 
 export interface WesternScrapeState {
   configured: boolean;
   candidates: number;
-  done: { matched?: number; missing?: number; error?: number };
+  done: { matched?: number; missing?: number; error?: number; no_cover?: number };
   job: WesternJob;
 }
 
@@ -68,7 +68,8 @@ export function WesternScrapeCard({ toast }: { toast(message: string): void }) {
       {query.isError ? <Note tone="error" title="读取状态失败">{errorMessage(query.error)}</Note> : null}
       {data ? <p className="text-body-regular text-text-primary">
         {`待处理范围：${n(data.candidates)} 部 · 已匹配 ${n(data.done.matched)} · 没找到 ${n(data.done.missing)}`
-          + (data.done.error ? ` · 出错 ${n(data.done.error)}` : '')}
+          + (data.done.error ? ` · 出错 ${n(data.done.error)}` : '')
+          + (data.done.no_cover ? ` · 已匹配但缺封面 ${n(data.done.no_cover)}（点开始刮削会补）` : '')}
       </p> : null}
 
       <div className="flex flex-col gap-2">
@@ -101,8 +102,11 @@ export function WesternScrapeCard({ toast }: { toast(message: string): void }) {
       {job && job.status !== 'idle' ? (
         <Note tone={job.status === 'failed' ? 'error' : job.status === 'running' ? 'info' : 'success'}
           title={{ running: '正在刮削', succeeded: '这一轮已完成', failed: '这一轮中断了', cancelled: '已停止', idle: '' }[job.status]}>
-          {`进度 ${n(job.checked)} / ${n(job.total)} · 匹配 ${n(job.matched)} · 没找到 ${n(job.missing)} · 封面 ${n(job.covers)}`
-            + (job.failed ? ` · 出错 ${n(job.failed)}` : '')}
+          {job.status !== 'running' && !job.total ? '没有新的需要查的作品，也没有要补的封面。'
+            : `进度 ${n(job.checked)} / ${n(job.total)} · 匹配 ${n(job.matched)} · 没找到 ${n(job.missing)} · 封面 ${n(job.covers)}`
+            + (job.failed ? ` · 出错 ${n(job.failed)}` : '')
+            + (job.cover_failed ? ` · 封面失败 ${n(job.cover_failed)}` : '')}
+          {job.cover_error ? <><br />{`最近一次封面失败：${job.cover_error}`}</> : null}
           {job.current ? <><br />{`当前：${job.current}`}</> : null}
           {job.error ? <><br />{job.error}</> : null}
         </Note>

@@ -90,5 +90,30 @@ class ClientTests(unittest.TestCase):
         self.assertIn('hashType=OSHASH', calls[0].url)
 
 
+class CoverTests(unittest.TestCase):
+    def test_refused_cover_download_is_reported_with_a_user_agent(self):
+        calls = []
+
+        def transport(request, timeout, max_bytes):
+            calls.append(request)
+            return HttpResponse(403, {}, b'')
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(tpdb.TpdbError, 'HTTP 403'):
+                tpdb.install_scene_cover(Path(folder), 7, scene(image='https://cdn.example.com/a.jpg'), transport)
+        self.assertIn('User-Agent', calls[0].headers)
+
+    def test_cover_failure_is_kept_on_the_record_and_counted(self):
+        job = tpdb.WesternScrapeJob()
+        job.status = {'cover_failed': 0}
+        state = {'7': {'status': 'matched', 'scene_id': 'abc'}}
+        contract = type('Contract', (), {})()
+        with tempfile.TemporaryDirectory() as folder:
+            contract.cover_root = Path(folder)
+            job._cover(contract, 7, scene(image='https://cdn.example.com/a.jpg'),
+                       lambda *args: HttpResponse(404, {}, b''), state)
+        self.assertIn('HTTP 404', state['7']['cover_error'])
+        self.assertEqual(job.status['cover_failed'], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

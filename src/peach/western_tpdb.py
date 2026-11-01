@@ -40,6 +40,7 @@ TAG_SOURCE = 'auto:theporndb'
 TOKEN_FILE = 'theporndb.json'
 STATE_FILE = 'western-tpdb.json'
 REQUEST_INTERVAL = 1.2
+COVER_MAX_BYTES = 16 * 1024 * 1024
 TIMEOUT = 30
 MAX_BYTES = 8 * 1024 * 1024
 #: 欧美片站文件名：至少两个连字符或下划线连起来的拉丁词（与 `metadata_routes._WESTERN_SLUG` 同一把尺）。
@@ -181,6 +182,10 @@ class TpdbClient:
     def by_hash(self, value: str) -> list[dict]:
         return _scenes(self.get(f'/scenes?hash={quote(value)}&hashType=OSHASH'))
 
+    def scene(self, scene_id: str) -> dict | None:
+        found = _scenes(self.get(f'/scenes/{quote(str(scene_id))}'))
+        return found[0] if found else None
+
     def by_name(self, text: str) -> list[dict]:
         return _scenes(self.get(f'/scenes?parse={quote(text)}&limit=10'))
 
@@ -305,20 +310,33 @@ def apply_scene(connection, asset_id: int, scene: dict, *, now: str) -> dict:
             'performers': performers, 'tags': len(tags)}
 
 
-def install_scene_cover(cover_root: Path, asset_id: int, scene: dict, transport) -> bool:
-    """这部作品还没有封面时装 ThePornDB 的剧照；已有封面原样保留。"""
-    from .avatar_picker import accept_image, fetch_image
-    from .cover_artwork import install_cover
+def cover_target(cover_root: Path, asset_id: int) -> Path:
     from .western_artwork import artwork_key
-    target = Path(cover_root) / f'{artwork_key(asset_id, None)}.jpg'
+    return Path(cover_root) / f'{artwork_key(asset_id, None)}.jpg'
+
+
+def install_scene_cover(cover_root: Path, asset_id: int, scene: dict, transport) -> bool:
+    """这部作品还没有封面时装 ThePornDB 的剧照；已有封面原样保留。取图或安装失败抛 `TpdbError`。"""
+    from .avatar_picker import PickerError, accept_image
+    from .cover_artwork import install_cover
+    target = cover_target(cover_root, asset_id)
     url = cover_url(scene)
     if target.exists() or not url:
         return False
-    body = fetch_image(transport, url)
-    inspected = accept_image(body)
-    install_cover(target, '', body, (inspected.width, inspected.height),
-                  evidence={'provider': PROVIDER, 'source': TAG_SOURCE, 'source_url': url,
-                            'scene_id': scene.get('id'), 'asset_id': asset_id})
+    try:
+        response = transport(HttpRequest('GET', url, {'Accept': 'image/*', 'User-Agent': USER_AGENT}),
+                             TIMEOUT, COVER_MAX_BYTES)
+    except Exception as error:  # noqa: BLE001 — 网络层什么都可能抛
+        raise TpdbError(f'封面下载失败：{error}') from error
+    if response is None or response.status != 200:
+        raise TpdbError(f'封面下载失败：HTTP {getattr(response, "status", "无响应")}')
+    try:
+        inspected = accept_image(response.body)
+        install_cover(target, target.stem, response.body, (inspected.width, inspected.height),
+                      evidence={'provider': PROVIDER, 'source': TAG_SOURCE, 'source_url': url,
+                                'scene_id': scene.get('id'), 'asset_id': asset_id})
+    except (PickerError, OSError, ValueError) as error:
+        raise TpdbError(f'封面安装失败：{error}') from error
     return True
 
 
@@ -354,7 +372,8 @@ class WesternScrapeJob:
                 raise ValueError('还没有填写 ThePornDB 的 API Token')
             self._cancel.clear()
             self.status = {'status': 'running', 'checked': 0, 'total': 0, 'matched': 0, 'missing': 0,
-                           'failed': 0, 'covers': 0, 'current': '', 'error': '',
+                           'failed': 0, 'covers': 0, 'cover_failed': 0, 'cover_error': '',
+                           'current': '', 'error': '',
                            'started_at': datetime.now(timezone.utc).isoformat()}
             self._thread = threading.Thread(
                 target=self._run, name='western-tpdb', daemon=True,
@@ -373,7 +392,14 @@ class WesternScrapeJob:
                 state = {key: value for key, value in state.items() if value.get('status') == 'matched'}
             with contract.read_connection() as connection:
                 pending = [item for item in candidates(connection) if str(item['id']) not in state]
-            self._set(total=len(pending))
+            # 已匹配却没装上封面的，按记下的场景号补一次封面，不重新判定身份。
+            uncovered = [int(key) for key, value in state.items()
+                         if value.get('status') == 'matched' and value.get('scene_id')
+                         and not cover_target(contract.cover_root, int(key)).exists()]
+            self._set(total=len(pending) + len(uncovered))
+            if not self._backfill_covers(contract, client, transport, state, uncovered, state_root):
+                return
+            offset = len(uncovered)
             for index, item in enumerate(pending, 1):
                 if self._cancel.is_set():
                     self._set(status='cancelled')
@@ -394,16 +420,12 @@ class WesternScrapeJob:
                 else:
                     with contract.write_transaction() as connection:
                         apply_scene(connection, int(item['id']), scene, now=now)
-                    try:
-                        if install_scene_cover(contract.cover_root, int(item['id']), scene, transport):
-                            self._bump('covers')
-                    except Exception:  # noqa: BLE001 — 封面失败不影响资料
-                        pass
-                    contract.cache_bust()
                     state[str(item['id'])] = {'status': 'matched', 'via': how, 'scene_id': scene.get('id'),
                                               'title': scene.get('title'), 'at': now}
+                    self._cover(contract, int(item['id']), scene, transport, state)
+                    contract.cache_bust()
                     self._bump('matched')
-                self._set(checked=index)
+                self._set(checked=offset + index)
                 if index % 10 == 0:
                     save_state(state, state_root)
             self._set(status='succeeded', current='')
@@ -418,6 +440,42 @@ class WesternScrapeJob:
             if own_transport and hasattr(transport, 'close'):
                 transport.close()
 
+    def _backfill_covers(self, contract, client, transport, state, uncovered, state_root) -> bool:
+        """给已匹配、缺封面的作品补封面；被取消时返回 False。"""
+        for index, asset_id in enumerate(uncovered, 1):
+            if self._cancel.is_set():
+                self._set(status='cancelled')
+                return False
+            record = state[str(asset_id)]
+            self._set(current=f'补封面：{record.get("title") or asset_id}')
+            try:
+                scene = client.scene(record['scene_id'])
+            except TpdbError as error:
+                if 'Token' in str(error) or '频繁' in str(error):
+                    raise
+                record['cover_error'] = str(error)
+                self._bump('cover_failed')
+                scene = None
+            if scene is not None:
+                self._cover(contract, asset_id, scene, transport, state)
+            self._set(checked=index)
+        if uncovered:
+            contract.cache_bust()
+            save_state(state, state_root)
+        return True
+
+    def _cover(self, contract, asset_id: int, scene: dict, transport, state: dict) -> None:
+        """装封面；失败记进这部作品的状态和本轮计数，资料照样算匹配。"""
+        record = state.setdefault(str(asset_id), {})
+        try:
+            if install_scene_cover(contract.cover_root, asset_id, scene, transport):
+                self._bump('covers')
+            record.pop('cover_error', None)
+        except TpdbError as error:
+            record['cover_error'] = str(error)
+            self._bump('cover_failed')
+            self._set(cover_error=str(error))
+
     def _bump(self, key: str) -> None:
         with self._lock:
             self.status[key] = int(self.status.get(key) or 0) + 1
@@ -430,8 +488,11 @@ def summary(contract, *, secrets_root: Path = SECRETS_DIR, state_root: Path = ST
     state = load_state(state_root)
     with contract.read_connection() as connection:
         total = len(candidates(connection))
-    counts = {'matched': 0, 'missing': 0, 'error': 0}
-    for value in state.values():
+    counts = {'matched': 0, 'missing': 0, 'error': 0, 'no_cover': 0}
+    for key, value in state.items():
         counts[value.get('status', 'error')] = counts.get(value.get('status', 'error'), 0) + 1
+        if (value.get('status') == 'matched' and key.isdigit()
+                and not cover_target(contract.cover_root, int(key)).exists()):
+            counts['no_cover'] += 1
     return {'configured': bool(read_token(secrets_root)), 'candidates': total,
             'done': counts, 'job': JOB.snapshot()}
