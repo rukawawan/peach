@@ -1,5 +1,6 @@
 /* Peach 播放会话：Video.js 10 的媒体、原生事件与自有控制条共用同一枚 video。 */
 import { randomId } from '../core/random-id';
+import { rememberVolume } from './volume-memory';
 import type { PlayerEvents, PlayerSource, QualityLevelList, VideojsFactory, VjsPlayer } from './types';
 
 interface HlsEngine {
@@ -57,6 +58,7 @@ export const createV10Player: VideojsFactory = (video, options) => {
   const events = new EventTarget();
   const cleanup = new AbortController();
   const signal = cleanup.signal;
+  rememberVolume(video, signal);
   let disposed = false, sourceGeneration = 0, playGeneration = 0, expectedDuration = 0, source: PlayerSource = { src: '', type: '' }, failure: unknown = null;
   let idle: ReturnType<typeof setTimeout> | undefined;
   const active = () => {
