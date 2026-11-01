@@ -617,6 +617,67 @@ def w_batch(contract: WebContract, body):
         raise
 
 
+JUNK_BULK_OPERATIONS = {"dispose": "垃圾文件全部移入回收站", "dismiss-junk": "垃圾文件全部标为不是垃圾"}
+JUNK_BULK_CHUNK = 500
+
+
+def w_junk_bulk(contract: WebContract, body):
+    """对垃圾文件当前视图（待判断、可按类）里的全部条目一次处置，不受 `w_batch` 的 200 条上限。
+
+    条目由服务端按与 `q_ads` 相同的口径重算，客户端只给分类和它看到的总数：总数对不上说明
+    队列已经变了，整批拒绝，让页面重读后再确认。移入回收站可在回收站还原，不动磁盘文件。
+    """
+    operation = body.get("operation")
+    if operation not in JUNK_BULK_OPERATIONS:
+        raise ValueError("unsupported junk bulk operation")
+    kind = str(body.get("kind") or "").strip().casefold()
+    if kind and kind not in JUNK_KINDS:
+        raise ValueError("invalid junk kind")
+    expected = body.get("expected_total")
+    out, dismissed_ids = contract.cached_until_changed("junk-scored", lambda: _scored_junk(contract))
+    ids = [item["id"] for item in out
+           if item["id"] not in dismissed_ids and (not kind or item["junk_kind"] == kind)]
+    if expected is not None and int(expected) != len(ids):
+        raise ValueError(f"垃圾文件队列已变化（现在 {len(ids)} 条，页面上是 {int(expected)} 条），请刷新页面后再试")
+    if not ids:
+        return {"ok": True, "operation": operation, "changed": 0}
+    contract.cache_bust()
+    run = contract.task_runs.start("batch", trigger="manual", total=len(ids), label=JUNK_BULK_OPERATIONS[operation])
+    handle = TaskRunHandle(contract.task_runs, run.id if run else None)
+    changed = 0
+    try:
+        with contract.write_transaction() as connection:
+            now = time.time()
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+            for start in range(0, len(ids), JUNK_BULK_CHUNK):
+                chunk = ids[start:start + JUNK_BULK_CHUNK]
+                marks = ",".join("?" * len(chunk))
+                # 只处置仍在库、可扫描的物理资产；期间已进回收站或已消失的跳过，不算失败。
+                eligible = [row["id"] for row in connection.execute(
+                    f"SELECT id,location,disposal FROM asset WHERE id IN ({marks})", chunk).fetchall()
+                    if row["disposal"] is None and row["location"] in SCANNABLE_LOCATIONS]
+                if not eligible:
+                    continue
+                marks = ",".join("?" * len(eligible))
+                if operation == "dispose":
+                    connection.execute(
+                        f"UPDATE asset SET disposal='trash',disposal_reason='junk',feedback_at=? WHERE id IN ({marks})",
+                        [now, *eligible])
+                else:
+                    connection.executemany(
+                        "INSERT INTO review_decision(category,item_key,status,note,updated_at) "
+                        "VALUES('junk_file',?,'rejected','用户确认不是垃圾',?) "
+                        "ON CONFLICT(category,item_key) DO UPDATE SET "
+                        "status='rejected',note=excluded.note,updated_at=excluded.updated_at",
+                        [(str(asset_id), stamp) for asset_id in eligible])
+                changed += len(eligible)
+    except BaseException as error:
+        handle.finish("failed", error=f"{type(error).__name__}: {error}")
+        raise
+    handle.finish("succeeded", summary={"operation": operation, "changed": changed})
+    return {"ok": True, "operation": operation, "changed": changed}
+
+
 def _add_large_short_copy_cluster(items: list[dict], clusters: list[list[dict]]):
     """把同番号的大体积短版本并到完整版所在组，返回这个组。"""
     claimed = {item["id"] for cluster in clusters for item in cluster}

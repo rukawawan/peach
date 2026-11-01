@@ -7,8 +7,10 @@
  * 行高照旧，数字到货时整块不改高度。`flush` 去掉块下方的间距：落在一行自己排间距的容器里时
  * （垃圾文件的计数行、`Page` 自己排间距的高清版），间距归那一层。壳铺的首屏骨架
  * （`src/island-skeleton.ts` 的 `islandSummary`）抄的是这里等待态的类名，改这里要一起改那边。 */
-export function CollectionSummary({ label, figure, detail = '', pending = false, flush = false }: {
-  label: string; figure: string; detail?: string; pending?: boolean; flush?: boolean;
+import type { ReactNode } from 'react';
+
+export function CollectionSummary({ label, figure, detail = '', pending = false, flush = false, actions = null }: {
+  label: string; figure: string; detail?: string; pending?: boolean; flush?: boolean; actions?: ReactNode;
 }) {
   return (
     <div data-collection-summary=""
@@ -24,6 +26,7 @@ export function CollectionSummary({ label, figure, detail = '', pending = false,
         </strong>
       </div>
       {detail ? <p className="text-body-regular text-text-secondary">{detail}</p> : null}
+      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
   );
 }

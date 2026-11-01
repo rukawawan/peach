@@ -12,7 +12,12 @@
  * 普通左键交给壳，由它收起多选、改地址并重读。计数为 0 的那一类整枚徽标不画。 */
 import { useRef, type MouseEvent } from 'react';
 
+import { confirmModal } from '@peach/legacy/ui';
+import { Button } from '@/components/base/buttons/button';
+
+import { apiSend } from '../../api';
 import { JUNK_KIND_OPTIONS, junkPath, junkSummaryLabel, junkViewLink } from '../../junk-queue';
+import { queryClient } from '../query';
 import { CollectionSummary } from '../components/collection-summary';
 import { useOverlayScrollbar } from '../components/overlay-scrollbar';
 import { useViewGlide } from '../components/use-view-glide';
@@ -43,12 +48,38 @@ export function JunkCount({ route, page, failed, onNavigate }: {
     event.preventDefault();
     onNavigate(link.getAttribute('href') || junkPath());
   };
+  const total = Number(page?.total || 0);
+  const scope = JUNK_KIND_OPTIONS.find(([key]) => key === kind)?.[1] || '全部';
+  const bulk = (operation: 'dispose' | 'dismiss-junk') => {
+    const dispose = operation === 'dispose';
+    void confirmModal({
+      title: dispose ? `把「${scope}」里 ${total.toLocaleString()} 个文件全部移入回收站` : `把「${scope}」里 ${total.toLocaleString()} 个文件全部标为不是垃圾`,
+      body: dispose
+        ? '只改库里的状态，不删除磁盘上的文件；之后可以在回收站逐个或批量还原，确认无误后再清空回收站。'
+        : '这些文件会移到「已排除」，以后不再出现在待判断里；可以在「已排除」里重新判断。',
+      confirmLabel: dispose ? '全部移入回收站' : '全部标为不是垃圾',
+      danger: dispose,
+      onConfirm: async () => {
+        const result = await apiSend<{ changed: number }>('/api/ads/bulk', { operation, kind, expected_total: total });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['junk-queue'] }),
+          queryClient.invalidateQueries({ queryKey: ['junk-summary'] }),
+          queryClient.invalidateQueries({ queryKey: ['trash-summary'] }),
+        ]);
+        return result;
+      },
+    });
+  };
+  const actions = view === 'pending' && total > 0 ? <>
+    <Button size="small" variant="secondary" onClick={() => bulk('dismiss-junk')}>全部不是垃圾</Button>
+    <Button size="small" variant="danger" onClick={() => bulk('dispose')}>{`全部移入回收站（${total.toLocaleString()}）`}</Button>
+  </> : null;
   /* 读不到就不再转圈：失败的原因写在网格那一格里，这里只说「没有数」。 */
   const figure = page ? `${Number(page.total || 0).toLocaleString()} 个` : failed ? '—' : '';
   return (
     <div data-junk-count="">
       <div data-junk-summary="" aria-live="polite">
-        <CollectionSummary label={junkSummaryLabel(view)} figure={figure} pending={!page && !failed} flush />
+        <CollectionSummary label={junkSummaryLabel(view)} figure={figure} pending={!page && !failed} flush actions={actions} />
       </div>
       <div data-junk-filters-frame="" data-filter-glass="" data-glass-pane="">
         <span ref={pane} data-view-glide="" aria-hidden="true" />
