@@ -68,8 +68,11 @@ jobs:
             echo
             echo "下载下面的 \`${name}\`，退出 Peach 后双击覆盖安装。"
             echo
-            echo "## 这一版的改动"
-            git log "$range" --no-merges --author=rukawawan --format='- %s' | grep -v '^- chore(release)' | head -n 40 || true
+            echo "## 这一版新增或修正"
+            git log "$range" --no-merges --author=rukawawan --format='- %s' | grep -v '^- chore(release)\|^- ci:' | head -n 40 || true
+            echo
+            echo "## 自定义版包含的全部功能（相对原作者版本）"
+            git log "$SHA" --no-merges --author=rukawawan --format='- %s' | grep '^- feat' | head -n 60 || true
           } > notes.md
           gh release create "$tag" "$name" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
             --title "Peach ${VERSION} 自定义版 第 ${BUILD} 版（${day}）" --notes-file notes.md --latest
