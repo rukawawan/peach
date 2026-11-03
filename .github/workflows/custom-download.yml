@@ -42,9 +42,11 @@ jobs:
             exit 0
           fi
           version=$(basename "$setup" | sed -E 's/^Peach-(.+)-windows-x64-setup\.exe$/\1/')
-          echo "found=true" >> "$GITHUB_OUTPUT"
-          echo "setup=$setup" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "found=true"
+            echo "setup=$setup"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
       - name: 发布
         if: steps.fetch.outputs.found == 'true'
         env:
