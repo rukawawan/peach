@@ -100,6 +100,7 @@ TASK_LABELS = {
     "upgrade-library": "自动修复资料",
     "organize": "按模板整理",
     "batch": "批量操作",
+    "jasna-restore": "Jasna 去码",
     "scrape-codes": "番号资料刮削",
     "jav-covers": "封面批量抓取",
     "entity-avatar": "补全资料图片",

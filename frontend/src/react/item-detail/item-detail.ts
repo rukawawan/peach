@@ -301,6 +301,8 @@ export interface ItemDetailActions {
   /** 目录的「垃圾文件」那一档按回收站状态列：移入回收站之后（`undo` 为假）、撤销任何一次反馈之后
    *  （`undo` 为真）由壳判要不要重读列表。 */
   trashChanged(disposal: string | null, undo: boolean): Promise<void>;
+  /** 这一条连同文件被永久删除了：壳关掉详情并重读列表。 */
+  deleted?(): Promise<void>;
   /** 操作回执；给了 `undo` 就带一颗撤销键。失败走 `failure`。 */
   toast(message: string, options?: { undo?: () => Promise<void> }): void;
   failure(action: string, error: unknown): void;

@@ -14,6 +14,7 @@ import { PerformerDeleteCard } from './performer-delete-card';
 import { hasResourceRoots } from './resource-sync';
 import { ResourceSyncCard } from './resource-sync-card';
 import { WesternScrapeCard } from './western-scrape-card';
+import { JasnaCard } from './jasna-card';
 
 function ResourceSyncPage({ toast }: Pick<DataCleanupProps, 'toast'>) {
   const sources = useQuery({ queryKey: MEDIA_SOURCES_KEY, queryFn: ({ signal }) => fetchMediaSources(signal) });
@@ -39,6 +40,7 @@ export function DataCleanupToolPage({ tool, toast, failure }: {
     case 'links': content = <LinkManager />; break;
     case 'batch-delete': content = <PerformerDeleteCard toast={notify} />; break;
     case 'western-scrape': content = <WesternScrapeCard toast={notify} />; break;
+    case 'jasna': content = <JasnaCard toast={notify} />; break;
   }
   return <Page>{content}</Page>;
 }

@@ -35,6 +35,7 @@ import { CatalogPicture } from './catalog-picture';
 import { fetchJavDetail, javDetailKey } from '../jav-detail/jav-detail';
 import { busyProps } from '../settings/use-action';
 import { ExternalPlayback } from './external-playback';
+import { DetailFileActions } from './detail-file-actions';
 import { isPlayerGuidePreview } from '../../player/guide-preview';
 import { CoverCrop } from '../cover-crop/cover-crop-page';
 import { queryClient } from '../query';
@@ -425,6 +426,8 @@ function Side({ item, queue, write, helpers, actions }: {
             aria-pressed={item.disposal === 'trash'} {...busy('dispose')} onClick={() => write.feedback('dispose')}><Glyph name="trash" /></button>
         </div>
         <Preference item={item} open={reasonOpen} write={write} />
+        {!online ? <DetailFileActions item={item} toast={(message) => actions.toast(message)}
+          onDeleted={async () => { await (actions.deleted ? actions.deleted() : actions.trashChanged('trash', false)) }} /> : null}
         <button type="button" data-kind="o" {...busy('o')} onClick={() => write.feedback('o')}>
           <Glyph name="sperm" /><span>记一次高潮</span><b className="mono" id="oCount">{item.o_count || 0}</b>
         </button>

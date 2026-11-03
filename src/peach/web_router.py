@@ -358,6 +358,28 @@ def _post_western_scrape(contract, body):
     raise ValueError("unsupported western scrape action")
 
 
+def _get_jasna(contract, _args):
+    from . import jasna_restore
+    return jasna_restore.summary(contract)
+
+
+def _post_jasna(contract, body):
+    """Jasna 去码：保存程序路径与模型、试启动、把一部影片排进队列（`jasna_restore`）。"""
+    from . import jasna_restore
+    action = str(body.get("action") or "")
+    if action == "config":
+        jasna_restore.save_config(body)
+        return jasna_restore.summary(contract)
+    if action == "check":
+        config = jasna_restore.read_config()
+        found = jasna_restore.version(jasna_restore.check_exe(config["exe"]))
+        return {**jasna_restore.summary(contract), "version": found}
+    if action == "enqueue":
+        jasna_restore.QUEUE.enqueue(contract, int(body.get("id")))
+        return jasna_restore.summary(contract)
+    raise ValueError("unsupported jasna action")
+
+
 def _post_empty_trash(contract, _body):
     return w_empty_trash(contract)
 
@@ -429,6 +451,7 @@ GET_HANDLERS = {
     "/api/tops": _get_tops,
     "/api/ads": _get_ads,
     "/api/western-scrape": _get_western_scrape,
+    "/api/jasna": _get_jasna,
     "/api/related": _get_related,
     "/api/custom-metadata": q_custom_metadata,
     "/api/playlists": q_playlists,
@@ -489,6 +512,7 @@ POST_HANDLERS = {
     "/api/batch": w_batch,
     "/api/ads/bulk": w_junk_bulk,
     "/api/western-scrape": _post_western_scrape,
+    "/api/jasna": _post_jasna,
     "/api/search-history": w_search_history,
     "/api/taste/refresh": w_taste_refresh,
     "/api/taste/source": w_taste_source,

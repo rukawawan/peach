@@ -261,6 +261,10 @@ mediaState.itemDetailActions = {
     if(!undo){clearOverlayBackground();disposeStage(true,false,{miniplayer:false});}
     await loadCatalog();
   },
+  deleted:async()=>{
+    clearOverlayBackground();disposeStage(true,false,{miniplayer:false});
+    await loadCatalog();
+  },
   toast:(message,{undo}={})=>receiptsState.actionReceipt(message,{undo}),
   failure:(action,error)=>receiptsState.actionFailure(action,error),
 };

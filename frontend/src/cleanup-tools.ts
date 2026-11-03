@@ -12,6 +12,8 @@ export const CLEANUP_TOOLS = [
     description: '检查官网、社交账号和资料站链接，复核并清理失效地址。' },
   { key: 'western-scrape', path: '/data-cleanup/western-scrape', title: '欧美资料刮削', icon: 'globe',
     description: '用 ThePornDB 为欧美作品补标题、厂牌、演员、标签和封面。' },
+  { key: 'jasna', path: '/data-cleanup/jasna', title: 'Jasna 去码', icon: 'sparkles',
+    description: '设置本机 Jasna，在影片详情页一键去码，成品放回原文件夹。' },
   { key: 'batch-delete', path: '/data-cleanup/batch-delete', title: '批量删除', icon: 'trash',
     description: '按女优勾选并永久删除关联影片，执行前确认范围与影响。' },
 ] as const;
