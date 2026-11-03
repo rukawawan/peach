@@ -4,7 +4,6 @@
  * `<原文件名>-去码.mkv`，登记后作为新的一条出现在片库。永久删除走与回收站相同的两步：
  * 先移入回收站，再永久删除，删的是磁盘上的文件和库里这一行。 */
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { confirmModal } from '@peach/legacy/ui';
 import { Button } from '@/components/base/buttons/button';
 
@@ -36,18 +35,18 @@ export function DetailFileActions({ item, toast, onDeleted }: {
   toast(message: string): void;
   onDeleted(): void | Promise<void>;
 }) {
-  const jasna = useQuery({ queryKey: JASNA_KEY, queryFn: ({ signal }) => fetchJasna(signal) });
+  /* 详情页不为去码键单独取状态：点下去才问服务端，没设置 Jasna 时由服务端说明去哪里设置。 */
   const [busy, setBusy] = useState('');
+  const [queued, setQueued] = useState(false);
   const stem = String(item.name || '').replace(/\.[^.]+$/, '');
   const video = (item.medium || 'video') === 'video';
-  const data = jasna.data;
-  const queued = !!data && (data.queue.includes(item.id) || data.current.asset_id === item.id);
 
   const restore = async () => {
     setBusy('jasna');
     try {
       const next = await apiSend<JasnaState>('/api/jasna', { action: 'enqueue', id: item.id });
       queryClient.setQueryData(JASNA_KEY, next);
+      setQueued(true);
       toast('已交给 Jasna 去码，进度在「管理 → 任务中心」');
     } catch (cause) {
       toast(errorMessage(cause));
@@ -57,7 +56,7 @@ export function DetailFileActions({ item, toast, onDeleted }: {
   const remove = () => {
     void confirmModal({
       title: '永久删除这部影片',
-      body: `会删除磁盘上的文件「${item.name || item.id}」和库里的这一条，不能恢复。只想先放一边，用旁边的回收站按钮。`,
+      body: `会删除磁盘上的文件「${item.name || item.id}」和库里的这一条，不能恢复。只想先放一边，用上面的回收站按钮。`,
       confirmLabel: '永久删除',
       danger: true,
       onConfirm: async () => {
@@ -72,9 +71,9 @@ export function DetailFileActions({ item, toast, onDeleted }: {
 
   return (
     <div className="flex flex-wrap items-center gap-2" data-detail-file-actions="">
-      {video && !RESTORED.test(stem) && data?.configured ? (
+      {video && !RESTORED.test(stem) ? (
         <Button size="small" variant="secondary" disabled={!!busy || queued} onClick={() => void restore()}>
-          {queued ? 'Jasna 去码排队中' : '用 Jasna 去码'}
+          {queued ? '已排进 Jasna 去码队列' : '用 Jasna 去码'}
         </Button>
       ) : null}
       <Button size="small" variant="secondary" disabled={!!busy} onClick={remove}>永久删除</Button>

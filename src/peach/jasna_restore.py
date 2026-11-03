@@ -52,7 +52,7 @@ def check_exe(exe: str) -> Path:
     """只接受名为 jasna.exe（或 Linux 的 jasna）且确实存在的文件，页面不能借此运行别的程序。"""
     path = Path(str(exe or '').strip().strip('"'))
     if not str(path) or path.name.casefold() not in EXE_NAMES:
-        raise ValueError('请填写 Jasna 程序 jasna.exe 的完整路径，例如 D:\\Jasna\\jasna.exe')
+        raise ValueError('还没设置 Jasna：到「管理 → 数据管理 → Jasna 去码」填写 jasna.exe 的完整路径，例如 D:\\Jasna\\jasna.exe')
     if not path.is_file():
         raise ValueError(f'找不到 {path}，请确认 Jasna 已解压到这个位置')
     return path
