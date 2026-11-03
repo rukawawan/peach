@@ -1,0 +1,73 @@
+name: Custom Download
+
+# 自定义构建的下载页：Release 演练在 master 上产出 Windows 安装包后，把它发成本仓库的一个
+# GitHub Release，文件名带版本号与构建序号，下载链接长期有效，不再去 Actions 里找 desktop-candidate。
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: 发布自定义安装包
+    if: github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: 取 Windows 安装包
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p candidate
+          if ! gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name desktop-candidate --dir candidate; then
+            echo "这次 Release 运行没有产出 Windows 安装包，跳过。"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          setup=$(find candidate -maxdepth 1 -name 'Peach-*-windows-x64-setup.exe' | head -n 1)
+          if [ -z "$setup" ]; then
+            echo "制品里没有安装包，跳过。"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(basename "$setup" | sed -E 's/^Peach-(.+)-windows-x64-setup\.exe$/\1/')
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "setup=$setup" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: 发布
+        if: steps.fetch.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SETUP: ${{ steps.fetch.outputs.setup }}
+          VERSION: ${{ steps.fetch.outputs.version }}
+          BUILD: ${{ github.event.workflow_run.run_number }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tag="custom-${VERSION}-${BUILD}"
+          name="Peach-${VERSION}-custom${BUILD}-windows-x64-setup.exe"
+          cp "$SETUP" "$name"
+          day=$(TZ=America/Toronto date +%Y-%m-%d)
+          previous=$(git tag --list 'custom-*' --sort=-creatordate | head -n 1)
+          range="$SHA"
+          if [ -n "$previous" ]; then range="$previous..$SHA"; fi
+          {
+            echo "自定义构建第 ${BUILD} 版，基于 Peach ${VERSION}，构建于 ${day}，提交 ${SHA:0:7}。"
+            echo
+            echo "下载下面的 \`${name}\`，退出 Peach 后双击覆盖安装。"
+            echo
+            echo "## 这一版的改动"
+            git log "$range" --no-merges --author=rukawawan --format='- %s' | grep -v '^- chore(release)' | head -n 40 || true
+          } > notes.md
+          gh release create "$tag" "$name" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+            --title "Peach ${VERSION} 自定义版 第 ${BUILD} 版（${day}）" --notes-file notes.md --latest
