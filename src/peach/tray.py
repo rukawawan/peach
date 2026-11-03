@@ -24,7 +24,7 @@ import httpx
 import pystray
 from PIL import Image
 
-from . import error_reporting, ledger_backups, log_retention, onboarding, runtime_prepare, settings_file
+from . import desktop_startup, error_reporting, ledger_backups, log_retention, onboarding, runtime_prepare, settings_file
 from .appid import MACOS_LAUNCH_AGENT_LABEL
 from .certs import ensure_certificate
 from .distribution import standalone
@@ -1865,12 +1865,29 @@ def log_to_file(path: Path) -> logging.Handler | None:
     return handler
 
 
+def failure_exit_code() -> int:
+    """托盘自己判定失败时的退出码；launchd 名下的 macOS 菜单栏项按 0 退出。
+
+    LaunchAgent 写的是 `KeepAlive = {SuccessfulExit: false}`（见
+    `desktop_startup.MACOS_KEEP_ALIVE`），非 0 退出会被重新拉起。走到这里的是配置、迁移、
+    建菜单这类失败，原因已经记下，重来结果相同，拉起只会每隔 ThrottleInterval 再失败一次。
+    PyObjC 的事件循环自己接住菜单回调里的异常，所以要 launchd 恢复的是崩溃和信号终止，
+    不经过这里。终端里手跑和 Windows 仍得到 1。
+    """
+    if sys.platform != "darwin":
+        return 1
+    try:
+        return 0 if launchd_owns_this_process() else 1
+    except OSError:
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         return _main(argv)
     except Exception as exc:
         show_message("Peach 启动失败", error_reporting.failure_details("tray-startup", exc), error=True)
-        return 1
+        return failure_exit_code()
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -1919,6 +1936,11 @@ def _main(argv: list[str] | None = None) -> int:
             remember_installation_data_root(config)
         except (OSError, RuntimeError):
             logging.getLogger(__name__).warning("更新后的数据目录位置未能保存", exc_info=True)
+        try:
+            if desktop_startup.refresh_launch_agent(config):
+                LOGGER.info("登录启动项已补上异常退出恢复，下次登录生效")
+        except (OSError, ValueError):
+            LOGGER.warning("登录启动项的异常退出恢复未能更新", exc_info=True)
         if sys.platform == "win32":
             lifecycle = Lifecycle(config.directory("state"), config.directory("logs"),
                                   config.data_root, PROJECT_ROOT)
@@ -1950,7 +1972,7 @@ def _main(argv: list[str] | None = None) -> int:
         LOGGER.exception("托盘运行失败")
         if not os.environ.get("PEACH_TRAY_RECOVERIES"):
             show_message("Peach 启动失败", error_reporting.failure_details("tray-runtime", exc), error=True)
-        return 1
+        return failure_exit_code()
     finally:
         if lifecycle is not None:
             lifecycle.exited(exit_code)

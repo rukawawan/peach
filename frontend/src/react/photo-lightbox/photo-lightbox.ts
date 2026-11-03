@@ -49,7 +49,7 @@ export interface SwiperInstance {
 }
 export type SwiperConstructor = new (el: HTMLElement, options: Record<string, unknown>) => SwiperInstance;
 
-const SWIPER = '/vendor/swiper/14.3.0/';
+const SWIPER = '/vendor/swiper/14.4.0/';
 let loader: Promise<SwiperConstructor> | null = null;
 
 /** 样式与脚本一起等：样式晚到一拍，所有 slide 会先当普通块元素同时画出来。 */

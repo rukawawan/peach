@@ -71,6 +71,36 @@ sudo /usr/bin/xattr -rd com.apple.quarantine "/Applications/Peach.app"
 
 版本提交触发 Release 演练，在 Apple Silicon 与 Intel 原生 runner 分别构建，再由干净 runner 下载并挂载 DMG，验证签名、架构和独立运行。标签核对同一提交的成功演练与摘要，发布已验收的相同文件。两种 DMG 与 Windows 安装包全部通过后，才一同上传到 GitHub 预发布，统一生成 SHA-256 清单。手动运行工作流只验收候选制品，不创建 Release；推送普通提交不会触发安装包构建。发版从只读审阅和依赖检查开始，重型验证前完成复核并冻结输入；集成、运行核验与定版按[发版检查](TESTING.md#每次发版检查)执行，打标签统一使用 `scripts/release_tag.py`。
 
+### macOS 异常退出恢复
+
+菜单栏的异常退出恢复交给 launchd，不移植 Windows 的监视器。配置页打开「开机自启」后，`~/Library/LaunchAgents/io.github.longmeidao.peach.tray.plist` 写入 `KeepAlive = {SuccessfulExit = false}` 与 `ThrottleInterval = 30`；源码部署的 `install_macos_agent.py install` 写同一份设置，来源是 `src/peach/desktop_startup.py`。
+
+| 退出方式 | 退出结果 | launchd |
+| --- | --- | --- |
+| 菜单「退出 Peach」 | 退出码 0 | 不拉起 |
+| 注销、关机 | 会话结束 | 不拉起 |
+| 已有一个 Peach 在运行 | 退出码 0 | 不拉起 |
+| 设置文件无效、迁移失败等启动失败 | 由 launchd 启动时按 0 退出，原因写进 `logs/tray.log` | 不拉起 |
+| 崩溃（`SIGSEGV`、`SIGBUS`、`SIGABRT` 等） | 信号终止 | 拉起 |
+| 强制退出、`kill` | 信号终止 | 拉起 |
+
+首次设置未完成时菜单栏照常运行，退出方式同上。启动失败重来结果相同，按非 0 退出会让 launchd 反复重试，所以托盘先核对 launchd 报的 pid 是自己，再按 0 退出；终端里手动运行仍返回 1。菜单回调里的 Python 异常由 PyObjC 事件循环弹出错误面板：选「继续」照常运行，选「退出」按 0 退出，都不触发拉起。
+
+运行满 30 秒后崩溃会立即拉起；启动后 30 秒内反复崩溃时，每 30 秒最多拉起一次，launchd 不限次数。拉起后的菜单栏沿用启动项的 `--silent` 或 `--show`，后者会再打开一次浏览器。子服务与托盘同属一个进程组，按 launchd 默认行为在托盘退出时一并结束，新托盘重新启动服务。要彻底停止，用菜单退出，或运行 `launchctl bootout gui/$(id -u)/io.github.longmeidao.peach.tray`。
+
+恢复只覆盖 launchd 启动的进程：
+
+- 开机自启关闭时写 `KeepAlive = false`。`SuccessfulExit` 隐含 `RunAtLoad`，保留它会让关掉的自启在登录时照样启动，所以此时没有恢复。
+- 独立包双击 `Peach.app` 由 LaunchServices 启动，不归 launchd 管理，崩溃后需要手动重开。登录时由启动项拉起的那一次有恢复；从菜单退出后再双击打开，到下次登录前都没有恢复。Peach 不为双击启动另设监视进程。
+- 源码外壳双击执行 `launchctl kickstart`，进程归 launchd，开机自启开着时同样恢复。
+
+launchd 使用登录时载入的 plist。升级后托盘第一次启动时，已开启的旧启动项会就地补上这两项，其余键不变；在配置页保存开机自启也会重写。两种方式都在下次登录生效。要立即生效，先从菜单退出，再运行：
+
+```sh
+launchctl bootout gui/$(id -u)/io.github.longmeidao.peach.tray
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.longmeidao.peach.tray.plist
+```
+
 ### GitLab 发布与下载后端
 
 GitLab 兼容平台使用 `.gitlab-ci.yml`。唯一版本入口支持 `--gitlab-host` 指定主机，默认入口使用 GitHub。主线发布判据要求同一提交最新的 push 流水线成功，且 Linux、Windows、macOS 和 wheel 验收任务全部成功；缺少原生系统任务时拒绝打标签。主线上的三个平台验收只跑改动域与平台敏感用例（[ADR-0119](adr/0119-mainline-changed-scope-release-full-suite.md)）。版本提交 `chore(release): 版本 X` 的主线流水线同时是发布演练：三平台全量、媒体工具、Windows 与 macOS 构建、Windows 冒烟和 Docker 镜像都跑一遍，只是不发布。`--ship` 等演练全部成功才打标签；标签流水线核对同一提交的演练已通过，只重新构建并发布（[ADR-0121](adr/0121-release-rehearsal-and-atomic-publication.md)）。GitHub 的 `release.yml` 用同一套判据，迁回 GitHub 时不用改流程。CLI 传输复用官方 glab，不在仓库或命令参数里存访问令牌。
@@ -679,7 +709,7 @@ Windows 托盘在取得单实例锁后启动独立监视器。监视器用 Win32
 
 菜单退出、更新、卸载、外部停止消息和系统会话结束都会登记退出意图并停止监视器。正常重启由重启脚本负责拉起，监视器不参与依赖同步与换包。`tray-lifecycle.log` 每行是一条 JSON，包含 UTC 时间、实例标识、托盘及监视器 PID、启动父进程、退出意图、外部消息发送者 PID、异常退出码和恢复结果。强制结束进程时，记录的操作者为 `unknown`，不能从退出码判断是谁关闭了它。
 
-监视器与托盘共用当前用户权限，不注册计划任务或 Windows 服务。监视器自身被结束、整棵进程树被结束或系统关机时不能自动恢复。监视器启动失败写入 `tray.log`；日志不可写时保留退出和服务清理行为。macOS 沿用 LaunchAgent 的启动行为。
+监视器与托盘共用当前用户权限，不注册计划任务或 Windows 服务。监视器自身被结束、整棵进程树被结束或系统关机时不能自动恢复。监视器启动失败写入 `tray.log`；日志不可写时保留退出和服务清理行为。macOS 由 launchd 负责，见 [macOS 异常退出恢复](#macos-异常退出恢复)。
 
 适用于代码已经在检出里、只需要让运行中的托盘重新加载、不换二进制的情况。
 

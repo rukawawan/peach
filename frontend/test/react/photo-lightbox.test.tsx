@@ -116,8 +116,8 @@ describe('打开', () => {
 
     await act(async () => {
       const opened = openPhotoLightbox(0, WALL);
-      expect(link().getAttribute('href')).toBe('/vendor/swiper/14.3.0/swiper-bundle.min.css');
-      expect(script().getAttribute('src')).toBe('/vendor/swiper/14.3.0/swiper-bundle.min.js');
+      expect(link().getAttribute('href')).toBe('/vendor/swiper/14.4.0/swiper-bundle.min.css');
+      expect(script().getAttribute('src')).toBe('/vendor/swiper/14.4.0/swiper-bundle.min.js');
       (window as { Swiper?: unknown }).Swiper = FakeSwiper;
       script().onload!(new Event('load'));
       await Promise.resolve();

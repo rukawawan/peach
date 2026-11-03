@@ -36,6 +36,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.appid import LEGACY_MACOS_LAUNCH_AGENT_LABELS, MACOS_LAUNCH_AGENT_LABEL
 from peach.config import LOG_DIR, PROJECT_ROOT
+from peach.desktop_startup import launch_agent_supervision
 
 
 LABEL = MACOS_LAUNCH_AGENT_LABEL
@@ -57,8 +58,8 @@ def build_plist(tray: Path) -> dict:
         # 直接跑目标程序，中间不能有 exec 跳板，否则菜单栏项注册不上。
         "ProgramArguments": [str(tray)],
         "RunAtLoad": True,
-        # 菜单栏项是用户主动退出的，不要自动拉回来。
-        "KeepAlive": False,
+        # 从菜单退出不拉回来，崩溃才拉回来；与设置页写的登录启动项同一份设置。
+        **launch_agent_supervision(True),
         "ProcessType": "Interactive",
         # launchd 给的 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，找不到 Homebrew 的
         # ffmpeg/ffprobe，转码和抽帧会静默变成「不可用」。

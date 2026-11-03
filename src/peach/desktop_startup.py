@@ -247,6 +247,54 @@ def desktop_snapshot(config) -> dict:
         return {"desktop": False, "desktop_message": "桌面快捷方式状态未取得"}
 
 
+#: launchd 只在菜单栏项异常结束时把它拉回来。从菜单「退出 Peach」退出码是 0，不拉起；
+#: 崩溃和被信号结束（含强制退出）都算异常。不该重试的启动失败由托盘自己按 0 退出，见
+#: `peach.tray.failure_exit_code`。
+MACOS_KEEP_ALIVE = {"SuccessfulExit": False}
+#: 两次拉起之间的最短秒数。跑满这段时间之后崩溃会立即拉起；它只拉开循环的间隔，不封顶次数。
+MACOS_THROTTLE_INTERVAL = 30
+
+
+def launch_agent_path() -> Path:
+    return Path.home() / "Library/LaunchAgents" / f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
+
+
+def launch_agent_supervision(enabled: bool) -> dict:
+    """LaunchAgent 的异常退出恢复设置。
+
+    `SuccessfulExit` 隐含 `RunAtLoad`：launchd 要先跑一次才有退出码可判。开机自启关着时
+    写成 `False`，否则关了自启照样登录即起。
+    """
+    return {"KeepAlive": dict(MACOS_KEEP_ALIVE) if enabled else False,
+            "ThrottleInterval": MACOS_THROTTLE_INTERVAL}
+
+
+def _launch_agent(program: Path) -> tuple[Path, dict]:
+    path = launch_agent_path()
+    entry = plistlib.loads(path.read_bytes()) if path.is_file() else {}
+    if entry.get("ProgramArguments") and Path(entry["ProgramArguments"][0]).resolve() != program.resolve():
+        raise ValueError("启动项属于另一份 Peach 安装")
+    return path, entry
+
+
+def refresh_launch_agent(config) -> bool:
+    """已开启的 LaunchAgent 缺当前的恢复设置时就地补上，返回是否改写。
+
+    托盘每次启动调一次，升级后的第一次启动就把旧版留下的 `KeepAlive=False` 换掉；其余键
+    原样保留。launchd 用的仍是登录时载入的那份，改动下次登录生效。
+    """
+    if sys.platform != "darwin":
+        return False
+    program, _, _ = target(config)
+    path, entry = _launch_agent(program)
+    wanted = launch_agent_supervision(True)
+    if not entry.get("RunAtLoad") or all(entry.get(key) == value for key, value in wanted.items()):
+        return False
+    entry.update(wanted)
+    atomic_write_text(path, plistlib.dumps(entry).decode("utf-8"))
+    return True
+
+
 def snapshot(config=None) -> dict:
     config = config or settings_file.load_config()
     if sys.platform not in {"win32", "darwin"}:
@@ -263,10 +311,7 @@ def snapshot(config=None) -> dict:
             enabled = entry["enabled"]
             silent = "--show" not in entry.get("arguments", "") if enabled else bool(preference.get("silent", True))
         else:
-            path = Path.home() / "Library/LaunchAgents" / f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
-            entry = plistlib.loads(path.read_bytes()) if path.is_file() else {}
-            if entry.get("ProgramArguments") and Path(entry["ProgramArguments"][0]).resolve() != program.resolve():
-                raise ValueError("启动项属于另一份 Peach 安装")
+            _, entry = _launch_agent(program)
             enabled = bool(entry.get("RunAtLoad", False))
             silent = "--show" not in entry.get("ProgramArguments", []) if enabled else bool(preference.get("silent", True))
         return {"available": program.is_file(), "enabled": enabled, "silent": silent,
@@ -305,12 +350,9 @@ def save(config, *, enabled: bool, silent: bool, desktop: bool, executable: Path
                  directory=str(directory), expected=existing.get("target", ""))
     elif sys.platform == "darwin":
         args = [*args, "--silent" if silent else "--show"]
-        path = Path.home() / "Library/LaunchAgents" / f"{MACOS_LAUNCH_AGENT_LABEL}.plist"
-        entry = plistlib.loads(path.read_bytes()) if path.is_file() else {}
-        if entry.get("ProgramArguments") and Path(entry["ProgramArguments"][0]).resolve() != program.resolve():
-            raise ValueError("启动项属于另一份 Peach 安装")
+        path, entry = _launch_agent(program)
         entry.update(Label=MACOS_LAUNCH_AGENT_LABEL, ProgramArguments=[str(program), *args], RunAtLoad=enabled,
-                     KeepAlive=False, ProcessType="Interactive", WorkingDirectory=str(directory))
+                     ProcessType="Interactive", WorkingDirectory=str(directory), **launch_agent_supervision(enabled))
         entry["EnvironmentVariables"] = {**entry.get("EnvironmentVariables", {}), "PEACH_DATA_ROOT": str(config.data_root),
                                          "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
         atomic_write_text(path, plistlib.dumps(entry).decode("utf-8"))

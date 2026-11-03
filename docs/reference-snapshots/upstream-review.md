@@ -4,6 +4,10 @@
 
 ## amane 桥
 
+### 稳定版 v0.24.1 暂不采用
+
+2026-11-02 复核官方 [v0.24.1](https://github.com/sqzw-x/amane/releases/tag/v0.24.1)，提交 `7d037a44b17a147df1db20989ab96047f0935933`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...7d037a44b17a147df1db20989ab96047f0935933)含 31 个提交。桥消费的站点类中只有 `avsox` 改动，响应模型改为容忍 null 字段；`amane.net` 新增 BrowserSkill 浏览器后端，桥不使用。0.24 新增 numpy、onnxruntime、tokenizers 与 macOS CoreML 的语义检索运行依赖，会显著增大随包 amane 环境，上游同时把 watchdog 限制为 `<7`。继续固定 v0.22.1；桥接站点出现必须的修复，或语义检索依赖改为可选后再升级。本次在约束内更新传递依赖，watchdog 与上游一致保持 6.0.0；python-dateutil 升至 4.0.0 只经 croniter 进入调度器，桥消费的站点与网络模块不引用。清空 PATH 后离线自检载入全部站点类通过。
+
 ### 稳定版 v0.23.0 暂不采用
 
 2026-10-30 复核官方 [v0.23.0](https://github.com/sqzw-x/amane/releases/tag/v0.23.0)，提交 `4230de458c3197e1e17b6c5b42cc385fc6961d15`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...4230de458c3197e1e17b6c5b42cc385fc6961d15)含 16 个提交、142 个文件，爬虫只改了 `theporndb`；桥消费的 makers、prestige、faleno、dahlia、mgstage、fc2club、freejavbt、airav、avsox 站点类和 `amane.net` 都没有变化，其余是 CLI、服务端与图片代理。继续固定 v0.22.1；桥接站点或网络接口出现修复时再升级。本次更新其约束允许的传递依赖，并核对独立环境的离线类加载。

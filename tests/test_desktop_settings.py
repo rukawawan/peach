@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+import plistlib
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -114,6 +115,51 @@ class DesktopSettingsTests(unittest.TestCase):
         # 路由漏传就在这里变成 400，而不是替用户做决定。
         with self.assertRaises(ValueError):
             desktop_startup.save(self.config, enabled=False, silent=True, desktop=None)
+
+    def _macos_agent(self):
+        agent = self.root / 'LaunchAgents/agent.plist'
+        agent.parent.mkdir()
+        (self.data / 'state').mkdir(exist_ok=True)
+        for patcher in (patch.object(desktop_startup, 'sys', SimpleNamespace(platform='darwin', executable=sys.executable)),
+                        patch.object(desktop_startup, 'launch_agent_path', return_value=agent)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return agent
+
+    def test_macos_launch_agent_relaunches_only_after_abnormal_exit(self):
+        agent = self._macos_agent()
+        program = self.program / 'Peach.exe'
+        desktop_startup.save(self.config, enabled=True, silent=True, desktop=False, executable=program)
+        entry = plistlib.loads(agent.read_bytes())
+        self.assertIs(entry['RunAtLoad'], True)
+        self.assertEqual(entry['KeepAlive'], {'SuccessfulExit': False}, '菜单「退出 Peach」退出码 0，不该被拉回来')
+        self.assertGreaterEqual(entry['ThrottleInterval'], 10)
+
+        desktop_startup.save(self.config, enabled=False, silent=True, desktop=False, executable=program)
+        entry = plistlib.loads(agent.read_bytes())
+        self.assertIs(entry['RunAtLoad'], False)
+        self.assertIs(entry['KeepAlive'], False, 'SuccessfulExit 隐含 RunAtLoad，关了自启还写它就会登录即起')
+
+    def test_macos_upgrade_refreshes_an_enabled_launch_agent_in_place(self):
+        agent = self._macos_agent()
+        program = (self.program / 'Peach.exe').resolve()
+        old = {'Label': 'old', 'ProgramArguments': [str(program), '--silent'], 'RunAtLoad': True,
+               'KeepAlive': False, 'StandardOutPath': '/tmp/peach.log'}
+        agent.write_bytes(plistlib.dumps(old))
+        with patch.object(desktop_startup, 'target', return_value=(program, [], self.program)):
+            self.assertTrue(desktop_startup.refresh_launch_agent(self.config))
+            entry = plistlib.loads(agent.read_bytes())
+            self.assertEqual(entry, {**old, **desktop_startup.launch_agent_supervision(True)}, '其余键原样保留')
+            self.assertFalse(desktop_startup.refresh_launch_agent(self.config), '已是当前写法就不再改写')
+
+            disabled = {**old, 'RunAtLoad': False}
+            agent.write_bytes(plistlib.dumps(disabled))
+            self.assertFalse(desktop_startup.refresh_launch_agent(self.config))
+            self.assertEqual(plistlib.loads(agent.read_bytes()), disabled, '自启关着时不碰')
+
+            agent.write_bytes(plistlib.dumps({**old, 'ProgramArguments': [str(self.root / 'Other/Peach')]}))
+            with self.assertRaisesRegex(ValueError, '另一份'):
+                desktop_startup.refresh_launch_agent(self.config)
 
     def test_configuration_actions_require_local_origin_and_uninstall_confirmation(self):
         from fastapi import FastAPI
