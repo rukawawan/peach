@@ -13,6 +13,7 @@ export const NUMBER_SPECS = {
   batchSizeSetting: { min: 1, max: 200, unit: '个', fallback: 60 },
   hoverDelaySetting: { min: 1, max: 60, unit: '秒', optional: true, fallback: 5 },
   seekSecondsSetting: { min: 1, max: 300, unit: '秒', fallback: 10 },
+  longSeekSecondsSetting: { min: 1, max: 600, unit: '秒', fallback: 30 },
   relatedLimitSetting: { min: 1, max: 60, unit: '个', optional: true, fallback: 20 },
   /* 上限跟 `/api/feeds/discoveries` 一致，服务端多于 100 也只回 100 部。 */
   feedLimitSetting: { min: 1, max: 100, unit: '部', fallback: 12 },

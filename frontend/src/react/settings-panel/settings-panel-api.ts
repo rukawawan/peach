@@ -33,6 +33,7 @@ export interface PanelSettings {
   detailAutoplay: boolean;
   miniplayer: boolean;
   seekSeconds: number;
+  longSeekSeconds: number;
   relatedLimit: number;
   searchHistoryLimit: number;
   followInitialDays: number;

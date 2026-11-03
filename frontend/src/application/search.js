@@ -153,7 +153,17 @@ applicationEffects.listen(document, 'keydown', e=>{
     return;
   }
   // 输入态不抢键：搜索框、标签弹窗和任何可编辑区域里的按键归它们自己处理。
-  if(isTypingTarget(e.target)||e.ctrlKey||e.metaKey||e.altKey)return;
+  if(isTypingTarget(e.target))return;
+  // Ctrl（macOS 为 Command）加左右方向键按长步长快进快退。
+  if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){
+    const longVideo=activeVideo();
+    if(longVideo){
+      e.preventDefault();
+      seekVideoBy(longVideo,preferencesState.appSettings.longSeekSeconds*(e.key==='ArrowRight'?1:-1));
+    }
+    return;
+  }
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
     const imageStep=document.querySelector(`#stage[open] [data-media-carousel]:not([data-carousel-video-active]) [data-follow-image-step="${e.key==='ArrowRight'?1:-1}"]`);
     if(imageStep){e.preventDefault();imageStep.click();return}

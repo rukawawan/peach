@@ -26,12 +26,12 @@ describe('启动归一化', () => {
 
   it('认不出的一项退回出厂那一档，其余照留', () => {
     const { settings } = normalizeAppSettings({
-      batchSize: 0, defaultSort: 'nope', hoverDelaySeconds: 61, seekSeconds: 2.5, searchHistoryLimit: 51, relatedLimit: -1,
+      batchSize: 0, defaultSort: 'nope', hoverDelaySeconds: 61, seekSeconds: 2.5, longSeekSeconds: 9999, searchHistoryLimit: 51, relatedLimit: -1,
       feedLimit: 101, theme: 'sepia', followInitialDays: 14, metadataRefreshDays: '7', accent: 'teal', homeLayout: 'big', ambientMode: 0,
       theaterMode: 'yes', miniplayer: false, feedHideSoloCompilations: 'true',
     });
     expect(settings).toMatchObject({
-      batchSize: 60, defaultSort: 'seed', hoverDelaySeconds: 5, seekSeconds: 10, searchHistoryLimit: 10, relatedLimit: 20,
+      batchSize: 60, defaultSort: 'seed', hoverDelaySeconds: 5, seekSeconds: 10, longSeekSeconds: 30, searchHistoryLimit: 10, relatedLimit: 20,
       feedLimit: 12, theme: 'system', followInitialDays: 30, accent: 'teal', homeLayout: 'big', ambientMode: true,
       theaterMode: false, miniplayer: false, feedHideSoloCompilations: false,
     });

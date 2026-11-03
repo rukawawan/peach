@@ -553,6 +553,12 @@ function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
             onApply={(value) => { settings.seekSeconds = value || 10; save(); current.changed('seekSeconds') }} />
         </div>
       </Row>
+      <Row title="Ctrl + 方向键快进 / 快退">
+        <div id="longSeekSecondsSetting">
+          <NumberSetting key={epoch} id="longSeekSecondsSetting" label="Ctrl + 方向键快进 / 快退" value={settings.longSeekSeconds}
+            onApply={(value) => { settings.longSeekSeconds = value || 30; save() }} />
+        </div>
+      </Row>
     </>
   );
 }
