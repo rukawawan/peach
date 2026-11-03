@@ -427,7 +427,7 @@ function Side({ item, queue, write, helpers, actions }: {
         </div>
         <Preference item={item} open={reasonOpen} write={write} />
         {!online ? <DetailFileActions item={item} toast={(message) => actions.toast(message)}
-          onDeleted={async () => { await (actions.deleted ? actions.deleted() : actions.trashChanged('trash', false)) }} /> : null}
+          onDeleted={() => actions.deleted()} /> : null}
         <button type="button" data-kind="o" {...busy('o')} onClick={() => write.feedback('o')}>
           <Glyph name="sperm" /><span>记一次高潮</span><b className="mono" id="oCount">{item.o_count || 0}</b>
         </button>

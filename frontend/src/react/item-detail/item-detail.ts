@@ -302,7 +302,7 @@ export interface ItemDetailActions {
    *  （`undo` 为真）由壳判要不要重读列表。 */
   trashChanged(disposal: string | null, undo: boolean): Promise<void>;
   /** 这一条连同文件被永久删除了：壳关掉详情并重读列表。 */
-  deleted?(): Promise<void>;
+  deleted(): Promise<void>;
   /** 操作回执；给了 `undo` 就带一颗撤销键。失败走 `failure`。 */
   toast(message: string, options?: { undo?: () => Promise<void> }): void;
   failure(action: string, error: unknown): void;
