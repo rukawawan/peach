@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 
 from peach import jasna_restore as jasna
+from peach.repository import LedgerDatabase
+from support.ledger import fresh_ledger
 
 
 class Handle:
@@ -79,6 +81,22 @@ class ExecuteTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'CUDA out of memory'):
                 jasna._execute([str(exe)], cwd=root, log=root / 'run.log', control=None, handle=Handle(),
                                report=lambda value: None, name='ABP-327')
+
+
+class LabelTests(unittest.TestCase):
+    def test_restored_copy_gets_the_original_title_with_a_label_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            database = LedgerDatabase(fresh_ledger(Path(folder)))
+            with database.write_transaction() as connection:
+                connection.execute("INSERT INTO asset(id,location,path,name,medium,catalog_title) VALUES"
+                                   "(1,'local','E:\\a\\ABP-327.mp4','ABP-327.mp4','video','原标题'),"
+                                   "(2,'local','E:\\a\\ABP-327-去码.mkv','ABP-327-去码.mkv','video','原标题')")
+            contract = type('Contract', (), {'database': database})()
+            self.assertTrue(jasna.label_restored(contract, 1, 2))
+            self.assertFalse(jasna.label_restored(contract, 1, 2))
+            with database.read_connection() as connection:
+                titles = dict(connection.execute("SELECT id,catalog_title FROM asset").fetchall())
+            self.assertEqual(titles, {1: '原标题', 2: '原标题（去码）'})
 
 
 if __name__ == '__main__':

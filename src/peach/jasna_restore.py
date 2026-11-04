@@ -347,8 +347,27 @@ def _ingest(contract, row, final: Path) -> int | None:
             _collect(contract, int(new_id), _QuietHandle())
         except Exception:  # noqa: BLE001 — 补资料失败不影响成品，下次同步会补
             pass
+        label_restored(contract, int(row['id']), int(new_id))
         contract.cache_bust()
     return new_id
+
+
+LABEL = '（去码）'
+
+
+def label_restored(contract, original_id: int, restored_id: int) -> bool:
+    """成品的标题沿用原片并加「（去码）」，卡片上一眼分得出来；以用户归属写入，刮削不会改回去。"""
+    from .field_owners import write_owned_fields
+    with contract.database.write_transaction() as connection:
+        rows = {int(row['id']): row for row in connection.execute(
+            "SELECT id,name,catalog_title FROM asset WHERE id IN (?,?)", (original_id, restored_id))}
+        restored = rows.get(restored_id)
+        if restored is None or str(restored['catalog_title'] or '').endswith(LABEL):
+            return False
+        source = rows.get(original_id) or restored
+        base = str(source['catalog_title'] or PureWindowsPath(str(source['name'] or '')).stem).strip()
+        write_owned_fields(connection, [restored_id], {'catalog_title': base + LABEL}, 'user:jasna')
+    return True
 
 
 class _QuietHandle:
@@ -374,5 +393,14 @@ def summary(contract, *, state_root: Path = STATE_DIR) -> dict:
             item['status'] = 'interrupted'
         jobs.append(item)
     jobs = sorted(jobs, key=lambda item: item.get('at') or '', reverse=True)[:30]
+    labelled = False
+    for item in jobs:
+        if item.get('status') == 'succeeded' and item.get('restored_id'):
+            try:
+                labelled = label_restored(contract, item['id'], int(item['restored_id'])) or labelled
+            except Exception:  # noqa: BLE001 — 补标签失败不影响读取状态
+                pass
+    if labelled:
+        contract.cache_bust()
     return {'config': config, 'models': list(MODELS), 'configured': bool(config['exe']),
             'jobs': jobs, **live}
