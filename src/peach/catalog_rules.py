@@ -1125,7 +1125,10 @@ def jav_edition_badges(name: str | None, code: str | None,
     badges = []
     if subtitled:
         badges.append("中字")
-    if cracked:
+    if text.endswith("-去码"):
+        # 本机 Jasna 去码的成品（`jasna_restore.output_name`）。
+        badges.append("AI去码")
+    elif cracked:
         badges.append("无码破解")
     elif uncensored:
         badges.append("无码")
