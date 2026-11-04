@@ -14,6 +14,8 @@ export const CLEANUP_TOOLS = [
     description: '用 ThePornDB 为欧美作品补标题、厂牌、演员、标签和封面。' },
   { key: 'jasna', path: '/data-cleanup/jasna', title: 'Jasna 去码', icon: 'sparkles',
     description: '设置本机 Jasna，在影片详情页一键去码，成品放回原文件夹。' },
+  { key: 'ai-subtitles', path: '/data-cleanup/ai-subtitles', title: 'AI 字幕', icon: 'file-stack',
+    description: '本机听写日语，用 DeepSeek 翻成中文字幕，放在影片旁边。' },
   { key: 'batch-delete', path: '/data-cleanup/batch-delete', title: '批量删除', icon: 'trash',
     description: '按女优勾选并永久删除关联影片，执行前确认范围与影响。' },
 ] as const;

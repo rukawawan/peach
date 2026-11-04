@@ -1,4 +1,5 @@
-/* 详情页的文件操作：交给 Jasna 去码，或把这部影片连同磁盘上的文件永久删除。
+/* 详情页的文件操作：交给 Jasna 去码、生成 AI 中文字幕（`src/peach/ai_subtitles.py`），
+ * 或把这部影片连同磁盘上的文件永久删除。
  *
  * 去码在服务端排队（`src/peach/jasna_restore.py`），进度在任务中心；成品是同目录的
  * `<原文件名>-去码.mkv`，登记后作为新的一条出现在片库。永久删除走与回收站相同的两步：
@@ -38,6 +39,7 @@ export function DetailFileActions({ item, toast, onDeleted }: {
   /* 详情页不为去码键单独取状态：点下去才问服务端，没设置 Jasna 时由服务端说明去哪里设置。 */
   const [busy, setBusy] = useState('');
   const [queued, setQueued] = useState(false);
+  const [subtitling, setSubtitling] = useState(false);
   const stem = String(item.name || '').replace(/\.[^.]+$/, '');
   const video = (item.medium || 'video') === 'video';
 
@@ -48,6 +50,17 @@ export function DetailFileActions({ item, toast, onDeleted }: {
       queryClient.setQueryData(JASNA_KEY, next);
       setQueued(true);
       toast('已交给 Jasna 去码，进度在「管理 → 任务中心」');
+    } catch (cause) {
+      toast(errorMessage(cause));
+    } finally { setBusy('') }
+  };
+
+  const subtitle = async () => {
+    setBusy('subtitle');
+    try {
+      await apiSend('/api/ai-subtitles', { action: 'enqueue', id: item.id });
+      setSubtitling(true);
+      toast('已开始生成中文字幕，进度在「管理 → 任务中心」');
     } catch (cause) {
       toast(errorMessage(cause));
     } finally { setBusy('') }
@@ -74,6 +87,11 @@ export function DetailFileActions({ item, toast, onDeleted }: {
       {video && !RESTORED.test(stem) ? (
         <Button size="small" variant="secondary" disabled={!!busy || queued} onClick={() => void restore()}>
           {queued ? '已排进 Jasna 去码队列' : '用 Jasna 去码'}
+        </Button>
+      ) : null}
+      {video ? (
+        <Button size="small" variant="secondary" disabled={!!busy || subtitling} onClick={() => void subtitle()}>
+          {subtitling ? '已排进字幕队列' : '生成中文字幕'}
         </Button>
       ) : null}
       <Button size="small" variant="secondary" disabled={!!busy} onClick={remove}>永久删除</Button>

@@ -276,7 +276,8 @@ def _restore(contract, row, config: dict, state_root: Path, control, handle, rep
     return {'output': final.name, 'restored_id': new_id}
 
 
-def _execute(command, *, cwd, log: Path, control, handle, report, name: str) -> None:
+def _execute(command, *, cwd, log: Path, control, handle, report, name: str, label: str = TASK_LABEL,
+             tool: str = 'Jasna') -> None:
     from .process_job import assign_to_job, close_job, create_kill_on_close_job
     job = create_kill_on_close_job()
     with log.open('wb') as sink:
@@ -285,7 +286,7 @@ def _execute(command, *, cwd, log: Path, control, handle, report, name: str) -> 
                                        stdin=subprocess.DEVNULL, **_hidden_window())
         except OSError as error:
             close_job(job)
-            raise RuntimeError(f'Jasna 启动失败：{error}') from error
+            raise RuntimeError(f'{tool} 启动失败：{error}') from error
         assign_to_job(job, process)
         if control is not None:
             control.usage.enter_process(process)
@@ -299,7 +300,7 @@ def _execute(command, *, cwd, log: Path, control, handle, report, name: str) -> 
                     last = value
                     report(value)
                     handle.progress(current=int(value), total=100,
-                                    label=f'{TASK_LABEL} · {name} · {value:.0f}%')
+                                    label=f'{label} · {name} · {value:.0f}%')
                 time.sleep(1)
         finally:
             if process.poll() is None:
@@ -309,7 +310,7 @@ def _execute(command, *, cwd, log: Path, control, handle, report, name: str) -> 
                 control.usage.leave_process(process)
             close_job(job)
     if process.returncode != 0:
-        raise RuntimeError(f'Jasna 处理失败（退出码 {process.returncode}）：' + log_tail(log))
+        raise RuntimeError(f'{tool} 处理失败（退出码 {process.returncode}）：' + log_tail(log))
     final = progress_of(log)
     if final is not None:
         report(final)

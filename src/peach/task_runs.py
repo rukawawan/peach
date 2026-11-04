@@ -101,6 +101,7 @@ TASK_LABELS = {
     "organize": "按模板整理",
     "batch": "批量操作",
     "jasna-restore": "Jasna 去码",
+    "ai-subtitles": "AI 字幕",
     "scrape-codes": "番号资料刮削",
     "jav-covers": "封面批量抓取",
     "entity-avatar": "补全资料图片",

@@ -1536,7 +1536,7 @@ class WebDataTests(unittest.TestCase):
             "/api/downloads", "/api/resources/search",
             "/api/wants", "/api/wants/magnets",
             "/api/jav/detail", "/api/jav/reviews", "/api/jav/resources", "/api/jav/discoveries",
-            "/api/western-scrape", "/api/jasna",
+            "/api/western-scrape", "/api/jasna", "/api/ai-subtitles",
         })
         self.assertEqual(set(rm_web.POST_HANDLERS), {
             "/api/tag-management", "/api/tag-management/preview", "/api/follow/tag",
@@ -1567,7 +1567,7 @@ class WebDataTests(unittest.TestCase):
             "/api/organize/preview", "/api/organize/apply", "/api/organize/rollback",
             "/api/feeds/check", "/api/feeds/source", "/api/feeds/discovery",
             "/api/wants", "/api/face-models",
-            "/api/ads/bulk", "/api/western-scrape", "/api/jasna",
+            "/api/ads/bulk", "/api/western-scrape", "/api/jasna", "/api/ai-subtitles",
         })
         with self.assertRaises(rm_web.ContractRouteNotFound):
             rm_web.dispatch_api_get(self.contract, "/api/typo", {})

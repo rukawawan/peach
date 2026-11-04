@@ -380,6 +380,30 @@ def _post_jasna(contract, body):
     raise ValueError("unsupported jasna action")
 
 
+def _get_ai_subtitles(contract, _args):
+    from . import ai_subtitles
+    return ai_subtitles.summary(contract)
+
+
+def _post_ai_subtitles(contract, body):
+    """AI 字幕：保存听写程序与 DeepSeek Key、试连接、把一部影片排进队列（`ai_subtitles`）。"""
+    from . import ai_subtitles
+    action = str(body.get("action") or "")
+    if action == "config":
+        ai_subtitles.save_config(body)
+        return ai_subtitles.summary(contract)
+    if action == "key":
+        key = str(body.get("key") or "").strip()
+        if key:
+            ai_subtitles.DeepSeek(key).check()
+        ai_subtitles.save_key(key)
+        return ai_subtitles.summary(contract)
+    if action == "enqueue":
+        ai_subtitles.QUEUE.enqueue(contract, int(body.get("id")))
+        return ai_subtitles.summary(contract)
+    raise ValueError("unsupported ai subtitles action")
+
+
 def _post_empty_trash(contract, _body):
     return w_empty_trash(contract)
 
@@ -452,6 +476,7 @@ GET_HANDLERS = {
     "/api/ads": _get_ads,
     "/api/western-scrape": _get_western_scrape,
     "/api/jasna": _get_jasna,
+    "/api/ai-subtitles": _get_ai_subtitles,
     "/api/related": _get_related,
     "/api/custom-metadata": q_custom_metadata,
     "/api/playlists": q_playlists,
@@ -513,6 +538,7 @@ POST_HANDLERS = {
     "/api/ads/bulk": w_junk_bulk,
     "/api/western-scrape": _post_western_scrape,
     "/api/jasna": _post_jasna,
+    "/api/ai-subtitles": _post_ai_subtitles,
     "/api/search-history": w_search_history,
     "/api/taste/refresh": w_taste_refresh,
     "/api/taste/source": w_taste_source,
