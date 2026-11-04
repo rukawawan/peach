@@ -2,10 +2,8 @@ name: Release
 
 # 版本提交 `chore(release): 版本 X` 推上 master 时演练整条发布链（只构建、验收，不发布）；
 # `release_tag.py --ship` 等这次演练通过才打标签，标签上才发布（ADR-0121）。
+# 自定义 fork 只在手动运行时构建 Windows 安装包，省 Actions 用量（推送太频繁会被 GitHub 暂停）。
 on:
-  push:
-    branches: [master]
-    tags: ["v*.*.*"]
   workflow_dispatch:
 
 permissions:
@@ -182,6 +180,7 @@ jobs:
   desktop-smoke:
     name: 仅下载制品验收
     needs: windows
+    if: github.repository_owner != 'rukawawan'
     runs-on: windows-latest
     timeout-minutes: 25
     # 验收脚本核对随包 amane 运行时要读发行锁与桥脚本；与 scripts/ci_windows.ps1 一样，验收宿主
@@ -262,7 +261,7 @@ jobs:
   macos:
     name: macOS ${{ matrix.arch }} 独立测试包
     needs: validate
-    if: github.ref_type != 'tag'
+    if: github.ref_type != 'tag' && github.repository_owner != 'rukawawan'
     strategy:
       fail-fast: false
       matrix:
@@ -422,7 +421,7 @@ jobs:
   docker:
     name: Linux amd64 镜像构建与验收
     needs: validate
-    if: github.ref_type != 'tag'
+    if: github.ref_type != 'tag' && github.repository_owner != 'rukawawan'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

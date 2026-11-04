@@ -3,11 +3,6 @@ name: Docker
 # 只验收不发布：镜像的版本号与 edge 由 release.yml 在 GitHub Release 成功后推送，
 # edge 始终指向最新发布的版本（ADR-0121）。
 on:
-  pull_request:
-    paths: [Dockerfile, .dockerignore, compose.yaml, 'src/**', 'migrations/**', 'web/**', 'resources/**', pyproject.toml, uv.lock, setup.py, MANIFEST.in, scripts/smoke_docker.py, .github/workflows/docker.yml]
-  push:
-    branches: [master]
-    paths: [Dockerfile, .dockerignore, compose.yaml, 'src/**', 'migrations/**', 'web/**', 'resources/**', pyproject.toml, uv.lock, setup.py, MANIFEST.in, scripts/smoke_docker.py, .github/workflows/docker.yml]
   workflow_dispatch:
 
 permissions:
