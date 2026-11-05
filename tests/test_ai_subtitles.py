@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from peach import ai_subtitles as subs
 from peach.http import HttpResponse
@@ -100,3 +101,45 @@ class SettingsTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WhisperExitTests(unittest.TestCase):
+    def test_a_crash_after_writing_subtitles_still_translates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = root / 'ABC-123.mp4'
+            video.write_bytes(b'')
+            exe = root / 'faster-whisper-xxl.exe'
+            exe.write_bytes(b'')
+
+            def crash_after_writing(command, **kwargs):
+                Path(command[command.index('--output_dir') + 1], 'ABC-123.srt').write_text(SRT, encoding='utf-8')
+                raise RuntimeError('Faster-Whisper-XXL 处理失败（退出码 3221226505）')
+
+            config = {'exe': str(exe), 'model': 'large-v3', 'vocal': False, 'bilingual': False, 'extra': ''}
+            with mock.patch('peach.jasna_restore._execute', crash_after_writing), \
+                    mock.patch('peach.platform.translate_ledger_path', lambda path: Path(path)), \
+                    mock.patch.object(subs, 'DeepSeek', lambda key: FakeClient([['你好', '好舒服']])):
+                result = subs._subtitle({'id': 1, 'path': str(video), 'name': video.name}, config, 'k',
+                                        root / 'state', None, mock.Mock(), lambda stage: None)
+            self.assertEqual(result['lines'], 2)
+            self.assertIn('你好', (root / 'ABC-123.zh.srt').read_text(encoding='utf-8'))
+            self.assertTrue((root / 'ABC-123.ja.srt').is_file())
+
+    def test_a_crash_without_subtitles_is_still_a_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = root / 'ABC-123.mp4'
+            video.write_bytes(b'')
+            exe = root / 'faster-whisper-xxl.exe'
+            exe.write_bytes(b'')
+
+            def crash(command, **kwargs):
+                raise RuntimeError('Faster-Whisper-XXL 处理失败（退出码 1）')
+
+            config = {'exe': str(exe), 'model': 'large-v3', 'vocal': False, 'bilingual': False, 'extra': ''}
+            with mock.patch('peach.jasna_restore._execute', crash), \
+                    mock.patch('peach.platform.translate_ledger_path', lambda path: Path(path)):
+                with self.assertRaisesRegex(RuntimeError, '退出码 1'):
+                    subs._subtitle({'id': 1, 'path': str(video), 'name': video.name}, config, 'k',
+                                   root / 'state', None, mock.Mock(), lambda stage: None)

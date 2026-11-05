@@ -341,9 +341,14 @@ def _subtitle(row, config: dict, key: str, state_root: Path, control, handle, re
         report('听写')
         handle.progress(current=0, total=100, label=f'{label}（首次使用会先下载模型）')
         try:
-            _execute(command, cwd=exe.parent, log=work / 'whisper.log', control=control, handle=handle,
-                     report=lambda value: None, name=row['name'] or video.name, label=label,
-                     tool='Faster-Whisper-XXL')
+            try:
+                _execute(command, cwd=exe.parent, log=work / 'whisper.log', control=control, handle=handle,
+                         report=lambda value: None, name=row['name'] or video.name, label=label,
+                         tool='Faster-Whisper-XXL')
+            except RuntimeError:
+                # Faster-Whisper-XXL 在部分显卡上写完字幕、退出时崩溃（退出码 0xC0000409）；字幕已写出就照常用。
+                if not any(work.glob('*.srt')):
+                    raise
             produced = sorted(work.glob('*.srt'))
             if not produced:
                 raise RuntimeError('听写结束了，但没有生成字幕文件')
