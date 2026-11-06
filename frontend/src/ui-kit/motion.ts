@@ -93,21 +93,13 @@ export function dissolveValue(input:any,host:any=input&&input.parentElement,
   input.classList.remove('dissolving');
   input.value='';
   if(!text||!input.isConnected)return ()=>{};
-  const box=input.getBoundingClientRect(),frame=host.getBoundingClientRect();
-  if(!box.width)return ()=>{};
-  const ghost=document.createElement('span');
-  ghost.className='cleardissolve';
-  ghost.setAttribute('aria-hidden','true');
+  const ghost=inputGhost(input,host,'cleardissolve');
+  if(!ghost)return ()=>{};
   const value=document.createElement('span');
   value.dataset.dissolveValue='';
   value.textContent=text;
   value.style.transform=`translateX(-${Math.max(0,scrollLeft)}px)`;
   ghost.append(value);
-  const style=getComputedStyle(input);
-  Object.assign(ghost.style,{left:`${box.left-frame.left-host.clientLeft}px`,
-    top:`${box.top-frame.top-host.clientTop}px`,width:`${box.width}px`,height:`${box.height}px`,
-    boxSizing:'border-box',padding:style.padding,font:style.font,lineHeight:style.lineHeight,
-    letterSpacing:style.letterSpacing,textAlign:style.textAlign,direction:style.direction});
   input.classList.add('dissolving');
   host.append(ghost);
   let active=true,timer:ReturnType<typeof setTimeout>|null=null;
@@ -123,6 +115,59 @@ export function dissolveValue(input:any,host:any=input&&input.parentElement,
   /* 兜底：`--motion-reveal` 归零或这一刻元素不可见时 `animationend` 不会来，
      不兜的话这份复制品就永远盖在输入框上。 */
   timer=setTimeout(drop,1000);
+  return drop;
+}
+
+/** 照输入框此刻的位置、内边距和字体摆一层空的覆盖层，字落在框里同一处；框不可见时是 null。 */
+function inputGhost(input:any,host:any,className:string):HTMLSpanElement|null{
+  const box=input.getBoundingClientRect(),frame=host.getBoundingClientRect();
+  if(!box.width)return null;
+  const ghost=document.createElement('span');
+  ghost.className=className;
+  ghost.setAttribute('aria-hidden','true');
+  const style=getComputedStyle(input);
+  Object.assign(ghost.style,{left:`${box.left-frame.left-host.clientLeft}px`,
+    top:`${box.top-frame.top-host.clientTop}px`,width:`${box.width}px`,height:`${box.height}px`,
+    boxSizing:'border-box',padding:style.padding,font:style.font,lineHeight:style.lineHeight,
+    letterSpacing:style.letterSpacing,textAlign:style.textAlign,direction:style.direction});
+  return ghost;
+}
+
+/**
+ * 输入框的占位字换一句：旧字往上糊掉，新字从下方回到原位，同 `swapText`。
+ *
+ * 占位字是输入框自己画的，做不了动画：这里照它的位置和颜色摆一层，让那一层去换，换的这段
+ * 时间收起框里的占位字，换完摘掉这一层。`placeholder` 当场就改成新的，读屏和回车读到的都是它。
+ * 框里有字、框不可见或要求减弱动效时直接改，不放动画。返回撤销函数：动画中途开始打字就收掉。
+ */
+export function rollPlaceholder(input:any,next:string,host:any=input&&input.parentElement):()=>void{
+  if(!input)return ()=>{};
+  const previous=input.placeholder;
+  host?.querySelectorAll(':scope > .placeholderroll').forEach((node:Element)=>node.remove());
+  input.classList.remove('placeholderrolling');
+  input.placeholder=next;
+  if(!host||!previous||previous===next||input.value||!input.isConnected
+    ||window.matchMedia('(prefers-reduced-motion: reduce)').matches)return ()=>{};
+  const ghost=inputGhost(input,host,'placeholderroll');
+  if(!ghost)return ()=>{};
+  ghost.style.color=getComputedStyle(input,'::placeholder').color;
+  const line=document.createElement('span');
+  ghost.append(line);
+  input.classList.add('placeholderrolling');
+  host.append(ghost);
+  swapText(line,previous);
+  line.getBoundingClientRect();
+  swapText(line,next);
+  let active=true;
+  const drop=()=>{
+    if(!active)return;
+    active=false;
+    clearTimeout(timer);
+    ghost.remove();
+    if(!host.querySelector(':scope > .placeholderroll'))input.classList.remove('placeholderrolling');
+  };
+  /* 退场与进场各一段 `--motion-swap`；`swapText` 自己的兜底是 400ms，这里留足两段再收。 */
+  const timer=setTimeout(drop,900);
   return drop;
 }
 

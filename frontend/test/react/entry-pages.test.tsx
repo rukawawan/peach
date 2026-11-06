@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ErrorPage } from '../../src/react/pages/error/error-page';
-import { LoginPage, WRONG_PASSWORD } from '../../src/react/pages/login/login-page';
-import { click, mount, type } from './render';
+import { AccessSetup, FIRST_ACCESS_URL } from '../../src/react/pages/login/access-setup';
+import { FIRST_ACCESS_DENIED } from '../../src/react/pages/first-access';
+import { LoginPage, WRONG_PASSWORD, WRONG_TOKEN } from '../../src/react/pages/login/login-page';
+import { buttonNamed, click, fetchMock, mount, sentBody, settle, submit, switches, type } from './render';
 
 const tokenInput = (root: ParentNode) => root.querySelector<HTMLInputElement>('input[name="token"]');
 const alerts = (root: ParentNode) => [...root.querySelectorAll('[role="alert"]')];
@@ -57,6 +59,85 @@ describe('登录页', () => {
       expect(alerts(host).map((node) => node.textContent)).toEqual([reason]);
       host.remove();
     }
+  });
+});
+
+describe('登录页的模式', () => {
+  const label = (root: ParentNode) => root.querySelector('label[for="login-token"], label')?.textContent ?? '';
+
+  it('有访问策略时填访问密码，不提口令', async () => {
+    const host = await mount(<LoginPage data={{ next: '/' }} />);
+    expect(label(host)).toContain('访问密码');
+    expect(host.textContent).not.toContain('peach token');
+  });
+
+  it('非 Docker 还没有访问策略时填访问口令，说明用 peach token 查看', async () => {
+    const host = await mount(<LoginPage data={{ next: '/', mode: 'legacy', invalid: 'true' }} />);
+    expect(label(host)).toContain('访问口令');
+    expect(alerts(host).map((node) => node.textContent)).toEqual([WRONG_TOKEN]);
+    await type(tokenInput(host), 'again');
+    expect(host.querySelector('code')?.textContent).toBe('peach token');
+    expect(host.textContent).not.toContain('docker compose');
+  });
+
+  it('Docker 来源不满足时先说去哪里打开，再给口令登录并写 docker compose 的查法', async () => {
+    const host = await mount(<LoginPage data={{ next: '/', mode: 'denied' }} />);
+    expect(host.querySelector('[role="note"]')?.textContent).toBe(FIRST_ACCESS_DENIED);
+    expect(label(host)).toContain('访问口令');
+    expect(host.querySelector('code')?.textContent).toBe('docker compose exec peach peach token');
+    expect(host.querySelector('form')?.getAttribute('action')).toBe('/login');
+  });
+
+  it('Docker 首次访问画访问设置，不画口令框', async () => {
+    const host = await mount(<LoginPage data={{ next: '/', mode: 'setup' }} />);
+    expect(tokenInput(host)).toBeNull();
+    expect(host.querySelector('h1')?.textContent).toBe('访问设置');
+    expect(host.querySelector('#access-password')).not.toBeNull();
+  });
+});
+
+describe('Docker 首次访问设置', () => {
+  it('设访问密码：提交密码与 next，成功后去服务端给的地址', async () => {
+    const fetcher = fetchMock(200, { url: '/stats' });
+    vi.stubGlobal('fetch', fetcher);
+    const navigate = vi.fn();
+    const host = await mount(<AccessSetup data={{ next: '/stats' }} navigate={navigate} />);
+    await type(host.querySelector<HTMLInputElement>('#access-password'), 'correct-password');
+    await type(host.querySelector<HTMLInputElement>('#access-confirm'), 'correct-password');
+    await submit(host.querySelector('form'));
+    await settle();
+    expect(fetcher.mock.calls[0]?.[0]).toBe(FIRST_ACCESS_URL);
+    expect(sentBody(fetcher)).toEqual({ mode: 'password', password: 'correct-password', confirmation: 'correct-password', next: '/stats' });
+    expect(navigate).toHaveBeenCalledWith('/stats');
+  });
+
+  it('关掉开关就是选免登录，按钮写明，提交里不带密码', async () => {
+    const fetcher = fetchMock(200, { url: '/' });
+    vi.stubGlobal('fetch', fetcher);
+    const navigate = vi.fn();
+    const host = await mount(<AccessSetup data={{}} navigate={navigate} />);
+    expect(buttonNamed('设置密码并进入', host)).not.toBeNull();
+    await click(switches(host)[0]);
+    expect(host.querySelector('#access-password')).toBeNull();
+    await click(buttonNamed('免登录进入', host));
+    await settle();
+    expect(sentBody(fetcher)).toEqual({ mode: 'open', next: '/' });
+    expect(navigate).toHaveBeenCalledWith('/');
+  });
+
+  it('字段错误写回框下，整页原因写在按钮上方，都不跳转', async () => {
+    const navigate = vi.fn();
+    vi.stubGlobal('fetch', fetchMock(400, { error: '两次输入的密码不一致', errors: { confirmation: '两次输入的密码不一致' } }));
+    const host = await mount(<AccessSetup data={{}} navigate={navigate} />);
+    await submit(host.querySelector('form'));
+    await settle();
+    expect(host.querySelector('#access-confirm')?.getAttribute('aria-invalid')).toBe('true');
+    expect(alerts(host).map((node) => node.textContent)).toEqual(['两次输入的密码不一致']);
+    vi.stubGlobal('fetch', fetchMock(403, { error: FIRST_ACCESS_DENIED }));
+    await submit(host.querySelector('form'));
+    await settle();
+    expect(host.textContent).toContain(FIRST_ACCESS_DENIED);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

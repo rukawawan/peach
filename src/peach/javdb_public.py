@@ -17,16 +17,30 @@ from urllib.parse import urlencode, urlsplit
 
 from PIL import Image
 
-from .catalog_rules import normalise_code_key
+from .catalog_rules import normalise_code_key, release_identity, same_release_code
 from .http import HttpRequest, HttpxTransport, response_text
 from .scripting import HostLimiter
+from .user_agent import JAVDB_APP_USER_AGENT
 from .jav_cache import DAY, PublicSnapshots, cache_lifetime
 from .javdb_identity import RULE, cache_key as identity_cache_key, current_evidence
 
 WEB = "https://catembylegacy.fastcdn.dpdns.org"
-API = "https://jdforrepam.com/api"
+#: 接口主机按序使用（ADR-0148）。2026-11-05 实测三家对同一作品给出同一份详情，网页签名与 App 签名都收；
+#: 镜像每次慢 0.25～0.45 秒，只在前一家冷却时接替。配额按各主机分开处理。
+API_HOSTS = ("https://jdforrepam.com", "https://apidd.czssdgz.com", "https://apidd.spthgb.com")
+#: 网页前端取不到签名时用的 App 签名材料与请求形态，按实测通过的那一组原样发送。
+APP_SIGNATURE = ("lpw6vgqzsp", "71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e"
+                 "7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa")
+APP_QUERY = {"platform": "android", "app_channel": "official", "app_version": "official",
+             "app_version_number": "1.9.35", "system_version": "13", "device_model": "Pixel 6",
+             "device_name": "Pixel", "device_uuid": "1d26b2df-f042-5138-90b3-28980fe1d98a"}
+APP_HEADERS = {"accept-language": "zh", "User-Agent": JAVDB_APP_USER_AGENT}
 PAGE_SIZE = 10
 MAX_REVIEW_PAGES = 8
+#: 资料请求的主机间隔，由用户 2026-11-05 定为 0.5 秒。同日实测：2 秒逐档降到 0.25 秒各 40 次，
+#: 再按 0.5 秒连发 600 次（5 分钟），全部 HTTP 200 且业务成功；更长时间的累计配额未测。
+#: 一个接口主机撞上 403/429 时冷却 15 分钟、换下一家，全部冷却才整源停（`_json`）。
+API_INTERVAL = 0.5
 _JS_IDENTIFIER = r'[A-Za-z_$][A-Za-z0-9_$]*'
 _CACHE_ROOT = ContextVar('jav_public_cache_root', default=None)
 _CACHE_READS = ContextVar('jav_public_cache_reads', default=None)
@@ -118,12 +132,31 @@ def preview_video_url(movie: dict) -> str:
     return value if allowed else ""
 
 
+def magnet_size(value: object) -> str:
+    """磁链区的体积是 MiB 整数，写成带单位的文字；其他形态原样保留。"""
+    if type(value) in (int, float) and value > 0:
+        return f"{value / 1024:.2f}GB" if value >= 1024 else f"{value:g}MB"
+    return str(value or "")
+
+
 class PublicSourceUnavailable(ValueError):
     """公开来源当前未取得。"""
 
 
 class PublicIdentityAmbiguous(PublicSourceUnavailable):
     """同番号有多个来源身份，不能按番号绑定资料或媒体。"""
+
+
+class PublicNotFound(PublicSourceUnavailable):
+    """来源搜索结果里没有这个番号。"""
+
+
+class PublicSourcePaused(PublicSourceUnavailable):
+    """来源冷却期内不发请求。"""
+
+
+class PublicHostFailed(PublicSourceUnavailable):
+    """这一个主机没有答复或答复不可用；同协议的下一个主机可以接替。"""
 
 
 class PublicBudgetExceeded(PublicSourceUnavailable):
@@ -169,7 +202,7 @@ class PublicAPI:
                  cache_root=None, wallclock=time.time):
         self.transport = transport
         self.clock = clock
-        self.limiter = HostLimiter({}, default_interval=3.0, clock=clock, sleeper=sleeper)
+        self.limiter = HostLimiter({}, default_interval=API_INTERVAL, clock=clock, sleeper=sleeper)
         self.lock = threading.RLock()
         self.cache: OrderedDict[str, tuple[float, object]] = OrderedDict()
         self.cache_root, self.wallclock = cache_root, wallclock
@@ -179,7 +212,9 @@ class PublicAPI:
         self.image_slots = threading.BoundedSemaphore(3)
         self.source_lock = threading.RLock()
         self.signature_parts: tuple[str, str] | None = None
+        self.signature_app = False
         self.signature_until = 0.0
+        self.host_paused: dict[str, float] = {}
         self.paused_until = 0.0
         self.image_paused_until = 0.0
         self.request_context = ContextVar("jav_public_request_budget", default=None)
@@ -196,10 +231,23 @@ class PublicAPI:
         finally:
             self.request_context.reset(token)
 
-    def _get(self, url: str, *, signed=False, limit=2 * 1024 * 1024, image=False):
+    def _pause(self, delay, *, image=False, host=None):
+        until = self.clock() + delay
+        if image:
+            self.image_paused_until = until
+        elif host:
+            self.host_paused[host] = until
+            if host in API_HOSTS and all(self.host_paused.get(name, 0.0) > self.clock() for name in API_HOSTS):
+                self.paused_until = min(self.host_paused[name] for name in API_HOSTS)
+        else:
+            self.paused_until = until
+
+    def _get(self, url: str, *, signed=False, limit=2 * 1024 * 1024, image=False, host=None):
+        """`host` 给出时失败只冷却这个主机，抛 `PublicHostFailed` 交调用方换下一家。"""
+        failed = PublicHostFailed if host else PublicSourceUnavailable
         paused = self.image_paused_until if image else self.paused_until
         if self.clock() < paused:
-            raise PublicSourceUnavailable("图片来源暂时不可用，请稍后重试" if image else "作品资料来源暂时不可用，请稍后重试")
+            raise PublicSourcePaused("图片来源暂时不可用，请稍后重试" if image else "作品资料来源暂时不可用，请稍后重试")
         if not image:
             self.limiter.wait(url)
         budget = self.request_context.get()
@@ -212,6 +260,8 @@ class PublicAPI:
             middle, suffix = self._signature()
             digest = hashlib.md5((stamp + suffix).encode(), usedforsecurity=False).hexdigest()
             headers["jdsignature"] = f"{stamp}.{middle}.{digest}"
+            if self.signature_app:
+                headers.update(APP_HEADERS)
         if self.transport is None:
             self.transport = HttpxTransport()
         try:
@@ -219,48 +269,66 @@ class PublicAPI:
                 budget.requests += 1
             response = self.transport(HttpRequest("GET", url, headers), 15, limit)
         except Exception as error:
-            if image:
-                self.image_paused_until = self.clock() + 60
-            else:
-                self.paused_until = self.clock() + 60
-            raise PublicSourceUnavailable("作品资料未取得，请稍后重试") from error
+            self._pause(60, image=image, host=host)
+            raise failed("作品资料未取得，请稍后重试") from error
         if budget:
             budget.bytes += len(response.body)
         if response.status != 200:
-            delay = 900 if response.status in (403, 429) else 60
-            if image:
-                self.image_paused_until = self.clock() + delay
-            else:
-                self.paused_until = self.clock() + delay
-            raise PublicSourceUnavailable("作品资料来源暂时不可用，请稍后重试")
+            self._pause(900 if response.status in (403, 429) else 60, image=image, host=host)
+            raise failed("作品资料来源暂时不可用，请稍后重试")
         return response
 
     def _signature(self) -> tuple[str, str]:
         if self.signature_parts and self.clock() < self.signature_until:
             return self.signature_parts
-        html = response_text(self._get(WEB + "/"))
-        entry = re.search(r'src="(/assets/index-[A-Za-z0-9_-]+\.js)"', html)
-        if not entry:
-            self.paused_until = self.clock() + 60
-            raise PublicSourceUnavailable("作品资料来源格式未识别")
-        js = response_text(self._get(WEB + entry[1]))
-        parts = public_signature_parts(js)
+        try:
+            parts = self._web_signature()
+        except PublicHostFailed:
+            parts = None
         if parts is None:
-            self.paused_until = self.clock() + 60
-            raise PublicSourceUnavailable("作品资料来源格式未识别")
-        self.signature_parts = parts
-        self.signature_until = self.clock() + 24 * 3600
+            # 网页前端取不到签名时用 App 那一套，一小时后再回头读网页前端。
+            self.signature_parts, self.signature_app = APP_SIGNATURE, True
+            self.signature_until = self.clock() + 3600
+        else:
+            self.signature_parts, self.signature_app = parts, False
+            self.signature_until = self.clock() + 24 * 3600
         return self.signature_parts
+
+    def _web_signature(self) -> tuple[str, str] | None:
+        if self.host_paused.get(WEB, 0.0) > self.clock():
+            return None
+        html = response_text(self._get(WEB + "/", host=WEB))
+        entry = re.search(r'src="(/assets/index-[A-Za-z0-9_-]+\.js)"', html)
+        parts = entry and public_signature_parts(response_text(self._get(WEB + entry[1], host=WEB)))
+        if not parts:
+            self._pause(60, host=WEB)
+        return parts or None
 
     def _json(self, path: str, query=None) -> dict:
         # 签名材料取齐后再领取 API 主机间隔，首个签名请求不占用两次间隔。
         self._signature()
-        response = self._get(API + path + ("?" + urlencode(query) if query else ""), signed=True)
-        try:
-            payload = json.loads(response.body)
-        except (ValueError, UnicodeError) as error:
-            self.paused_until = self.clock() + 60
-            raise PublicSourceUnavailable("作品资料来源格式未识别") from error
+        if self.signature_app:
+            query = {**APP_QUERY, **(query or {})}
+        tail = "/api" + path + ("?" + urlencode(query) if query else "")
+        attempted = False
+        for host in API_HOSTS:
+            if self.host_paused.get(host, 0.0) > self.clock():
+                continue
+            attempted = True
+            try:
+                response = self._get(host + tail, signed=True, host=host)
+            except PublicHostFailed:
+                continue
+            try:
+                payload = json.loads(response.body)
+                break
+            except (ValueError, UnicodeError):
+                # 被劫持或改版的主机会回 200 的网页，换下一家。
+                self._pause(60, host=host)
+        else:
+            if attempted:
+                raise PublicSourceUnavailable("作品资料来源暂时不可用，请稍后重试")
+            raise PublicSourcePaused("作品资料来源暂时不可用，请稍后重试")
         if not isinstance(payload, dict) or payload.get("success") != 1:
             self.paused_until = self.clock() + 60
             raise PublicSourceUnavailable("作品资料未取得，请稍后重试")
@@ -377,16 +445,20 @@ class PublicAPI:
         return snapshot
 
     def movie(self, code: str, *, refresh=False, source_id=None) -> dict:
+        """番号对应的来源作品。来源去掉 MGS 的数字前缀（`259LUXU-891` 记作 `LUXU-891`），
+        搜索词与身份核对都按 `release_identity` 认同一部作品。"""
         canonical = normalise_code_key(code)
 
         def identify():
             product = re.fullmatch(r'FC2-PPV-(\d+)', canonical)
-            query = product[1] if product else canonical
+            query = product[1] if product else release_identity(canonical) or canonical
             rows = self._rows("/v2/search", "movies", {"q": query, "type": "movie", "page": 1})
             matches = [row for row in rows if isinstance(row, dict)
-                       and normalise_code_key(row.get("number")) == canonical]
-            if not matches or any(not isinstance(row.get('id'), str)
-                                  or not re.fullmatch(r'[A-Za-z0-9]+', row['id']) for row in matches):
+                       and same_release_code(canonical, row.get("number"))]
+            if not matches:
+                raise PublicNotFound("未取得这个番号的作品资料")
+            if any(not isinstance(row.get('id'), str)
+                   or not re.fullmatch(r'[A-Za-z0-9]+', row['id']) for row in matches):
                 raise PublicSourceUnavailable("未取得这个番号的作品资料")
             return list(dict.fromkeys(row['id'] for row in matches))
 
@@ -402,7 +474,7 @@ class PublicAPI:
 
         def fetch():
             movie = self._json("/v4/movies/" + movie_id).get("movie")
-            if (not isinstance(movie, dict) or normalise_code_key(movie.get("number")) != canonical
+            if (not isinstance(movie, dict) or not same_release_code(canonical, movie.get("number"))
                     or movie.get("id") != movie_id):
                 raise PublicSourceUnavailable("来源作品身份不匹配")
             return {**movie, 'javdb_rule': RULE}
@@ -414,7 +486,7 @@ class PublicAPI:
         canonical = normalise_code_key(code)
         identity = source.get("id")
         if (not current_evidence(source) or not isinstance(identity, str)
-                or normalise_code_key(source.get("number")) != canonical
+                or not same_release_code(canonical, source.get("number"))
                 or not re.fullmatch(r"[A-Za-z0-9]+", identity)):
             return
         key = 'movie-id:' + canonical
@@ -461,7 +533,7 @@ class PublicAPI:
             return self.movie(code)
         if (not isinstance(movie, dict) or not isinstance(movie.get('id'), str)
                 or not re.fullmatch(r'[A-Za-z0-9]+', movie['id'])
-                or normalise_code_key(movie.get('number')) != normalise_code_key(code)):
+                or not same_release_code(code, movie.get('number'))):
             raise PublicSourceUnavailable('来源作品身份不匹配')
         return movie
 
@@ -492,6 +564,53 @@ class PublicAPI:
         return self._cached("magnets:" + movie['id'], lambda:
                             self._rows(f"/v1/movies/{movie['id']}/magnets", "magnets"),
                             released=movie.get('release_date'), refresh=refresh)
+
+    def resources(self, code: str, *, refresh=False, review_pages=MAX_REVIEW_PAGES) -> dict:
+        """磁链区与评论正文的资源链接；一侧未取得只记警告，作品身份未取得直接抛出。"""
+        from .downloads import parse_magnet
+        from .sources.javdb import merge_resources, parse_comment_text
+
+        movie = self.movie(code, refresh=True) if refresh else self.movie(code)
+        source_url = "https://javdb.com/v/" + movie["id"]
+        warnings = []
+        items = {}
+        magnet_failed = comments_failed = False
+        try:
+            rows = self.magnets(code, refresh=refresh, movie=movie)
+        except PublicSourceUnavailable as error:
+            rows = []
+            magnet_failed = True
+            warnings.append("磁链区资源未取得：" + str(error))
+        for row in rows:
+            try:
+                magnet = parse_magnet(str(row.get("hash") or ""))
+            except ValueError:
+                continue
+            if magnet.info_hash in items:
+                continue
+            attributes = [label for key, label in (("cnsub", "中字"), ("hd", "高清")) if row.get(key)]
+            items[magnet.info_hash] = {"id": "magnet:" + magnet.info_hash, "protocol": "magnet",
+                "info_hash": magnet.info_hash, "uri": magnet.uri, "name": row.get("name") or code,
+                "size": magnet_size(row.get("size")), "files": str(row.get("files_count") or ""),
+                "date": str(row.get("created_at") or ""), "attributes": attributes,
+                "source": "JavDB", "source_url": source_url, "origins": ["JavDB"]}
+        comments = []
+        try:
+            for page in range(1, review_pages + 1):
+                reviews = self.reviews(code, page, refresh=refresh, movie=movie)
+                for review in reviews:
+                    origin = source_url + "#review-item-" + str(review.get("id") or "")
+                    comments.extend(parse_comment_text(str(review.get("content") or ""), origin,
+                                                       str(review.get("created_at") or "")))
+                if len(reviews) < PAGE_SIZE:
+                    break
+            else:
+                warnings.append(f"已查询前 {review_pages} 页评论资源。")
+        except PublicSourceUnavailable as error:
+            comments_failed = True
+            warnings.append("评论资源未取得：" + str(error))
+        return {"items": merge_resources([*items.values(), *comments]), "warnings": warnings,
+                "source_url": source_url, "magnet_failed": magnet_failed, "comments_failed": comments_failed}
 
     def official_preview(self, code, fetch, *, released=None, refresh=False, provider='prestige', source_id=None):
         """预告按来源独立保存；DMM、JavDB 和未提供的预告每天可再检查。"""

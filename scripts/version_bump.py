@@ -39,6 +39,8 @@ RUNTIME_INPUTS = (
     "scripts/setup_macos_media_tools.py",
     "scripts/fetch_cloudflared_macos.py",
     "scripts/cloudflared-macos.json",
+    "scripts/fetch_sparkle_macos.py",
+    "scripts/sparkle-macos.json",
     "scripts/media_tool_bundle.py",
     "scripts/fetch_ffmpeg_sources.py",
     "scripts/fetch_untrunc_sources.py",

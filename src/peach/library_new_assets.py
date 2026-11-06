@@ -34,8 +34,18 @@ def _read(db):
     return set(ids)
 
 
+def _lock(path):
+    return FileLock(str(path)+'.lock')
+
+
 def pending(db):
-    return _active_videos(db, sorted(_read(db)))
+    # `remember` 持锁原子替换；Windows 上替换瞬间的读取会撞上共享冲突，读也等同一把锁。
+    path = _path(db)
+    if not path.parent.is_dir():
+        return []
+    with _lock(path):
+        wanted = sorted(_read(db))
+    return _active_videos(db, wanted)
 
 
 def _active_videos(db, wanted):
@@ -53,7 +63,7 @@ def _active_videos(db, wanted):
 def remember(db, ids=(), *, completed=()):
     path = _path(db)
     path.parent.mkdir(parents=True,exist_ok=True)
-    with FileLock(str(path)+'.lock'):
+    with _lock(path):
         previous = _read(db)
         updated = set(_active_videos(db, sorted(previous | set(ids)))) - set(completed)
         if updated != previous or (updated and not path.exists()):

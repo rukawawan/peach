@@ -103,10 +103,17 @@ describe('共享提示的文字与锚点', () => {
         await tip.hover();
         await opened.page.waitForTimeout(300);
         assert.equal(await tip.isVisible(), true);
-        await opened.page.keyboard.press('Escape');
-        await tip.waitFor({ state: 'hidden' });
-        assert.equal(await tip.getAttribute('data-copy-key'), null);
-        await opened.page.locator('#tip-other-control').focus();
+        // Esc 收起后指针仍停在原处，浏览器随后按原坐标补发边界事件；收起与聚焦放在同一任务里，补发必然落在聚焦之后。
+        const closed = await opened.page.evaluate(() => {
+          const node = document.querySelector('#board-control-tooltip')!;
+          document.addEventListener('pointerover', () => { (window as any).__restingBoundary = true }, { once: true, capture: true });
+          document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          const state = { hidden: node.hasAttribute('hidden'), key: node.getAttribute('data-copy-key') };
+          document.querySelector<HTMLElement>('#tip-other-control')!.focus();
+          return state;
+        });
+        assert.deepEqual(closed, { hidden: true, key: null });
+        await opened.page.waitForFunction(() => (window as any).__restingBoundary === true);
         await tip.waitFor({ state: 'visible' });
         assert.equal(await tip.textContent(), '其他操作');
         assert.equal(await tip.getAttribute('data-copy-key'), null);

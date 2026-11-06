@@ -1,12 +1,14 @@
 """发行通道、故障状态和独立托盘检查的隔离回归。"""
 import json
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 import httpx
 
-from peach import distribution, release_updates
+from peach import distribution, docker_update, release_updates
 from peach.http import HttpResponse
 from peach.versioning import VersionManager
 
@@ -131,6 +133,26 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.assertEqual(calls, [release_updates.API_URL, release_updates.DOWNLOADS_API])
         self.assertEqual(result["asset_url"], release_updates.RELEASES_URL + "/download/v1.0.0/Peach-1.0.0-windows-x64.zip")
 
+    def test_tool_package_is_the_newest_release_carrying_that_tool_with_a_digest(self):
+        def tools(version, digest=True):
+            row = release(version)
+            row["assets"].append({"name": f"Peach-{version}-windows-x64-tools-ffmpeg.zip", "state": "uploaded",
+                                  "size": 42, **({"digest": "sha256:" + "b" * 64} if digest else {})})
+            return row
+
+        github = [tools("2.0.0", digest=False), tools("1.5.0"), release("3.0.0")]
+        mirror = [tools("1.0.0")]
+
+        def transport(request, *_args):
+            rows = mirror if request.url == release_updates.DOWNLOADS_API else github
+            return HttpResponse(200, {}, json.dumps(rows).encode())
+
+        self.assertEqual(release_updates.tool_package("ffmpeg", transport=transport), {
+            "url": release_updates.RELEASES_URL + "/download/v1.5.0/Peach-1.5.0-windows-x64-tools-ffmpeg.zip",
+            "size": 42, "digest": "sha256:" + "b" * 64, "version": "1.5.0"})
+        with self.assertRaisesRegex(ValueError, "工具包"):
+            release_updates.tool_package("untrunc", transport=transport)
+
     def test_standalone_tray_checks_releases_without_git(self):
         execute = Mock(side_effect=AssertionError("Git must not run"))
         with patch("peach.distribution.standalone", return_value=True), patch.object(
@@ -162,8 +184,124 @@ class ReleaseUpdateTests(unittest.TestCase):
             with patch.object(distribution, "sys", SimpleNamespace(platform="win32")):
                 self.assertTrue(release_updates.snapshot()["in_app_update"])
 
+    def docker_check(self, digests, *, auth_status=200):
+        """Release 列表给 1.0.0；镜像仓库按 `digests` 回各标签的摘要，缺的标签回 404。"""
+        calls = []
+
+        def transport(request, *_args):
+            calls.append(request)
+            if request.url.startswith(docker_update.REGISTRY_AUTH):
+                return HttpResponse(auth_status, {}, json.dumps({"token": "anonymous"}).encode())
+            if request.url.startswith(docker_update.REGISTRY):
+                digest = digests.get(request.url.rsplit("/", 1)[1])
+                return HttpResponse(200 if digest else 404, {"Docker-Content-Digest": digest} if digest else {}, b"")
+            return HttpResponse(200, {}, json.dumps([release("1.0.0")]).encode())
+
+        with patch.dict("os.environ", {"PEACH_DISTRIBUTION": "docker"}), \
+                patch.object(release_updates, "__version__", "0.9.0"), \
+                patch.object(docker_update, "status", return_value={"available": True, "reason": ""}):
+            return release_updates.check(transport=transport, system="linux", machine="x86_64"), calls
+
+    def test_docker_image_reports_itself_and_gives_host_steps_instead_of_a_package(self):
+        same = "sha256:" + "a" * 64
+        with patch.dict("os.environ", {"PEACH_DISTRIBUTION": "docker"}):
+            snapshot = release_updates.snapshot()
+        result, calls = self.docker_check({"1.0.0": same, "edge": same})
+        self.assertEqual(snapshot["installation"], "Docker 镜像", "此前显示成「源码运行」")
+        self.assertEqual([step["command"] for step in snapshot["steps"]],
+                         ["docker compose pull", "docker compose up -d"])
+        self.assertEqual((result["state"], result["latest_version"]), ("available", "1.0.0"))
+        self.assertEqual(result["release_url"], release_updates.RELEASES_URL + "/tag/v1.0.0")
+        self.assertNotIn("package_kind", result, "容器不下载 Windows 发行包")
+        self.assertNotIn("asset_url", result)
+        self.assertEqual(result["one_click"], {"available": True, "reason": ""})
+        manifests = [request for request in calls if "/manifests/" in request.url]
+        self.assertEqual({request.method for request in manifests}, {"HEAD"}, "只读摘要，不下载 manifest 正文与镜像层")
+        self.assertTrue(all(request.headers["Authorization"] == "Bearer anonymous" for request in manifests))
+        self.assertFalse(any("Authorization" in request.headers for request in calls if request not in manifests),
+                         "匿名令牌只发给镜像仓库")
+        with patch.dict("os.environ", {"PEACH_DISTRIBUTION": ""}):
+            self.assertEqual(release_updates.snapshot()["steps"], [])
+
+    def test_docker_release_waits_until_edge_points_at_the_pushed_version(self):
+        old, new = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        for digests in ({}, {"edge": old}, {"1.0.0": new, "edge": old}):
+            with self.subTest(digests=digests):
+                result, _ = self.docker_check(digests)
+                self.assertEqual(result["state"], "pending", "Release 已建、镜像还没推送时不能提示拉取")
+                self.assertEqual(result["latest_version"], "1.0.0")
+                self.assertIn("镜像尚未发布", result["message"])
+                self.assertNotIn("one_click", result, "镜像没推送时不给一键更新")
+        result, _ = self.docker_check({"1.0.0": new, "edge": new}, auth_status=503)
+        self.assertEqual(result["state"], "error", "读不到镜像仓库就是没查成，不当成有新版")
+
     def test_macos_skips_releases_without_its_dmg(self):
         transport = Mock(return_value=HttpResponse(200, {}, json.dumps([release("1.0.0")]).encode()))
         with patch.object(release_updates, "__version__", "0.9.0"):
             result = release_updates.check(transport=transport, system="darwin", machine="arm64")
         self.assertEqual(result["state"], "empty", "只有 Windows 包的版本不能提示 macOS 更新")
+
+
+class DockerUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict("os.environ", {docker_update.IMAGE_TAG_ENV: "edge",
+                                                    docker_update.UPDATE_DIR_ENV: str(self.root)}))
+
+    def watchtower(self, post_status, *, reachable=True):
+        """假 Watchtower：探测（GET）回 401 表示在线，更新请求（POST）回 `post_status`。"""
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            if not reachable:
+                raise httpx.ConnectError("Name or service not known", request=request)
+            return httpx.Response(401 if request.method == "GET" else post_status)
+        return httpx.MockTransport(handler), requests
+
+    def test_token_is_generated_once_and_kept(self):
+        docker_update.ensure_token()
+        path = self.root / docker_update.TOKEN_NAME
+        first = path.read_text(encoding="utf-8")
+        self.assertGreaterEqual(len(first), 40)
+        docker_update.ensure_token()
+        self.assertEqual(path.read_text(encoding="utf-8"), first, "Watchtower 只在启动时读一次，换了就对不上")
+        with patch.dict("os.environ", {docker_update.UPDATE_DIR_ENV: ""}):
+            docker_update.ensure_token()  # 不在官方镜像里：没有令牌目录，什么也不做
+
+    def test_one_click_needs_a_rolling_tag_a_token_and_a_reachable_watchtower(self):
+        transport, _ = self.watchtower(202)
+        self.assertIn("令牌", docker_update.status(transport=transport)["reason"])
+        docker_update.ensure_token()
+        self.assertEqual(docker_update.status(transport=transport), {"available": True, "reason": ""})
+        self.assertEqual(docker_update.status(transport=self.watchtower(202, reachable=False)[0]),
+                         {"available": False, "reason": ""}, "没启用 watchtower profile 时照常给两步命令，不报错")
+        for tag, message in (("0.53.0", ".env"), ("", "compose.yaml")):
+            with self.subTest(tag=tag), patch.dict("os.environ", {docker_update.IMAGE_TAG_ENV: tag}):
+                state = docker_update.status(transport=transport)
+                self.assertFalse(state["available"])
+                self.assertIn(message, state["reason"], "旧 compose 没传标签时要指向 compose 文件，不是 .env")
+
+    def test_trigger_posts_an_async_update_with_the_generated_token(self):
+        docker_update.ensure_token()
+        token = (self.root / docker_update.TOKEN_NAME).read_text(encoding="utf-8")
+        transport, requests = self.watchtower(202)
+        self.assertEqual(docker_update.trigger(transport=transport)["state"], "updating")
+        posted = [request for request in requests if request.method == "POST"]
+        self.assertEqual([str(request.url) for request in posted], [docker_update.WATCHTOWER_URL + "/v1/update?async=true"],
+                         "同步请求的响应会被 Watchtower 停容器打断")
+        self.assertEqual(posted[0].headers["Authorization"], f"Bearer {token}")
+        self.assertFalse(any("Authorization" in request.headers for request in requests if request.method == "GET"),
+                         "探测不带令牌")
+        for status, message in ((401, "docker compose restart watchtower"), (429, "另一次更新"), (500, "HTTP 500")):
+            with self.subTest(status=status), self.assertRaisesRegex((ValueError, OSError), message):
+                docker_update.trigger(transport=self.watchtower(status)[0])
+
+    def test_trigger_refuses_before_contacting_watchtower_when_it_cannot_update(self):
+        transport, requests = self.watchtower(202)
+        docker_update.ensure_token()
+        with patch.dict("os.environ", {docker_update.IMAGE_TAG_ENV: "0.53.0"}), self.assertRaisesRegex(ValueError, "edge"):
+            docker_update.trigger(transport=transport)
+        self.assertEqual(requests, [], "换不到新版本时不打扰 Watchtower")
+        with self.assertRaisesRegex(ValueError, "watchtower profile"):
+            docker_update.trigger(transport=self.watchtower(202, reachable=False)[0])

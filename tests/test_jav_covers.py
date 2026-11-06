@@ -774,7 +774,7 @@ class CrossProductCoverTests(unittest.TestCase):
             "https://contents-thumbnail2.fc2.com/w1200/storage/x.jpg"))
 
     def test_dmm_content_id_must_carry_the_code_number(self):
-        # 字母段对上、数字段不对：MIB 的 `YUJ-101` 取回 `yuj00011`，`435MFC-135` 取回
+        # 字母段对上、数字段不对：`YUJ-101` 取回 `yuj00011`，`435MFC-135` 取回
         # `mfcc00027`。954 条成功记录里，这样的正好 9 条，全是错图。
         for code, cid in (("YUJ-101", "yuj00011"), ("CHU-201", "chu00021"),
                           ("435MFC-135", "h_1711mfcc00027")):
@@ -787,6 +787,12 @@ class CrossProductCoverTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertFalse(covers.is_cross_product_cover(
                     code, f"https://pics.dmm.co.jp/mono/movie/{cid}/{cid}pl.jpg"))
+
+    def test_dmm_padding_does_not_cross_a_registered_short_serial(self):
+        # #296：DMM 的 `mcdv00024` 是クリスタル映像的有码 `MCDV-024`，不是无码的 `MCDV-24`。
+        url = "https://pics.dmm.co.jp/mono/movie/mcdv00024/mcdv00024pl.jpg"
+        self.assertTrue(covers.is_cross_product_cover("MCDV-24", url))
+        self.assertFalse(covers.is_cross_product_cover("MCDV-024", url))
 
     def test_an_fc2_image_named_after_another_work_is_cross_product(self):
         # JavArchive 图床的文件名就是作品号；十位的 `1654160016` 是上传时间戳，说明不了归属。
@@ -898,7 +904,7 @@ class KoreanMibCoverTests(unittest.TestCase):
             connection.execute("CREATE TABLE asset(code TEXT, medium TEXT, location TEXT)")
             connection.executemany(
                 "INSERT INTO asset(code,medium,location) VALUES(?, 'video', '115')",
-                [("ABW-232",), ("HA-101",), ("YUJ-101",)],
+                [("ABW-232",), ("HA-101",), ("AIN-101",)],
             )
             connection.commit(); connection.close()
             for only_shaped in (True, False):

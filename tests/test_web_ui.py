@@ -129,7 +129,7 @@ class WebUiPolicyTests(unittest.TestCase):
 
     TUNGSTEN_ALLOWED_SELECTORS = (
         ":focus",              # 焦点环：:focus / :focus-visible / :focus-within
-        ".watchprogress", ".vjs-play-progress", ".vjs-progress-holder",  # 进度与数据
+        ".watchprogress", ".vjs-play-progress", ".vjs-progress-holder", ".navprogress",  # 进度与数据
         ".ptoggle:checked",  # Toggle 开态：Geist Toggle 实测轨道 rgb(0,112,243)
         ".flink", ".taste-history-guide-content a",  # 真正的链接
         ".vjs-subtitles-control>button[aria-pressed=true]:after", "[data-player-quality-badge]",  # 播放器字幕开态与清晰度

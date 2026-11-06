@@ -550,8 +550,11 @@ export interface FeedLookup {
   candidates: FeedCandidate[];
   /** 名字对得上、又只有一个人的那几张，先替用户勾上；同名不止一位时是空的。 */
   suggested: string[];
-  /** 数据库里按这个名字认得出的那位；认不出是 null，登记时会新建。 */
-  known: { id: number; name: string } | null;
+  /** 数据库里按这个名字认得出的那位；认不出是 null，登记时会新建。`subscribable` 是她已有
+   *  JavDB 演员页或 DMM 编号、不经搜索就能订，`following` 是已经在订。 */
+  known: { id: number; name: string; subscribable: boolean; following: boolean } | null;
+  /** JavDB 这一趟没搜成的原因；只在库里的她能直接订时随结果一起回来，否则整次查找报错。 */
+  unavailable?: string;
 }
 
 export const lookupFeedActor = (name: string, signal?: AbortSignal) =>
@@ -568,6 +571,11 @@ export interface FeedFollowed {
 /** 勾选的演员卡登记到这位名下并订上她的演员页。地址仍由服务端拼，页面只送 id。 */
 export const followFeedByName = (name: string, ids: string[], signal?: AbortSignal) =>
   apiSend<FeedFollowed>(FEED_SOURCE_URL, { action: 'follow-name', name, ids }, 'POST', signal);
+
+/** 按库里认出的这位直接订，和人物页「订阅新作」开关同一个动作。 */
+export const followFeedEntity = (entityId: number, signal?: AbortSignal) =>
+  apiSend<{ entity_id: number; following: boolean; sources: number[] }>(
+    FEED_SOURCE_URL, { action: 'follow', entity_id: entityId, enabled: true }, 'POST', signal);
 
 /** 首屏：创作者来源、JAV 订阅与凭据状态取回来才画。
  *

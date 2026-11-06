@@ -554,6 +554,21 @@ class EndpointTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaisesRegex(organize.OrganizeError, '整理路径'):
                 w_organize_apply(self.contract, {**body, 'confirm': True})
 
+    def test_a_scope_outside_the_source_is_a_bad_request_not_a_server_error(self):
+        """整理路径填错是参数问题：接口回 400 并带原因，不是 500。"""
+        from peach.api import create_app
+        from peach.config import PeachSettings
+        from support.web import route_client
+
+        app = create_app(PeachSettings(db_path=self.db_path, configured=True, token=""))
+        with route_client(app) as client:
+            for route in ("/api/organize/preview", "/api/organize/apply"):
+                with self.subTest(route=route):
+                    response = client.post(route, json={"location": "local", "path": r"S:\outside",
+                                                        "file_template": "{number}", "confirm": True})
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIn("整理路径不在所选来源内", response.json()["error"])
+
     def test_apply_on_a_source_without_verified_rename_is_refused(self):
         from peach.web_organize import w_organize_apply
 

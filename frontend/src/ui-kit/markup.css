@@ -90,3 +90,7 @@ input[type=checkbox]:not([data-toggle]):not(.ui-pcheck input):not(.peach-react i
 .ui-geist-gauge[data-level="error"] circle:last-child{stroke:var(--drop)}
 .ui-gauge-status{margin-inline-end:8px;font-size:var(--fs-xs)}
 @media(prefers-reduced-motion:no-preference){.ui-geist-gauge circle:last-child{transition:stroke-dasharray .2s ease-out,stroke .2s ease-out}}
+/* 不定档：那一段弧绕圈转，转的是整枚 svg，弧自己的 -90° 起点不动。减少动态效果时停在原处，
+   旁边那句说明照样说清在等。 */
+@keyframes ui-gauge-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:no-preference){.ui-geist-gauge[data-indeterminate] svg{animation:ui-gauge-spin .9s linear infinite}}

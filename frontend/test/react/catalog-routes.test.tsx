@@ -168,20 +168,21 @@ const cards = (grid: Element) => grid.querySelectorAll('.peach-react [data-media
 /** 页面画出来的那一块（宿主里的第一个元素）：重挂之后就换成另一个。 */
 const painted = (grid: Element) => grid.querySelector(':scope > .peach-react > *');
 
-it('冷启动深链首页由页面立即显示骨架，首屏取齐后交叉呈现内容', async () => {
+it('冷启动深链首页取齐首屏再挂，壳的骨架一直留到数据到，挂上就是内容', async () => {
   const r = await load('/');
-  const { grid } = gridSurface();
+  const { grid, skeleton } = gridSurface();
   await mount(r);
   const fetch = catalogFetch({ deferred: true });
   const open = catalogOpen({ skeletonHtml: () => GRID_SKELETON });
   const opened = r.openManagedRoute('/', open, { container: grid, isCurrent: () => true, place: revealRoutedPage });
   await until(() => fetch.calls('/api/items').length > 0, '首屏取数发出去');
-  expect(grid.querySelector('[data-content-transition]')?.getAttribute('aria-busy')).toBe('true');
-  expect(grid.querySelector('[data-content-skeleton] [data-skeleton]')).not.toBeNull();
-  const batches: Array<{ pending: boolean; painted: boolean }> = [];
+  expect(skeleton.isConnected, '取数在途时壳的骨架原样留着').toBe(true);
+  expect(r.managedEntry(grid), '页面还没挂').toBeFalsy();
+  const batches: Array<{ pageSkeleton: boolean; shell: boolean; painted: boolean }> = [];
   const observer = new MutationObserver(() => {
     batches.push({
-      pending: Boolean(grid.querySelector('[data-content-transition][aria-busy="true"] [data-skeleton]')),
+      pageSkeleton: Boolean(grid.querySelector('[data-content-transition][aria-busy="true"] [data-skeleton]')),
+      shell: skeleton.isConnected,
       painted: cards(grid).length === 3,
     });
   });
@@ -191,7 +192,9 @@ it('冷启动深链首页由页面立即显示骨架，首屏取齐后交叉呈�
   await act(async () => { expect(await opened).toBe(true) });
   await until(() => cards(grid).length === 3, '首屏内容就绪');
   expect(batches.length).toBeGreaterThan(0);
-  expect(batches.every((batch) => batch.pending || batch.painted), '每一批变化都有占位或内容').toBe(true);
+  expect(batches.some((batch) => batch.pageSkeleton), '页面挂上时不再铺第二份骨架').toBe(false);
+  expect(batches.every((batch) => batch.shell || batch.painted), '每一批变化都有占位或内容').toBe(true);
+  expect(grid.querySelector('.skelfade')?.contains(skeleton), '壳的骨架抬成淡出层与内容交叉').toBe(true);
   expect(grid.querySelector('[data-content-transition]')?.getAttribute('aria-busy')).toBe('false');
   expect(grid.querySelector('[data-content-skeleton]')?.getAttribute('aria-hidden')).toBe('true');
   expect(fetch.calls('/api/items'), '首屏只取一次').toHaveLength(1);

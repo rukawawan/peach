@@ -10,6 +10,7 @@ from peach.catalog_rules import is_korean_mib_code, release_code_from_filename
 from peach.metadata_auto_apply import auto_apply_metadata
 from peach.genre_taxonomy import map_genres
 from peach.metadata_kmib import parse_list, parse_star, parse_video
+from peach.metadata_routes import classify
 
 from support.ledger import fresh_ledger
 
@@ -19,7 +20,7 @@ harvest = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(harvest)
 
 
-def video_page(code="YUJ-103", actor="Ain", date="2024-11-20", runtime="00:31:03",
+def video_page(code="AIN-203", actor="Ain", date="2024-11-20", runtime="00:31:03",
                categories=("Blowjob", "Sexy", "Kiss"),
                cover="/uploads/image/streaming/a.jpg"):
     tags = ", ".join(f"<p onclick=\"viewTag('1', 'T');\">{c}</p>" for c in categories)
@@ -47,8 +48,8 @@ STAR_PAGE = """
 class KmibPageTests(unittest.TestCase):
     def test_video_page_yields_catalog_fields(self):
         release = parse_video(video_page(), 7)
-        self.assertEqual(release["id"], "YUJ-103")
-        self.assertEqual(release["provider_id"], "YUJ-103")
+        self.assertEqual(release["id"], "AIN-203")
+        self.assertEqual(release["provider_id"], "AIN-203")
         self.assertEqual(release["source_url"],
                          "https://www.k-mib.com/video/video-view.php?idx=7")
         self.assertEqual(release["release_date"], "2024-11-20")
@@ -96,7 +97,7 @@ class KmibPageTests(unittest.TestCase):
 class KmibCatalogRuleTests(unittest.TestCase):
     def test_mib_filenames_yield_their_codes(self):
         for name, code in (
-            ("YUJ-103 Ain Do you wanna be my slave.mp4", "YUJ-103"),
+            ("AIN-203 Ain Training medical college girl.mp4", "AIN-203"),
             ("KJI-101 Ggulji Car sex with thick girl.mp4", "KJI-101"),
             ("[K-MIB]NOAH-101(NOAH)(1).mp4", "NOAH-101"),
         ):
@@ -104,7 +105,7 @@ class KmibCatalogRuleTests(unittest.TestCase):
 
     def test_the_mib_filename_rule_stays_inside_mib_prefixes(self):
         # 下划线写法只对 MIB 前缀开放；「厂牌-序号 + 片名」的通用形态归片名规则。
-        self.assertEqual(release_code_from_filename("YUJ_103 some title.mp4"), "YUJ-103")
+        self.assertEqual(release_code_from_filename("AIN_203 some title.mp4"), "AIN-203")
         self.assertIsNone(release_code_from_filename("ABC_123 some title.mp4"))
         self.assertIsNone(release_code_from_filename("MIB.mp4"))
 
@@ -113,6 +114,12 @@ class KmibCatalogRuleTests(unittest.TestCase):
             self.assertTrue(is_korean_mib_code(code), code)
         # 合作厂牌不是 MIB 的命名体系。
         self.assertFalse(is_korean_mib_code("STRC-001"))
+
+    def test_attackers_yuj_is_not_a_mib_prefix(self):
+        # `YUJ` 当初取自两部错名文件，实为官网 `AIN-101`、`AIN-102`（片名、片长逐一对上）。
+        # r18.dev 上 `YUJ-001`～`YUJ-080` 是 Attackers 的作品，`YUJ-072` 为 164 分钟。
+        self.assertFalse(is_korean_mib_code("YUJ-072"))
+        self.assertEqual(classify("YUJ-072"), "censored")
 
     def test_kmib_categories_project_onto_existing_tags(self):
         """k-mib 的类目在来源页上就是英文，没有日文原词可换，只能靠表里收录英文写法。
@@ -131,7 +138,7 @@ class KmibHarvestTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.db = fresh_ledger(self.root)
         con = sqlite3.connect(self.db)
-        for aid, code, name in ((1, "YUJ-103", "YUJ-103 Ain Do you wanna be my slave.mp4"),
+        for aid, code, name in ((1, "AIN-203", "AIN-203 Ain Training medical college girl.mp4"),
                                 (2, None, "[K-MIB]NOAH-101(NOAH)(1).mp4"),
                                 (3, None, "MIB.mp4"),
                                 (4, None, "NOAH-999 not listed.mp4"),
@@ -159,21 +166,21 @@ class KmibHarvestTests(unittest.TestCase):
     def test_candidates_carry_their_own_item_keys_and_identity(self):
         """`<番号>:<字段>` 已被 JAV 错配候选的拒绝决定占着，官网候选要另起一个键。"""
         rows = self.rows()
-        self.assertEqual({row["code"] for row in rows}, {"YUJ-103"})
+        self.assertEqual({row["code"] for row in rows}, {"AIN-203"})
         self.assertTrue(all(row["item_key"].endswith(":kmib") for row in rows))
         by_field = {row["field"]: harvest.json.loads(row["candidates_json"])[0]
                     for row in rows}
         self.assertEqual(set(by_field), {"title", "performers", "studio",
                                          "release_date", "tags"})
         self.assertEqual(by_field["studio"]["value"], "MIB")
-        self.assertEqual(by_field["performers"]["provider_id"], "YUJ-103")
+        self.assertEqual(by_field["performers"]["provider_id"], "AIN-203")
         self.assertEqual(by_field["performers"]["value"][0]["external_id"], "3")
         self.assertEqual(by_field["tags"]["value"], ["口交", "接吻"])
 
     def test_missing_codes_come_from_filenames_listed_on_the_official_site(self):
         con = sqlite3.connect(self.db)
         try:
-            filled = harvest.fill_missing_codes(con, {"YUJ-103", "NOAH-101"})
+            filled = harvest.fill_missing_codes(con, {"AIN-203", "NOAH-101"})
             con.commit()
             codes = dict(con.execute("SELECT id,code FROM asset"))
         finally:

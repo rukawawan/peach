@@ -87,16 +87,25 @@ function columnKeys(location: typeof active.location): string[] {
   const meta = routeMetaOf(location.pathname);
   return [...(meta?.nav ? [meta.nav] : []), ...(meta?.section ? ['manage', meta.section] : [])];
 }
+/* 首页那几栏（首页、JAV、竖屏都在 `/` 上）记地址时不带搜索词：搜出来的那一屏是一次查询，不是
+   这一栏的视图。带着词记，搜索时点「首页」就是原地不动，离开再回来也还落在搜索结果上。 */
+function columnAddress(location: typeof active.location): string {
+  const path = location.pathname + location.search + location.hash;
+  if (location.pathname !== '/') return path;
+  const query = new URLSearchParams(location.search);
+  if (!query.has('q')) return path;
+  query.delete('q');
+  return '/' + (query.size ? `?${query}` : '') + location.hash;
+}
 function rememberColumns(): void {
   const location = active.location;
-  for (const key of columnKeys(location)) columns.set(key, location.pathname + location.search + location.hash);
+  for (const key of columnKeys(location)) columns.set(key, columnAddress(location));
 }
 
-/** 同一标签页再次进入栏目，沿用最后一次的地址；已在该栏目时保持当前视图。 */
+/** 同一标签页再次进入栏目，沿用最后一次的地址；已在该栏目时保持当前视图，搜索结果回到不带词的那一屏。 */
 export function rememberedSidebarPath(key: string): string | undefined {
   installPageNavigation();
-  return columnKeys(active.location).includes(key)
-    ? active.location.pathname + active.location.search + active.location.hash : columns.get(key);
+  return columnKeys(active.location).includes(key) ? columnAddress(active.location) : columns.get(key);
 }
 
 /** 主动刷新和已启用的自动换批按原刷新入口取新内容，不认领旧视图。 */

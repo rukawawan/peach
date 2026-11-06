@@ -1,5 +1,4 @@
 """采集设置与有界来源连接检查；凭据只写本机。"""
-import io
 import hashlib
 import json
 import time
@@ -7,12 +6,9 @@ import httpx
 
 from PIL import Image
 
-from .http import HttpRequest
-from .scraping_access import SOURCES, SourcePaused, SourceTransport, describe, save, record_source_check
+from .scraping_access import SOURCES, SourcePaused, SourceTransport, describe, save
 
-#: 连不上 DMM 图片主机时给的那句去处：2026-09 实测中国移动宽带直连大多在握手后被断开，
-#: 电信、联通直连正常，所以不是站点挂了，换条线路就好。
-MOBILE_BROADBAND_HINT = "中国移动宽带直连 DMM 图片主机常在握手后被断开，请把 DMM / FANZA 的连接方式设成 Peach 代理。"
+from .source_checks import MOBILE_BROADBAND_HINT, check_source
 
 
 def _kept_cover_size(target, incoming, incoming_size, installed, previous):
@@ -158,94 +154,30 @@ def w_scraping_settings(contract, body):
     return {"ok": True, "saved": save(contract.follow_secrets_root, str(body.get("source", "")), body)}
 
 
-def _connection_failure(exc, label):
-    """来源连接异常对应可操作的诊断说明。"""
-    if isinstance(exc, SourcePaused):
-        detail, message = "cooldown", "来源正在冷却，请稍后重试。"
-    elif isinstance(exc, httpx.ProxyError):
-        detail, message = "proxy", "代理连接失败，请检查 Peach 代理。"
-    elif isinstance(exc, httpx.TimeoutException):
-        detail, message = "timeout", "来源连接超时，请稍后重试或检查连接方式。"
-    else:
-        detail = "network"
-        message = (f"连接未取得；{MOBILE_BROADBAND_HINT}" if label == "高清图片 CDN"
-                   else "连接未取得；此来源可能需要代理，请检查来源连接方式。")
-    return {"ok": False, "kind": "unavailable", "reason": detail,
-            "message": message, "error_type": type(exc).__name__}
-
-
-def _connection_message(detail, reason):
-    """来源响应的失败原因决定用户下一步操作。"""
-    from .metadata import reason_blames_credentials
-
-    if detail == "cloudflare_challenge":
-        return "来源返回人机验证页，请检查来源验证状态或更换出口。"
-    if detail == "rate_limited":
-        return "来源正在限流，请稍后重试。"
-    if detail == "not_found":
-        return "来源检查地址不存在，请核对站点地址。"
-    if reason_blames_credentials(reason):
-        return "来源要求登录或验证，请在官网完成登录后重试。"
-    return f"{reason}。" if reason else "来源暂不可用，请稍后重试。"
-
-
 def w_scraping_check(contract, body):
-    from .metadata import auth_wall_reason
-    source = str(body.get("source", ""))
-    if source not in SOURCES:
-        raise ValueError("未知采集来源")
-    if not SOURCES[source]["login"]:
-        return {"ok": True, "results": [{"label": "来源页面", "ok": False, "kind": "unavailable",
-                "reason": "needs_code", "message": "片商官网按番号选择，请输入馆藏番号检查高清封面。"}],
-                "session_verified": False}
-    targets = [("来源页面", SOURCES[source]["login"])]
-    if source == "dmm":
-        targets.append(("高清图片 CDN", "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/gyan00017/gyan00017pl.jpg"))
-    results = []
-    transport = SourceTransport(contract.follow_secrets_root)
-    try:
-        for label, url in targets:
-            result = {"label": label, "ok": False}
-            started = time.monotonic()
-            try:
-                response = transport(HttpRequest("GET", url, {"Range": "bytes=0-65535"}), 10, 65536)
-                # 鉴权失败与「站点挂了」是两件事，页面上要分得开：前者要人去官网登录
-                # 或换一份 Cookie，后者只要等。判据和元数据来源共用一份；重定向终点
-                # 只在真的跳转过时才算数，否则配置里本身就指向登录页的来源会自判失败。
-                reason = auth_wall_reason(
-                    status_code=response.status, body=response.body,
-                    final_url=response.url if response.url and response.url != url else "")
-                result.update(status=response.status, bytes=len(response.body),
-                              ok=response.status in {200, 206} and not reason,
-                              kind="ok" if response.status in {200, 206} and not reason
-                              else "auth" if reason else "unavailable")
-                from .browser_transport import CHALLENGE_MARKS
-                challenge = any(mark.lower() in response.body.decode("utf-8", errors="replace").lower()
-                                for mark in CHALLENGE_MARKS)
-                detail = ("cloudflare_challenge" if challenge else "auth_required" if reason
-                          else "ok" if result["ok"] else "rate_limited" if response.status == 429
-                          else "server_error" if response.status >= 500
-                          else "not_found" if response.status == 404 else "http_error")
-                result["reason"] = detail
-                if challenge:
-                    result.update(ok=False, kind="auth")
-                if label == "高清图片 CDN" and result["ok"]:
-                    with Image.open(io.BytesIO(response.body)) as image:
-                        result["width"], result["height"] = image.size
-                if not result["ok"]:
-                    # 成因锁死在凭据上才让人去登录。只剩状态码可看的 403 直接把
-                    # `auth_wall_reason` 那句原样给用户：出口 IP 被封时登录是白做，
-                    # 页面上再手写一份「请去登录」等于把人引去做错事。
-                    result["message"] = _connection_message(detail, reason)
-            except Exception as exc:
-                result.update(_connection_failure(exc, label))
-            result.update(checked_at=time.time(), elapsed_s=round(time.monotonic() - started, 2))
-            if label == "来源页面":
-                record_source_check(contract.follow_secrets_root, source, "connection", result)
-            results.append(result)
-    finally:
-        transport.close()
-    return {"ok": True, "results": results, "session_verified": False}
+    return check_source(contract.follow_secrets_root, str(body.get("source", "")))
+
+
+def w_scraping_check_all(contract, _body):
+    """全部来源跑一趟 `peach check-sources` 的同一检查。冷却中的来源在传输层直接判冷却，
+    不发请求；不登记续跑：服务重启后不该自己再打一轮来源。"""
+    from .source_preflight import check_sources, default_sources
+    job = contract.source_check_job
+    sources = default_sources()
+
+    def work(job_id):
+        def done(row):
+            with job.editing(job_id) as state:
+                if state is not None:
+                    state["results"].append(row)
+                    state["checked"] += 1
+                    state["current"] = {"label": row["label"]}
+        result = check_sources(contract.follow_secrets_root, sources, on_result=done)
+        targets = [target for row in result["sources"] for target in row["results"]]
+        job.update(job_id, status="complete", ok=result["ok"], results=result["sources"],
+                   failed=sum(target["outcome"] not in ("ok", "skipped") for target in targets),
+                   elapsed_s=result["elapsed_s"], completed_at=time.time())
+    return job.start(work, initial={"checked": 0, "total": len(sources), "results": []}, restart=True)
 
 
 def q_scraping_amane_bridge(contract, args):

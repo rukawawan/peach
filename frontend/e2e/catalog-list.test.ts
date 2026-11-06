@@ -44,14 +44,17 @@ describe('馆藏卡片与列表', () => {
           const row = node.getBoundingClientRect();
           const picture = node.querySelector('[data-list-picture]')!.getBoundingClientRect();
           const title = node.querySelector('[data-list-name]')!.getBoundingClientRect();
-          const byline = node.querySelector('[data-list-byline]')!.getBoundingClientRect();
+          const people = node.querySelector('[data-list-people]');
+          const cell = (selector: string) => node.querySelector(selector)?.closest('td')?.getBoundingClientRect().left ?? -1;
           return { width: row.width, height: row.height, pictureRight: picture.right, titleLeft: title.left,
-            radius: getComputedStyle(node).borderBottomLeftRadius, titleBottom: title.bottom, bylineTop: byline.top };
+            radius: getComputedStyle(node).borderBottomLeftRadius, identityAvatar: !!node.querySelector('[data-list-identity] [data-media-avatar]'),
+            peopleAvatar: !!people?.querySelector('[data-media-avatar]'), nameCell: cell('[data-list-identity]'), peopleCell: cell('[data-list-people]') };
         });
         assert.ok(geometry.height <= 120 && geometry.width > geometry.height * 2, JSON.stringify(geometry));
         assert.ok(geometry.titleLeft > geometry.pictureRight, JSON.stringify(geometry));
         assert.equal(geometry.radius, '0px');
-        assert.ok(geometry.bylineTop >= geometry.titleBottom, JSON.stringify(geometry));
+        assert.ok(!geometry.identityAvatar && geometry.peopleAvatar && geometry.peopleCell > geometry.nameCell,
+          `头像与署名拆成作品列之后单独的艺人列：${JSON.stringify(geometry)}`);
         const screenshots = join('..', 'build', 'agent-verification', 'folders');
         mkdirSync(screenshots, { recursive: true });
         await page.screenshot({ path: join(screenshots, `${viewport.name}-list.png`), fullPage: false });

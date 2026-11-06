@@ -8,6 +8,31 @@ Windows 或 macOS 上，在运行 Peach 的电脑打开作品详情，在详情�
 
 本地打开接口只对本机直接连接开放，拒绝转发请求；Docker 和无桌面部署不启动宿主机或容器中的应用。接口接受账本资产 ID 和固定播放器 ID，经媒体根目录授权后打开文件，不接受客户端指定程序或文件路径。STRM 使用网络播放地址或 M3U。
 
+## 观看进度回传
+
+从详情选定 mpv、VLC（Windows）或 IINA、mpv（macOS）打开时，Peach 跟踪这次播放，把观看记录写进网页播放器使用的同一组列：位置第一次前进时计一次播放（`play_count`、`last_played`），连续前进的时长累计进 `play_seconds`，大幅跳转计入 `seek_count`，最后位置写成 `leave_ratio`，放完记为 1。每 30 秒和播放器退出时各写一次。系统默认播放器和 PotPlayer 不回传。
+
+| 播放器 | 通道 | 启动参数 |
+| --- | --- | --- |
+| mpv | JSON IPC：Windows 命名管道，macOS Unix socket，名字随机 | `--input-ipc-server=…` |
+| IINA | 经 `iina-cli` 透传给内置 mpv，读法同 mpv | `--mpv-input-ipc-server=…` |
+| VLC | Lua HTTP 接口的 `requests/status.json`，只听 `127.0.0.1`，端口和密码随机 | `--extraintf=http --http-host=127.0.0.1 --http-port=… --http-password=…` |
+
+Peach 每秒读一次位置、时长与暂停状态。播放器退出、断开、换成别的文件、mpv 进入空闲或 VLC 停止时结束跟踪；停下时离片尾不到 3 秒，或 mpv 报告文件放完，都按放完记录。同时最多跟踪 4 个播放器，每个最长 12 小时；启动后 15 秒内连不上进度接口就放弃。连不上、读失败或播放器异常退出时只是不记，不提示用户；已经看过的部分照常写入。Peach 关闭时先写下在跟踪的播放再退出。
+
+续播位置在网页播放器里先读当前浏览器保存的位置，没有时才用 `leave_ratio`。在这个浏览器里看过的作品，外部播放器写入的位置不会改变网页续播点。
+
+VLC 开启了「只允许一个实例」并已在运行时，新打开的文件交给已有窗口，HTTP 接口不会启动，这次播放不记录。
+
+### PotPlayer 取证
+
+PotPlayer 只做了取证，没有接入，原因如下：
+
+- 社区记录的做法是向 PotPlayer 窗口发送 `WM_USER`（`0x0400`）消息，wParam `0x5004` 返回当前毫秒数，`0x5002` 返回总时长。这不是官方公开接口。要查询当前文件名，PotPlayer 只能通过 `WM_COPYDATA` 回信，Peach 需要再建一个接收消息的窗口。
+- 要把窗口对应到具体文件，只能用 `/new` 强制新开实例，再按进程 ID 找窗口。用户在同一窗口里换片后，Peach 无法得知。服务进程须与 PotPlayer 在同一桌面会话；PotPlayer 以管理员身份运行时，UIPI 会拦截普通权限进程发出的消息。
+- 本机 PotPlayer 的设置在注册表 `HKCU\Software\DAUM\PotPlayerMini64`。其中 `Positions` 存放窗口位置和大小，不是播放位置；`Settings` 下也没有逐文件续播记录。默认播放列表 `%APPDATA%\PotPlayerMini64\Playlist\PotPlayerMini64.dpl` 是文本文件，只记录最后一个文件的 `playname=`、`playtime=` 和 `saveplaypos=`，无法区分多次播放。`playtime` 的单位和写入时机未取得。
+- `SendMessage` 读数没有实测。启动 PotPlayer 会改写用户默认播放列表里的「上次播放」记录，因此没有在这台机器上执行。
+
 ## 网页画面旋转
 
 播放器「设置 → 画面旋转」提供 0°、90°、180°、270°；0° 恢复原始方向。画面保持比例并适配播放器，控制条保持正向。切换清晰度、影院模式和全屏时继续适配。旋转只影响网页画面，不修改媒体文件或外部播放器设置。
@@ -40,7 +65,7 @@ Windows 或 macOS 上，在运行 Peach 的电脑打开作品详情，在详情�
 播放地址的 origin 一并签名：优先使用通过同源检查的页面 Origin；无 Origin 的客户端使用已配置的
 隧道入口或当前服务地址。M3U 使用该签名地址，代理转发的本机 Host 不会改写列表中的公网入口。
 
-播放器实现不进入 Peach，无新增依赖。自动化验证覆盖票据、Range、
+播放器程序不随 Peach 分发；进度回传只用 Python 标准库，无新增依赖。自动化验证覆盖票据、Range、
 M3U 内容和页面交互，不替代真实设备的解码验收。
 
 Windows 原生验证使用现有 ffplay、临时 HTTPS 服务与专用测试证书，播放 M3U 中的签名网络地址。

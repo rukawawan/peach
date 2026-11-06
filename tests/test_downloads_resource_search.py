@@ -140,6 +140,14 @@ class SearchTests(unittest.TestCase):
                              filters=Filters(min_size=100), blocked=[HASH])
         self.assertEqual(result["items"], [])
 
+    def test_when_nothing_passes_the_filters_the_reasons_are_counted(self):
+        result = self.search(feed(item(title="ABC-124"), item(title="ABC-125"), item(seeders=0), item(size=1)),
+                             filters=Filters(min_size=100))
+        self.assertEqual(result["items"], [])
+        self.assertEqual(result["rejected"], {"code": 2, "seeders": 1, "size": 1})
+        self.assertEqual(result["warnings"],
+                         ["索引器返回了 4 条结果，都没通过筛选：番号不符 2 条、体积不在区间 1 条、没有人做种 1 条"])
+
     def test_quality_goal_precedes_size_and_only_five_candidates_are_returned(self):
         rows = [item(title=f"ABC-123 1080p {'中字' if at == 6 else ''}",
                      info_hash=f"{at:040x}", size=(at + 1) * 1024 ** 3) for at in range(7)]

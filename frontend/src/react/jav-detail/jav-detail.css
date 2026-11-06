@@ -3,7 +3,7 @@
 /* 来源图片读取中藏着但留在原位；大图与缩略图条都给 img 写了 display，这里压回去。 */
 .peach-react img[data-source-picture][hidden] { display: none !important; }
 .peach-react [data-jav-picture-wait] { display: grid; place-items: center; width: 100%; min-width: 0; min-height: 300px; padding: 24px; }
-.peach-react [data-jav-picture-wait] > :is([role="note"], [role="alert"]) { width: 100%; max-width: 32rem; }
+.peach-react [data-jav-picture-wait] > [data-empty-state] { max-width: 32rem; }
 .peach-react [data-jav-picture-wait] [class~="skeleton-sheen"] { width: 100%; min-height: 260px; }
 .peach-react [data-jav-info] { min-width: 0; }
 .peach-react [data-jav-info] > * { flex-shrink: 0; }

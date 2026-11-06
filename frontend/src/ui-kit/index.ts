@@ -10,7 +10,7 @@ export {
   badgeHtml, boardTabsHtml, checkboxHtml, collectionHeaderHtml, emptyStateHtml, gaugeHtml, LOAD_MORE_STATUS,
   loadingDotsHtml, noteHtml, progressHtml, projectBannerHtml, searchInputHtml, spinnerHtml,
 } from './markup';
-export { dissolveValue, iconSwapHtml, popBadges, popCount, revealTexts, setIconSwap, swapText } from './motion';
+export { dissolveValue, iconSwapHtml, popBadges, popCount, revealTexts, rollPlaceholder, setIconSwap, swapText } from './motion';
 export {
   configurationSkeletonHtml, fillSkeletonTier, fitSkeleton, indexSkeletonHtml, revealSkeleton, SKELETON_REVEAL_DELAY,
   skeletonHtml,

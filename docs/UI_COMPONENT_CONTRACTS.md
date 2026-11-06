@@ -59,6 +59,7 @@ React 与 BoardUI 的组件、颜色和尺寸采用 [BoardUI 适配](BOARD_UI.md
 - Spinner 只反馈用户直接触发的动作，触发器统一调用 `setActionBusy()`：写入 `aria-busy=true` 与 `aria-disabled=true`、视觉变灰、拦截重复触发，同时保持可聚焦；请求等待期不得再用原生 `disabled`，它只留给缺输入、无权限等动作确实不可执行的状态。未知时长的后台抓取使用 Loading Dots。整页或大区块首次取数使用 Skeleton 预留最终结构。Spinner／Loading Dots 保留可见状态文字；Skeleton 只保留给辅助技术的状态名，不另画「正在读取」文案。三者都尊重 reduced motion。
 - 用户写操作只在服务端终态成功后调用共享 `actionReceipt()` 发一条过去时 Toast；可由安全逆操作完整恢复的状态提供 8 秒「撤销」，永久删除、凭据、保存到账本等不伪造撤销。仅打开面板／菜单／Dialog 不算操作完成，不发 Toast；失败除短 Toast 外仍在原位置保留原因与重试入口。
 - 同一次页面进入只呈现一段等待态；深链启动与页面取数复用同一个 Skeleton，禁止 Spinner 再切换成 Loading Dots 或 Skeleton。
+- 页面顶边的换页进度条（`navigation-progress.ts`）顶替单页换页时不再出现的浏览器加载条，属于壳，不算页面的等待态：壳在取某一页首屏、或屏上组件在等第一份数据时亮，200ms 内画完不出现，出现后至少停 400ms。它只是不定进度，不报百分比，也不替代 Skeleton。
 - Skeleton 只覆盖真正等待的内容区；静态标题、导航和能同步得到的筛选控件立即显示。骨架必须复用最终容器的宽度、列数与对齐方式：卡片网格横向铺满，居中面板仍居中，不得用一列通用占位替代不同页面结构。
 - 骨架里的占位不接指针、没有任何悬停反馈（`09-skeleton.css` 一处关掉）；要等数据才能执行的键用原生 `disabled` 加 `data-skeleton-action`，呈全站共用的禁用面（`--surface` 底、`--border-15` 环、`--muted` 字、not-allowed），不用 opacity，也不伪装成可点的最终档。
 - 分页末尾、空页和「没有更多内容」是中性终止状态，用可关闭 Note；只有需要恢复或处理的故障才能进入红色 error Note。

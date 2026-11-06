@@ -6,7 +6,7 @@ from datetime import date
 from urllib.parse import urlsplit
 
 from .catalog_rules import (
-    same_release_code, code_query_variants, normalise_code_key, tokyo_hot_code)
+    same_release_code, code_query_variants, code_serial_pattern, normalise_code_key, tokyo_hot_code)
 from .genre_taxonomy import map_genres, unmapped_genre_warning
 from .http import body_text
 from .javdb import LOGIN as JAVDB_LOGIN_PAGE
@@ -208,9 +208,9 @@ def identifies_code(code: str, payload: dict) -> bool:
     value = str(code or "").upper()
     matched = re.fullmatch(r"(?:\d{3,6})?([A-Z]{2,8})-?(\d{2,5})([A-Z]{0,2})", value)
     if matched:
-        letters, digits = matched.group(1).lower(), matched.group(2).lstrip("0") or "0"
+        letters, digits = matched.group(1).lower(), code_serial_pattern(matched.group(1), matched.group(2))
         suffix = matched.group(3).lower()
-        return any(re.search(rf"(?<![a-z]){letters}[-_]?0*{digits}{suffix}(?![a-z0-9])",
+        return any(re.search(rf"(?<![a-z]){letters}[-_]?{digits}{suffix}(?![a-z0-9])",
                              str(payload.get(field) or "").lower()) is not None
                    for field in IDENTITY_FIELDS)
     return _compact(value) in blob

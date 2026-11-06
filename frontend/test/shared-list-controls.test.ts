@@ -86,3 +86,21 @@ it('横排推过头按橡皮筋收敛，顶在边上再推也弹，一次滚轮�
   expect(animate).toHaveBeenCalledTimes(3);
   clock.mockRestore();
 });
+
+it('按住拖动横排时整页锁成抓取光标，松手或窗口失焦就撤掉，点在控件上不起拖', () => {
+  vi.stubGlobal('ResizeObserver',class {observe(){}disconnect(){}});
+  const node=document.createElement('div');document.body.append(node);
+  const control=document.createElement('button');node.append(control);
+  Object.defineProperties(node,{clientWidth:{value:100},scrollWidth:{value:200}});
+  wireHorizontalScroller(node,{drag:true,dragIgnore:'button'});
+  const dragging=()=>document.documentElement.hasAttribute('data-drag-scrolling');
+  node.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
+  expect(dragging()).toBe(true);
+  window.dispatchEvent(new MouseEvent('mouseup'));
+  expect(dragging()).toBe(false);
+  node.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
+  window.dispatchEvent(new Event('blur'));
+  expect(dragging()).toBe(false);
+  control.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
+  expect(dragging()).toBe(false);
+});

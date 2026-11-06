@@ -11,6 +11,7 @@ import { queryClient } from '../query';
 import { CodeBlock } from '../components/code-block';
 import { ErrorText, FieldLabel, Footer, Help, Section, Stack } from '../settings/section';
 import { busyProps, useAction } from '../settings/use-action';
+import { composingKey } from '../components/ime';
 import { SelectField } from '../settings-panel/legacy-controls';
 import { CUSTOM_SOURCES_URL as URL, CUSTOM_SOURCES_KEY as KEY, fetchCustomSources,
   type CustomSource as Source } from './custom-source-data';
@@ -92,7 +93,7 @@ function SourceForm({ initial, cancel, saved }: {
       <Input label="试查番号（回车查询）" value={code} onChange={(value) => {
         revision.current++; setCode(value); setPreview('');
       }} onKeyDown={(event) => {
-        if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+        if (event.key !== 'Enter' || composingKey(event.nativeEvent)) return;
         event.preventDefault();
         const current = revision.current;
         void action.run('preview', (signal) => apiSend<{ record: unknown }>(URL,

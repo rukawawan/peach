@@ -406,6 +406,36 @@ class ProcessingControlTests(unittest.TestCase):
             'completed_metadata':['1:R:\\Media\\0.mp4']}),encoding='utf-8')
         self.assertEqual(pending(self.db),[2,3])
 
+    def test_new_asset_range_is_read_under_the_writer_lock(self):
+        """`remember` 持锁原子替换文件；Windows 替换瞬间读会撞上共享冲突，所以读也要等同一把锁。"""
+        from filelock import FileLock
+        from peach.library_new_assets import pending
+        from peach.update_tasks import state_for
+        self.seed(3)
+        path=state_for(self.db).parent/'library-new-assets.json'
+        path.parent.mkdir(parents=True,exist_ok=True)
+        outcome={}
+
+        def read():
+            try:
+                outcome['ids']=pending(self.db)
+            except Exception as error:
+                outcome['error']=error
+        with FileLock(str(path)+'.lock'):
+            path.write_text('[1, 2',encoding='utf-8')
+            reader=threading.Thread(target=read)
+            reader.start()
+            reader.join(0.5)
+            self.assertTrue(reader.is_alive(),f'写入方持锁期间读到了半份文件：{outcome}')
+            path.write_text('[1, 2]',encoding='utf-8')
+        reader.join(5)
+        self.assertEqual(outcome,{'ids':[1,2]})
+
+    def test_new_asset_range_is_empty_before_any_state_exists(self):
+        from peach.library_new_assets import pending
+        self.seed(1)
+        self.assertEqual(pending(self.db),[])
+
     def test_archiving_keeps_full_legacy_issues_and_export_rejects_changes(self):
         import json
         from peach.library_processing import state_path,_save
@@ -427,6 +457,9 @@ class ProcessingControlTests(unittest.TestCase):
             first=q_library_processing_issues(contract,{'job_id':'legacy','limit':200})
             last=q_library_processing_issues(contract,{'job_id':'legacy','limit':200,'offset':200,'revision':first['revision']})
             self.assertEqual(first['rows']+last['rows'],state['issues'])
+            restored=w_library_processing(contract,{'action':'unarchive','job_id':'legacy'})
+            self.assertFalse(restored['archived'],'撤销归档后提示回来')
+            self.assertEqual(json.loads(state_path(self.config).read_text(encoding='utf-8'))['issues'],state['issues'])
             state['issues'].append({'asset_id':None,'message':'恢复后新增的问题'})
             _save(state_path(self.config),state)
             with self.assertRaisesRegex(ValueError,'变化'):
@@ -501,6 +534,25 @@ class ProcessingControlTests(unittest.TestCase):
             self.assertEqual(job.runs.get(initial['run_id']).status,'cancelled')
             self.assertEqual(q_library_processing(contract,{})['status'],'cancelled')
             self.assertEqual(job_recovery.resume(db,{'library-processing':Mock()}),[])
+
+    def test_status_names_how_a_command_line_run_was_started(self):
+        from peach.task_runs import TaskRunStore
+        from peach.web_library_processing import q_library_processing
+        root = self.config.directory('database')
+        root.mkdir(parents=True)
+        db = fresh_ledger(root)
+        runs = TaskRunStore(db)
+        # 命令行那一轮在另一个进程里写状态；这里用一份进行中的快照代替，状态里没有 `run_id`。
+        job = Mock()
+        job.snapshot.return_value = {'job_id': 'cli', 'status': 'running', 'started_at': 1}
+        contract = SimpleNamespace(db_path=db, library_processing_job=job, task_runs=runs)
+        with patch('peach.web_library_processing.settings_file.active', return_value=self.config):
+            self.assertNotIn('trigger', q_library_processing(contract, {}))
+            run = runs.start('library-processing', trigger='cli')
+            self.assertEqual(q_library_processing(contract, {})['trigger'], 'cli')
+            runs.finish(run.id, 'succeeded')
+            job.snapshot.return_value = {'job_id': 'cli', 'status': 'complete', 'started_at': 1}
+            self.assertNotIn('trigger', q_library_processing(contract, {}))
 
     def test_web_pause_and_resume_preserve_running_job_and_initial_estimate(self):
         from peach.jobs import BackgroundJob
@@ -737,7 +789,8 @@ class ProcessingControlTests(unittest.TestCase):
         control = control_for(self.config)
         job = BackgroundJob('library-processing')
         job.state = dict(job_id='one', status='paused', speed_mode='low', eta_seconds_min=180, eta_seconds_max=360)
-        contract = SimpleNamespace(db_path=self.db, library_processing_job=job)
+        from peach.task_runs import TaskRunStore
+        contract = SimpleNamespace(db_path=self.db, library_processing_job=job, task_runs=TaskRunStore(self.db))
         with control.bind('one', publish=lambda **_: None, active=lambda: True, db_path=self.db, mode='low'), \
                 patch('peach.web_library_processing.settings_file.active', return_value=self.config):
             control.request('pause', 'one')
@@ -773,6 +826,23 @@ class ProcessingControlTests(unittest.TestCase):
         self.assertTrue(all(row['total'] == 0 for row in discovering))
         self.assertEqual((result.scanned, result.scanned_bytes), (4, 60))
         self.assertEqual(result.junk_isolated, 2)
+
+    def test_incremental_scan_probes_rows_moved_onto_new_files(self):
+        """按番号改指到新文件的旧行不算新行，但文件换了，增量扫描照样要探它。"""
+        from peach.library_processing import _scan_sources
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True, locations={'local': ('R:\\Media',)})
+        scanned = SimpleNamespace(files=2, total_bytes=30, new_ids=(5,), relocated_ids=(7,), junk_isolated=0)
+        with patch('peach.library_processing.scan_location', return_value=scanned), \
+                patch('peach.library_processing._online_source_root', return_value=self.root), \
+                patch('peach.library_processing._ffprobe_path', return_value=None), \
+                patch('peach.library_processing.probe_unmeasured', return_value=0) as probe, \
+                patch('peach.library_processing.reattach_in') as reattach:
+            result = _scan_sources(config, self.db, locations=config.locations, asset_ids=None,
+                                   stage='scan', guard=Mock(), update=lambda **values: None,
+                                   issue=lambda *_args, **_kwargs: None, incremental=True)
+        self.assertEqual(probe.call_args.kwargs['asset_ids'], [5, 7])
+        self.assertEqual(result.new_ids, (5,), "改指的旧行不进新影片范围")
+        reattach.assert_called_once_with(self.db, (5,))
 
     def test_library_scan_reports_conflicting_records_and_processes_both_roots(self):
         import sqlite3

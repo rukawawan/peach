@@ -14,7 +14,8 @@ export const TASKS_KEY = ['tasks'] as const;
 export type TaskControlAction = 'pause' | 'resume' | 'cancel';
 export type TaskControlState = 'running' | 'pausing' | 'paused' | 'cancelling';
 export type TaskResourceState = 'ready' | 'sampling' | 'unavailable';
-export interface TaskResourceMetric { state: TaskResourceState; high: boolean; reason?: string }
+/** `via` 只出现在未取得的网络读数上：`cloud` 是从网盘挂载读的，网速无法按任务计量。 */
+export interface TaskResourceMetric { state: TaskResourceState; high: boolean; reason?: string; via?: 'cloud' }
 export interface TaskPercentMetric extends TaskResourceMetric { percent: number | null }
 export interface TaskResourcesPayload {
   cpu: TaskPercentMetric;
@@ -64,7 +65,11 @@ export interface ActivityData {
   working_parents?: TaskRunPayload[];
   /** 父任务 id → 它直接派出的后继按状态各几条。下发的后继只是一部分，进度与「还在不在跑」看这份。 */
   followup_counts?: FollowupCounts;
+  /** 逐部到来的入库通知：云下载整理完成、推送发现登记的新影片。`epoch` 换了表示服务重启过。 */
+  ingest_notices?: { epoch: string; items: IngestNotice[] };
 }
+
+export interface IngestNotice { id: number; kind: 'download' | 'discovered'; asset_id: number; label: string; at: number }
 
 export type FollowupCounts = Record<string, Record<string, number>>;
 
@@ -90,13 +95,14 @@ export function followupTally(counts: FollowupCounts | undefined, runs: TaskRunP
 }
 
 /** 同一种任务连着派出的几轮合成一件事：自动修复每分钟派一批，一屏十几张「已完成」卡说的是同一件事。
- *  每组按最新那一轮排在前面，`runs[0]` 是最新那一轮。 */
-export function foldByKind(rows: TaskRunPayload[]): RunFold[] {
+ *  每组按最新那一轮排在前面，`runs[0]` 是最新那一轮。`split` 再按它的值分组，同一种任务值不同的分开。 */
+export function foldByKind(rows: TaskRunPayload[], split: (run: TaskRunPayload) => string = () => ''): RunFold[] {
   const folds = new Map<string, RunFold>();
   for (const run of rows) {
-    const fold = folds.get(run.task_key);
+    const key = `${run.task_key}\u0000${split(run)}`;
+    const fold = folds.get(key);
     if (fold) fold.runs.push(run);
-    else folds.set(run.task_key, { run, runs: [run] });
+    else folds.set(key, { run, runs: [run] });
   }
   return [...folds.values()];
 }
@@ -127,6 +133,12 @@ export const pollInterval = (data: ActivityData | undefined): number =>
   data?.running?.length ? RUNNING_POLL_MS : SETTLED_POLL_MS;
 
 export const fetchTasks = (signal?: AbortSignal) => apiGet<ActivityData>(TASKS_URL, signal);
+
+/** 每个页面常驻轮询的那一小份：结果版本、入库通知与有没有任务在排或在跑。完整任务列表只给任务中心。 */
+export const RESULT_UPDATES_KEY = ['result-updates'] as const;
+export type ResultUpdatesData = Pick<ActivityData, 'result_versions' | 'ingest_notices'> & { busy?: boolean };
+export const fetchResultUpdates = (signal?: AbortSignal) =>
+  apiGet<ResultUpdatesData>('/api/result-updates', signal);
 
 export const controlTask = (id: number, action: TaskControlAction, signal?: AbortSignal) =>
   apiSend(`${TASKS_URL}/${id}/control`, { action }, 'POST', signal);
@@ -228,6 +240,14 @@ export function problemDestination(run: TaskRunPayload, latest = true): { href: 
   return target ? { href: target[0], label: target[1] } : null;
 }
 
+/** 这一轮只处理一部作品时，摘要里带它的 `asset_id` 与文件名，任务卡据此链接到作品详情。 */
+export function taskSubject(run: TaskRunPayload): { href: string; label: string } | null {
+  const id = run.result_summary?.asset_id;
+  const name = run.result_summary?.name;
+  return typeof id === 'number' && Number.isInteger(id) && id > 0 && typeof name === 'string' && name
+    ? { href: `/assets/${id}`, label: name } : null;
+}
+
 /** `LATEST_ONLY` 里每种任务最新那一轮的 id。后继不算：它们挂在父任务下，不是这种任务的一轮。 */
 export function latestOfKind(rows: TaskRunPayload[]): Set<number> {
   const newest = new Map<string, number>();
@@ -286,7 +306,7 @@ export const isRoutine = (run: TaskRunPayload) => run.trigger === 'scheduled'
 export const isActive = (run: TaskRunPayload) => run.status === 'pending' || run.status === 'running';
 
 /** 后继那一行的说明：它在做哪一件（标签去掉与任务名重复的前缀）、做到第几项或结果如何。
- *  标题已经是任务名，这里再写一遍「取新作资料：」读起来就是同一句话说了两次。 */
+ *  标题已经是任务名，这里再写一遍「新作资料采集：」读起来就是同一句话说了两次。 */
 export function followupDetail(row: TaskRunPayload): string {
   const prefix = `${row.task_label}：`;
   const label = row.progress_label || '';

@@ -50,6 +50,7 @@ def stub_provider():
     provider.query.side_effect = dmm_has_nothing
     provider.community.side_effect = NotFound('社区来源都没有这个番号')
     provider.amane.side_effect = NotFound('amane 桥问的几站都没有这个番号')
+    provider.wiki.side_effect = NotFound('Wiki 搜索范围内未取得精确作品表格行')
     return provider
 
 
@@ -269,7 +270,8 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(result['checked'], 2)
 
     @windows_ledger_roots
-    def test_a_later_source_requires_review_to_replace_a_field_filled_during_the_run(self):
+    def test_a_later_source_only_adds_tags_to_a_field_filled_during_the_run(self):
+        """本轮先补上的标签，后来的来源只按并集补新增的（ADR-0139），一个不删、不进复核页。"""
         media = self.root / 'media'
         media.mkdir()
         (media / 'SSIS-057.mp4').write_bytes(b'video')
@@ -290,7 +292,7 @@ class LibraryNfoTests(unittest.TestCase):
         def query(code, source='r18dev', **kwargs):
             if source == 'javdb':
                 self.assertIn('巨乳', tags())
-                return {'id': code, 'genres': ['高跟鞋', '絲襪']}
+                return {'id': code, 'genres': ['高跟鞋', '絲襪'], 'javdb_rule': 2, 'source_id': 'Ssis057'}
             if source == 'dmm':
                 raise NotFound('没有')
             return {'id': code, 'title': '本地标题', 'maker': 'Prestige', 'release_date': '2023-05-26',
@@ -302,20 +304,16 @@ class LibraryNfoTests(unittest.TestCase):
             process_library(config, db, self.root / 'generated', self.root / 'covers',
                             provider_factory=lambda: provider, database=database,
                             route_overrides='censored=r18dev,javdb')
-        self.assertEqual(tags(), {'巨乳'})
+        self.assertEqual(tags(), {'巨乳', '高跟', '丝袜'})
         group = next(row for row in read_rows(self.root / 'generated/library-metadata-field-candidates.csv')
                      if row['field'] == 'tags')
         choice = next(item for item in json.loads(group['candidates_json']) if item['source'] == 'javdb')
         self.assertTrue(choice['requires_review'])
         from peach.web_contract import WebContract
-        from peach.web_review import q_review, w_review_decision
+        from peach.web_review import q_review
         contract = WebContract(db, candidate_root=self.root / 'generated', database=database)
         pending = q_review(contract)['sections']['metadata_fields']
-        decision = next(item for item in pending if item['field'] == 'tags')
-        w_review_decision(contract, {'category': 'metadata_fields', 'item_key': decision['item_key'],
-            'status': 'approved', 'candidate_key': choice['candidate_key'],
-            'expected_revision': decision['asset_mutation_revision']})
-        self.assertEqual(tags(), {'高跟', '丝袜'})
+        self.assertNotIn('tags', [item['field'] for item in pending])
 
     @windows_ledger_roots
     def test_a_confirmed_site_is_visible_before_another_site_reaches_its_deadline(self):
@@ -864,9 +862,41 @@ class LibraryNfoTests(unittest.TestCase):
         contract = Mock()
         contract.db_path = self.root / 'database/ledger.db'
         contract.library_processing_job.snapshot.return_value = {'status': 'running', 'job_id': 'one'}
+        contract.task_runs.query.return_value = []
         with patch('peach.web_library_processing.process_library') as worker:
             self.assertEqual(q_library_processing(contract, {})['job_id'], 'one')
             worker.assert_not_called()
+
+    def test_network_recovery_retries_only_a_run_that_skipped_rows_offline(self):
+        from peach.web_library_processing import retry_after_network_recovery
+        skipped = {'status': 'failed', 'offline_skipped': 2, 'retryable_asset_ids': [1, 2]}
+        writer, reader = SimpleNamespace(read_only=False), SimpleNamespace(read_only=True)
+        cases = {
+            'skipped offline': (skipped, writer, True),
+            'failed for other reasons': ({**skipped, 'offline_skipped': 0}, writer, False),
+            'nothing left': ({**skipped, 'retryable_asset_ids': []}, writer, False),
+            'read-only device': (skipped, reader, False),
+        }
+        for name, (live, sync, expected) in cases.items():
+            with self.subTest(name):
+                contract = Mock()
+                contract.db_path = self.root / 'database/ledger.db'
+                contract.library_processing_job.thread = None
+                contract.library_processing_job.snapshot.return_value = {**live, 'job_id': 'one', 'started_at': 1}
+                with patch('peach.web_library_processing.settings_file.active'), \
+                        patch('peach.web_library_processing.snapshot', return_value={}), \
+                        patch('peach.web_library_processing.w_library_processing') as start:
+                    retry_after_network_recovery(contract, sync)
+                if expected:
+                    start.assert_called_once_with(contract, {'job_id': 'one', 'retry': []})
+                else:
+                    start.assert_not_called()
+        # 断网那一趟还在收尾：这次恢复不算用掉，留给探测器下一次判回联网。
+        contract = Mock()
+        contract.library_processing_job.snapshot.return_value = {**skipped, 'status': 'running', 'job_id': 'one'}
+        with patch('peach.web_library_processing.w_library_processing') as start:
+            self.assertIs(retry_after_network_recovery(contract, writer), False)
+        start.assert_not_called()
 
     @windows_ledger_roots
     def test_processing_auto_applies_safe_nfo_fields_before_it_finishes(self):
@@ -1118,6 +1148,59 @@ class LibraryNfoTests(unittest.TestCase):
                          asked)
 
     @windows_ledger_roots
+    def test_offline_scan_finishes_locally_and_leaves_only_remote_rows_for_retry(self):
+        """断网首扫：NFO 资料照落，要出网的行记成可重试，一个来源都不问；联网后重试补齐。
+
+        有 NFO 的作品联网时也要拿外部来源核对一遍，所以它同样留给重试；不出网的行不记。"""
+        from PIL import Image
+        from peach.library_processing import OFFLINE_MESSAGE
+        from peach.network_reachability import NetworkReachability
+        media = self.root / 'media'
+        media.mkdir()
+        (media / 'ABW-358.mp4').write_bytes(b'video')
+        (media / 'ABW-358.nfo').write_text(
+            '<movie><title>Local title</title><sorttitle>ABW-358</sorttitle><studio>Studio</studio>'
+            '<premiered>2023-05-26</premiered><actor><name>涼森れむ</name></actor><tag>自定义标签</tag></movie>',
+            encoding='utf-8')
+        Image.new('RGB', (600, 900), 'blue').save(media / 'ABW-358-poster.jpg')
+        (media / 'SSIS-057.mp4').write_bytes(b'video')
+        # 文件名读不出番号的本地作品：有 NFO 也不问外部来源，断网时不进重试。
+        (media / 'holiday.mp4').write_bytes(b'video')
+        (media / 'holiday.nfo').write_text('<movie><title>假期</title></movie>', encoding='utf-8')
+        db = fresh_ledger(self.root)
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True, locations={'local': (str(media),)})
+        provider = stub_provider()
+        provider.query.return_value = {'id': 'SSIS-057', 'title': '作品资料'}
+        provider.cover.return_value = False
+        factory = Mock(return_value=provider)
+        generated, covers = self.root / 'generated', self.root / 'covers'
+        offline = NetworkReachability(check=lambda: False, retry_delay=0)
+        self.addCleanup(offline.stop)
+
+        # 只看资料：测试里的假视频生成不了预览，那一步的失败会混进重试集合。
+        process_library(config, db, generated, covers, stage='scan')
+        result = process_library(config, db, generated, covers, provider_factory=factory, stage='metadata',
+                                 database=LedgerDatabase(db), network=offline)
+
+        self.assertEqual(provider.method_calls, [])
+        self.assertEqual((result['status'], result['offline_skipped']), ('failed', 2))
+        with closing(sqlite3.connect(db)) as connection:
+            ids = dict(connection.execute('SELECT name,id FROM asset'))
+            title = connection.execute("SELECT catalog_title FROM asset WHERE code='ABW-358'").fetchone()[0]
+        self.assertEqual(title, 'Local title')
+        self.assertEqual(sorted(result['retryable_asset_ids']), sorted([ids['ABW-358.mp4'], ids['SSIS-057.mp4']]))
+        self.assertIn('holiday.mp4', ids)
+        self.assertEqual({issue['message'] for issue in result['issue_preview']}, {OFFLINE_MESSAGE})
+
+        online = NetworkReachability(check=lambda: True, retry_delay=0)
+        self.addCleanup(online.stop)
+        retried = process_library(config, db, generated, covers, provider_factory=factory,
+                                  database=LedgerDatabase(db), network=online,
+                                  retry_ids=result['retryable_asset_ids'])
+        self.assertEqual(retried['offline_skipped'], 0)
+        self.assertEqual({call.args[0] for call in provider.query.call_args_list}, {'ABW-358', 'SSIS-057'})
+
+    @windows_ledger_roots
     def test_local_nfo_fields_keep_remote_differences_for_review(self):
         """本地字段优先补空，在线不同值保留为覆盖复核候选。"""
         from PIL import Image
@@ -1219,6 +1302,74 @@ class LibraryNfoTests(unittest.TestCase):
         process_library(config, db, self.root / 'generated', self.root / 'covers',
                         provider_factory=Mock(return_value=provider))
         return provider, read_rows(self.root / 'generated/library-metadata-field-candidates.csv')
+
+    def _collect_amateur(self, code, wiki_answers, performer=None):
+        """一部素人片走采集：MGStage 给齐标量、演员只给素人名义，认人 Wiki 按 `wiki_answers` 答。
+
+        `performer` 给了就先把这个演员挂到账本上，这一行就不缺演员。返回 (provider, 候选行)。"""
+        media = self.root / 'media'
+        media.mkdir()
+        (media / f'{code}.mp4').write_bytes(b'video')
+        db = fresh_ledger(self.root)
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True, locations={'local': (str(media),)})
+        if performer:
+            # 先扫一遍入库，再把标量与演员写进账本：这一行只剩列表字段可补。第一遍桩出来的「没有」
+            # 记忆一并清掉，第二遍问不问 Wiki 只看这一行缺不缺演员。
+            from peach.library_processing import misses_path
+            scan = stub_provider()
+            scan.query.return_value = {'id': code}
+            process_library(config, db, self.root / 'generated', self.root / 'covers',
+                            provider_factory=Mock(return_value=scan))
+            with closing(sqlite3.connect(db)) as connection, connection:
+                connection.execute("UPDATE asset SET catalog_title=?, studio=?, release_date=? WHERE code=?",
+                                   ('素人の標題', 'ラグジュTV', '2024-01-01', code))
+                connection.execute("INSERT INTO entity(kind, canonical_name, normalized_name, created_at, updated_at) "
+                                   "VALUES('performer', ?, ?, '2026-11-05', '2026-11-05')", (performer, performer))
+                connection.execute("INSERT INTO asset_entity(asset_id, entity_id, role, source, confidence) "
+                                   "SELECT a.id, e.id, 'performer', 'manual', 1.0 FROM asset a, entity e "
+                                   "WHERE a.code=? AND e.canonical_name=?", (code, performer))
+            misses_path(config).unlink(missing_ok=True)
+            (self.root / 'generated/library-metadata-field-candidates.csv').unlink(missing_ok=True)
+        provider = stub_provider()
+        provider.amane.side_effect = None
+        provider.amane.return_value = [('mgstage', {
+            'id': code, 'content_id': code, 'source': 'mgstage', 'title': '素人の標題', 'maker': 'ラグジュTV',
+            'release_date': '2024-01-01', 'actresses': [{'japanese_name': 'まいな'}]})]
+
+        def wiki(source, query, **_):
+            if source not in wiki_answers:
+                raise NotFound('Wiki 搜索范围内未取得精确作品表格行')
+            return [(source, {'id': query, 'source': source, 'actresses': [{'japanese_name': wiki_answers[source]}]})]
+
+        provider.wiki.side_effect = wiki
+        process_library(config, db, self.root / 'generated', self.root / 'covers',
+                        provider_factory=Mock(return_value=provider))
+        return provider, read_rows(self.root / 'generated/library-metadata-field-candidates.csv', missing_ok=True)
+
+    @windows_ledger_roots
+    def test_a_missing_amateur_cast_asks_the_name_wikis_after_mgstage_and_stops_at_the_first_answer(self):
+        """MGStage 只给素人名义，缺演员的素人片接着问认人 Wiki；素人系総合 Wiki 没有就问 av_neme，
+        有一个给出艺名就停，不再落到综合索引（ADR-0145）。"""
+        provider, rows = self._collect_amateur('259LUXU-1378', {'av_neme': '優梨まいな'})
+        self.assertEqual([call.args[0] for call in provider.wiki.call_args_list], ['sougouwiki', 'av_neme'])
+        provider.community.assert_not_called()
+        performers = next(row for row in rows if row['field'] == 'performers')
+        self.assertEqual({candidate['source'] for candidate in json.loads(performers['candidates_json'])},
+                         {'mgstage', 'av_neme'})
+
+    @windows_ledger_roots
+    def test_an_amateur_code_neither_wiki_knows_settles_on_mgstage_without_the_community_sites(self):
+        provider, rows = self._collect_amateur('259LUXU-1378', {})
+        self.assertEqual([call.args[0] for call in provider.wiki.call_args_list], ['sougouwiki', 'av_neme'])
+        provider.community.assert_not_called()
+        performers = next(row for row in rows if row['field'] == 'performers')
+        self.assertEqual({candidate['source'] for candidate in json.loads(performers['candidates_json'])},
+                         {'mgstage'})
+
+    @windows_ledger_roots
+    def test_an_amateur_row_that_already_has_its_cast_does_not_ask_the_wikis(self):
+        provider, _ = self._collect_amateur('259LUXU-1378', {'sougouwiki': '優梨まいな'}, performer='優梨まいな')
+        provider.wiki.assert_not_called()
 
     @windows_ledger_roots
     def test_javdb_tags_are_collected_with_their_community_identity_after_maker_scalars(self):
@@ -1556,7 +1707,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(SOURCE_INTERVALS, {'javdb.com': 3.0, 'jdbstatic.com': 3.0})
 
     def test_every_provider_waits_on_one_shared_host_interval(self):
-        """取想要的资料、取新作资料与资料处理各起一个 provider；同时跑时问 javdb 也要排同一条队。"""
+        """想要作品资料采集、新作资料采集与资料处理各起一个 provider；同时跑时问 javdb 也要排同一条队。"""
         from peach.library_processing import SOURCE_LIMITER, LibraryMetadataProvider
         from peach.web_feeds import _transport
         with tempfile.TemporaryDirectory() as root:
@@ -1793,7 +1944,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(sorted((c['source'], c['provider'], c['source_kind'], c['official'], c['provider_id'])
                                 for c in title),
                          [('avbase', 'avbase-search', 'community', False, 'ORETD-615'),
-                          ('javdb', 'javdb-page', 'community', False, 'ORETD-615')])
+                          ('javdb', 'javdb-api', 'community', False, 'ORETD-615')])
         self.assertEqual(rows['title']['source_profile'], 'library')
         self.assertEqual(len(json.loads(rows['release_date']['candidates_json'])), 2)
 
@@ -2052,7 +2203,8 @@ class LibraryNfoTests(unittest.TestCase):
                          ['封面未取得：来源返回 HTTP 503'], '来源说没有只报一个数，不占问题清单')
         self.assertEqual(first['notes'], {'querying_metadata': 1})
         recorded = json.loads(misses_path(config).read_text(encoding='utf-8'))
-        self.assertEqual(list(recorded['misses']), ['mgstage', 'avbase', 'javbus', 'javdb', 'r18dev'],
+        self.assertEqual(list(recorded['misses']),
+                         ['mgstage', 'sougouwiki', 'av_neme', 'avbase', 'javbus', 'javdb', 'r18dev'],
                          '按站记，不按档记')
         self.assertEqual(provider.amane.call_args.kwargs['route'], ('mgstage',))
         self.assertEqual(list(recorded['misses']['r18dev']), ['STP-26232'])
@@ -2243,6 +2395,28 @@ class LibraryNfoTests(unittest.TestCase):
                                              [], set(), **options)
             self.assertEqual(cached, entries)
             provider.query.assert_called_once()
+        finally:
+            session.close()
+
+    def test_a_refused_javdb_tag_request_is_no_issue_when_the_chain_already_gave_tags(self):
+        """MIAB-086：片商官网这一趟已给标签，JavDB 拒绝访问只是换不到更细的类别，不记成问题。"""
+        from peach.library_processing import _MissCache, _RemoteSession, misses_path
+        from peach.scraping_access import SourcePaused
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True)
+        provider = Mock()
+        provider.query.side_effect = SourcePaused('来源拒绝访问，暂停向它请求一段时间')
+        session = _RemoteSession(config, Mock(return_value=provider),
+                                 _MissCache(misses_path(config)), retrying=False)
+        issue = Mock()
+        options = dict(update=Mock(), issue=issue, deadline=time.monotonic() + 60)
+        official = [('makers', {'id': 'MIAB-086', 'genres': ['痴女', '护士']}, None)]
+        try:
+            self.assertEqual(session._preferred_tags({}, 'MIAB-086', ['tags'], ('makers', 'javdb'),
+                                                     official, set(), **options), [])
+            issue.assert_not_called()
+            # 链上没给标签时照旧记成限流问题。
+            session._preferred_tags({}, 'MIAB-086', ['tags'], ('makers', 'javdb'), [], set(), **options)
+            self.assertTrue(issue.call_args.kwargs['paused'])
         finally:
             session.close()
 
@@ -3514,6 +3688,122 @@ class LibraryPreviewCompletionTests(unittest.TestCase):
         self.assertEqual(retried['status'], 'complete')
         self.assertEqual(retried['issue_count'], 0)
         self.assertEqual(retried['retryable_asset_ids'], [])
+
+    def test_cells_in_an_undecodable_tail_take_earlier_frames(self):
+        # 容器写 30 秒，实际只有前 9 秒解得出：靠后的格子先失败，再往前找到好帧。
+        calls = []
+
+        def capture(_ffmpeg, _video, timestamp, _destination, *, diagnostics, timeout, decode_options):
+            calls.append(timestamp)
+            if timestamp < 9:
+                diagnostics.update(reason='success', returncode=0)
+                return True
+            diagnostics.update(reason='ffmpeg_error', returncode=234, attempts=[],
+                               stderr='Could not open encoder before EOF')
+            return False
+
+        with patch('peach.library_processing.FFmpegResolver', return_value=self.resolver), \
+                patch('peach.frame_capture.capture_with_retry', side_effect=capture), \
+                patch('peach.frame_capture.tile_frames', side_effect=self.make_tile):
+            result = self.run_processing(stage='previews', asset_ids=[1])
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['previews'], 1)
+        planned = [30 * (0.03 + 0.94 * (index + 0.5) / 9) for index in range(9)]
+        healthy = [value for value in planned if value < 9]
+        taken = [value for value in calls if value < 9]
+        self.assertEqual(len(taken), 9)
+        self.assertEqual(taken[:len(healthy)], healthy)
+        self.assertGreater(len(calls), 9)
+        with self.database.read_connection() as connection:
+            snapshot = connection.execute('SELECT snapshot_path FROM asset WHERE id=1').fetchone()[0]
+        self.assertTrue(Path(snapshot).is_file())
+
+    def test_healthy_video_extracts_each_cell_once(self):
+        with patch('peach.library_processing.FFmpegResolver', return_value=self.resolver), \
+                patch('peach.frame_capture.capture_with_retry', return_value=True) as capture, \
+                patch('peach.frame_capture.tile_frames', side_effect=self.make_tile):
+            result = self.run_processing(stage='previews', asset_ids=[1])
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(capture.call_count, 9)
+
+    def test_undecodable_video_still_fails_after_earlier_attempts(self):
+        calls = []
+
+        def fail(_ffmpeg, _video, timestamp, _destination, *, diagnostics, timeout, decode_options):
+            calls.append(timestamp)
+            diagnostics.update(reason='no_frame', returncode=0, attempts=[], stderr='')
+            return False
+
+        with patch('peach.library_processing.FFmpegResolver', return_value=self.resolver), \
+                patch('peach.frame_capture.capture_with_retry', side_effect=fail):
+            result = self.run_processing(stage='previews', asset_ids=[1])
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['retryable_asset_ids'], [1])
+        detail = json.loads(Path(result['issues_log']).read_text(encoding='utf-8').splitlines()[0])['diagnostics']
+        self.assertEqual((detail['frame_index'], detail['reason']), (0, 'no_frame'))
+        earlier = [attempt['timestamp_seconds'] for attempt in detail['earlier_attempts']]
+        self.assertTrue(earlier)
+        self.assertEqual(calls[1:], earlier)
+        self.assertEqual(earlier, sorted(earlier, reverse=True))
+        self.assertLess(earlier[0], calls[0])
+        with self.database.read_connection() as connection:
+            self.assertIsNone(connection.execute('SELECT snapshot_path FROM asset WHERE id=1').fetchone()[0])
+
+    def test_timed_out_cell_does_not_retry_earlier_points(self):
+        def slow(_ffmpeg, _video, timestamp, _destination, *, diagnostics, timeout, decode_options):
+            diagnostics.update(reason='timeout', returncode=None, attempts=[], stderr='')
+            return False
+
+        with patch('peach.library_processing.FFmpegResolver', return_value=self.resolver), \
+                patch('peach.frame_capture.capture_with_retry', side_effect=slow) as capture:
+            result = self.run_processing(stage='previews', asset_ids=[1])
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(capture.call_count, 1)
+
+    def test_earlier_points_stay_inside_the_clip_and_move_backwards(self):
+        from peach.library_processing import _earlier_timestamps
+        self.assertEqual(_earlier_timestamps(27.5, 30), [13.75, 6.875, 1.5])
+        # 0.1 秒的短片：0.5 秒那个保底点已经越过片尾，不再尝试。
+        self.assertEqual(_earlier_timestamps(0.08, 0.1), [0.04, 0.02])
+        # 首格本来就靠前：保底点不比上一次更早就跳过。
+        self.assertEqual(_earlier_timestamps(2.4, 30), [1.2, 0.6])
+
+    def test_selected_assets_fit_the_connection_parameter_limit(self):
+        from peach.library_processing import _asset_selection
+        connect = sqlite3.connect
+        def limited_connection(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 1)
+            return connection
+        with patch('peach.library_processing.sqlite3.connect', side_effect=limited_connection):
+            self.assertEqual(_asset_selection(self.db, [2, 1, 2]), [2, 1])
+            for invalid in (3, 4, 99):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    _asset_selection(self.db, [2, 1, invalid])
+
+    def test_selected_processing_queries_fit_the_connection_parameter_limit(self):
+        from peach.library_processing import _chosen_asset_paths, _collection_rows
+        from peach.processing_control import initial_estimate
+        from peach.processing_traffic_plan import ledger_rows
+        connect = sqlite3.connect
+        def limited_connection(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 3)
+            return connection
+        selection = [2, 1] * 4
+        with patch('peach.library_processing.sqlite3.connect', side_effect=limited_connection):
+            with self.subTest(query='paths'):
+                self.assertEqual(set(_chosen_asset_paths(self.db, selection)), {'local', 'pikpak'})
+            with self.subTest(query='collection'):
+                rows, _ = _collection_rows(self.db, locations=self.config.locations,
+                                           online_roots=(self.media,), asset_ids=selection)
+                self.assertEqual([row['id'] for row in rows], [1])
+            with self.subTest(query='estimate'):
+                estimate = initial_estimate(self.config, self.db, 'all', selection, mode='high')
+                self.assertEqual(estimate['estimate_file_count'], 2)
+            with self.subTest(query='traffic'):
+                self.assertEqual({row['id'] for row in ledger_rows(self.db, selection)}, {1, 2})
+                self.assertEqual(ledger_rows(self.db, []), [])
 
     def test_selected_assets_require_active_videos(self):
         for selection in ([], [True], [0], [-1], ['1'], '1', [99], [3], [4]):

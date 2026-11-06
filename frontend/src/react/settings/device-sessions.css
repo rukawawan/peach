@@ -1,0 +1,4 @@
+/* 已登录的设备：平台标志用品牌原色，与旁边彩色的浏览器标志同一风格。Apple 官方标志是单色，跟正文色走深浅主题。 */
+.peach-react [data-platform-mark="windows"] { color: #0078d4; }
+.peach-react [data-platform-mark="android"] { color: #3ddc84; }
+.peach-react [data-platform-mark="apple"] { color: var(--color-text-primary); }

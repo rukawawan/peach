@@ -404,8 +404,9 @@ class SourceTransport:
     """公开采集按来源复用连接池；登录会话由特定来源消费者显式建立。"""
 
     def __init__(self, secrets_root: Path, *, max_requests: int = 0,
-                 max_bytes: int = 0, max_seconds: float = 0):
+                 max_bytes: int = 0, max_seconds: float = 0, allow_browser: bool = True):
         self.root = secrets_root
+        self.allow_browser = allow_browser
         self.transports: dict[str | None, HttpxTransport] = {}
         self.max_requests, self.max_bytes = max_requests, max_bytes
         from .processing_control import deadline_after
@@ -527,7 +528,7 @@ class SourceTransport:
 
     def _via(self, source: str | None) -> str:
         """这个来源这次走哪条路。该走浏览器的来源要先选出传输才知道（不发请求、不起进程）。"""
-        if source and source not in self.transports and wants_browser(self.root, source):
+        if self.allow_browser and source and source not in self.transports and wants_browser(self.root, source):
             self.transports[source] = self._transport_for(source)
         transport = self.transports.get(source)
         return VIA_BROWSER if isinstance(transport, browser_transport.BrowserTransport) else VIA_HTTP
@@ -538,6 +539,8 @@ class SourceTransport:
         取到 200 且不是验证页：这个来源固定到浏览器（`fix_to_browser`），本趟之后的请求也走浏览器，返回这一页。
         本机没有浏览器、浏览器没取到或同样被拦：返回 None，调用方照 HTTP 客户端被拦那样冷却。
         """
+        if not self.allow_browser:
+            return None
         from .processing_control import checkpoint
         checkpoint('network')
         browser = self._browser_for(source)
@@ -572,7 +575,7 @@ class SourceTransport:
 
     def _transport_for(self, source: str | None):
         """这个来源的请求走哪条路：该走浏览器（`wants_browser`）且本机有浏览器就走浏览器页面，否则 httpx。"""
-        if source and wants_browser(self.root, source):
+        if self.allow_browser and source and wants_browser(self.root, source):
             browser = self._browser_for(source)
             if browser is not None:
                 return browser

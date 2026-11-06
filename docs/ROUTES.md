@@ -96,11 +96,11 @@
 | `/settings/maintenance` | 应用与维护 |
 | `/settings/diagnostics` | 系统诊断：系统检查、库健康、来源会话与后台诊断、刮削记录导出 |
 | `/subscriptions` | 关注管理：关注列表统一管理创作者来源与 JAV 订阅；添加关注提供创作者、女优入口和别名管理，标签管理支持在线标签分页与批量操作 |
-| `/sources` | 来源和凭证：采集来源、访问方式与凭据状态 |
+| `/sources` | 来源和凭证：采集来源、访问方式与凭据状态，全部来源的连接检查 |
 | `/tasks` | 任务中心与云下载进度 |
 | `/stats` | 统计 |
 | `/taste` | 口味分析 |
-| `/review` | 人工复核 |
+| `/review` | 人工复核；元数据字段下逐条列出核查结算自动写入的资料，可勾选后预览并撤回 |
 | `/data-cleanup` | 数据管理概览；日常扫描、待处理摘要、维护与清理入口 |
 | `/data-cleanup/organize` | 文件整理与批次历史 |
 | `/data-cleanup/resource-sync` | 核对文件与馆藏记录，清理失效条目、空目录与缓存 |
@@ -114,13 +114,23 @@
 
 设置分区可直接打开、刷新和用浏览器前进后退。偏好面板从当前页面打开时保留背景；配置分区复用配置页及其权限检查。配置分类导航停在搜索栏下方，切换分类时显示所选分区的开头。
 
-用户脚本通过专用令牌调用 `POST /api/jav-browser/errors`，仅接收白名单错误字段并写入本机日志；批次、体积、限频与诊断包范围见 [浏览器添加 JAV](JAV_BROWSER.md)。状态接口 `GET /api/jav-browser` 同时投影真实下载与整理进度，不授予配置、账号或账本写入权限。
+用户脚本通过专用令牌调用 `POST /api/jav-browser/errors`，仅接收白名单错误字段并写入本机日志；批次、体积、限频与诊断包范围见 [浏览器添加 JAV](JAV_BROWSER.md)。状态接口 `GET /api/jav-browser` 同时投影真实下载与整理进度，`GET /api/jav-browser/active` 以同一结构列出进行中与最近结束的任务，均不授予配置、账号或账本写入权限。`POST /api/jav-browser/postprocess` 只能重试该番号已失败的整理，走任务中心同一入口。`POST /api/jav-browser/dismiss` 只记下脚本确认过哪些已结束的任务，不改任务与账本。`GET`/`POST /api/jav-browser/performer` 认出女优页是哪位并开关她的「订阅新作」，与人物页开关同一套订阅；编号没人持有时会新建女优并绑上编号，规则见 ADR-0143。
+
+`GET /api/review/auto-landings` 逐条列出 ADR-0139 两条规则仍在的自动写入：作品、封面地址、写入的字段与值、写入前的值或补上的标签、规则与时间；带 `items=<决定键>`（换行分隔）时只读返回这几条要改回的值、要删的标签、写入后被改过或已删除而不动的作品，以及计划摘要 `token`。`POST /api/review/auto-landings/revert` 接收 `items` 与 `token`，在写锁里重算计划，对不上返回 400 要求重新预览；对上后先备份账本再撤回，回执带备份文件名与未改动的作品。列表里没有的决定键一律拒绝，其余自动落库来源仍由 `scripts/revert_auto_landing.py` 撤回；只读端拒绝撤回（ADR-0141）。
 
 `GET /api/client-updates` 要求应用鉴权，返回运行版本与构建标记、发行版检查结果、安装状态、用户脚本版本和自动补修状态，不触发外部检查。`GET /api/jav-browser/updates` 使用用户脚本专用令牌，无需番号，返回运行与发行版、脚本版本快照，不暴露补修明细。`POST /api/configuration/upgrade-repairs/retry` 限本机同源请求，重试失败项；`GET /api/configuration/upgrade-repairs/review` 限本机管理权限，下载 JSON 复核记录，无记录时返回 404。
+
+Docker 镜像的一键更新（[ADR-0140](adr/0140-docker-one-click-update-via-watchtower.md)）：容器里的 `GET /api/configuration/updates` 在 Docker Hub 的版本号标签与 `edge` 指向同一镜像前返回 `state: pending`；有新镜像时多一个 `one_click`，`available` 表示镜像标签是 `edge`、令牌已生成且探测得到 Watchtower，不能时 `reason` 说明原因，没启用 Watchtower 时为空。`POST /api/configuration/docker-update` 请 Watchtower 异步拉取并重建容器，收到 202 后返回 `state: updating`；条件不满足、Watchtower 拒绝令牌或正忙返回 409。接口限本机同源请求，非 Docker 部署返回 404，从不回传令牌。
 
 `GET /api/configuration/cloud-proxies` 返回已添加媒体库对应的 CloudDrive 账号及 API／数据代理、未匹配媒体库和账号修订号，不回显代理密码；尚未填写 CloudDrive2 地址时返回空列表与 `configured: false`。`POST` 接受账号 `id`、`revision` 和本次修改的 `api`／`data`，写回 CloudDrive 后返回该账号当前状态；配置冲突返回 409。这两条接口均限本机管理权限，写入还要求同源请求。
 
 `POST /api/configuration/smb/test` 接受共享地址及连接字段，验证只读目录访问，返回 `readable` 和最多 500 个可进入子目录名。接口要求本机管理权限与同源请求；地址无效返回 400，无读取权限返回 403，共享不可达返回 502，不回显密码。配置读取只返回账号、加密要求与密码是否已保存。
+
+`POST /api/configuration/access/first` 是已配置、还没有访问策略的 Docker 部署的访问设置提交（[ADR-0149](adr/0149-docker-first-access-setup.md)），不要求登录。正文 `{mode, password, confirmation, next}`，`mode` 为 `password` 或 `open`；成功写入访问策略，返回站内地址 `url`，设了密码时同时设下会话 cookie。只在 Docker 且还没有访问策略时可用：非 Docker 返回 404，已有策略返回 409，来源不是本机或私有网络、带代理转发头或不同源时返回 403，密码错误按 `errors.password`、`errors.confirmation` 返回 400。
+
+`POST /api/configuration/access/token/rotate` 更换访问口令，运行中的服务立即改用新口令。接口要求本机管理权限与同源请求；口令由 `--token`、`PEACH_TOKEN` 指定或这次启动没有口令时返回 409，访问设置读不出时也返回 409。响应只在这一次带回新口令 `token`（`Cache-Control: no-store`），另有访问方式 `mode` 和被登出的其他设备数 `signed_out`。配置读取的 `api_token` 只给出 `rotatable`、`reason`、`paired`，不回显口令。
+
+`GET /api/configuration/certificate` 限本机管理权限，返回本机 CA 的 SHA-256 `fingerprint`、到期日 `not_after`、下载路径和二维码：`phone_url` 是带 10 分钟签名的下载地址，`qr` 是模块矩阵。没有 HTTPS 服务或没有 CA 时返回 404，配置读取的 `certificate` 为 null。`GET /api/configuration/certificate/peach-local-ca.crt` 只下发 CA 的公开证书（`application/x-x509-ca-cert`），任何私钥都不经过它；带有效签名 `k` 时不需要登录，签名无效或过期返回 403；不带签名时要求应用鉴权。
 
 ## 兼容地址与服务接口
 

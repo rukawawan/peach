@@ -72,6 +72,46 @@ describe('混排作品的画面框',()=>{
    }finally{await context.close()}
   });
  }
+ // 回收站资源卡、文件夹面包屑等的文件名走共用的中间省略。页面开着 text-autospace，汉字、假名与
+ // 拉丁字母、数字相邻处多出间距，量宽时要算上，否则判成「放得下」的结果实际溢出、末尾被裁掉。
+ it('中日文夹英文数字的文件名中间省略后首尾完整、不越出盒子',async()=>{
+  const context=await browser.newContext({viewport:{width:1280,height:800},reducedMotion:'reduce'});
+  try{
+   const page=await context.newPage();
+   const name='PCH-031 あ1い2う3え4お5か6き7く8け9こ0さ1し2す3せ4そ5た6ち7つ8て9と0な1に2ぬ3ね4の5.mp4';
+   await openHome(page,'small');
+   await settle(page);
+   const gap=await page.evaluate(()=>{
+    const host=document.createElement('div');host.className='peach-react';host.dataset.autospaceHost='';
+    const span=document.createElement('span');span.style.cssText='white-space:nowrap;font-size:var(--fs-md)';
+    host.append(span);document.body.append(host);
+    const width=(text:string)=>{span.textContent=text;return span.getBoundingClientRect().width};
+    const value=width('あa')-width('あ')-width('a');span.remove();return value;
+   });
+   assert.ok(gap>0.5,`浏览器没有加 autospace 间距（${gap}px），用例测不到这类溢出`);
+   await page.evaluate(name=>{
+    const host=document.querySelector('[data-autospace-host]')!;
+    for(const width of [168,240,333]){
+     const box=document.createElement('span');box.dataset.middleTruncate='';box.dataset.autospaceCase='';
+     box.style.cssText=`display:block;width:${width}px;overflow:hidden;white-space:nowrap;font-size:var(--fs-md)`;
+     box.textContent=name;host.append(box);
+    }
+   },name);
+   await page.waitForFunction(()=>[...document.querySelectorAll('[data-autospace-case]')].every(node=>node.classList.contains('middle-truncated')));
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   const boxes=await page.locator('[data-autospace-case]').evaluateAll(nodes=>nodes.map(node=>{
+    const range=document.createRange();range.selectNodeContents(node);
+    return {text:node.textContent||'',scroll:node.scrollWidth,client:node.clientWidth,
+     overflow:range.getBoundingClientRect().right-node.getBoundingClientRect().right};
+   }));
+   for(const box of boxes){
+    const shown=JSON.stringify(box);
+    assert.ok(box.text.startsWith('PCH-031 ')&&box.text.includes('…')&&box.text.endsWith('5.mp4'),shown);
+    assert.ok(box.scroll<=box.client,shown);
+    assert.ok(box.overflow<=.5,shown);
+   }
+  }finally{await context.close()}
+ });
  // 稍后看由卡上的状态图标表示，卡面底色留给媒体库来源色，不随稍后看变化。
  for(const theme of ['light','dark'])it(`${theme} 稍后看状态图标与按钮及撤销同步`,async()=>{
   const context=await browser.newContext({viewport:{width:1280,height:800},colorScheme:theme,reducedMotion:'reduce'});

@@ -44,6 +44,8 @@ def _naive_rank(source, candidates, limit, *, seed=None, diversity=0.22):
         reasons = choice.pop("_reasons")
         relevance = choice.pop("_relevance")
         choice["why"] = " · ".join(reasons[:2])
+        choice["shared_tags"] = sorted(related._sets(source)["tag"] & related._sets(choice)["tag"],
+                                       key=lambda tag: (-weights.get(tag, 1.0), tag))
         choice["related_score"] = round(relevance, 4)
         selected.append(choice)
     return selected
@@ -106,6 +108,14 @@ class RelatedRankerTests(unittest.TestCase):
         ranked = rank_related(source, [common, rare, *background], 2, seed="fixed")
         self.assertEqual(ranked[0]["id"], 3)
         self.assertEqual(ranked[0]["why"], "标签接近")
+
+    def test_shared_tags_come_rarest_first(self):
+        source = {"id": 1, "entities": {"tag": {10, 20, 30}}}
+        both = {"id": 2, "entities": {"tag": {10, 20, 30}}}
+        background = [{"id": asset_id, "entities": {"tag": {10, 30} if asset_id % 2 else {10}}}
+                      for asset_id in range(3, 13)]
+        ranked = rank_related(source, [both, *background], 1, seed="fixed")
+        self.assertEqual(ranked[0]["shared_tags"], [20, 30, 10])
 
     def test_result_is_stable_and_mmr_adds_variety(self):
         source = {"id": 1, "entities": {"creator": {7}, "tag": {10, 11}}}

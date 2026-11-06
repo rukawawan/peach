@@ -77,7 +77,9 @@ const COLUMN_LABELS: Record<string, string> = {
 /** 表头里不占字的列：勾选那一格自己会说「选择 谁」，行尾三个控件也各带自己的名字。 */
 const SILENT_COLUMNS = new Set(['actions']);
 const preferenceColumns = Object.entries(COLUMN_LABELS).map(([id, label]) => ({ id, label,
-  width: id === 'select' ? 48 : id === 'name' ? 300 : id === 'actions' ? 208 : id === 'fetched' ? 200 : 160,
+  /* 来源那一格要放下站标、`video.dmm.co.jp` 与外链图标，160 会把站名压到图标底下。 */
+  width: id === 'select' ? 48 : id === 'name' ? 300 : id === 'actions' ? 208 : id === 'fetched' ? 200
+    : id === 'origin' ? 184 : 160,
   min: id === 'select' ? 48 : id === 'actions' ? 200 : id === 'name' ? 300 : 112, max: id === 'select' ? 48 : id === 'name' ? 2000 : 800,
   flex: id === 'name',
   required: id === 'select' || id === 'name',
@@ -283,8 +285,9 @@ export function FeedSources({ readOnly, toast, onAdd, selection }: {
         header: label('origin'),
         cell: (context) => (
           <a href={context.getValue()} target="_blank" rel="noopener noreferrer" title="打开来源页面"
-            className="text-text-primary underline-offset-2 hover:underline">
-            <SiteLabel site={context.row.original.kind.startsWith('javdb') ? 'javdb' : originHost(context.getValue())}
+            className="max-w-full text-text-primary underline-offset-2 hover:underline">
+            <SiteLabel site={context.row.original.kind.startsWith('javdb') ? 'javdb'
+              : context.row.original.kind.startsWith('dmm') ? 'dmm' : originHost(context.getValue())}
               label={originHost(context.getValue())} />
             <RiExternalLinkLine aria-hidden className="size-(--icon-inline) shrink-0" />
           </a>

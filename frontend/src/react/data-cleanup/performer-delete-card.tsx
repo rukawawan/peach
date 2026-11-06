@@ -7,6 +7,7 @@ import { Button } from '@/components/base/buttons/button';
 import { cx } from '@/utils/cx';
 
 import { errorMessage } from '../../api';
+import { BATCH_DELETE_TEXT } from '../../cleanup-tool-skeletons';
 import { entityDisplayName, nameFallback } from '../../core/entity-names';
 import { DataTable, type DataColumn } from '../components/data-table';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
@@ -21,8 +22,6 @@ import {
   deletePerformerVideos, fetchDeletePerformers, fetchDeletePlan, PERFORMER_DELETE_KEY,
   type DeletePerformer, type PerformerDeleteResult,
 } from './performer-delete';
-
-const DESCRIPTION = '勾选女优，永久删除她们在全部来源中的影片文件、影片资料和观看记录，包括回收站中的影片。女优档案和照片保留。共同出演的同一文件只删除一次。';
 
 function PerformerName({ person }: { person: DeletePerformer }) {
   const name = entityDisplayName('performer', person.k, person.entity_id);
@@ -112,7 +111,7 @@ export function PerformerDeleteCard({ toast }: { toast(message: string): void })
         action={<Button variant="secondary" size="small" onClick={() => void query.refetch()}>重试</Button>}>
         {errorMessage(query.error)}</Note> : <p role="status" className="text-body-regular text-text-secondary">正在读取女优列表…</p>}
     </Fieldset> : <DataTable label="女优影片" title="批量删除" titleId="batch-delete-title" unit="位女优"
-      description={DESCRIPTION} items={items} columns={columns}
+      description={BATCH_DELETE_TEXT} items={items} columns={columns}
       rowId={person => String(person.entity_id)} rowLabel={person => entityDisplayName('performer', person.k, person.entity_id)}
       selected={selected} onSelected={setSelected}
       toolbarActions={<IndexSearch label="搜索女优姓名或别名" value={search} onQuery={value => { setSearch(value); setSelected([]) }} />}

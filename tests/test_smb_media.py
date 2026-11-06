@@ -238,6 +238,59 @@ class SmbMediaTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT path FROM asset WHERE medium='video'").fetchall(), [(ledger_root + '\\ABC-123.mp4',)])
                 self.assertEqual(connection.execute('SELECT COUNT(*) FROM asset_subtitle').fetchone()[0], 1)
 
+    def test_scan_walk_shares_one_connection_and_reconnects_once_after_a_drop(self):
+        import errno
+        from peach.smb_transport import SmbEntry
+        tree = {('Movies',): [SmbEntry(0, 1, 1, True, name) for name in ('A', 'B', 'C', 'Gone')]}
+        for name in 'ABC':
+            tree[('Movies', name)] = [SmbEntry(10, 1, 1, False, f'{name}.mp4'), SmbEntry(0, 1, 1, True, 'extrafanart')]
+            tree[('Movies', name, 'extrafanart')] = [SmbEntry(5, 1, 1, False, 'fanart1.jpg')]
+        listed_directories = len(tree)
+
+        class Transport:
+            def __init__(self, drop_on=None):
+                self.drop_on, self.calls, self.closed = drop_on, 0, False
+                transports.append(self)
+
+            def scandir(self, parts):
+                assert not self.closed, '已关闭的连接不应再被使用'
+                self.calls += 1
+                if self.calls == self.drop_on:
+                    raise OSError(errno.ENETDOWN, 'SMB 连接已断开')
+                if parts not in tree:
+                    raise FileNotFoundError(errno.ENOENT, '不存在')
+                return tree[parts]
+
+            def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            config = settings_file.PeachConfig(root, root / 'config.toml', present=True, locations={})
+            sources = media_configuration.prepare_sources([
+                dict(location='local', path='smb://nas/share/Movies', library='NAS', cost='free')], windows=True, config=config)
+            config = media_identity.configure_sources(config, sources, windows=True)
+            with patch('peach.settings_file.active', return_value=config):
+                top = scan.walk_root_for('local', sources[0]['root'], declared_roots=config.locations, mounts=config.mounts)
+            for drop_on, expected_transports in ((None, 1), (3, 2)):
+                with self.subTest(drop_on=drop_on):
+                    transports, errors = [], []
+                    with patch.object(smb_media.SmbResource, '_transport',
+                                      side_effect=lambda first_drop=drop_on, created=transports: Transport(None if created else first_drop)):
+                        walked = list(scan._walk(top, onerror=errors.append))
+                    self.assertEqual(len(transports), expected_transports)
+                    self.assertTrue(all(transport.closed for transport in transports))
+                    self.assertEqual(len(walked), listed_directories)
+                    self.assertEqual(sorted(entry.name for _, files in walked for entry in files),
+                                     ['A.mp4', 'B.mp4', 'C.mp4', 'fanart1.jpg', 'fanart1.jpg', 'fanart1.jpg'])
+                    self.assertEqual([error.errno for error in errors], [errno.ENOENT])
+            transports = []
+            with patch.object(smb_media.SmbResource, '_transport', side_effect=lambda: Transport()):
+                walker = scan._walk(top, onerror=lambda error: None)
+                next(walker)
+                walker.close()
+            self.assertEqual([transport.closed for transport in transports], [True])
+
     def test_loopback_bridge_range_and_authorization(self):
         resource = _Resource(b'0123456789')
         bridge = smb_media._bridge()

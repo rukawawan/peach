@@ -113,11 +113,11 @@ SCOPES: dict[str, tuple[str, ...]] = {
                  "test_seed_pack.py", "test_seed_followup.py", "test_seed_corrections.py"),
     "tooling": ("test_scripts.py", "test_trash_junk.py", "test_auth.py", "test_access.py", "test_cli.py", "test_server.py", "test_diagnostics.py", "test_error_reporting.py", "test_remote_reporting.py", "test_reporting_*.py", "test_library_sharing.py", "test_library_diagnostics.py", "test_script_policy.py",
                 "test_scan.py", "test_record_rehome.py", "test_wants.py", "test_push_discovery.py", "test_media_probe.py", "test_subtitles.py", "test_onboarding.py", "test_configuration_sources.py", "test_clouddrive_proxy.py", "test_folder_picker.py", "test_ledger_backups.py", "test_clear_camera_filename_codes.py",
-                "test_agent_worktree.py", "test_star_history.py", "test_test_evidence.py", "test_test_history.py", "test_test_environment.py", "test_dependency_policy.py",
+                "test_agent_worktree.py", "test_check_public_text.py", "test_issue_intake.py", "test_star_history.py", "test_test_evidence.py", "test_test_history.py", "test_test_environment.py", "test_dependency_policy.py",
                 "test_version_bump.py", "test_changelog.py", "test_release_due.py", "test_release_candidate.py", "test_media_build_cache.py", "test_runner_launcher.py",
                 "test_restart_windows_tray.py", "test_deploy_windows_tray.py", "test_runtime_prepare.py",
                 "test_buildinfo.py", "test_versioning.py", "test_macos_standalone.py",
-                "test_windows_update.py", "test_release_updates.py", "test_automatic_updates.py", "test_standalone_update.py", "test_upgrade_repairs.py", "test_certs.py", "test_config.py",
+                "test_windows_update.py", "test_release_updates.py", "test_release_signing.py", "test_automatic_updates.py", "test_standalone_update.py", "test_upgrade_repairs.py", "test_certs.py", "test_config.py",
                 "test_fsutil.py", "test_desktop_settings.py", "test_desktop_installer.py", "test_data_storage.py",
                 "test_job_status.py", "test_jobs.py", "test_task_runs.py", "test_followups.py", "test_update_tasks.py",
                 "test_task_center_integration.py", "test_task_control.py", "test_task_resources.py", "test_resource_platform.py", "test_reference_updates.py",
@@ -187,6 +187,11 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     "scripts/fetch_cloudflared_macos.py": ("tooling", "packaging"),
     "scripts/fetch_face_models.py": ("tooling", "packaging"),
     "scripts/cloudflared-macos.json": ("tooling", "packaging"),
+    "scripts/fetch_sparkle_macos.py": ("tooling", "packaging"),
+    "scripts/sparkle-macos.json": ("tooling", "packaging"),
+    "scripts/sparkle_appcast.py": ("tooling", "packaging"),
+    # 发布签名脚本的用例与客户端校验放在同一份 `test_release_signing.py` 里。
+    "scripts/sign_release.py": ("tooling",),
     "scripts/fetch_ffmpeg_sources.py": ("tooling", "packaging"),
     "scripts/ffmpeg-sources.json": ("tooling", "packaging"),
     "scripts/build_ffmpeg_windows.sh": ("tooling", "packaging"),
@@ -205,6 +210,8 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     # 托盘既是 sync 域的服务编排，也被版本与桌面设置那些 tooling 测试读源码。
     "src/peach/tray.py": ("sync", "tooling"),
     "src/peach/menubar.py": ("sync", "tooling"),
+    # Sparkle 更新器由菜单栏持有，打包与发布门槛的测试也直接导入它。
+    "src/peach/sparkle_update.py": ("sync", "tooling", "packaging"),
     # 托盘子服务与隧道的 cloudflared 共用这份 Job Object；两边的测试都要跑到。
     "src/peach/process_job.py": ("tooling", "sync"),
     'src/peach/task_control.py': ('catalog', 'media', 'metadata', 'follow', 'sync', 'tooling', 'web'),
@@ -254,6 +261,10 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     # 失效标记由资料页、网页链接体检、维护脚本与种子导出共用。
     "src/peach/link_status.py": ("catalog", "metadata", "tooling", "web"),
     "scripts/revert_auto_landing.py": ("catalog", "metadata", "tooling"),
+    # 撤回的实现与复核页入口（ADR-0141）：脚本用例散在 catalog、metadata、tooling，网页用例在
+    # `test_metadata_verification.py`，路由登记在 `test_rm_web.py`。
+    "src/peach/auto_landing_revert.py": ("catalog", "metadata", "tooling"),
+    "src/peach/web_auto_landings.py": ("catalog", "metadata", "web"),
     # 实体事实种子包（ADR-0073）：导出导入的逻辑与命令行，测试都在 `test_seed_pack.py`；
     # 扫描结算后自动导入的后继（ADR-0075）在 `test_seed_followup.py`。
     "src/peach/seed_pack.py": ("metadata", "tooling"),
@@ -270,6 +281,8 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     "src/peach/performer_header.py": ("metadata", "catalog", "web"),
     # 推送发现横跨扫描登记（tooling）与 HTTP 端点（catalog），按名字只推得出一个域。
     "src/peach/push_discovery.py": ("tooling", "catalog"),
+    # 入库通知由推送发现、云下载整理与任务接口共用，测试分在 catalog 与 tooling，按名字推不出来。
+    "src/peach/ingest_notices.py": ("catalog", "tooling"),
     # 个人记录的判据与搬运（ADR-0087）：资源同步与列表在 catalog，扫描登记与撤回脚本在 tooling。
     "src/peach/personal_records.py": ("catalog", "tooling"),
     "src/peach/record_rehome.py": ("catalog", "tooling"),
@@ -287,6 +300,8 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     ".dockerignore": ("packaging", "tooling"),
     "compose.yaml": ("packaging", "tooling"),
     "src/peach/server.py": ("packaging", "tooling"),
+    # 一键更新的用例和镜像仓库核对一起放在 `test_release_updates.py`。
+    "src/peach/docker_update.py": ("tooling",),
     "scripts/smoke_docker.py": ("packaging", "tooling"),
     # GitLab 流水线：构建、发布与 CI 验证的编排，本机测试不执行它；`test_version_bump.py`
     # 读它判补丁版本。主线 CI 改它时由 `ci_scope` 让三个平台跑全量。
@@ -315,6 +330,9 @@ AUTO_SCOPE_PREFIXES: tuple[tuple[str, str | tuple[str, ...]], ...] = (
     # 站点解析器契约与套了契约的站（ADR-0044）：测试住在 `test_metadata_sources.py` 与
     # `test_community_catalog.py`，都在 metadata 域；按包内模块名推不出来。
     ("src/peach/sources/", "metadata"),
+    # 来源录制回放：录制由 `test_metadata_replay.py` 回放，录制脚本也由它装载；重录不必全量。
+    ("tests/fixtures/source-replay/", "metadata"),
+    ("scripts/record_source_fixtures.py", ("metadata", "tooling")),
     ("scripts/localize_performer_names.py", ("metadata", "tooling")),
     ("scripts/localize_series_names.py", ("metadata", "tooling")),
     ("scripts/localize_studio_names.py", ("metadata", "tooling")),
@@ -550,7 +568,7 @@ def special_scopes(path: str, kind: str) -> tuple[str, ...] | None:
     if path.startswith(".github/workflows/"):
         return ("tooling",) if path in {
             ".github/workflows/project-board.yml", ".github/workflows/docker.yml",
-            ".github/workflows/star-history.yml",
+            ".github/workflows/star-history.yml", ".github/workflows/issue-intake.yml",
         } else ("full",)
     if path.rsplit("/", 1)[-1] == "conftest.py" or any(path.startswith(p) for p in FULL_ONLY_PREFIXES):
         return ("full",)

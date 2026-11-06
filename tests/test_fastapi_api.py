@@ -70,7 +70,6 @@ if HAS_DEPS:
     from peach import routes_auth
     from peach import routes_jav_browser
     from peach.api import create_app
-    from peach.follow_covers import PLACEHOLDER_CONTENT_TYPE
     from peach.follow_secrets import credential_store_for
     from peach.config import PeachSettings
 
@@ -146,6 +145,9 @@ CREATE TABLE review_decision(
   category TEXT NOT NULL,item_key TEXT NOT NULL,status TEXT NOT NULL,
   reviewer TEXT NOT NULL DEFAULT 'local-default',note TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,
   PRIMARY KEY(category,item_key));
+CREATE TABLE download_task(
+  id INTEGER PRIMARY KEY, code TEXT, state TEXT NOT NULL, ledger_path TEXT, asset_id INTEGER,
+  display_name TEXT NOT NULL DEFAULT '', remote_name TEXT);
 CREATE TABLE genre_decision(
   source_genre TEXT PRIMARY KEY, raw_genre TEXT NOT NULL, peach_tag TEXT, decided_at TEXT NOT NULL,
   CHECK(peach_tag IS NULL OR length(trim(peach_tag))>0));
@@ -309,6 +311,9 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         con.executescript(BASE_SCHEMA)
         for migration in ("0018_online_follow.sql", "0034_feed_discovery.sql"):
             con.executescript((ROOT / "migrations" / migration).read_text(encoding="utf-8"))
+        # 删除与清空回收站后的缓存清理按想要清单认封面的主人；整份 0042 迁移还要连带
+        # 修订号与账户表，这里只建清理读的两列。
+        con.execute("CREATE TABLE want_item(code_key TEXT, state TEXT NOT NULL)")
         con.execute(
             """INSERT INTO asset(id,location,path,name,medium,size,creator,studio,duration,
                                   width,height,ctx_orient,snapshot_path,first_seen)
@@ -825,18 +830,20 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "image/webp")
         self.assertEqual(hits, ["https://kemono.cr/icons/fanbox/30917150"])
-        # 没有实测过头像端点的来源、缺 ref 或身份形状不对的请求都不出网，直接给占位图。
+        # 没有实测过头像端点的来源、缺 ref 或身份形状不对的请求都不出网，直接回 404。
+        # 404 不带占位图：浏览器会把占位图当成加载成功，页面上的兜底链（归档站头像、首字母）就走不下去。
         for query in ("provider=rule34video&ref=1", "provider=kemono&ref=noslash",
                       "service=fanbox&id=not.a.creator", "service=patreon&id=1",
                       "service=profile&id=twitter:../x", "service=profile&id=fanbox:1"):
             missing = await self.client.get(f"/follow-avatar?t=secret&{query}")
             self.assertEqual(missing.status_code, 404, query)
-            self.assertEqual(missing.headers["content-type"], PLACEHOLDER_CONTENT_TYPE, query)
+            self.assertEqual(missing.content, b"", query)
         self.assertEqual(len(hits), 1)
         # 字母加连字符是合法的 FANBOX 创作者 id：去官方查一次，走的是应用那条 client；
-        # 回来的不是资料 JSON，就给占位图，不再往别处取。
+        # 回来的不是资料 JSON，就回 404，不再往别处取。
         unknown = await self.client.get("/follow-avatar?t=secret&service=fanbox&id=not-a-number")
         self.assertEqual(unknown.status_code, 404)
+        self.assertEqual(unknown.content, b"")
         self.assertEqual(hits[1:], ["https://api.fanbox.cc/creator.get?creatorId=not-a-number"])
 
     async def test_profile_avatars_keep_the_sharpest_of_x_and_patreon(self):
@@ -1342,6 +1349,30 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recovered.status_code, 200)
         self.assertGreater(len(asked), reached)
         self.assertFalse(marker.exists())
+
+    async def test_a_site_redirecting_to_an_unusable_address_counts_as_unreachable(self):
+        """重定向目标的主机名过不了 IDNA 时传输层抛 ValueError，地址本身不合法时抛 InvalidURL。
+
+        两者都不是 `httpx.HTTPError`，都按取不到处理：回 404 露出地球图标，失败窗口内不再出网。
+        """
+        self._archive_links(lambda url: "red")
+        for failure in (ValueError("encoding with 'idna' codec failed (UnicodeError: label empty or too long)"),
+                        httpx.InvalidURL("Invalid port: 'abc'")):
+            with self.subTest(failure=type(failure).__name__):
+                for marker in (self.root / "generated" / "link-marks").glob("*.failed"):
+                    marker.unlink()
+                asked = []
+
+                def broken(request, failure=failure, asked=asked):
+                    asked.append(str(request.url))
+                    raise failure
+                self._swap_http_client(broken)
+                answer = await self.client.get("/link-mark?t=secret&id=901")
+                self.assertEqual(answer.status_code, 404)
+                reached = len(asked)
+                self.assertTrue(reached)
+                self.assertEqual((await self.client.get("/link-mark?t=secret&id=901")).status_code, 404)
+                self.assertEqual(len(asked), reached, "失败窗口内不再出网")
 
     async def test_unauthorized_keeps_three_shapes_grouped_by_route_class(self):
         """401 三种形态按路由类分组，收敛到 Depends 之后也不许并成一种。
@@ -2069,6 +2100,42 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["models"][0]["id"], "kimi-k3")
         discover.assert_called_once_with()
 
+    async def test_local_player_progress_writes_same_activity_columns(self):
+        from peach import playback_tracking, routes_media
+
+        class Probe:
+            eof = False
+
+            def __init__(self):
+                self.frames = iter([0.0, 0.0, 1.0, 2.0, 40.0, 41.0])
+
+            def snapshot(self):
+                position = next(self.frames, None)
+                if position is None:
+                    raise EOFError("player exited")
+                return playback_tracking.Snapshot(position, 100.0, False)
+
+            def close(self):
+                pass
+
+        con = sqlite3.connect(self.db)
+        before = con.execute("SELECT COALESCE(play_count,0) FROM asset WHERE id=1").fetchone()[0]
+        con.close()
+        trackers = playback_tracking.PlaybackTrackers(poll=0.001)
+        with patch.object(self.app.state, "playback_trackers", trackers):
+            track = routes_media._playback_tracker(self.app.state, 1)
+            self.assertTrue(track(Probe, lambda: True))
+            for _ in range(500):
+                if not trackers.threads:
+                    break
+                await asyncio.sleep(0.01)
+        self.assertFalse(trackers.threads)
+        con = sqlite3.connect(self.db)
+        row = con.execute("SELECT play_count,play_seconds,seek_count,leave_ratio,last_played IS NOT NULL "
+                          "FROM asset WHERE id=1").fetchone()
+        con.close()
+        self.assertEqual(row, (before + 1, 3.0, 1, 0.41, 1))
+
     async def test_post_writes_only_test_database(self):
         response = await self.client.post(
             "/api/activity", headers={"X-Token": "secret"},
@@ -2171,7 +2238,7 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         refused = await self.client.post("/login", content=body, headers=page)
         self.assertEqual(refused.status_code, 400)
         self.assertTrue(refused.headers["content-type"].startswith("text/html"))
-        self.assertIn('data-page="login" data-next="/stats" data-error="请选择有效的保持登录时间">', refused.text)
+        self.assertIn('data-page="login" data-next="/stats" data-mode="legacy" data-error="请选择有效的保持登录时间">', refused.text)
         self.assertNotIn("set-cookie", refused.headers)
         refused = await self.client.post("/login", content=body, headers=form)
         self.assertEqual(refused.status_code, 400)
@@ -2184,7 +2251,7 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limited.status_code, 429)
         self.assertEqual(limited.headers["retry-after"], "60")
         self.assertTrue(limited.headers["content-type"].startswith("text/html"))
-        self.assertIn('data-page="login" data-next="/stats" data-error="尝试次数较多，请一分钟后重试">',
+        self.assertIn('data-page="login" data-next="/stats" data-mode="legacy" data-error="尝试次数较多，请一分钟后重试">',
                       limited.text)
         limited = await self.client.post("/login", content="token=secret&next=%2Fstats", headers=form)
         self.assertEqual(limited.status_code, 429)
@@ -2948,6 +3015,34 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
                 redirected = await self.client.get('/cover-image?code=ABC-006&t=secret')
                 self.assertEqual(redirected.status_code, 404)
                 self.assertNotIn('cdn.example', {host for host, _, _ in calls})
+        finally:
+            self.app.state.http_transport.client = original
+            fake.close()
+
+    async def test_cover_image_refuses_the_official_now_printing_placeholder(self):
+        """DMM 缺图时 302 到同一主机族上的「NOW PRINTING」：回 404 不缓存，官方出图后下一次加载取到真图。"""
+        connection = sqlite3.connect(self.db)
+        connection.execute("INSERT INTO feed_discovery(code,cover_url,discovered_at) VALUES(?,?,'2026-10-22')",
+                           ('ABC-007', 'https://pics.dmm.co.jp/digital/video/abc00007/abc00007pl.jpg'))
+        connection.commit()
+        connection.close()
+        published = {'cover': False}
+        def upstream(request):
+            if request.url.path.endswith('abc00007pl.jpg') and not published['cover']:
+                return httpx.Response(302, request=request, headers={
+                    'location': 'https://imgsrc.dmm.com/pics/mono/movie/n/now_printing/now_printing.jpg?w=800&h=800'})
+            return httpx.Response(200, headers={'content-type': 'image/jpeg', 'content-length': '5'},
+                                  stream=httpx.ByteStream(b'cover'), request=request)
+        original = self.app.state.http_transport.client
+        fake = httpx.Client(transport=httpx.MockTransport(upstream))
+        self.app.state.http_transport.client = fake
+        try:
+            with patch('peach.web_jav_discovery._cached_movie', return_value={}):
+                pending = await self.client.get('/cover-image?code=ABC-007&t=secret')
+                self.assertEqual((pending.status_code, pending.headers['cache-control']), (404, 'no-store'))
+                published['cover'] = True
+                cover = await self.client.get('/cover-image?code=ABC-007&t=secret')
+                self.assertEqual((cover.status_code, cover.content), (200, b'cover'))
         finally:
             self.app.state.http_transport.client = original
             fake.close()
@@ -4033,7 +4128,9 @@ class UnconfiguredMachineTests(unittest.IsolatedAsyncioTestCase):
                 release.set()
                 await shutdown
                 self.assertTrue(closed.is_set())
-                self.assertEqual(calls, ["/api/taste"])
+                # 只走到预热清单的第一项：关机等它释放账本，后面的不再起。
+                from peach.api import WARM_AGGREGATES
+                self.assertEqual(calls, [WARM_AGGREGATES[0][0]])
             finally:
                 release.set()
                 if shutdown is not None:
@@ -4081,6 +4178,10 @@ PUBLIC_ROUTES = {
     ("GET", "/api/setup/questions"),
     ("POST", "/api/setup"),
     ("POST", "/api/setup/restore"),
+    # Docker 首次访问设置的提交（ADR-0149）。这时还没有访问策略，没有密码可验；只在 Docker 且
+    # 没有策略时收，来源须是本机或私有网络、不带代理转发头（403），再看 Origin（403）；已有策略
+    # 就 409，非 Docker 是 404。
+    ("POST", "/api/configuration/access/first"),
     # 首启与登录页的浏览器尚无会话；此接口仅向本机同源开放，限流、限长后只写脱敏错误日志。
     ("POST", "/api/diagnostics/client-error"),
     # 登录页在拿到会话之前就要出图，书签与历史记录也从这三个固定路径取图标。
@@ -4110,6 +4211,10 @@ PUBLIC_ROUTES = {
     # STRM 的 HLS 子资源供浏览器和外部播放器共用：处理函数验证浏览器会话，
     # 或绑定资产与 Origin 的限时 HMAC；两条分支都检查媒体根目录及资源归属。
     ("GET,HEAD", "/strm-resource/{id}/{key}"),
+    # 本机 CA 的公开证书（ADR-0142）。手机扫码时还没登录、也还没信任这张证书，二维码带进程
+    # 密钥签发、十分钟有效的签名，只换得到这张公开证书；处理函数里不带签名的请求照常
+    # `require_auth`。私钥不经过这条路由。
+    ("GET", "/api/configuration/certificate/peach-local-ca.crt"),
 }
 
 
@@ -4150,11 +4255,16 @@ class RouteAuthContractTests(unittest.TestCase):
         cls.guards = {getattr(routes_auth, name) for name in cls.GUARD_NAMES}
         cls.special_guards = {
             ("GET", "/api/jav-browser"): routes_jav_browser.browser_client,
+            ("GET", "/api/jav-browser/active"): routes_jav_browser.browser_client,
             ("GET", "/api/jav-browser/identify"): routes_jav_browser.browser_client,
             ("GET", "/api/jav-browser/updates"): routes_jav_browser.browser_client,
             ("GET", "/api/jav-browser/people"): routes_jav_browser.browser_client,
             ("POST", "/api/jav-browser"): routes_jav_browser.browser_client,
             ("POST", "/api/jav-browser/errors"): routes_jav_browser.browser_client,
+            ("POST", "/api/jav-browser/postprocess"): routes_jav_browser.browser_client,
+            ("GET", "/api/jav-browser/performer"): routes_jav_browser.browser_client,
+            ("POST", "/api/jav-browser/performer"): routes_jav_browser.browser_client,
+            ("POST", "/api/jav-browser/dismiss"): routes_jav_browser.browser_client,
         }
         cls.routes = {(",".join(sorted(route.methods)), route.path):
                       {dependency.call for dependency in route.dependant.dependencies}

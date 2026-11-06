@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { InputBase, TextField } from '@/components/base/input/input';
 import { spriteGlyph } from '../components/sprite-glyph';
+import { composingKey } from '../components/ime';
 
 const SearchGlyph = spriteGlyph('search');
 
@@ -18,7 +19,7 @@ export function IndexSearch({ label, value, onQuery }: { label: string; value: s
     timer.current = setTimeout(() => onQuery(next.trim()), 300);
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Enter' || composing.current || event.nativeEvent.isComposing) return;
+    if (event.key !== 'Enter' || composing.current || composingKey(event.nativeEvent)) return;
     event.preventDefault();
     clearTimeout(timer.current);
     onQuery(text.trim());

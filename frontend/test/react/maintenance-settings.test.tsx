@@ -35,6 +35,26 @@ it('分区依次是运行信息、新手教程、卸载；缺依赖的运行信�
   expect(link?.textContent).toBe('下载 FFmpeg');
 });
 
+it('能装的缺失工具给「安装」，装完用服务端回的运行信息换掉那一行并回执', async () => {
+  const data: ConfigurationData = {
+    editable: true, notice: '', revision: 'r', media_dirs: [], library_count: 0, port: 9123,
+    facts: [{ term: 'untrunc', value: '未安装；缺索引的 MP4 需要它才修得了。', install_tool: 'untrunc' }],
+  };
+  const fetcher = fetchMock(200, { message: '已安装 untrunc（9d86ec9）', facts: [{ term: 'untrunc', value: '已安装，版本 9d86ec9' }] });
+  vi.stubGlobal('fetch', fetcher);
+  const receipt = vi.fn();
+  const host = await mount(<MaintenanceSettings data={data} receipt={receipt} reopenTutorial={vi.fn()} />);
+  const facts = section(host, '运行信息')!;
+  expect(facts.querySelector('a[target="_blank"]')).toBeNull();
+  await click(buttonNamed('安装', facts));
+  await settle();
+  expect(fetcher.mock.calls[0]?.[0]).toBe('/api/configuration/media-tools');
+  expect(sentBody(fetcher)).toEqual({ tool: 'untrunc' });
+  expect(facts.querySelector('dd')?.textContent).toBe('已安装，版本 9d86ec9');
+  expect(buttonNamed('安装', facts)).toBeNull();
+  expect(receipt).toHaveBeenCalledWith('已安装 untrunc（9d86ec9）');
+});
+
 describe('自动更新', () => {
   it('两颗开关互相约束，服务端成功后才回执，关闭也能保存', async () => {
     const fetcher = fetchMock(200, automatic);
@@ -147,6 +167,20 @@ describe('检查更新', () => {
     expect(link?.getAttribute('href')).toBe(dmg);
   });
 
+  it('Docker 镜像有新版时列出宿主机上的两步命令，不给下载或安装键', async () => {
+    const steps = [{ text: '拉取新镜像', command: 'docker compose pull' }, { text: '重建容器', command: 'docker compose up -d' }];
+    const docker = { ...release, installation: 'Docker 镜像', in_app_update: false, steps };
+    const host = await mount(<ReleaseUpdates initial={{ ...docker, state: 'available', latest_version: '1.0.0', message: '有新镜像可拉取。' }} />);
+    const updates = section(host, '检查更新')!;
+    expect(updates.textContent).toContain('Docker 镜像');
+    const list = updates.querySelector('ol[aria-label="在宿主机上更新"]');
+    expect([...list!.querySelectorAll('code')].map((code) => code.textContent)).toEqual(['docker compose pull', 'docker compose up -d']);
+    expect(buttonNamed('下载并安装', updates)).toBeNull();
+    expect([...updates.querySelectorAll('a')].some((a) => a.textContent === '下载新版本')).toBe(false);
+    const current = await mount(<ReleaseUpdates initial={{ ...docker, state: 'current', latest_version: '0.9.0', message: '已是最新测试版。' }} />);
+    expect(current.querySelector('ol[aria-label="在宿主机上更新"]')).toBeNull();
+  });
+
   it('已是最新就不再提示可用更新，也不给安装键', async () => {
     const current = await mount(<ReleaseUpdates initial={{ ...release, latest_version: '0.9.0', state: 'current', message: '已是最新测试版。' }} />);
     expect(current.textContent).not.toContain('有可用更新');
@@ -164,7 +198,7 @@ it('卸载默认保留数据，勾选完全卸载后确认文案点名要删的�
   expect(area.textContent).toContain('原始媒体文件保留');
   const full = area.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
   expect(full.checked).toBe(false);
-  expect([...area.querySelectorAll('details p')].filter(p => !p.closest('[data-guide-help]')).map(p => p.textContent)).toEqual(['fixture', 'fixture/cache']);
+  expect([...area.querySelectorAll('details p')].map(p => p.textContent)).toEqual(['fixture', 'fixture/cache']);
   // 每条路径自己带一颗打开键：要删的是哪几个目录，看一眼比照着路径再翻一遍快。
   expect([...area.querySelectorAll('details button[aria-label="在资源管理器中显示"]')]).toHaveLength(2);
   await click(buttonNamed('卸载 Peach', area));

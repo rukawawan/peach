@@ -236,6 +236,12 @@ class SourceIdentityTests(unittest.TestCase):
                 ("550ENE-006", {"id": "ENE-006", "content_id": "ene006"})):
             self.assertFalse(identifies_code(code, payload), code)
 
+    def test_a_registered_short_serial_rejects_the_padded_release(self):
+        # #296：`MCDV-24` 与 `MCDV-024` 是两部片，DMM 按补零猜出的 `mcdv00024` 是后者。
+        self.assertFalse(identifies_code("MCDV-24", {"content_id": "mcdv00024"}))
+        self.assertTrue(identifies_code("MCDV-024", {"content_id": "mcdv00024"}))
+        self.assertTrue(identifies_code("MCDV-24", {"id": "MCDV-24"}))
+
     def test_real_source_id_shapes_are_accepted(self):
         # DMM 带厂牌数字前缀，r18dev 对 IQQQ-026 会补零，259 系只在 URL 里出现番号。
         self.assertTrue(identifies_code("ABW-220", {"content_id": "118abw220"}))

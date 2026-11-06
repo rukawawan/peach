@@ -2,7 +2,10 @@
  *
  * 查找只是列出候选、不写任何东西：同名的人站上可能不止一位，替用户决定「就是这个」是错的。
  * 名字对得上、又只有一个人的那几张先勾上，其余的要用户自己点。地址仍由服务端按勾选的 id 拼，
- * 页面从头到尾不送地址。这位在数据库里不存在也可以订：服务端会新建她。 */
+ * 页面从头到尾不送地址。这位在数据库里不存在也可以订：服务端会新建她。
+ *
+ * 数据库里认得出、又已有 JavDB 演员页或 DMM 编号的人不必靠搜索：JavDB 冷却搜不成或搜不到时，
+ * 照样给出「订阅库里的她」，和人物页的开关是同一个动作。 */
 import { useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { RiSearchLine } from '@remixicon/react';
@@ -16,7 +19,8 @@ import { cardClass } from '../components/card';
 import { Note } from '../components/note';
 import { ExternalLink, FieldLabel, Help } from '../settings/section';
 import { busyProps, useAction } from '../settings/use-action';
-import { followFeedByName, lookupFeedActor, type FeedCandidate, type FeedLookup } from './follow-manage';
+import { composingKey } from '../components/ime';
+import { followFeedByName, followFeedEntity, lookupFeedActor, type FeedCandidate, type FeedLookup } from './follow-manage';
 
 const PLACEHOLDER = '输入女优名，到 JavDB 找她的演员页';
 const TITLE = '添加 JAV 订阅';
@@ -75,7 +79,7 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
     });
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); search() }
+    if (event.key === 'Enter' && !composingKey(event.nativeEvent)) { event.preventDefault(); search() }
   };
   const close = () => { setResult(null); setPicked(new Set()); action.setError('') };
   const add = () => {
@@ -90,7 +94,20 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
     });
   };
 
+  const followKnown = () => {
+    const known = result?.known;
+    if (!known) return;
+    void action.run('known', (signal) => followFeedEntity(known.id, signal), () => {
+      toast(`已订阅「${known.name}」的新作`);
+      setName('');
+      close();
+      onAdded();
+    });
+  };
+
   const where = result ? destination(result, picked) : null;
+  /* 没有可勾的卡（搜不成或搜不到）时，库里能直接订的她就是这一次的去处。 */
+  const direct = result && !result.candidates.length && result.known?.subscribable ? result.known : null;
 
   return (
     /* 和「添加关注」那一块同一个形：一张填充卡，标题在卡里。 */
@@ -109,6 +126,7 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
 
       {result ? (
         <div className="flex flex-col gap-3">
+          {result.unavailable ? <Note tone="warning" title="JavDB 这一次没有搜成">{result.unavailable}</Note> : null}
           <FieldLabel>JavDB 上的演员卡</FieldLabel>
           {result.candidates.length ? result.candidates.map((card) => (
             <CandidateRow key={card.id} card={card} picked={picked.has(card.id)}
@@ -117,15 +135,24 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
                 if (on) next.add(card.id); else next.delete(card.id);
                 return next;
               })} />
-          )) : <Help>JavDB 上没有搜到这个名字。</Help>}
+          )) : <Help>{result.unavailable ? '这一次没有拿到演员卡。' : 'JavDB 上没有搜到这个名字。'}</Help>}
           {result.candidates.length ? (
             <Help role="status">{picked.size ? where!.text : '勾选她的演员卡；有碼与無碼两条记录都是她的话，两张都勾。'}</Help>
+          ) : null}
+          {direct ? (
+            <Help role="status">{direct.following
+              ? `数据库里的「${direct.name}」已经在订阅新作。`
+              : `数据库里的「${direct.name}」已有 JavDB 或 DMM 编号，可以直接订阅。`}</Help>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="small" onClick={close}>关闭</Button>
             {result.candidates.length ? (
               <Button variant="primary" size="small" disabled={readOnly || !picked.size || where!.blocked}
                 {...busyProps(action.busy === 'follow')} onClick={add}>{`添加订阅（${picked.size}）`}</Button>
+            ) : null}
+            {direct && !direct.following ? (
+              <Button variant="primary" size="small" disabled={readOnly}
+                {...busyProps(action.busy === 'known')} onClick={followKnown}>{`订阅「${direct.name}」`}</Button>
             ) : null}
           </div>
         </div>

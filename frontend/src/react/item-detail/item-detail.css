@@ -136,6 +136,10 @@
   overflow: hidden;
 }
 .peach-react [data-item-detail] [data-detail-title][data-expanded] { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
+/* 番号段同卡片标题（media-card.css）：拆成行内的几枚，放不下的整枚折到下一行。整块不折时，
+   窄屏下它会整段掉到第二行，第一行只剩来源徽标，标题被两行上限挤得一个字不剩。 */
+.peach-react [data-item-detail] [data-detail-title] [class~="ui-javidentity"] { display: inline; white-space: normal; }
+.peach-react [data-item-detail] [data-detail-title] [class~="javedition"] { margin-left: 5px; }
 .peach-react [data-item-detail] [data-detail-title][data-foldable] { cursor: pointer; }
 /* 展开、取景与两枚文件键：行内档的纯图标方键。图标必须显式写 stroke/fill，Lucide 是描边路径，
    缺了就被按默认 fill:black 画成黑块。在线条目没有那两枚文件键，标题又没溢出时这一排里一枚
@@ -217,7 +221,7 @@
 
 /* ── 出演与署名 ──
    按类别分组：组标题在上，同类横向排开并按需换行；每个名字独占一行会让共演作品撑满整个侧栏。
-   组标题、头像和名字共用左边缘，详情栏里的所有身份信息都从内容区起点对齐。 */
+   名字在头像正下方居中；格比头像宽，整排往左让出半个差值，头像左缘仍和组标题对齐。 */
 .peach-react :is([data-item-detail], [data-follow-detail]) [data-item-identity] { display: flex; flex-direction: column; gap: 14px; margin: 0 0 18px; }
 .peach-react :is([data-item-detail], [data-follow-detail]) [data-identity-primary] { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: flex-start; }
 .peach-react :is([data-item-detail], [data-follow-detail]) [data-identity-primary] > [data-id-group] { width: max-content; max-width: 100%; }
@@ -230,14 +234,17 @@
   color: var(--muted);
   letter-spacing: .04em;
 }
-.peach-react :is([data-item-detail], [data-follow-detail]) [data-id-row] { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-start; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-id-row] {
+  display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-start;
+  margin-inline-start: calc((var(--id-face, 46px) - var(--id-cell, 62px)) / 2);
+}
 .peach-react :is([data-item-detail], [data-follow-detail]) [data-id-group="performer"] [data-id-row] { gap: 10px; }
 /* 有实体 id 的格是入口（`data-entity-kind`），「未归属」指向一个集合，样式同源；没有 id 的只是
    一个名字，不给指针。可点的身份只用颜色、头像描边反馈，不用下划线。 */
 .peach-react :is([data-item-detail], [data-follow-detail]) [data-id-cell] {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 5px;
   width: var(--id-cell, 62px);
   border: 0;
@@ -287,7 +294,7 @@
 .peach-react :is([data-item-detail], [data-follow-detail]) [data-id-name] {
   font-size: var(--fs-xs);
   line-height: 1.5;
-  text-align: left;
+  text-align: center;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -459,8 +466,13 @@
    底色和上面的详情栏同源：半透明的氛围色落在舞台那圈只铺到 58% 的径向渐变外面，会让这一条浅
    一档，整幅宽度上于是有一道深浅不匀的色差。分界靠 `--line-soft` 那条明确的线画出来——「接着看」
    是另一件事，同色的两块之间只留白读不出边界。横排竖向不滚，滑到头也不把手势交给外面那层浮窗，
-   不画滚动条：拖动与滚轮靠壳的 `wireDrag`。 */
-.peach-react [data-item-related] { border-top: 1px solid var(--line-soft); padding: 10px 15px 8px; background: var(--detail-surface); }
+   不画滚动条：拖动与滚轮靠壳的 `wireDrag`。
+   详情底色在浅色下就是 `--ground`，与全站悬停面 `--hover` 同为 #F7F7F7，卡片悬停铺出去等于没铺；
+   这一条的悬停面照竖屏带的做法，在详情底色上压一层主文字色，两种主题都比底色深一档。 */
+.peach-react [data-item-related] {
+  --hover: color-mix(in srgb, var(--ink) 8%, var(--detail-surface));
+  border-top: 1px solid var(--line-soft); padding: 10px 15px 8px; background: var(--detail-surface);
+}
 .peach-react [data-item-related] > h3 {
   margin: 0 0 6px;
   line-height: 20px;

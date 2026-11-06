@@ -1,9 +1,13 @@
-/** 页面持续读取已提交结果；仅使发生变化的资料缓存失效。 */
+/** 页面持续读取已提交结果；仅使发生变化的资料缓存失效。新到的入库通知弹 toast。 */
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { shellNavigate } from '@peach/history';
 
-import { fetchTasks, pollInterval, TASKS_KEY } from './activity/tasks';
+import {
+  fetchResultUpdates, RESULT_UPDATES_KEY, RUNNING_POLL_MS, SETTLED_POLL_MS, type ActivityData, type IngestNotice,
+} from './activity/tasks';
 import { queryClient } from './query';
+import { showToast } from './toaster';
 
 const CATALOG = ['catalog-grid', 'catalog-folders', 'item', 'item-related', 'item-queue',
   'entity', 'entity-items', 'entity-photos', 'entity-route', 'index', 'stats',
@@ -46,16 +50,47 @@ export function createResultRefresher() {
   };
 }
 
+const escape = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+
+/** 一轮轮询里到了超过这么多部就合成一条，同步一批文件时不刷屏。 */
+const NOTICE_BURST = 3;
+
+const noticeText = (item: IngestNotice) => {
+  const name = escape(item.label || '一部作品');
+  return item.kind === 'download' ? `「${name}」已入库并整理完成` : `新文件已入库：「${name}」`;
+};
+
+/** 新到的入库通知弹成 toast，点「打开」进这部作品。首轮与服务重启后（`epoch` 变了）只记基线，不补弹。 */
+export function announceIngests(seen: { epoch: string; last: number } | null,
+  notices: ActivityData['ingest_notices']): { epoch: string; last: number } | null {
+  if (!notices) return seen;
+  const last = notices.items.reduce((max, item) => Math.max(max, item.id), 0);
+  if (!seen || seen.epoch !== notices.epoch) return { epoch: notices.epoch, last };
+  const fresh = notices.items.filter((item) => item.id > seen.last);
+  if (fresh.length > NOTICE_BURST) {
+    showToast(`ingest-${notices.epoch}-${last}`, { html: `${fresh.length} 部作品已入库`, alert: false, timeout: 8000, action: null });
+  } else {
+    for (const item of fresh) {
+      showToast(`ingest-${notices.epoch}-${item.id}`, { html: noticeText(item), alert: false, timeout: 8000,
+        action: { label: '打开', run: () => shellNavigate(`/assets/${item.asset_id}`) } });
+    }
+  }
+  return { epoch: notices.epoch, last: Math.max(seen.last, last) };
+}
+
 export function ResultUpdates() {
-  const query = useQuery({ queryKey: TASKS_KEY, queryFn: ({ signal }) => fetchTasks(signal),
-    refetchInterval: current => pollInterval(current.state.data) });
+  const query = useQuery({ queryKey: RESULT_UPDATES_KEY, queryFn: ({ signal }) => fetchResultUpdates(signal),
+    refetchInterval: current => (current.state.data?.busy ? RUNNING_POLL_MS : SETTLED_POLL_MS) });
   const previous = useRef<Record<string, string> | undefined>(undefined);
+  const announced = useRef<{ epoch: string; last: number } | null>(null);
   const [refresh] = useState(createResultRefresher);
   const versions = query.data?.result_versions;
+  const notices = query.data?.ingest_notices;
   useEffect(() => {
     if (!versions) return;
     if (previous.current) void refresh(previous.current, versions);
     previous.current = versions;
   }, [versions, refresh]);
+  useEffect(() => { announced.current = announceIngests(announced.current, notices) }, [notices]);
   return null;
 }

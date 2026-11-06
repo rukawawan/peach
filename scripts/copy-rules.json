@@ -13,5 +13,8 @@
   ],
   "test_names": [
     ["_no_longer_|_previously_|_formerly_|_used_to_", "测试名称说明当前契约", "error"]
+  ],
+  "doc_terms": [
+    ["兜底|落盘|闭环|链路(?!本地)", "改写成具体机制，如后备、写入磁盘、流程", "error"]
   ]
 }

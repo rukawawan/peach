@@ -1,4 +1,4 @@
-/* Tailwind CSS 4.3.3 的 preflight.css，逐字包进 `@scope (.peach-react)`。
+/* Tailwind CSS 4.3.4 的 preflight.css，逐字包进 `@scope (.peach-react)`。
  *
  * 旧样式表与 React 子树同处一页，Preflight 铺到整页会清掉未迁移页面依赖的默认外边距、
  * 标题字号和列表样式；限定在 React 子树里，BoardUI 源码依赖的基线照样成立。

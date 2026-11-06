@@ -111,7 +111,7 @@ def publish(root: Path = Path('release')) -> None:
         raise ValueError("缺少发行说明")
     command = [os.environ.get("PEACH_GLAB", "glab"), "release", "create", tag,
                     "--repo", os.environ["CI_PROJECT_URL"], "--ref", sha,
-                    "--name", f"Peach {tag[1:]} · Windows / macOS 测试版",
+                    "--name", tag,
                     "--notes-file", str(notes), "--no-close-milestone"]
     backend = os.environ.get("PEACH_DOWNLOAD_BACKEND", "gitgud")
     if backend in {"r2", "both"}:

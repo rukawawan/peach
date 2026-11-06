@@ -82,13 +82,17 @@ RULE34VIDEO_DETAIL_HTML = b"""<html><body>
 <script>video_url: 'https://rule34video.com/get_file/51/aa/4542721.mp4/?v-acctoken=test'</script>
 </body></html>"""
 
-RULE34XXX_DETAIL_HTML = b"""<html><body><ul id="tag-sidebar">
-<li class="tag-type-metadata tag"><a href="index.php?page=wiki&amp;s=list&amp;search=3d">?</a><a href="index.php?page=post&amp;s=list&amp;tags=3d">3d</a></li>
-<li class="tag-type-metadata tag"><a href="index.php?page=wiki&amp;s=list&amp;search=blender">?</a><a href="index.php?page=post&amp;s=list&amp;tags=blender">blender</a></li>
-<li class="tag-type-metadata tag"><a href="index.php?page=wiki&amp;s=list&amp;search=3d_model">?</a><a href="index.php?page=post&amp;s=list&amp;tags=3d_model">3d model</a></li>
-<li class="tag-type-artist tag"><a href="index.php?page=post&amp;s=list&amp;tags=lazyprocrastinator">lazyprocrastinator</a></li>
-<li class="tag-type-general tag"><a href="index.php?page=post&amp;s=list&amp;tags=reverse_cowgirl_position">reverse cowgirl position</a></li>
-</ul></body></html>"""
+# XML 形态取自 2026-11-03 对 api.rule34.xxx 的实测：只有它带 `created_at`，带时区偏移。
+RULE34XXX_XML_FIRST_TWO = (
+    b'<?xml version="1.0" encoding="UTF-8"?><posts count="2" offset="0">'
+    b'<post height="720" score="72" id="18534395" change="1787445373"'
+    b' created_at="Fri May 01 18:32:21 +0200 2026" status="active"/>'
+    b'<post height="720" score="70" id="18534396" change="1787445300"'
+    b' created_at="Sun Aug 23 00:30:00 -0500 2026" status="active"/>'
+    b"</posts>")
+RULE34XXX_XML = RULE34XXX_XML_FIRST_TWO.replace(b"</posts>", (
+    b'<post id="18534397" created_at="Sun Aug 23 00:20:00 +0000 2026"/>'
+    b'<post id="18534398" created_at="Sun Aug 23 00:10:00 +0000 2026"/></posts>'))
 
 # 搜索表单与结果页的结构取自 2026-09-01 对 f95zone.to 的实测：关键词 `Ria_neearts`
 # 在 latest_data.php 的五个分类里全为空，站内搜索命中
@@ -523,9 +527,19 @@ class OfficialConnectorTests(unittest.TestCase):
 
 # 形状取自 2026-08-25 对 api.rule34.xxx 的实测响应：顶层是裸列表，`image` 是 32 位
 # 十六进制哈希（15/15），`parent_id` 全是 0（15/15），`source` 13/15 有值。
+# `tag_info` 是 `fields=tag_info` 加上的（2026-11-03 实测）：普通标签的类型写作 `tag`，
+# 名字和 `tags` 一样是 HTML 转义形态。
 RULE34XXX_JSON = json.dumps([
     {"id": 18534395, "image": "3df1cbc67e072d6144588d6c80e490ea.mp4", "parent_id": 0,
-     "tags": "lazyprocrastinator fiona blush video sound", "change": 1787445373,
+     "tags": "lazyprocrastinator fiona blush video sound miqo&#039;te", "change": 1787445373,
+     "tag_info": [
+         {"count": 120, "type": "artist", "tag": "lazyprocrastinator"},
+         {"count": 900, "type": "character", "tag": "fiona"},
+         {"count": 50000, "type": "tag", "tag": "blush"},
+         {"count": 80000, "type": "metadata", "tag": "video"},
+         {"count": 70000, "type": "metadata", "tag": "sound"},
+         {"count": 20796, "type": "character", "tag": "miqo&#039;te"},
+         {"count": 3, "type": "deprecated", "tag": "old_name"}],
      "file_url": "https://api-cdn-mp4.rule34.xxx/images/1232/3df1.mp4",
      "sample_url": "https://api-cdn.rule34.xxx/images/1232/3df1.jpg",
      "preview_url": "https://api-cdn.rule34.xxx/thumbnails/1232/t_3df1.jpg",
@@ -533,13 +547,16 @@ RULE34XXX_JSON = json.dumps([
      "score": 72, "source": "https://lazyprocrast.fanbox.cc/posts/12304831"},
     {"id": 18534396, "image": "3bda1572c365b223d8b287c538a38956.mp4", "parent_id": 0,
      "tags": "lazyprocrastinator fiona video", "change": 1787445300,
+     "tag_info": [{"count": 120, "type": "artist", "tag": "lazyprocrastinator"}],
      "file_url": "https://api-cdn-mp4.rule34.xxx/images/1232/3bda.mp4",
      "score": 70, "source": "https://www.fanbox.cc/@lazyprocrast/posts/12304831"},
     {"id": 18534397, "image": "93eaeadff5effabe078c738aab85b3bc.mp4", "parent_id": 0,
      "tags": "lazyprocrastinator sayuri video", "change": 1787445200,
+     "tag_info": [{"count": 120, "type": "artist", "tag": "lazyprocrastinator"}],
      "file_url": "https://api-cdn-mp4.rule34.xxx/images/1232/93ea.mp4", "score": 12},
     {"id": 18534398, "image": "fiona_paizuri_nude.mp4", "parent_id": 18534397,
      "tags": "lazyprocrastinator fiona nude", "change": 1787445100,
+     "tag_info": [{"count": 120, "type": "artist", "tag": "lazyprocrastinator"}],
      "file_url": "https://api-cdn-mp4.rule34.xxx/images/1232/fp.mp4", "score": 9},
 ]).encode()
 
@@ -1047,6 +1064,30 @@ class Rule34VideoConnectorTests(unittest.TestCase):
         self.assertTrue(first.thumb_url.endswith("/preview.jpg"))
         self.assertIn("4542721_360.mp4", first.media_url)
 
+    def test_characters_follow_the_site_group_not_the_name_shape(self):
+        """角色按站方的 Characters 分组记 character，名字带括号不算依据。
+
+        `d.mon (overwatch)` 这类标签站方列在 Tags 组里，照记 general。
+        """
+        groups = (
+            b'<div class="vp-group vp-group--characters">'
+            b'<div class="label vp-group__title">Characters</div>'
+            b'<a class="tag_item" href="https://rule34video.com/tags/harry-potter-harry-potter/">'
+            b'harry potter (harry potter)</a></div>'
+            b'<div class="wrap vp-group"><div class="label vp-group__title">Tags</div>'
+            b'<a class="tag_item" href="https://rule34video.com/tags/d-mon-overwatch/">'
+            b'd.mon (overwatch)</a>'
+            b'<a href="#" class="js-open-suggest tag_item tag_item_suggest">+ Suggest</a></div>')
+        detail = RULE34VIDEO_DETAIL_HTML.replace(b"</body>", groups + b"</body>")
+
+        extra = Rule34VideoConnector._detail(detail)["extra"]
+        self.assertEqual(extra["tags"], ["deep throat", "breast squeeze",
+                                         "harry potter (harry potter)",
+                                         "d.mon (overwatch)"])
+        self.assertEqual(extra["tag_types"]["harry potter (harry potter)"], "character")
+        self.assertEqual(extra["tag_types"]["d.mon (overwatch)"], "general")
+        self.assertEqual(extra["tag_types"]["deep throat"], "general")
+
     def _detail_with_credits(self, names, *, ready=None):
         credits = "".join(
             f'<a class="item btn_link video_meta_pill"'
@@ -1468,134 +1509,133 @@ class Rule34XxxConnectorTests(unittest.TestCase):
         self.assertNotIn("width", by_id["18534396"].extra)
         self.assertNotIn("height", by_id["18534396"].extra)
 
-    def test_post_page_taxonomy_is_recorded_without_guessing_from_tag_words(self):
+    @staticmethod
+    def _dapi_transport(*, xml=RULE34XXX_XML, video=None, seen=None):
+        """JSON 请求回列表，XML 请求按 `xml` 回（可调用时逐次取），文件头按 `video` 回。"""
+        def transport(request, timeout, max_bytes):
+            if seen is not None:
+                seen.append((request, max_bytes))
+            if request.url.startswith("https://api.rule34.xxx/"):
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.url).query)
+                if query.get("json") == ["1"]:
+                    return HttpResponse(200, {}, RULE34XXX_JSON)
+                return xml() if callable(xml) else HttpResponse(200, {}, xml)
+            if video is not None and request.url.startswith("https://api-cdn-mp4.rule34.xxx/"):
+                return HttpResponse(206, {}, video)
+            return HttpResponse(404, {}, b"")
+        return transport
+
+    def _fetch(self, transport, *, max_items=1, sleeper=lambda _: None, **options):
+        return Rule34XxxConnector(
+            transport=transport, max_items=max_items, sleeper=sleeper,
+            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
+            **options).fetch("lazyprocrastinator")
+
+    def test_list_request_brings_the_site_taxonomy_without_guessing_from_tag_words(self):
+        """帖子页被 Cloudflare 验证挡住后，分类随列表请求的 `fields=tag_info` 一起到。
+
+        一页一次请求就拿全，不逐条打帖子页；普通标签在 `tag_info` 里叫 `tag`，
+        记成读取层与色板认的 general。站方没列进五类的（`deprecated`）不记。
+        """
         seen = []
-        def transport(request, timeout, max_bytes):
-            seen.append(request)
-            body = RULE34XXX_JSON if request.url.startswith("https://api.rule34.xxx/") \
-                else RULE34XXX_DETAIL_HTML
-            return HttpResponse(200, {}, body)
+        result = self._fetch(self._dapi_transport(seen=seen))
+        self.assertEqual(result.candidates[0].extra["tag_types"], {
+            "lazyprocrastinator": "artist", "fiona": "character", "blush": "general",
+            "video": "metadata", "sound": "metadata", "miqo'te": "character"})
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(seen[0][0].url).query)
+        self.assertEqual(query["fields"], ["tag_info"])
+        self.assertTrue(all(request.url.startswith("https://api") for request, _ in seen),
+                        "不再打 rule34.xxx 的帖子页")
+        self.assertNotIn("api_key", result.request_url)
 
-        result = Rule34XxxConnector(
-            transport=transport, max_items=1,
-            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
-        ).fetch("lazyprocrastinator")
-        types = result.candidates[0].extra["tag_types"]
-        self.assertEqual(types["3d"], "metadata")
-        self.assertEqual(types["blender"], "metadata")
-        self.assertEqual(types["3d_model"], "metadata")
-        self.assertEqual(types["lazyprocrastinator"], "artist")
-        self.assertEqual(types["reverse_cowgirl_position"], "general")
-        self.assertNotIn("api_key", seen[1].url)
-        # 详情页没有 `#stats` 时，dapi 的 `change` 留作占位。
-        self.assertEqual(result.candidates[0].published_at, "2026-08-23T00:36:13Z")
+    def test_upload_time_comes_from_the_xml_created_at_not_the_last_edit(self):
+        """dapi 的 `change` 是最后修改时间：17361475 五月上传、九月改过标签就显示成九月。
 
-    def test_upload_time_comes_from_the_post_page_not_the_last_edit(self):
-        """dapi 的 `change` 是最后修改时间：17361475 五月上传、九月改过标签就显示成九月。"""
-        detail = RULE34XXX_DETAIL_HTML.replace(b"</ul>", (
-            b'</ul><div id="stats"><ul><li>Id: 18534395</li>'
-            b"<li>Posted: 2026-05-01 16:32:21<br> by <a>rekin3d</a></li></ul></div>"))
-
-        def transport(request, timeout, max_bytes):
-            body = RULE34XXX_JSON if request.url.startswith("https://api.rule34.xxx/") \
-                else detail
-            return HttpResponse(200, {}, body)
-
-        result = Rule34XxxConnector(
-            transport=transport, max_items=1,
-            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
-        ).fetch("lazyprocrastinator")
-        self.assertEqual(result.candidates[0].published_at, "2026-05-01T16:32:21Z")
-        self.assertFalse(result.candidates[0].partial)
+        只有 XML 给 `created_at`，带时区偏移；按帖子号对回，对不上的那条留 partial。
+        """
+        candidates = self._fetch(self._dapi_transport(xml=RULE34XXX_XML_FIRST_TWO),
+                                 max_items=3).candidates
+        self.assertEqual(candidates[0].published_at, "2026-05-01T16:32:21Z")
+        self.assertEqual(candidates[1].published_at, "2026-08-23T05:30:00Z")
+        self.assertFalse(candidates[0].partial)
+        # 两次请求之间插进新帖、页错开一格时，第三条不在 XML 里：`change` 占位，
+        # 保持 partial 等下一轮，分类照样带上。
+        self.assertTrue(candidates[2].partial)
+        self.assertEqual(candidates[2].extra["tag_types"], {"lazyprocrastinator": "artist"})
+        self.assertEqual(candidates[2].published_at, "2026-08-23T00:33:20Z")
 
     def test_video_duration_comes_from_the_original_file_head(self):
-        """接口和帖子页都不给时长，原文件头的 `mvhd` 有；只取头上一段，不拉整片。"""
+        """接口都不给时长，原文件头的 `mvhd` 有；只取头上一段，不拉整片。"""
         video = minimal_mp4(timescale=1000, sample_delta=40, samples=250, keyframe_every=25)
         seen = []
-
-        def transport(request, timeout, max_bytes):
-            seen.append((request, max_bytes))
-            if request.url.startswith("https://api.rule34.xxx/"):
-                return HttpResponse(200, {}, RULE34XXX_JSON)
-            if request.url.startswith("https://api-cdn-mp4.rule34.xxx/"):
-                return HttpResponse(206, {}, video)
-            return HttpResponse(200, {}, RULE34XXX_DETAIL_HTML)
-
-        result = Rule34XxxConnector(
-            transport=transport, max_items=1,
-            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
-        ).fetch("lazyprocrastinator")
+        result = self._fetch(self._dapi_transport(video=video, seen=seen))
         self.assertEqual(result.candidates[0].duration, 10.0)
         head, budget = next((request, size) for request, size in seen
                             if request.url.endswith(".mp4"))
         self.assertEqual(head.headers["Range"], f"bytes=0-{budget - 1}")
         self.assertLessEqual(budget, 65536)
 
-    def test_a_throttled_post_page_still_brings_the_file_head_duration(self):
-        """文件头在另一个主机上，帖子页被挡回来不牵连它：时长照样带上，候选仍是 partial。"""
-        video = minimal_mp4(timescale=1000, sample_delta=40, samples=250, keyframe_every=25)
+    #: 站方限流页的原句：HTTP 200，正文是一句话而不是 XML。
+    RATE_LIMITED = b"You currently have a limit of 60 requests every 60 second(s)"
 
-        def transport(request, timeout, max_bytes):
-            if request.url.startswith("https://api.rule34.xxx/"):
-                return HttpResponse(200, {}, RULE34XXX_JSON)
-            if request.url.startswith("https://api-cdn-mp4.rule34.xxx/"):
-                return HttpResponse(206, {}, video)
-            return HttpResponse(503, {}, b"slow down")
+    def test_a_rate_limited_upload_time_is_retried_not_read_as_missing(self):
+        """站方口径是每 60 秒 60 次。挡回来一次就放弃的话，上传时间永远停在 `change`。"""
+        replies = [HttpResponse(429, {}, b""), HttpResponse(200, {}, self.RATE_LIMITED),
+                   HttpResponse(200, {}, RULE34XXX_XML)]
+        waits = []
+        result = self._fetch(self._dapi_transport(xml=lambda: replies.pop(0)),
+                             sleeper=waits.append)
+        # 退避节奏本身也是行为：注入假 sleeper 才能断言它，而且测试不会真的等。
+        self.assertEqual(waits, [1.5, 4.0])
+        self.assertEqual(result.candidates[0].published_at, "2026-05-01T16:32:21Z")
+        self.assertFalse(result.candidates[0].partial)
 
-        result = Rule34XxxConnector(
-            transport=transport, max_items=1, sleeper=lambda _: None,
-            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
-        ).fetch("lazyprocrastinator")
-        self.assertEqual(result.candidates[0].duration, 10.0)
-        self.assertTrue(result.candidates[0].partial)
-        self.assertNotIn("tag_types", result.candidates[0].extra)
+    def test_an_upload_time_that_stays_throttled_keeps_types_duration_and_partial(self):
+        """重试有界，仍被挡就留 partial：落库不动已有的上传时间，下一轮再问。
 
-    def test_a_throttled_detail_page_is_retried_not_read_as_no_types(self):
-        """站方公布的是每 60 秒 60 次，而列表页一页 24 条、每条都要单独打一次详情页。
-
-        一次挡回来就返回 {}，落进库里就是「这条没有类型」——和「这条确实没有
-        类型」长得一模一样。实测：回填首轮 400 条里 372 条判成「没有类型」，
-        事后逐条直取，全部 200 且 `#tag-sidebar` 正常。
+        列表那次已经成功，分类与它同一次请求到手，照样带上；文件头在另一个主机上，
+        也不受牵连。一抛错就连已经到手的列表一起丢了。
         """
-        attempts = []
-
-        def transport(request, timeout, max_bytes):
-            if request.url.startswith("https://api.rule34.xxx/"):
-                return HttpResponse(200, {}, RULE34XXX_JSON)
-            if "page=post" not in request.url:
-                return HttpResponse(404, {}, b"")
-            attempts.append(request.url)
-            if len(attempts) < 3:
-                return HttpResponse(503, {}, b"slow down")
-            return HttpResponse(200, {}, RULE34XXX_DETAIL_HTML)
-
+        video = minimal_mp4(timescale=1000, sample_delta=40, samples=250, keyframe_every=25)
         waits = []
-        result = Rule34XxxConnector(
-            transport=transport, max_items=1, sleeper=waits.append,
-            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
-        ).fetch("lazyprocrastinator")
-        self.assertEqual(len(attempts), 3, "被挡回来要重试，不能一次就当没有类型")
-        # 退避节奏本身也是行为：注入假 sleeper 才能断言它，而且测试不会真的等 5.5 秒。
-        self.assertEqual(waits, [1.0, 2.0])
-        self.assertEqual(result.candidates[0].extra["tag_types"]["lazyprocrastinator"],
-                         "artist")
+        result = self._fetch(self._dapi_transport(xml=self.RATE_LIMITED, video=video),
+                             sleeper=waits.append)
+        first = result.candidates[0]
+        self.assertEqual(waits, [1.5, 4.0, 9.0], "退避有界且不会叠乘")
+        self.assertTrue(first.partial,
+                        "上传时间没取到就得留着 partial，否则落库会拿 `change` 冲掉上一轮的值")
+        self.assertEqual(first.extra["tag_types"]["lazyprocrastinator"], "artist")
+        self.assertEqual(first.duration, 10.0)
 
-    def test_a_detail_page_that_stays_unavailable_records_no_types(self):
-        """重试完仍取不到就留空，让下一轮再问；不写空字典冒充已补。"""
+    def test_a_page_already_enriched_costs_no_upload_time_request(self):
+        seen = []
+        self._fetch(self._dapi_transport(seen=seen), max_items=4,
+                    enrich_skip=("18534395", "18534396", "18534397", "18534398"))
+        self.assertEqual(len(seen), 1, "整页都补过，只有列表那一次请求")
+
+    def test_one_post_detail_for_the_backfill_asks_dapi_by_id(self):
+        """存量行补齐逐条问：JSON 按帖子号带 `tag_info`，XML 按帖子号给 `created_at`。"""
+        seen = []
+        detail = Rule34XxxConnector(
+            transport=self._dapi_transport(seen=seen), sleeper=lambda _: None,
+            credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
+        )._detail("18534395")
+        self.assertEqual(detail["published_at"], "2026-05-01T16:32:21Z")
+        self.assertEqual(detail["tag_types"]["miqo'te"], "character")
+        for request, _ in seen:
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.url).query)
+            self.assertEqual(query["id"], ["18534395"])
+
+    def test_one_post_detail_that_stays_throttled_has_no_types(self):
+        """被挡回来不能读成「这条没有分类」：结果里不出现 `tag_types`，脚本记未取得。"""
         def transport(request, timeout, max_bytes):
-            if request.url.startswith("https://api.rule34.xxx/"):
-                return HttpResponse(200, {}, RULE34XXX_JSON)
-            return HttpResponse(503, {}, b"slow down")
+            return HttpResponse(200, {}, self.RATE_LIMITED)
 
-        waits = []
-        result = Rule34XxxConnector(
-            transport=transport, max_items=1, sleeper=waits.append,
+        detail = Rule34XxxConnector(
+            transport=transport, sleeper=lambda _: None,
             credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
-        ).fetch("lazyprocrastinator")
-        self.assertNotIn("tag_types", result.candidates[0].extra)
-        self.assertTrue(result.candidates[0].partial,
-                        "详情没取到就得留着 partial，否则落库会把上一轮的分类抹掉")
-        self.assertEqual(waits, [1.0, 2.0, 4.0, 8.0], "退避有界且不会叠乘")
+        )._detail("18534395")
+        self.assertEqual(detail, {})
 
     def test_autocomplete_reports_the_real_tag_spelling_without_credentials(self):
         # 站上写作 `ria-neearts`，手边的手柄是 `Ria_neearts`；补全是唯一能把两者
@@ -1637,6 +1677,7 @@ class Rule34XxxConnectorTests(unittest.TestCase):
         self.assertEqual(query["tags"], ["stellar_blade 3d sort:score"])
         self.assertEqual(query["limit"], ["3"])
         self.assertNotIn("pid", query, "一次性的搜索只要第一页")
+        self.assertNotIn("fields", query, "不落库的搜索用不上分类，不多拉四倍正文")
         self.assertEqual(len(candidates), 3)
         self.assertEqual(candidates[0].thumb_url,
                          "https://api-cdn.rule34.xxx/images/1232/3df1.jpg",
@@ -2306,12 +2347,16 @@ class EnrichPhaseTests(unittest.TestCase):
     补齐过的条目不再问——否则一个作者的来源每次检查都要按条目数付请求。
     """
 
+    #: rule34xxx 第二阶段逐条付费的请求是原文件头；上传时间整页一次，不随条目数长。
+    HEAD = "https://api-cdn-mp4.rule34.xxx/"
+
     def _rule34xxx(self, seen, **kwargs):
         def transport(request, timeout, max_bytes):
             seen.append(request.url)
             if request.url.startswith("https://api.rule34.xxx/index.php"):
-                return HttpResponse(200, {}, RULE34XXX_JSON)
-            return HttpResponse(200, {}, RULE34XXX_DETAIL_HTML)
+                return HttpResponse(200, {}, RULE34XXX_JSON if "json=1" in request.url
+                                    else RULE34XXX_XML)
+            return HttpResponse(404, {}, b"")
 
         return Rule34XxxConnector(
             transport=transport, max_items=4,
@@ -2323,7 +2368,7 @@ class EnrichPhaseTests(unittest.TestCase):
         result = self._rule34xxx(seen, enrich_budget=2).fetch("lazyprocrastinator")
         self.assertEqual(len(result.candidates), 4)
         self.assertEqual(result.probed, 2)
-        details = [url for url in seen if "s=view" in url]
+        details = [url for url in seen if url.startswith(self.HEAD)]
         self.assertEqual(len(details), 2, "额度是请求数的上限，不是建议值")
         self.assertEqual([item.partial for item in result.candidates],
                          [False, False, True, True],
@@ -2332,7 +2377,7 @@ class EnrichPhaseTests(unittest.TestCase):
     def test_a_zero_budget_means_the_list_phase_alone(self):
         seen = []
         result = self._rule34xxx(seen, enrich_budget=0).fetch("lazyprocrastinator")
-        self.assertEqual(seen, [url for url in seen if "s=view" not in url])
+        self.assertEqual(len(seen), 1, "额度为零连整页的上传时间都不问")
         self.assertEqual(result.probed, 0)
         self.assertTrue(all(item.partial for item in result.candidates))
 
@@ -2343,7 +2388,7 @@ class EnrichPhaseTests(unittest.TestCase):
         def publish(candidate):
             ready.append(candidate)
             enriched = sum(not item.partial for item in ready)
-            self.assertEqual(sum('s=view' in url for url in seen), enriched)
+            self.assertEqual(sum(url.startswith(self.HEAD) for url in seen), enriched)
 
         connector.candidate_ready = publish
         result = connector.fetch('lazyprocrastinator')
@@ -2357,8 +2402,9 @@ class EnrichPhaseTests(unittest.TestCase):
         result = self._rule34xxx(
             seen, enrich_budget=2, enrich_skip={"18534395", "18534396"},
         ).fetch("lazyprocrastinator")
-        details = sorted(url.rsplit("id=", 1)[1] for url in seen if "s=view" in url)
-        self.assertEqual(details, ["18534397", "18534398"])
+        details = sorted(url for url in seen if url.startswith(self.HEAD))
+        self.assertEqual(details, [self.HEAD + "images/1232/93ea.mp4",
+                                   self.HEAD + "images/1232/fp.mp4"])
         self.assertEqual([item.partial for item in result.candidates],
                          [True, True, False, False])
 
@@ -2388,8 +2434,8 @@ class EnrichPhaseTests(unittest.TestCase):
     def test_rule34xxx_is_not_marked_by_a_time_the_list_already_gave(self):
         """rule34xxx 的上传时间来自列表的 `change`，第一次落库就有值。
 
-        拿 `published_at` 当它的补齐判据，等于宣布「所有条目都已补齐」，上一轮被
-        限流挡掉的分类就永远补不回来了。
+        拿 `published_at` 当它的补齐判据，等于宣布「所有条目都已补齐」，没读到时长的
+        mp4 就永远补不回来了。分类随列表一起到，不走第二阶段也照样带上。
         """
         self.assertNotEqual(Rule34XxxConnector.ENRICHED_MARK, "published_at")
         listed = Rule34XxxConnector(
@@ -2397,7 +2443,7 @@ class EnrichPhaseTests(unittest.TestCase):
             credential=Credential("rule34xxx", {"user_id": "42", "api_key": "sekret"}),
         ).fetch("lazyprocrastinator").candidates
         self.assertTrue(all(item.published_at for item in listed))
-        self.assertTrue(all("tag_types" not in item.extra for item in listed))
+        self.assertTrue(all(item.partial and item.extra["tag_types"] for item in listed))
 
 
 class MediaContentHashTests(unittest.TestCase):

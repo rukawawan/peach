@@ -12,6 +12,7 @@ import { fmtSize } from '@peach/legacy/core';
 import { Button } from '@/components/base/buttons/button';
 
 import { errorMessage } from '../../api';
+import { RESOURCE_SYNC_TEXT } from '../../cleanup-tool-skeletons';
 import { useBackgroundJob } from '../background-job';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
@@ -184,7 +185,7 @@ export function ResourceSyncCard(
       }>
         <FieldsetTitle id="resource-sync-title" gap="small">资源同步</FieldsetTitle>
         <p className="max-w-190 text-body-2-regular leading-5 text-text-secondary">
-          按馆藏记录逐条查找本地磁盘与网盘上的文件，列出文件已不存在的记录、空文件夹，以及不再被引用的缓存。
+          {RESOURCE_SYNC_TEXT}
         </p>
         <div aria-live="polite" className="mt-4 empty:hidden">{progress}</div>
       </Fieldset>

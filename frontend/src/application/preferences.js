@@ -18,6 +18,7 @@ import { refreshFeedRows, syncFeedAutoScroll } from './feed.js';
 import { stageApi } from '../react/application-residents';
 import { syncJavImages } from './../jav-artwork';
 import { coverAnchor } from './../card-art/framing';
+import { DEFAULT_SFW_SHORTCUT, SFW_SHORTCUT_KEY, parseShortcut, serializeShortcut } from './../keyboard-shortcut';
 import { mediaState, repaintDetailPoster } from './media.js';
 import { loadingState } from './loading.js';
 import { updateManagedRoute } from './../history/managed';
@@ -118,6 +119,18 @@ export function setCensored(on){
   localStorage.setItem(preferencesState.CENSOR_KEY,on?'1':'0');
   applyCensor(on);
   if(on)releaseHoverPreviews();
+}
+
+/** SFW 开关键：本机存的那份读不出来时回到默认 Shift+S。 */
+export function sfwShortcut(){
+  return parseShortcut(localStorage.getItem(SFW_SHORTCUT_KEY))||parseShortcut(DEFAULT_SFW_SHORTCUT);
+}
+
+/** 传空恢复默认。存本机、不进同步设置，见 `keyboard-shortcut.ts`。 */
+export function setSfwShortcut(shortcut){
+  if(shortcut)localStorage.setItem(SFW_SHORTCUT_KEY,serializeShortcut(shortcut));
+  else localStorage.removeItem(SFW_SHORTCUT_KEY);
+  preferencesState.settingsStore.notify();
 }
 
 export function setHighContrast(on){

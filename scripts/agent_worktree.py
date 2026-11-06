@@ -16,7 +16,7 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
-from . import (changelog, check_readme_impact, co_author, commit_subject,
+from . import (changelog, check_public_text, check_readme_impact, co_author, commit_subject,
                test_evidence, test_runner, version_bump)
 from .release_tag import MASTER_WRITER
 
@@ -170,12 +170,21 @@ def require_verified(worker: Path, target_branch: str, paths: Iterable[str]) -> 
         raise WorkspaceError("验证检查期间工作树改变，请重试")
 
 
-def require_pull_request(worker: Path, branch: str, target_branch: str, head: str) -> dict[str, str]:
-    """用工作树的 GitHub 仓库上下文取得当前分支 PR，绑定精确提交与目标分支。"""
+ISSUE_LINK = re.compile(
+    r"(?:Refs|Close[sd]?|Fix(?:e[sd])?|Resolve[sd]?)[ \t]+"
+    r"(?:(?:[\w.-]+/[\w.-]+)?#[1-9]\d*|https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)",
+    re.IGNORECASE)
+
+
+def require_pull_request(worker: Path, branch: str, target_branch: str, head: str) -> dict[str, object]:
+    """用工作树的 GitHub 仓库上下文取得当前分支 PR，绑定精确提交与目标分支。
+
+    正文里独占一行的 issue 关联行原样带出，写进合并提交；正文中顺带提到的编号不算。
+    """
     fields = ("url", "state", "headRefOid", "baseRefName")
     try:
         result = subprocess.run(
-            ["gh", "pr", "view", branch, "--json", ",".join(fields)], cwd=worker,
+            ["gh", "pr", "view", branch, "--json", ",".join((*fields, "body"))], cwd=worker,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -196,7 +205,29 @@ def require_pull_request(worker: Path, branch: str, target_branch: str, head: st
         raise WorkspaceError("PR 提交与工作者分支不一致；请先推送当前提交并核对对应 CI")
     if pr["baseRefName"] != target_branch:
         raise WorkspaceError(f"PR 目标分支不是 {target_branch}")
-    return {"url": pr["url"], "head": head, "base": target_branch}
+    body = pr.get("body") if isinstance(pr.get("body"), str) else ""
+    refs = [line.strip() for line in body.splitlines() if ISSUE_LINK.fullmatch(line.strip())]
+    return {"url": pr["url"], "head": head, "base": target_branch, "refs": refs, "body": body}
+
+
+def require_public_text(repo: Path, texts: dict[str, str]) -> None:
+    """PR 正文与提交说明都公开在 GitHub 上：成串列出本机馆藏细节的拒收。
+
+    判据在 `scripts/check_public_text.py`，只读本机账本；没有账本的机器放行。
+    """
+    library = check_public_text.load_library(repo)
+    found = [f"{name}（{'；'.join(problems)}）" for name, text in texts.items()
+             for problems in [check_public_text.problems(text, library)] if problems]
+    if found:
+        raise WorkspaceError("公开文字成串列出了馆藏细节，改写 PR 正文或提交说明后再合入：" + "，".join(found))
+
+
+def merge_message(branch: str, pull_request: dict[str, object]) -> str:
+    """合并提交带 PR 号与 issue 关联行，从 `git log` 就能追到交付与反馈。"""
+    number = str(pull_request["url"]).rsplit("/", 1)[1]
+    subject = f"Merge branch '{branch}' (#{number})"
+    refs = pull_request["refs"]
+    return f"{subject}\n\n" + "\n".join(refs) if refs else subject
 
 
 def integrate(repo: Path, worker_branch: str, target_branch: str = "master", *,
@@ -258,6 +289,10 @@ def _integrate_locked(repo: Path, worker_branch: str,
     worker_head = _git(main, "rev-parse", worker_branch).stdout.strip()
     require_verified(workers[0], target_branch, worker_files)
     pull_request = require_pull_request(workers[0], worker_branch, target_branch, worker_head)
+    commits = _git(main, "log", "--format=%h%x00%B%x1e", f"{base}..{worker_head}").stdout
+    require_public_text(main, {"PR 正文": str(pull_request.get("body") or ""), **{
+        f"提交 {sha}": message for sha, _, message in
+        (entry.strip().partition("\0") for entry in commits.split("\x1e") if entry.strip())}})
     if _git(main, "rev-parse", worker_branch).stdout.strip() != worker_head or \
             _git(workers[0], "rev-parse", "HEAD").stdout.strip() != worker_head:
         raise WorkspaceError("验证检查期间工作者分支改变，请重试")
@@ -266,7 +301,7 @@ def _integrate_locked(repo: Path, worker_branch: str,
         raise WorkspaceError("验证检查期间集成工作树改变，请重试")
     _install_hooks(main)
     _git(main, "-c", f"{MASTER_WRITER}=integrate", "merge", "--no-ff", "--no-edit",
-         "-m", f"Merge branch '{worker_branch}'", worker_head)
+         "-m", merge_message(worker_branch, pull_request), worker_head)
     _git(main, "worktree", "unlock", str(workers[0]), check=False)
     return {
         "ok": True,

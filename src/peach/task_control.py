@@ -64,17 +64,9 @@ def requested(db, run_id, ancestors=()):
 def projection(store, run):
     if not store.enabled or run.host != store.host:
         return None
-    children = []
-    if not run.active:
-        with store.database.read_connection() as connection:
-            rows = connection.execute(
-                'WITH RECURSIVE family(id) AS (SELECT id FROM task_run WHERE parent_run_id=? '
-                'UNION ALL SELECT t.id FROM task_run t JOIN family f ON t.parent_run_id=f.id) '
-                "SELECT id FROM task_run WHERE id IN (SELECT id FROM family) AND status IN ('pending','running')",
-                (run.id,)).fetchall()
-        children = [store.get(row[0]) for row in rows]
-        if not children:
-            return None
+    # 自己已结束的父任务，有后代还在排或在跑才算可控；这里只问有没有。
+    if not run.active and not store.active_descendants(run.id, limit=1):
+        return None
     command = intent(store.database.db_path, run.id, (run.parent_run_id, run.root_run_id))
     action = command.get('action', 'resume')
     observed = _read(_root(store.database.db_path) / f'{run.id}.observed.json')
@@ -83,6 +75,8 @@ def projection(store, run):
     elif action == 'pause':
         acknowledged = observed.get('command') == command.get('id') and observed.get('state') == 'paused'
         if not run.active:
+            # 暂停是否已落到每个后代：只有这里要整行，一次查询取回。
+            children = store.active_descendants(run.id)
             acknowledged = bool(children) and all(
                 (projection(store, child) or {}).get('state') == 'paused' for child in children)
         state = 'paused' if run.status == 'pending' or acknowledged else 'pausing'

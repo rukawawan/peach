@@ -74,19 +74,42 @@ def runtime_facts(config) -> tuple[tuple[str, str], ...]:
 
 
 def runtime_fact_entries(config) -> list[dict[str, str]]:
-    """运行信息中的缺失依赖附带官方下载入口；依赖可用时不占一行。"""
+    """运行信息中的缺失依赖附带入口：Windows x64 由 Peach 装进数据目录（`install_tool`），
+    其余平台没有发布的工具包，给官方下载外链。
+
+    依赖可用时，只有数据目录里那份占一行并写明版本，让刚装完的人看到结果；随包或 PATH 上的不占行。
+    """
+    from . import media_tools
     from .ffmpeg import FFmpegResolver
+    from .mp4recover import untrunc_path
+    tools = config.directory("tools")
+    installable = media_tools.supported()
     entries = [{"term": term, "value": value} for term, value in runtime_facts(config)]
-    resolver = FFmpegResolver(config.directory("tools") / "ffmpeg")
-    missing = [name for name, choice in (("FFmpeg", resolver.ffmpeg()), ("ffprobe", resolver.ffprobe()))
-               if choice is None]
+
+    def installed(tool: str) -> str:
+        version = media_tools.installed_version(tools, tool)
+        return f"已安装，版本 {version}" if version else "已安装在数据目录"
+
+    resolver = FFmpegResolver(tools / "ffmpeg")
+    choices = {"FFmpeg": resolver.ffmpeg(), "ffprobe": resolver.ffprobe()}
+    entry = next(row for row in entries if row["term"] == "FFmpeg")
+    missing = [name for name, choice in choices.items() if choice is None]
     if missing:
-        entry = next(row for row in entries if row["term"] == "FFmpeg")
-        entry.update(value="未找到 " + "、".join(missing) + "；转码、媒体信息与缩略图需要 FFmpeg 工具包。",
-                     download_url="https://ffmpeg.org/download.html", download_label="下载 FFmpeg")
+        entry.update(value="未找到 " + "、".join(missing) + "；转码、媒体信息与缩略图需要 FFmpeg 工具包。")
+        if installable:
+            entry["install_tool"] = "ffmpeg"
+        else:
+            entry.update(download_url="https://ffmpeg.org/download.html", download_label="下载 FFmpeg")
+    elif all(choice.source == "peach-managed" for choice in choices.values()):
+        entry["value"] = installed("ffmpeg")
     untrunc = next(row for row in entries if row["term"] == "untrunc")
-    if untrunc["value"] != "可用":
-        untrunc.update(value=untrunc["value"] + f"解压到 {config.directory('tools') / 'untrunc'}。",
+    path = untrunc_path(tools)
+    if path is None and installable:
+        untrunc["install_tool"] = "untrunc"
+    elif path is None:
+        untrunc.update(value=untrunc["value"] + f"解压到 {tools / 'untrunc'}。",
                        download_url="https://github.com/anthwlock/untrunc/releases",
                        download_label="下载 untrunc")
+    elif path.parent == (tools / "untrunc").resolve():
+        untrunc["value"] = installed("untrunc")
     return [row for row in entries if not (row["term"] in ("FFmpeg", "untrunc") and row["value"] == "可用")]

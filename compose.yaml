@@ -5,12 +5,23 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 75s
+    environment:
+      # Watchtower 只换同一标签的新镜像；标签不是 edge 时配置页不给「一键更新」。
+      PEACH_IMAGE_TAG: ${PEACH_VERSION:-edge}
+      # 可选：还没有访问设置时，启动就用它设访问密码（8–256 个字符），首次设置页不再问；已有访问设置时忽略。
+      # 密码写在 .env 的 PEACH_ACCESS_PASSWORD，再取消下一行的注释。
+      # PEACH_ACCESS_PASSWORD: ${PEACH_ACCESS_PASSWORD}
+    labels:
+      # 只有带这个标签的容器归 watchtower profile 管（WATCHTOWER_LABEL_ENABLE）。
+      com.centurylinklabs.watchtower.enable: "true"
     ports:
       # NAS / 局域网：在 .env 中设置 PEACH_BIND 为宿主机的局域网 IP。
       # 127.0.0.1 仅供宿主机访问；PEACH_PORT 可修改宿主机端口。
       - "${PEACH_BIND:-127.0.0.1}:${PEACH_PORT:-8900}:8900"
     volumes:
       - peach-data:/data
+      # 只装一键更新的令牌：Peach 首次启动时生成，watchtower 只读这一个卷，看不到 /data。
+      - peach-update:/update
       - type: bind
         source: ${PEACH_MEDIA_ROOT:-./media}
         target: /media
@@ -19,5 +30,26 @@ services:
           propagation: rslave
           create_host_path: false
 
+  # 可选：配置页「一键更新」（docs/DOCKER.md、ADR-0140）。`docker compose --profile watchtower up -d`
+  # 才会起它。它挂着 Docker socket，等于宿主 root；只开要令牌的更新接口，不发布端口，不定时轮询。
+  watchtower:
+    image: nickfedor/watchtower:1.23.2
+    profiles: [watchtower]
+    restart: unless-stopped
+    depends_on:
+      # 令牌在 Peach 起服务前写好；等它就绪再启动，Watchtower 启动时读到的就是那份文件。
+      peach:
+        condition: service_healthy
+    environment:
+      WATCHTOWER_HTTP_API_ENDPOINTS: update
+      WATCHTOWER_HTTP_API_TOKEN: /peach-update/watchtower-token
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # 换下的旧镜像已失去 edge 标签，留着只占盘；回滚按版本号标签从 Docker Hub 重新拉。
+      WATCHTOWER_CLEANUP: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - peach-update:/peach-update:ro
+
 volumes:
   peach-data:
+  peach-update:

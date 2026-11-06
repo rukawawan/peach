@@ -16,6 +16,8 @@
   --normal-border:var(--color-border-button-default);--normal-text:var(--color-text-primary);
   width:max-content;min-width:min(400px,100%);max-width:100%;right:0;
   padding:18px 20px;gap:12px;flex-wrap:wrap;font:var(--board-body)}
+/* 失败的回执自己就是那块错误框：外框线换成错误色，不在卡里再套一层红底提示；正文仍是正文色。 */
+#toasts [data-sonner-toast][data-styled=true][data-type=error]{--normal-border:var(--color-border-error-default)}
 #toasts :is([data-sonner-toast][data-styled=true],[data-processing-dock]){
   border-radius:var(--floating-radius);box-shadow:var(--elevation-xs)}
 /* 正文按实际内容参与排布，上限留出图标、间距与 Sonner 的光学校正边距。 */

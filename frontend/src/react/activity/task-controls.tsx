@@ -46,11 +46,24 @@ export function TaskControlFeedback() {
   </div>;
 }
 
-export function TaskControls({ run }: { run: TaskRunPayload }) {
+/** `runs` 是并在同一张卡里的几批，按钮对每一批各发一次；不给就只管 `run` 这一轮。 */
+export function TaskControls({ run, runs = [run] }: { run: TaskRunPayload; runs?: TaskRunPayload[] }) {
   const client = useQueryClient();
   const pending = useRef({ change: false, cancel: false, confirmation: false });
   const refresh = () => { void client.invalidateQueries({ queryKey: TASKS_KEY }) };
-  const send = (command: ControlCommand) => controlTask(command.id, command.action);
+  // 一批被拒不拦后面几批：并卡期间较早那批可能刚好跑完，其余几批照样要停；有被拒的照常报出来。
+  const send = async (command: ControlCommand) => {
+    let failure: unknown = null;
+    for (const row of runs) {
+      try {
+        await controlTask(row.id, command.action);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure !== null) throw failure;
+  };
+  const batches = runs.length > 1 ? `这 ${runs.length} 批` : '这轮';
   const change = useMutation({
     mutationKey: [...CONTROL_KEY, run.id, 'change'],
     mutationFn: send,
@@ -74,8 +87,8 @@ export function TaskControls({ run }: { run: TaskRunPayload }) {
       void confirmModal({
         title: followups ? `取消「${run.task_label}」的全部后续任务` : `取消任务「${run.task_label}」`,
         body: followups
-          ? '将停止这轮已派出的全部后续任务，包括正在处理和排队的项目。已保存的资料和结果会保留。'
-            + '这批后续任务取消后不能继续，需要时重新发起。'
+          ? `将停止${batches}已派出的全部后续任务，包括正在处理和排队的项目。已保存的资料和结果会保留。`
+            + '这些后续任务取消后不能继续，需要时重新发起。'
           : '将停止这轮剩余的处理及其后续任务。已保存的资料和结果会保留。'
             + '这轮任务取消后不能继续，需要时重新发起。',
         confirmLabel: followups ? '取消后续任务' : '取消任务',

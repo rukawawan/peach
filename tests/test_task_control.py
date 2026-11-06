@@ -177,6 +177,28 @@ class TaskControlTests(unittest.TestCase):
         self.store.finish(late_id, 'succeeded')
         self.assertIsNone(self.state(parent.id))
 
+    def test_a_parent_with_many_queued_followups_is_projected_without_a_query_per_followup(self):
+        """一轮补全派出上千条后继：任务中心每次轮询算父卡的控制状态，连接数不随后继条数增长。"""
+        parent = self.store.start('parent', trigger='manual')
+        self.store.enqueue_followups(parent.id, [(f'leaf:{n}', 'leaf', f'后继 {n}') for n in range(50)])
+        self.store.finish(parent.id, 'succeeded')
+        original = self.store.database.read_connection
+        opened = []
+
+        def counted():
+            opened.append(1)
+            return original()
+
+        run = self.store.get(parent.id)
+        with patch.object(self.store.database, 'read_connection', side_effect=counted):
+            self.assertEqual(task_control.projection(self.store, run)['state'], 'running')
+            running = len(opened)
+            task_control.request(self.store, parent.id, 'pause')
+            opened.clear()
+            self.assertEqual(task_control.projection(self.store, run)['state'], 'paused')
+        self.assertLessEqual(running, 2)
+        self.assertLessEqual(len(opened), 3)
+
     def test_cancelled_parent_does_not_run_followups_enqueued_after_the_request(self):
         parent = self.store.start('parent', trigger='manual')
         first = self.store.enqueue_followups(parent.id, [('leaf:1', 'leaf', '原任务')])['queued'][0]

@@ -302,7 +302,10 @@ class SmbResource:
             if not exist_ok or not self.is_dir():
                 raise
 
-    def scandir(self):
+    def scandir(self, transport=None):
+        """列目录。给 `transport` 时沿用调用方的连接，由调用方负责关闭。"""
+        if transport is not None:
+            return transport.scandir(self.remote_parts)
         transport = self._transport()
         try:
             return transport.scandir(self.remote_parts)

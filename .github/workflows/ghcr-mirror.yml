@@ -1,0 +1,50 @@
+name: 补发 ghcr 镜像
+
+# 发布作业已经把版本推到 Docker Hub、却没推到 ghcr 时（ADR-0147 之前的版本，或 ghcr 那一步失败），
+# 把 Docker Hub 上的同一份镜像按摘要原样复制到 ghcr，不重新构建。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 已发布的版本号，例如 0.55.1
+        required: true
+      edge:
+        description: 同时把 ghcr 的 edge 指向这一版
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: 复制到 ghcr
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: 按摘要复制版本号与 edge
+        env:
+          VERSION: ${{ inputs.version }}
+          EDGE: ${{ inputs.edge }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号格式不对：$VERSION"; exit 1; }
+          source="docker://docker.io/longmeidao/peach:$VERSION"
+          targets=("ghcr.io/peach-mitao/peach:$VERSION")
+          if [ "$EDGE" = "true" ]; then targets+=(ghcr.io/peach-mitao/peach:edge); fi
+          # skopeo 读 login-action 写下的 ~/.docker/config.json；--preserve-digests 保证复制后摘要不变。
+          expected="$(skopeo inspect --raw "$source" | sha256sum | cut -d' ' -f1)"
+          for target in "${targets[@]}"; do
+            skopeo copy --all --preserve-digests "$source" "docker://$target"
+            copied="$(skopeo inspect --raw "docker://$target" | sha256sum | cut -d' ' -f1)"
+            [ "$expected" = "$copied" ] || { echo "摘要不一致：$target"; exit 1; }
+            echo "$target 与 Docker Hub 同一摘要 sha256:$copied"
+          done

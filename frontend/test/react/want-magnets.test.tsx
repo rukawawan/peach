@@ -101,6 +101,11 @@ it('待找清单查询多个来源，不采用快速添加的单来源持久缓�
   expect(host.textContent).toContain('sukebei');
 });
 
+it('来源没给大小时整行照常展示，提示里不出现缺值', async () => {
+  const { host } = await open([{ ...candidate, size: undefined as unknown as string }]);
+  expect(host.querySelector('[data-resource-facts]')?.textContent).toContain('大小未知');
+  expect([...host.querySelectorAll('[title]')].map(node => node.getAttribute('title')).join('|')).not.toContain('undefined');
+});
 it('ED2K 类型使用文字，字节容量按馆藏口径展示', async () => {
   const { host } = await open([{ ...candidate, protocol: 'ed2k', size: '27,311,519,717 B' }]);
   expect(host.textContent).toContain('ED2K');

@@ -91,7 +91,7 @@ describe('JAV 推荐与加载结构', () => {
       assert.ok(cover && Math.abs(cover.width / cover.height - 0.75) < 0.02, '大图封面占位应与馆藏正封同一比例');
       const skeletonWidth = await page.locator('[data-skeleton="jav-discover"]').first().boundingBox();
       const skeletonCard = await page.locator('[data-jav-skeleton-card]').first().boundingBox();
-      const searchBox = await page.locator('input[aria-label="筛选推荐"]').locator('xpath=../../..').boundingBox();
+      const searchBox = await page.locator('[data-index-search]').boundingBox();
       const main = await page.locator('#main').boundingBox();
       assert.ok(skeletonWidth && main && skeletonWidth.width >= main.width - 40);
       const pendingFilter = await page.locator('[data-jav-filter]').boundingBox();
@@ -185,7 +185,7 @@ describe('JAV 推荐与加载结构', () => {
       } else {
         assert.ok(skeletonCard && Math.abs(skeletonCard.height - heights[0]!) <= 2, JSON.stringify({ skeletonCard, heights }));
       }
-      assert.deepEqual(await search.locator('xpath=../../..').boundingBox(), searchBox);
+      assert.deepEqual(await page.locator('[data-index-search]').boundingBox(), searchBox, '页头筛选框骨架与接管后同一位置');
       assert.equal(await cards.nth(1).locator('h3').evaluate(node => getComputedStyle(node).webkitLineClamp), '2');
       const lookup = page.getByRole('button', { name: '查找资源', exact: true }).first();
       assert.notEqual(await lookup.evaluate(node => getComputedStyle(node).backgroundColor),

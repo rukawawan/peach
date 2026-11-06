@@ -9,7 +9,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { queryClient } from '../../src/react/query';
 import { linkHost, networkOptions, ScrapingPage } from '../../src/react/scraping/scraping-page';
 import { prefetchScraping } from '../../src/react/scraping/scraping';
-import type { AmaneBridge, Check, CoverJob, Source } from '../../src/react/scraping/scraping';
+import type {
+  AmaneBridge, Check, CheckAllJob, CoverJob, ReportedCheck, Source,
+} from '../../src/react/scraping/scraping';
 
 import {
   buttonNamed, click, mount, mountRoot, section, settle, submit, type,
@@ -56,8 +58,8 @@ function serve(handlers: Record<string, (body: never) => Reply | Promise<Reply>>
   return { calls, fetcher };
 }
 
-/** 依次回这几份任务快照，最后一份之后一直回它。 */
-function coverStates(...states: CoverJob[]) {
+/** 依次回这几份任务快照，最后一份之后一直回它。抓封面与全部检查两种任务共用。 */
+function coverStates<T extends CoverJob | CheckAllJob>(...states: T[]) {
   let at = 0;
   return () => {
     const state = states[Math.min(at, states.length - 1)]!;
@@ -92,11 +94,18 @@ const BRIDGE: AmaneBridge = {
 const quiet = (overrides: Partial<Source> = {}) => ({
   'GET /api/scraping': () => ({ body: { sources: [source(overrides)] } }),
   'GET /api/scraping/cover': () => ({ body: { status: 'idle' } }),
+  'GET /api/scraping/check-all': () => ({ body: { status: 'idle' } }),
   'GET /api/scraping/amane-bridge': () => ({ body: BRIDGE }),
   'GET /api/custom-metadata': () => ({ body: { items: [] } }),
 });
 /** 首屏来源与任务数据的请求顺序，和 `prefetchScraping` 一致。 */
-const FIRST_SCREEN = ['/api/scraping', '/api/scraping/cover', '/api/scraping/amane-bridge', '/api/custom-metadata'];
+const FIRST_SCREEN = ['/api/scraping', '/api/scraping/cover', '/api/scraping/check-all',
+  '/api/scraping/amane-bridge', '/api/custom-metadata'];
+
+/** 全部检查里的一项结果：口径与中文名同 `source_preflight.OUTCOMES`。 */
+const reported = (outcome: ReportedCheck['outcome'], outcome_label: string, message = ''): ReportedCheck => ({
+  label: '来源页面', ok: outcome === 'ok', outcome, outcome_label, ...(message ? { message } : {}),
+});
 
 const password = (root: ParentNode) => root.querySelector<HTMLInputElement>('input[type=password]');
 const radio = (value: string) => document.querySelector<HTMLInputElement>(`input[type=radio][value="${value}"]`);
@@ -291,6 +300,66 @@ it('卸载之后不再敲后台：轮询跟着这棵根一起走', async () => {
   await mounted.unmount();
   await tick(60_000);
   expect(calls.length, '卸载之后还在轮询').toBe(asked);
+});
+
+it('全部检查按已检查来源数推进，跑完按口径成组列出问题、回执一次并重读来源', async () => {
+  vi.useFakeTimers();
+  const toast = vi.fn();
+  const done: CheckAllJob = {
+    status: 'complete', checked: 3, total: 3, failed: 1, elapsed_s: 4.2, completed_at: 1_793_790_000,
+    results: [
+      { source: 'javbus', label: 'JavBus', results: [reported('ok', '可连接')] },
+      { source: 'makers', label: '片商官网', results: [reported('skipped', '未检查', '片商官网按番号选择')] },
+      { source: 'javdb', label: 'JavDB', results: [reported('auth', '登录或人机验证', '来源返回人机验证页')] },
+    ],
+  };
+  const { calls } = serve({
+    ...quiet(),
+    'GET /api/scraping/check-all': coverStates(
+      { status: 'idle' },
+      { status: 'running', checked: 1, total: 3,
+        results: [{ source: 'javbus', label: 'JavBus', results: [reported('ok', '可连接')] }] },
+      done),
+    'POST /api/scraping/check-all': () => ({ body: { status: 'running', checked: 0, total: 3, results: [] } }),
+  });
+  await prefetchScraping(new AbortController().signal);
+  const host = await mount(page(toast));
+  const card = () => section(host, '连接检查')!;
+
+  await click(buttonNamed('全部检查', card()));
+  await settle();
+  expect(calls[FIRST_SCREEN.length]).toMatchObject({ path: '/api/scraping/check-all', method: 'POST' });
+  expect(card().textContent).toContain('已检查 1 / 3 个来源');
+  expect(card().querySelector('[role=progressbar]')?.getAttribute('aria-valuenow')).toBe('1');
+
+  await tick(2000);
+  expect(card().querySelector('[role=progressbar]')).toBeNull();
+  const problems = [...card().querySelectorAll('li')].map((row) => row.textContent);
+  expect(problems, '要人去登录的排在不在这里查的片商官网前面').toEqual([
+    expect.stringContaining('JavDB'), expect.stringContaining('片商官网'),
+  ]);
+  expect(problems[0]).toContain('来源返回人机验证页');
+  expect(card().textContent).toContain('可连接的 1 项');
+  expect(card().textContent).toContain('用时 4.2 秒');
+  expect(toast).toHaveBeenCalledTimes(1);
+  expect(toast).toHaveBeenCalledWith('检查完成，1 项未通过');
+  expect(calls.filter((call) => call.path === '/api/scraping' && call.method === 'GET'),
+    '冷却会变，跑完重读来源列表').toHaveLength(2);
+});
+
+it('离开页面再回来，全部检查的上一次结果仍在，但不发回执', async () => {
+  const { host, toast } = await open({
+    ...quiet(),
+    'GET /api/scraping/check-all': () => ({ body: {
+      status: 'complete', checked: 1, total: 1, failed: 1, completed_at: 1_793_790_000,
+      results: [{ source: 'javdb', label: 'JavDB', results: [reported('cooldown', '冷却', '来源正在冷却')] }],
+    } }),
+  });
+  const card = section(host, '连接检查')!;
+  expect(card.textContent).toContain('冷却');
+  expect(card.textContent).toContain('来源正在冷却');
+  expect(card.textContent).toContain('上次检查');
+  expect(toast).not.toHaveBeenCalled();
 });
 
 it('amane 桥：检查上游只填「上游最新版本」那一行，重建跟到终态并发一次回执', async () => {

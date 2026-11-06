@@ -31,7 +31,7 @@ OLDEST_CLIENT = "0.48.0"
 
 #: 在旧版本的源码树里执行：只走它自己的检查与清单读取，网络换成本次的发布条目。
 PROBE = r"""
-import json, sys, tempfile
+import inspect, json, sys, tempfile
 from pathlib import Path
 from types import SimpleNamespace
 sys.path[:0] = [sys.argv[1]]
@@ -44,7 +44,11 @@ def transport(request, *_):
     if request.url == release_updates.DOWNLOADS_API:
         return SimpleNamespace(status=200, headers={}, body=json.dumps(payload["rows"]).encode(), url=request.url)
     return SimpleNamespace(status=404, headers={}, body=b"", url=request.url)
-release = release_updates.check(transport=transport)
+# 这道核对针对 Windows 更新包。0.53.0 起检查按本机平台选包，在 macOS 上只认 DMG，所以明确按
+# Windows x64 客户端核对；更早的版本不分平台、只认 Windows 包，照原样调用。
+windows = ({"system": "win32", "machine": "AMD64"}
+           if "system" in inspect.signature(release_updates.check).parameters else {})
+release = release_updates.check(transport=transport, **windows)
 result = {"state": release.get("state"), "latest": release.get("latest_version"),
           "kind": release.get("package_kind"), "tools": sorted(update_packages.TOOL_PATHS)}
 if release.get("package_kind") != "full":

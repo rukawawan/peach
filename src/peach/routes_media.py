@@ -79,13 +79,18 @@ def _asset_root(state) -> Path:
     return Path(state.settings.candidate_root) / follow_assets.ROOT_NAME
 
 
-def _asset_response(request: Request, path: Path | None):
+def _asset_response(request: Request, path: Path | None, *, placeholder: bool = True):
     """这些端点只出现在 `<img src>` 里，所以取不到时回的是占位图而不是 JSON：
 
-    错误正文对 `<img>` 毫无意义，只会留下一个碎图。状态码仍然是 404，
-    前端据此把 `<img>` 摘掉、换成站名或首字母。
+    错误正文对 `<img>` 毫无意义，只会留下一个碎图。状态码仍然是 404。
+
+    浏览器照样把 404 带的占位图当成加载成功，`error` 不触发。头像后面有一条兜底链
+    （归档站那张，再到首字母，`data-fallbacks`／`data-drop`），占位图会把它整条截住，
+    圆框里留一枚播放键：头像传 `placeholder=False`，404 不带图，`<img>` 报错走下一环。
     """
     if path is None:
+        if not placeholder:
+            return Response(status_code=404, headers={"cache-control": "no-store"})
         return Response(PLACEHOLDER_IMAGE, status_code=404,
                         media_type=PLACEHOLDER_CONTENT_TYPE,
                         headers={"cache-control": "no-store"})
@@ -251,7 +256,7 @@ def local_playback(request: Request, id: int, player: str = 'default', args=Depe
     asset = request.app.state.media_engine.asset(id)
     path = request.app.state.media_engine.filesystem.file_for(asset, thumbnail=False)
     try:
-        launcher.open_media(path, player)
+        launcher.open_media(path, player, track=_playback_tracker(request.app.state, id))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     except (OSError, subprocess.SubprocessError) as exc:
@@ -259,6 +264,22 @@ def local_playback(request: Request, id: int, player: str = 'default', args=Depe
                        player, type(exc).__name__, getattr(exc, 'errno', None), getattr(exc, 'winerror', None))
         raise HTTPException(503, '无法打开播放器，请检查系统文件关联或选择其他播放器') from None
     return {'opened': True}
+
+
+def _playback_tracker(state, asset_id: int):
+    """外部播放器回报的进度按网页播放器同一口径写：首次前进计一次播放，其余进活动记录。"""
+    from .playback_tracking import Session
+    from .web_activity import w_activity, w_play
+    trackers, contract = state.playback_trackers, state.web_contract
+    if not trackers.has_room():
+        return None
+
+    def report(body: dict, first: bool) -> None:
+        if first:
+            w_play(contract, {'id': asset_id})
+        w_activity(contract, body)
+
+    return lambda connect, alive: trackers.start(Session(asset_id, connect, alive, report))
 
 
 def _external_asset(request: Request, asset_id: int, ticket: str, origin: str):
@@ -850,7 +871,7 @@ def follow_avatar(request: Request, service: str = "", id: str = "",
     if provider:
         target = follow_assets.mirror_avatar_url(provider, ref)
         if target is None:
-            return _asset_response(request, None)
+            return _asset_response(request, None, placeholder=False)
         key = f"mirror:{provider}:{ref}"
 
         def fetch():
@@ -859,7 +880,7 @@ def follow_avatar(request: Request, service: str = "", id: str = "",
         # 名片上的 X、Patreon 与 pixiv：每家取到能用的最大一档，几家之间留像素最多的那张。
         identities = profile_identities(id)
         if not identities:
-            return _asset_response(request, None)
+            return _asset_response(request, None, placeholder=False)
         key = f"official:profile:{id}"
 
         def fetch():
@@ -875,7 +896,7 @@ def follow_avatar(request: Request, service: str = "", id: str = "",
         # FANBOX 创作者 id（`jul3dnsfw.fanbox.cc`）。两种的合法形状都由
         # `resolve_official_avatar` 把关，这里只挡住明显不是身份的串。
         if service != "fanbox" or not _FANBOX_IDENTITY_RE.fullmatch(id):
-            return _asset_response(request, None)
+            return _asset_response(request, None, placeholder=False)
         key = f"official:{service}:{id}"
 
         def fetch():
@@ -886,7 +907,7 @@ def follow_avatar(request: Request, service: str = "", id: str = "",
             return follow_assets.fetch_image(client, resolved)
     path = follow_assets.cached_image(_asset_root(state), "avatars", key,
                                       AVATAR_REFRESH_SECONDS, fetch)
-    return _asset_response(request, path)
+    return _asset_response(request, path, placeholder=False)
 
 
 @router.api_route("/source-icon", methods=["GET", "HEAD"])
@@ -1215,8 +1236,9 @@ def cover_image(request: Request, code: str, args: dict[str, str] = Depends(requ
     """库外作品的官方封面：按番号在服务端查地址，经 Peach 的出网设置取图并落盘缓存。
 
     取不到一律回 404 且不缓存：卡片按 `data-drop` 换成占位，网络恢复后下一次加载重取。
+    DMM 缺图时 302 到同一主机族上的「NOW PRINTING」占位图，跟到那一跳也算取不到。
     """
-    from .jav_cover_fetch import COVER_PROXY_HOSTS, candidate_for
+    from .jav_cover_fetch import COVER_PROXY_HOSTS, PLACEHOLDER, candidate_for
     from .web_jav_detail import detail_code, stored_cover_url
     state = request.app.state
     try:
@@ -1229,8 +1251,13 @@ def cover_image(request: Request, code: str, args: dict[str, str] = Depends(requ
         if hit is not None:
             return hit
         target = ResolvedFollowMedia(url, candidate_for(url).referer, allowed_hosts=COVER_PROXY_HOSTS)
-        return cache.stream(key, request, lambda: open_upstream(
-            state.http_transport.client, request.method, target, incoming=request.headers))
+        def fetch():
+            upstream = open_upstream(state.http_transport.client, request.method, target, incoming=request.headers)
+            if PLACEHOLDER.search(str(upstream.url)):
+                upstream.close()
+                raise FollowProxyError("上游给的是「准备中」占位图")
+            return upstream
+        return cache.stream(key, request, fetch)
     except (ValueError, FollowProxyError, OSError, httpx.HTTPError):
         return Response(status_code=404, headers={"cache-control": "no-store"})
 
@@ -1377,7 +1404,9 @@ def _site_mark_response(state, url: str, root: Path):
                 upstream = state.http_transport.client.get(
                     locate(target), headers={"User-Agent": USER_AGENT},
                     timeout=8, follow_redirects=True)
-            except (OSError, httpx.HTTPError):
+            except (OSError, ValueError, httpx.HTTPError, httpx.InvalidURL):
+                # 重定向到主机名过不了 IDNA 的地址时传输层抛 ValueError，地址本身不合法时
+                # 抛 InvalidURL；两者都不是 HTTPError，同样算取不到。
                 return None
             if upstream.status_code != 200 or not upstream.content:
                 return None

@@ -375,11 +375,7 @@ export async function openCatalogBars(browser: Browser, viewport: Viewport = DES
   await opened.page.locator('[data-catalog-filter] [data-catalog-tag]').first().waitFor({ timeout: 15_000 });
   await opened.page.locator('[data-catalog-filter] [data-tier-studio]').first().waitFor({ timeout: 15_000 });
   await settle(opened.page);
-  // 关页时还在路上的那一趟桩请求不算失败。
-  return { ...opened, close: async () => {
-    await opened.page.unrouteAll({ behavior: 'ignoreErrors' });
-    await opened.close();
-  } };
+  return opened;
 }
 
 export interface CatalogFixture {

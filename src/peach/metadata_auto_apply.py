@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from .catalog_rules import (
@@ -56,6 +58,7 @@ from .metadata_policy import (
     CHAIN_OFFICIAL, FALLBACK_SOURCES, LOCAL_NFO_SOURCE, SOURCE_SPECS,
     blacklisted, chain_rank, preferred_tag_source, source_tier,
 )
+from .metadata_routes import classify
 from .review_csv import read_candidates
 from .javdb_identity import current_candidate as current_javdb_candidate
 from .sources import fc2
@@ -112,6 +115,30 @@ def _codes_matching(connection, codes: list[str], columns: str) -> list:
                                 and str(row["code"] or "").strip().upper() in exact):
                 found.append(row)
     return found
+
+
+def code_assets(connection, rows: list[dict]):
+    """一批候选行要用到的番号资产一次查齐，返回按行取资产的函数。
+
+    `_codes_matching` 每次都扫全表；复核页对几千行逐行查，单这一项就要一分多钟。一次
+    查齐后按归一化键分组，按行取到的与逐行查同一组 `[code, query]` 的结果相同。
+    """
+    def keys(row: dict) -> set[str]:
+        return {normalise_code_key(text) or text.upper() for text in (
+            str(row.get(name) or "").strip() for name in ("code", "query")) if text}
+
+    groups: dict[str, list] = defaultdict(list)
+    found = _codes_matching(connection, [str(row.get(name) or "") for row in rows
+                                         for name in ("code", "query")],
+                            "id,code,name,path,field_owners")
+    for asset in found:
+        text = str(asset["code"] or "").strip()
+        groups[normalise_code_key(text) or text.upper()].append(asset)
+
+    def lookup(row: dict) -> list:
+        merged = {int(asset["id"]): asset for key in keys(row) for asset in groups.get(key, [])}
+        return [merged[asset_id] for asset_id in sorted(merged)]
+    return lookup
 
 
 def refresh_current_values(connection, rows: list[dict]) -> None:
@@ -412,6 +439,9 @@ def _without_descriptive_performers(code: str, field: str, candidates: list[dict
                                     resolve=None) -> tuple[list[dict], list[dict]]:
     """FC2 出演者候选里一个艺名都没有的那些不算证据（ADR-0079），剩下的照常比。
 
+    素人番号同理（ADR-0145）：MGStage、r18.dev 写 `早見さん`、`Mana(23)` 这类片中称呼，认人 Wiki
+    给出艺名时，不该让称呼把整行拖进人工。
+
     返回 `(留下的候选, 被剔掉的候选)`。全都剔光时原样返回：那一行交给自动否决判，
     不在这里把它变成「没有候选」。
 
@@ -420,7 +450,7 @@ def _without_descriptive_performers(code: str, field: str, candidates: list[dict
     两家各执一词的行交人工，不因为少了一家就替人认了。`飛鳥ちゃん` 与 `飛鳥` 到这里之前
     已由 `_with_honorific_echoes` 折成两家一致。
     """
-    if field != "performers" or not _FC2_CODE.match(code):
+    if field != "performers" or not (_FC2_CODE.match(code) or classify(code) == "amateur"):
         return candidates, []
     dropped = [c for c in candidates if _names_nobody(c, resolve)]
     kept = [c for c in candidates if not _names_nobody(c, resolve)]
@@ -925,13 +955,329 @@ def pending_genres(candidates: list[dict]) -> list[str]:
         for genre in candidate.get("unmapped_genres") or [] if str(genre).strip()))
 
 
-def overwrite_requires_review(connection, row: dict) -> bool:
-    """NFO 核查中的已有值差异必须由用户批准。"""
+def _verification_difference(connection, row: dict) -> bool:
+    """核查（ADR-0108）带回的候选里有没有与账本已有值不同的。"""
     current = str(row.get("current_value") or "").strip()
     return bool(current) and any(
         candidate.get("requires_review") and not _same_as_current(
             connection, str(row.get("field") or ""), candidate, current)
         for candidate in row.get("candidates") or _parsed_candidates(row))
+
+
+#: 核查差异的四种去向（ADR-0139）。保留现值与交人都不写账本；并集只插账本没有的标签；
+#: 覆盖只在官方来源一致、现值不归人时发生，note 记下旧值，撤回按它还原。
+VERIFY_KEEP, VERIFY_UNION, VERIFY_REPLACE, VERIFY_REVIEW = "keep", "union", "replace", "review"
+#: 两条会写账本的规则名，也是 `revert_auto_landing.py --source` 认的那个名字。
+VERIFIED_UNION_RULE = "adr-0139-verified-tags-union"
+VERIFIED_REPLACE_RULE = "adr-0139-official-replaces-verified"
+#: 覆盖时能改的列。厂牌与系列在账本里是实体，换值连带改作品关联与实体，撤回还不了原样，
+#: 官方说法不一致时交人。
+_VERIFIED_REPLACE_FIELDS = frozenset({"title", "original_title", "release_date"})
+
+
+@dataclass(frozen=True)
+class Verification:
+    """一行核查差异的去向、据以判断的规则名，以及要落的东西。"""
+
+    kind: str
+    rule: str
+    #: 覆盖用的那条候选。
+    candidate: dict | None = None
+    #: 并集要补的标签（规范化名），按链上先后排。
+    tags: tuple[str, ...] = ()
+    #: 参与并集的候选，链上靠前的在前。
+    sources: tuple[dict, ...] = ()
+
+
+#: 站方打码用的字。`fill_masked_title` 只认星号，DMM 那边用的是 `●`、`○`。
+_MASK_CHARS = frozenset("*＊○●〇◯×✕□■◆◇◎")
+#: 比较标题时不算内容的字：空白、标点、引号与括号、波浪线。
+_TITLE_NOISE = re.compile(r"[\s・･,，、。.!！?？:：;；\"'“”‘’「」『』()（）…~〜～\-‐–—_/]")
+#: 店铺与卖家在标题前后加的装饰：`【MGSだけのおまけ映像付き+5分】`、`[特典付き]`。
+_TITLE_DECORATION = re.compile(r"【[^】]*】|\[[^\]]*\]|［[^］]*］")
+#: 把厂牌、系列译成英文的来源。`Amateur Pussies` 是 `しろうとまんまん` 的英文名，不是另一家。
+_TRANSLATING_SOURCES = frozenset({"r18dev"})
+_CJK = re.compile(r"[぀-ヿ㐀-鿿豈-﫿]")
+
+
+def _title_fold(text: object) -> str:
+    return _TITLE_NOISE.sub("", unicodedata.normalize("NFKC", str(text or "")).casefold())
+
+
+def _masked_pattern(value: str) -> re.Pattern:
+    """`value` 自己打了码的地方对上任意一段字（`タイトスカート○○` 对 `タイトスカート女教師`）。
+
+    只认候选一侧的码：现值打码、候选没打码时，候选补上了被打掉的字，那是新信息。
+    """
+    parts = re.split(f"([{re.escape(''.join(sorted(_MASK_CHARS)))}]+)", value)
+    return re.compile("".join(".+?" if index % 2 else re.escape(part)
+                              for index, part in enumerate(parts)))
+
+
+def _masked_within(value: str, current: str) -> bool:
+    """`value` 是不是 `current` 里的一段，码按 `_masked_pattern` 对。"""
+    return bool(value) and _masked_pattern(value).search(current) is not None
+
+
+def _masked_equal(value: str, current: str) -> bool:
+    return bool(value) and _masked_pattern(value).fullmatch(current) is not None
+
+
+#: 厂牌、系列写法里的注记：`E-BODY（イーボディ）` 的读音、`Flower/妄想族` 的上级。
+_ENTITY_NOTE = re.compile(r"\s*[（(]([^）)]+)[）)]\s*|\s*/\s*")
+
+
+def _title_adds_nothing(value: str, current: str) -> bool:
+    """候选标题对现值没有新东西：只差全半角、空白、标点与码，是现值的一段，或者
+    去掉【】装饰后是。"""
+    folded = _title_fold(value)
+    whole = _title_fold(current)
+    if not folded or _masked_within(folded, whole):
+        return True
+    core = _title_fold(_TITLE_DECORATION.sub("", value))
+    return bool(core) and _masked_within(core, whole)
+
+
+def _adds_nothing(connection, field: str, candidate: dict, current: str) -> bool:
+    """这条候选相对账本现值有没有新东西；没有就既不写，也不必交人。
+
+    这里的归一化只用于判「保留现值」，结论永远不写账本。ADR-0025 否决的是拿归一化
+    判两家「一致」然后落库，那条路会写；这条路不会。
+    """
+    if _same_as_current(connection, field, candidate, current):
+        return True
+    value = str(candidate.get("display_value") or "").strip()
+    if field in {"title", "original_title"}:
+        return _title_adds_nothing(value, current)
+    if field == "performers":
+        # 企划名义（`つばきさん 27歳`）与剪不出艺名的称呼不挑战账本里的主艺名：它们是这部片
+        # 给她起的称呼，落库也落不下（ADR-0025 的形态门槛）。
+        names, _resolved = _stage_names(candidate)
+        if names is None or not _offers_another_stage_name(candidate):
+            return True
+        return (_performer_identity_keys(connection, names)
+                <= _performer_identity_keys(connection, _split_multi(current)))
+    if field in {"studio", "series"}:
+        whole = _title_fold(current)
+        parts = [_title_fold(part) for part in _ENTITY_NOTE.split(value) if part]
+        return _masked_equal(_title_fold(value), whole) or whole in parts
+    return False
+
+
+def _translates(field: str, candidate: dict, current: str) -> bool:
+    """这条厂牌、系列候选是不是现值的英文译名：既不算异议，也不算给现值作证。
+
+    `HOISW-002` 的 r18dev 写 `Fresh Gordon/Daydream Tribe`，它译的是 dmm 那一边的
+    `フレッシュ・ゴードン/妄想族`，不是账本里的 `素人ホイホイsweet！`；把它算成背书，
+    maker 与 label 混写的那条真冲突就被压下去了。
+    """
+    value = str(candidate.get("display_value") or "")
+    return (field in {"studio", "series"}
+            and str(candidate.get("source") or "").strip() in _TRANSLATING_SOURCES
+            and not _CJK.search(value) and bool(_CJK.search(current)))
+
+
+def _leads_chain(field: str, candidate: dict, code: str) -> bool:
+    """能改掉账本已有值的那一档：本地 NFO、官方来源，以及字段上提到链首的来源。"""
+    source = str(candidate.get("source") or "").strip()
+    return chain_rank(field, source, code=code)[0] <= CHAIN_OFFICIAL
+
+
+def _tag_names(candidate: dict) -> list[str]:
+    """候选里按现在的词表认得出、落库时会写下的标签名。"""
+    names = []
+    for raw in candidate.get("value") or []:
+        try:
+            names.append(_approved_entity_name(raw, "tag"))
+        except ValueError:
+            continue
+    return current_tags(names)
+
+
+def _verified_tags(row: dict, evidence: list[dict], current: str) -> Verification:
+    have = {normalize_entity_name(name) for name in _split_multi(current)}
+    code = str(row.get("code") or "").strip()
+    ordered = sorted(evidence, key=lambda c: chain_rank(
+        "tags", str(c.get("source") or "").strip(), code=code))
+    new: dict[str, str] = {}
+    sources = []
+    for candidate in ordered:
+        added = [tag for tag in _tag_names(candidate)
+                 if normalize_entity_name(tag) not in have
+                 and normalize_entity_name(tag) not in new]
+        if added:
+            sources.append(candidate)
+            new.update((normalize_entity_name(tag), tag) for tag in added)
+    if not new:
+        return Verification(VERIFY_KEEP, "adr-0139-no-new-information")
+    return Verification(VERIFY_UNION, VERIFIED_UNION_RULE,
+                        tags=tuple(new), sources=tuple(sources))
+
+
+def _current_owners(connection, row: dict, field: str, assets=None) -> set[str]:
+    column = METADATA_FIELD_COLUMNS.get(field)
+    if not column:
+        return set()
+    asset_id = str(row.get("asset_id") or "").strip()
+    if row.get("asset_path") and asset_id.isdigit():
+        found = connection.execute(
+            "SELECT field_owners FROM asset WHERE id=?", (int(asset_id),)).fetchall()
+    elif assets is not None:
+        found = assets(row)
+    else:
+        code = str(row.get("code") or "").strip()
+        found = _codes_matching(connection, [code, str(row.get("query") or code)],
+                                "id,code,field_owners") if code else []
+    return {owner_of(asset["field_owners"], column) for asset in found}
+
+
+def _pinned_asset_id(connection, group: dict) -> int | None:
+    """按文件出的候选行（`asset:<编号>:<字段>`）指的那条在库视频；已不在时返回 None。
+
+    编号与路径都对得上的是它。路径对不上、编号还在且番号相同的也是它：扫描按番号把挪过
+    的文件改指回原行（ADR-0131），编号不变，候选件里记的还是旧路径——处理任务重出这一
+    行时沿用旧行，路径也不跟着换。2026-11-04 真实账本里 697 行是这样，按路径认的话谁批准
+    都写不进去。番号也对不上，就当是别的片占了这个编号。
+    """
+    asset_id = str(group.get("asset_id") or "").strip()
+    if not asset_id.isdigit():
+        return None
+    found = connection.execute(
+        "SELECT path,code FROM asset WHERE id=? AND medium='video' AND disposal IS NULL",
+        (int(asset_id),)).fetchone()
+    if found is None:
+        return None
+    if found[0] == group.get("asset_path"):
+        return int(asset_id)
+    code = normalise_code_key(str(group.get("code") or ""))
+    return int(asset_id) if code and normalise_code_key(str(found[1] or "")) == code else None
+
+
+def verification_outcome(connection, row: dict, *, assets=None) -> Verification | None:
+    """核查差异（ADR-0108）按确定判据结算的去向；这一行没有核查差异时返回 None。
+
+    依次问：
+
+    0. 按文件出的行，那条资产已不在库（`_pinned_asset_id`）：写不进去，保留；
+    1. 标签：候选里认得出、账本还没有的，按并集补，一个不删；
+    2. 现值归人（`user:`、`review:`）：人判过，保留；
+    3. 日期式番号的发行日期：现值就是番号那天，保留（ADR-0034）；
+    4. 每条候选对现值都没有新东西（`_adds_nothing`）：保留；
+    5. 提出新东西的只有社区来源：社区来源只补空（ADR-0033），保留；
+    6. 链首那一档里有 NFO 以外的来源与现值一致：现值有官方背书，保留；
+    7. 本地 NFO 与链首来源说法不一（不论哪边是现值）：交人；
+    8. 现值由链上更靠前的来源自动写入：链已经取过舍（ADR-0038），保留；
+    9. 出演者有异议、官方之间不一致：交人；
+    10. 标题与日期：官方一致、番号身份核得上，覆盖，旧值记进 note；厂牌与系列交人。
+
+    兜底来源（javbus）不挑战已有值（ADR-0038 决策三），r18dev 的厂牌、系列英文译名
+    （`_translates`）既不挑战也不作证，两者先剔掉。并集与覆盖都要过番号
+    身份那道闸（`_auto_apply_targets`），过不了交人。只读，不写账本；`assets` 是
+    `code_assets` 给的按行取资产函数，整页判几千行时传它，免得逐行扫表。
+    """
+    if not _verification_difference(connection, row):
+        return None
+    if row.get("asset_path") and _pinned_asset_id(connection, row) is None:
+        return Verification(VERIFY_KEEP, "adr-0139-asset-gone")
+    field = str(row.get("field") or "").strip()
+    code = str(row.get("code") or "").strip()
+    current = str(row.get("current_value") or "").strip()
+    evidence = [candidate for candidate in _unmasked_titles(
+                    field, _evidence_candidates(row, field), current)
+                if str(candidate.get("source") or "").strip() not in FALLBACK_SOURCES
+                and not _translates(field, candidate, current)]
+    if field == "tags":
+        outcome = _verified_tags(row, evidence, current)
+        if outcome.kind == VERIFY_UNION and not _auto_apply_targets(
+                connection, row, code, field, assets):
+            return Verification(VERIFY_REVIEW, "adr-0139-identity-unverified")
+        return outcome
+    owners = _current_owners(connection, row, field, assets)
+    if any(is_protected(owner) for owner in owners):
+        return Verification(VERIFY_KEEP, "adr-0139-user-owned")
+    if field == "release_date" and current == code_release_date(code):
+        return Verification(VERIFY_KEEP, "adr-0139-code-date")
+    dissent = _Dissent.of(connection, field, code, evidence, current)
+    kept = dissent.keeps_current()
+    if kept:
+        return Verification(VERIFY_KEEP, kept)
+    return _settle_leading_dissent(connection, row, dissent, owners, assets)
+
+
+@dataclass(frozen=True)
+class _Dissent:
+    """一行核查差异里谁提出了新东西、谁在给现值作证。"""
+
+    field: str
+    code: str
+    #: 还剩下的证据候选（兜底来源与译名已剔掉）。
+    evidence: tuple[dict, ...]
+    #: 对现值有新东西的候选。
+    fresh: tuple[dict, ...]
+    #: 其中链首那一档的。
+    leading: tuple[dict, ...]
+    #: 链首那一档里与现值一致的来源。
+    backers: frozenset[str]
+
+    @classmethod
+    def of(cls, connection, field: str, code: str, evidence: list[dict], current: str) -> "_Dissent":
+        fresh = [candidate for candidate in evidence
+                 if not _adds_nothing(connection, field, candidate, current)]
+        fresh_ids = {id(candidate) for candidate in fresh}
+        backers = frozenset(str(candidate.get("source") or "").strip() for candidate in evidence
+                            if _leads_chain(field, candidate, code) and id(candidate) not in fresh_ids)
+        return cls(field, code, tuple(evidence), tuple(fresh),
+                   tuple(c for c in fresh if _leads_chain(field, c, code)), backers)
+
+    def keeps_current(self) -> str:
+        """现值不必动、也不必问人时返回规则名，否则返回空串。"""
+        if not self.fresh:
+            return "adr-0139-no-new-information" if self.evidence else "adr-0139-no-evidence"
+        if not self.leading:
+            return "adr-0139-community-dissent"
+        if self.backers - {LOCAL_NFO_SOURCE}:
+            return "adr-0139-official-backs-current"
+        return ""
+
+
+def _chain_wrote_current(field: str, code: str, owners: set[str], winner: dict) -> bool:
+    """现值是不是链上比 `winner` 更靠前的来源自动写下的（ADR-0038 已经取过舍）。"""
+    written_by = {owner.partition(":")[2] for owner in owners}
+    return (len(written_by) == 1 and all(owner.startswith("auto:") for owner in owners)
+            and chain_rank(field, next(iter(written_by)), code=code)
+            < chain_rank(field, str(winner.get("source") or "").strip(), code=code))
+
+
+def _settle_leading_dissent(connection, row: dict, dissent: _Dissent, owners: set[str],
+                            assets) -> Verification:
+    """链首那一档有异议、现值又没有别的官方背书时：交人、保留，或覆盖标题与日期。"""
+    field, code, leading = dissent.field, dissent.code, list(dissent.leading)
+    # 本地 NFO 与链首来源说法不一，不论哪边是现值都交人：核对用户自己那份 NFO 正是
+    # 核查要做的事（ADR-0108），链在这里替人取舍就等于没有核查。
+    if (dissent.backers or {owner.partition(":")[2] for owner in owners} == {LOCAL_NFO_SOURCE}
+            or any(str(c.get("source") or "").strip() == LOCAL_NFO_SOURCE for c in leading)):
+        return Verification(VERIFY_REVIEW, "adr-0139-nfo-dissent")
+    winner = _preferred_candidate(field, leading, code=code)
+    if _chain_wrote_current(field, code, owners, winner):
+        return Verification(VERIFY_KEEP, "adr-0139-chain-keeps-current")
+    if field == "performers":
+        return Verification(VERIFY_REVIEW, "adr-0139-official-performers")
+    if field in {"studio", "series"}:
+        keys = {_entity_identity_key(connection, field, str(c.get("display_value") or "").strip())
+                for c in leading}
+    else:
+        keys = {_candidate_value_key(connection, field, candidate) for candidate in leading}
+    if None in keys or len(keys) != 1:
+        return Verification(VERIFY_REVIEW, "adr-0139-official-disagree")
+    if field not in _VERIFIED_REPLACE_FIELDS:
+        return Verification(VERIFY_REVIEW, "adr-0139-official-entity")
+    date = code_release_date(code) if field == "release_date" else None
+    if date is not None and str(winner.get("display_value") or "").strip() != date:
+        return Verification(VERIFY_REVIEW, "adr-0139-code-date-disagrees")
+    if (not _auto_apply_targets(connection, row, code, field, assets)
+            or (is_korean_mib_code(code) and not _only_mib_official(row))):
+        return Verification(VERIFY_REVIEW, "adr-0139-identity-unverified")
+    return Verification(VERIFY_REPLACE, VERIFIED_REPLACE_RULE, candidate=winner)
 
 
 def _may_replace_current(candidates: list[dict], *, field: str = "", code: str = "") -> bool:
@@ -952,10 +1298,13 @@ def _may_replace_current(candidates: list[dict], *, field: str = "", code: str =
         source_tier(source) <= CHAIN_OFFICIAL for source in sources)
 
 
-def _auto_apply_targets(connection, row: dict, code: str, field: str):
-    """核对番号组的文件身份与字段归属，返回可供自动补全的资产。"""
+def _auto_apply_targets(connection, row: dict, code: str, field: str, assets=None):
+    """核对番号组的文件身份与字段归属，返回可供自动补全的资产。
+
+    `assets` 是 `code_assets` 给的按行取资产函数，不给就当场查。"""
     query = str(row.get("query") or code).strip()
-    targets = _codes_matching(connection, [code, query], "code,name,path,field_owners")
+    targets = (assets(row) if assets is not None
+               else _codes_matching(connection, [code, query], "code,name,path,field_owners"))
     if not targets or not _group_identifies_code(code, targets):
         return []
     column = METADATA_FIELD_COLUMNS.get(field)
@@ -1004,13 +1353,13 @@ def metadata_auto_apply_candidate(connection, row: dict, *,
     快照，实测 r18dev 在 CSV 里写着 False，而现行 policy 认它是 official_mirror。
 
     本地 NFO 不在登记表里，却同样构成证据（ADR-0029）：采集时它的番号已经和文件名
-    对过，第 3 条照样再核一遍。NFO 核查的覆盖候选带 `requires_review`，非空字段必须
-    复核后才可改值（ADR-0108）；来源链只决定补空采用哪一份。
+    对过，第 3 条照样再核一遍。NFO 核查的覆盖候选带 `requires_review`，已有值的差异只走
+    `verification_outcome` 那一套判据（ADR-0139）；来源链只决定补空采用哪一份。
     """
     field = str(row.get("field") or "").strip()
     if field not in AUTO_APPLY_FIELDS:
         return None
-    if overwrite_requires_review(connection, row):
+    if _verification_difference(connection, row):
         return None
     code = str(row.get("code") or "").strip()
     if not code:
@@ -1224,11 +1573,8 @@ def _landing_scope(connection, group: dict, candidate: dict,
     code = str(group.get("code") or "").strip()
     query = str(group.get("query") or code).strip()
     if group.get('asset_path'):
-        assets = connection.execute(
-            "SELECT id FROM asset WHERE id=? AND path=? AND medium='video' "
-            "AND disposal IS NULL",
-            (group.get('asset_id'), group['asset_path']),
-        ).fetchall()
+        pinned = _pinned_asset_id(connection, group)
+        assets = [] if pinned is None else [{"id": pinned}]
     else:
         # 写入范围必须和判据、现值刷新看的是同一组资产，三处共用一份番号匹配。
         assets = _codes_matching(connection, [code, query], "id,code")
@@ -1483,7 +1829,8 @@ def auto_apply_metadata(database, candidate_root, *, batch_size=AUTO_APPLY_BATCH
     交回人（`_reopened_approval`）。自动落库时留下生词的那一行，词收录了就把收录出的
     标签按并集补上（`_land_collected_genres`，ADR-0082）。落不下去的
     FC2 出演者行里一个艺名都没有的，写一条 `rejected`（`fc2_descriptive_rejection`，
-    ADR-0079），其余照旧留给人。
+    ADR-0079），其余照旧留给人。核查差异（带 `requires_review` 的已有值差异）只按
+    `verification_outcome` 结算（ADR-0139）：保留现值的计进 `kept`，并集与覆盖落库。
 
     `database` 是调用方已经在用的那一个 `LedgerDatabase`：写锁与提交后的缓存失效都挂在
     实例上，自己再 new 一个就绕开了两者。`active` 返回假时停在批与批之间，已经提交的
@@ -1497,6 +1844,8 @@ def auto_apply_metadata(database, candidate_root, *, batch_size=AUTO_APPLY_BATCH
     """
     rows = _collection_candidates(candidate_root, asset_ids, candidate_rows)
     applied, skipped, rejected, refreshed = [], 0, 0, 0
+    # 核查差异按去向分桶：落库的并进 `applied`，保留现值与交人的只计数。
+    settled = {"applied": applied, VERIFY_KEEP: [], VERIFY_REVIEW: []}
     # 一次运行一个批次号，并集补进来的标签按它整批撤回。
     union_batch = f"{UNION_TAGS_SOURCE}@{time.strftime('%Y%m%dT%H%M%S')}"
     step = max(1, int(batch_size))
@@ -1522,8 +1871,11 @@ def auto_apply_metadata(database, candidate_root, *, batch_size=AUTO_APPLY_BATCH
                                      if str(candidate.get('source') or '').strip() != 'javdb'
                                      or current_javdb_candidate(candidate)]
                 prior = decided.get(item_key)
-                if overwrite_requires_review(connection, row):
-                    skipped += 1
+                verified = verification_outcome(connection, row)
+                if verified is not None:
+                    landed = _land_verification(connection, item_key, prior, row, verified,
+                                                batch=union_batch, now=now)
+                    settled[_settled_bucket(verified, landed)].append(landed)
                     continue
                 landed = _land_union_tags(
                     connection, item_key, prior, row, genres, batch=union_batch, now=now)
@@ -1577,7 +1929,18 @@ def auto_apply_metadata(database, candidate_root, *, batch_size=AUTO_APPLY_BATCH
                                 "value": candidate.get("display_value"),
                                 "assets": count})
     return {"ok": True, "applied": len(applied), "auto_rejected": rejected,
-            "refreshed": refreshed, "left_to_review": skipped, "items": applied}
+            "refreshed": refreshed, "kept": len(settled[VERIFY_KEEP]),
+            "left_to_review": skipped + len(settled[VERIFY_REVIEW]), "items": applied}
+
+
+def _settled_bucket(verified: Verification, landed: dict | None) -> str:
+    """一行核查差异结算之后记在哪一桶：落了库、保留现值，还是交人。
+
+    并集与覆盖这一轮没写（早已落过、或人的决定在前）时记在保留现值那一桶。
+    """
+    if landed is not None:
+        return "applied"
+    return VERIFY_REVIEW if verified.kind == VERIFY_REVIEW else VERIFY_KEEP
 
 
 #: 落库候选里有值才原样抄进 note 的几项。
@@ -1613,6 +1976,186 @@ def _auto_landing_note(candidate: dict) -> dict:
     if raw and raw != candidate.get("display_value"):
         note["raw_value"] = raw
     return note
+
+
+def _write_auto_decision(connection, item_key: str, note: dict, now: str) -> None:
+    connection.execute(
+        "INSERT INTO review_decision(category,item_key,status,note,updated_at) "
+        "VALUES('metadata_fields',?,'approved',?,?) "
+        "ON CONFLICT(category,item_key) DO UPDATE SET status=excluded.status,"
+        "note=excluded.note,updated_at=excluded.updated_at",
+        (item_key, json.dumps(note, ensure_ascii=False, separators=(",", ":")), now))
+
+
+def _land_verification(connection, item_key: str, prior: dict | None, row: dict,
+                       verified: Verification, *, batch: str, now: str) -> dict | None:
+    """把一行核查差异的结算写进账本，返回落库摘要；保留、交人或落不下时返回 None。
+
+    人的决定不翻：已有决定是人写的，或是没过期的自动决定，就不再落。note 的
+    `reviewed_candidate_keys` 记下这一刻的全部候选，来源再给出新说法时决定才过期、重判。
+    并集例外：它只插不删，上一次并集之后又收录了生词、词表认出了新标签，照样补上。
+
+    并集不记 `pending_genres`：这一行的现值本来就有，留着生词会让它为几个词重新回到
+    复核页；生词在补空的行上照常等人收录（ADR-0038）。
+    """
+    if verified.kind not in (VERIFY_UNION, VERIFY_REPLACE):
+        return None
+    code = str(row.get("code") or "").strip()
+    reopens = prior is not None and _decision_reopens(prior, row["candidates"], code=code)
+    reviewed = sorted({str(c.get("candidate_key") or "").strip()
+                       for c in row["candidates"]} - {""})
+    if verified.kind == VERIFY_UNION:
+        return _land_verified_union(connection, item_key, prior, row, verified, reviewed,
+                                    reopens=reopens, batch=batch, now=now)
+    if prior is not None and not (_is_automatic(prior) and reopens):
+        return None
+    candidate = verified.candidate or {}
+    field = str(row.get("field") or "").strip()
+    column = METADATA_FIELD_COLUMNS[field]
+    try:
+        asset_ids, source, _confidence, _metadata = _landing_scope(connection, row, candidate)
+        marks = ",".join("?" * len(asset_ids))
+        previous = [{"asset_id": int(asset["id"]), "value": asset[column],
+                     "owner": owner_of(asset["field_owners"], column)}
+                    for asset in connection.execute(
+                        f"SELECT id,{column},field_owners FROM asset WHERE id IN ({marks})",
+                        asset_ids)]
+        count = _apply_metadata_candidate(connection, row, candidate, now, auto_owner(source))
+    except ValueError:
+        return None
+    written = connection.execute(
+        f"SELECT {column} FROM asset WHERE id=?", (asset_ids[0],)).fetchone()[0]
+    _write_auto_decision(connection, item_key, {
+        "auto_applied": True, "rule": verified.rule,
+        "candidate_key": candidate.get("candidate_key"), "source": source, "value": written,
+        # 与并集同一个运行时刻：一次结算一个批次，复核页按批次列出、整批撤回。
+        "batch": f"{verified.rule}@{batch.rpartition('@')[2]}", "previous": previous,
+        "reviewed_candidate_keys": reviewed,
+    }, now)
+    return {"item_key": item_key, "field": field, "value": written, "assets": count}
+
+
+def _land_verified_union(connection, item_key: str, prior: dict | None, row: dict,
+                         verified: Verification, reviewed: list[str], *, reopens: bool,
+                         batch: str, now: str) -> dict | None:
+    """按并集补核查带回的标签，返回落库摘要；这一行不归它补时返回 None。
+
+    三种情形能补：还没有决定；上一次也是这条并集规则写的（之后又收录了生词，照样补）；
+    人批准过的标签决定过期了（ADR-0082：人批准的标签只增不删）。人的决定只追加这次补了
+    什么，原有各项不动；note 不是 JSON 的（早期手写备注）不碰。
+    """
+    note = _decision_note(prior or {})
+    again = note.get("rule") == VERIFIED_UNION_RULE
+    human = (prior is not None and not _is_automatic(prior) and reopens and bool(note)
+             and str(prior.get("status") or "").strip() == "approved")
+    if prior is not None and not (again or human or (_is_automatic(prior) and reopens)):
+        return None
+    wanted = set(verified.tags)
+    added: list[str] = []
+    for candidate in verified.sources:
+        grown = _extend_approved_tags(connection, row, candidate, batch, now, only=wanted)
+        if grown:
+            added.extend(grown)
+            wanted -= {normalize_entity_name(tag) for tag in grown}
+    if not added:
+        return None
+    grown = {"added_tags": list(dict.fromkeys([*note.get("added_tags", []), *added])),
+             "reviewed_candidate_keys": reviewed}
+    summary = {"item_key": item_key, "field": "tags", "value": "、".join(added), "assets": None}
+    if human:
+        # 与 `_reopened_approval` 同一口径：status、updated_at 与原有各项都不动。
+        connection.execute(
+            "UPDATE review_decision SET note=? WHERE category='metadata_fields' AND item_key=?",
+            (json.dumps({**note, **grown}, ensure_ascii=False, separators=(",", ":")), item_key))
+        return summary
+    lead = verified.sources[0]
+    _write_auto_decision(connection, item_key, {
+        "auto_applied": True, "rule": verified.rule,
+        "candidate_key": lead.get("candidate_key"), "source": lead.get("source"),
+        "value": "、".join(added), "batch": batch,
+        # 再补一次时累加：撤回按这里列的每个批次删。
+        "batches": list(dict.fromkeys([*(note.get("batches", []) if again else []), batch])),
+        **(grown if again else {**grown, "added_tags": added}),
+    }, now)
+    return summary
+
+
+def planned_verified_revert(connection, source: str, batch: str = "",
+                            item_keys: set[str] | None = None) -> list[dict]:
+    """`revert_auto_landing.py --source <规则名>` 要撤的核查结算（ADR-0139）。
+
+    覆盖那条按 note 的 `previous` 还原每条资产的旧值与旧归属；之后被别人改过的资产
+    （值或归属已不是这次写下的）不动，计划里记 `changed`。并集那条删掉这次补进的标签。
+    两条都删掉决定，行回到核查前的样子，下一轮按那时的判据重判。
+    `item_keys` 给了就只认这几行决定：复核页逐条勾选撤回（ADR-0141）。
+    """
+    if source not in (VERIFIED_REPLACE_RULE, VERIFIED_UNION_RULE):
+        return []
+    plan = []
+    for row in connection.execute(
+            "SELECT item_key,note FROM review_decision WHERE category='metadata_fields'"
+            " AND status='approved' AND note LIKE ? ORDER BY item_key", (f"%{source}%",)):
+        note = _decision_note({"note": row["note"]})
+        batches = note.get("batches") or [note.get("batch", "")]
+        if note.get("rule") != source or (batch and batch not in batches):
+            continue
+        if item_keys is not None and row["item_key"] not in item_keys:
+            continue
+        entry = {"item_key": row["item_key"], "rule": source, "batch": note.get("batch", ""),
+                 "value": note.get("value", ""), "source": note.get("source", "")}
+        if source == VERIFIED_UNION_RULE:
+            entry["tags"] = [{"asset_id": int(tag["asset_id"]), "entity_id": int(tag["entity_id"]),
+                              "tag": tag["canonical_name"], "batch": tag["source"]}
+                             for written in batches
+                             for tag in connection.execute(
+                                 "SELECT ae.asset_id,ae.entity_id,e.canonical_name,ae.source"
+                                 " FROM asset_entity ae JOIN entity e ON e.id=ae.entity_id"
+                                 " WHERE ae.role='tag' AND ae.source=?"
+                                 " AND json_extract(ae.metadata_json,'$.review_item')=?",
+                                 (written, row["item_key"]))]
+        else:
+            field = row["item_key"].rpartition(":")[2]
+            column = METADATA_FIELD_COLUMNS.get(field)
+            owner = f"auto:{entry['source']}"
+            restores, changed = [], []
+            for before in note.get("previous") or []:
+                now = connection.execute(
+                    f"SELECT {column},field_owners FROM asset WHERE id=?",
+                    (before["asset_id"],)).fetchone() if column else None
+                if now is not None and now[0] == entry["value"] and owner_of(now[1], column) == owner:
+                    restores.append(before)
+                else:
+                    changed.append(before["asset_id"])
+            entry.update(column=column, restores=restores, changed=changed)
+        plan.append(entry)
+    return plan
+
+
+def revert_verified(connection, plan: list[dict]) -> dict:
+    """按 `planned_verified_revert` 的计划还原，返回改了几条。"""
+    restored = removed_tags = 0
+    for entry in plan:
+        for tag in entry.get("tags") or []:
+            connection.execute(
+                "DELETE FROM asset_entity WHERE asset_id=? AND entity_id=? AND role='tag' AND source=?",
+                (tag["asset_id"], tag["entity_id"], tag["batch"]))
+            removed_tags += connection.execute(
+                "DELETE FROM asset_tag WHERE asset_id=? AND tag=? AND source=?",
+                (tag["asset_id"], tag["tag"], tag["batch"])).rowcount or 0
+        column = entry.get("column")
+        for before in entry.get("restores") or []:
+            path = f'$."{column}"'
+            connection.execute(
+                f"UPDATE asset SET {column}=?,field_owners=CASE WHEN ?='' "
+                f"THEN json_remove(COALESCE(field_owners,'{{}}'),?) "
+                f"ELSE json_set(COALESCE(field_owners,'{{}}'),?,?) END,"
+                f"mutation_revision=mutation_revision+1 WHERE id=?",
+                (before["value"], before["owner"], path, path, before["owner"], before["asset_id"]))
+            restored += 1
+        connection.execute(
+            "DELETE FROM review_decision WHERE category='metadata_fields' AND item_key=?",
+            (entry["item_key"],))
+    return {"restored": restored, "removed_tags": removed_tags, "decisions": len(plan)}
 
 
 def _reopened_approval(connection, item_key: str, decision: dict, row: dict,

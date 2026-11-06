@@ -270,7 +270,6 @@
   gap: 24px;
 }
 .peach-react [data-follow-list]:not([data-follow-wall]) > [data-media-card] { align-self: stretch; }
-.peach-react [data-follow-list] > [data-follow-empty] { grid-column: 1 / -1; }
 
 /* 图片墙：列数同资料页照片墙那一套，小图 5 列、大图 3 列，逐档收窄。 */
 .peach-react [data-follow-wall] {
@@ -292,6 +291,11 @@
   .peach-react [data-follow-wall] { --photo-columns: 2; gap: 12px 8px; }
   .peach-react [data-follow-wall][data-size="big"] { --photo-columns: 1; }
 }
+/* 文字区的最小高度是给等高网格对齐同一行卡片的；瀑布流每列各自往下排，按内容定高，卡片底下不留空。 */
+.peach-react [data-follow-wall][data-layout="masonry"] [data-follow-item] [data-media-meta] {
+  min-height: 0;
+  contain-intrinsic-block-size: none;
+}
 .peach-react [data-follow-wall][data-layout="masonry"]:has(> [data-media-card]) {
   row-gap: 0;
 }
@@ -304,24 +308,16 @@
 .peach-react [data-follow-item] [data-media-meta] {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
-  gap: 12px 10px;
-  grid-template-rows: auto auto;
+  gap: 6px 10px;
+  grid-template-rows: auto;
   align-content: start;
   align-items: start;
   --card-meta-byline: max(1lh, 21px);
-  --card-meta-tags: calc(var(--fs-xs) * 1.45 + var(--tag-pad-y) * 2 + 2px + 12px);
+  --card-meta-tags: calc(var(--fs-xs) * 1.45 + var(--tag-pad-y) * 2 + 2px + 6px);
 }
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follow-item] [data-media-meta] {
   --card-meta-block: calc(var(--fs-md) * 1.35 + 6px + var(--card-meta-byline) + var(--card-meta-tags));
 }
-body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follow-item] [data-media-text] {
-  display: flex; flex-direction: column; height: auto; margin: 0; padding: 0; gap: 6px;
-}
-body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follow-item] [data-follow-labels] {
-  height: calc(var(--fs-xs) * 1.45 + var(--tag-pad-y) * 2 + 2px + 8px);
-}
-.peach-react [data-follow-labels] { grid-column: 1 / -1; }
-.peach-react [data-follow-item] [data-media-meta] > [data-follow-labels] { pointer-events: none; }
 .peach-react [data-follow-list]:not([data-follow-wall]) [data-follow-item] [data-media-meta] {
   min-height: calc(var(--card-meta-block) + 16px);
   contain-intrinsic-block-size: auto var(--card-meta-block);
@@ -331,9 +327,17 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follo
   body .peach-react [data-follow-list] [data-follow-item] [data-media-meta] {
     min-height: 0; content-visibility: visible; contain-intrinsic-block-size: none;
   }
+  /* 关注卡也是 `data-media-card`，密集档把标题行钉成 1.35em 的那条网格会把两行标题切成一行；
+     同首页单列卡改回按内容排的竖列。 */
+  body[data-density]:not([data-surface="/trash"]) .peach-react [data-follow-list] [data-follow-item] [data-media-text] {
+    display: flex; flex-direction: column; height: auto;
+  }
   body[data-density]:not([data-surface="/trash"]) .peach-react [data-follow-item] [data-media-title] {
     display: -webkit-box; min-height: 0; white-space: normal; -webkit-line-clamp: 2;
   }
+  /* 同首页单列卡（`../components/media-card.css` 的 `[data-single-column]`）：署名行 20px 一行，
+     密集档也一样，要压过密集档钉成 1.35em 的那条。 */
+  body[data-density]:not([data-surface="/trash"]) .peach-react [data-follow-list] [data-follow-item] [data-media-byline] { height: auto; min-height: 20px; line-height: 20px; }
 }
 /* 已看的卡片保持原样：看过不等于不想再看，只有忽略的才淡下去。 */
 .peach-react [data-follow-item][data-status="ignored"] { opacity: .62; }
@@ -473,11 +477,13 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follo
   .peach-react [data-follow-wall] [data-follow-item] [data-follow-actions] > :not([data-follow-save]) { display: none; }
 }
 
-/* 元信息区：作者、时间和署名补充同行，标签从卡片左沿开始。 */
+/* 元信息区：署名行与标签行是作品卡的同一份零件（`../components/card-meta.tsx`），几何与字形归
+   `../components/media-card.css`；这里只写头像、作者页链接和「署名含」这几格自己多出来的样子。 */
 .peach-react [data-follow-avatar] { display: grid; place-items: center; cursor: default; }
 .peach-react [data-follow-avatar] > img { border-radius: 50%; }
 .peach-react a[data-follow-avatar] { cursor: pointer; }
-.peach-react a[data-follow-author] { color: inherit; text-decoration: none; }
+/* 作者名的颜色取署名行的 `data-media-who`（同作品卡），链接这里只去掉下划线。 */
+.peach-react a[data-follow-author] { text-decoration: none; }
 .peach-react a:is([data-follow-avatar], [data-follow-author]):focus-visible {
   outline: 2px solid var(--tungsten);
   outline-offset: 2px;
@@ -492,30 +498,6 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follo
   color: var(--muted);
   font-family: var(--board-font);
   font-size: var(--fs-sm);
-}
-.peach-react [data-follow-byline] {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: 21px;
-  overflow: hidden;
-  color: var(--muted);
-}
-.peach-react [data-follow-byline] > [data-follow-author] {
-  min-width: 0;
-  overflow: hidden;
-  color: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.peach-react [data-follow-byline] > time {
-  flex: none;
-  font-family: "Cascadia Mono", Consolas, ui-monospace, "Microsoft YaHei UI", "PingFang SC", monospace;
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 .peach-react [data-follow-credit] {
   flex: 0 1 auto;
@@ -569,18 +551,8 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follo
   backdrop-filter: blur(16px) saturate(145%); color: var(--color-text-secondary); font: var(--board-caption);
   pointer-events: auto;
 }
-.peach-react [data-follow-sources] [data-follow-site-icon] { width: 18px; height: 18px; }
-/* 卡上的标签：线与底取类型色，没记类型的按 general 那一档蓝。 */
-.peach-react [data-follow-item] [data-media-tag] {
-  --tag-color: #55a7ff;
-  border-color: color-mix(in srgb, var(--tag-color) 42%, transparent);
-  background: color-mix(in srgb, var(--tag-color) 10%, transparent);
-  cursor: default;
-}
-.peach-react [data-follow-item] [data-media-tag][data-tag-cat="r34-artist"] { --tag-color: #e36c6c; }
-.peach-react [data-follow-item] [data-media-tag][data-tag-cat="r34-character"] { --tag-color: #68c76f; }
-.peach-react [data-follow-item] [data-media-tag][data-tag-cat="r34-copyright"] { --tag-color: #d675d6; }
-.peach-react [data-follow-item] [data-media-tag][data-tag-cat="r34-metadata"] { --tag-color: #f5a24a; }
+/* 站点图标和作品卡角标里的媒体库图标同一档（20px），两种卡左上角那一枚等大。 */
+.peach-react [data-follow-sources] [data-follow-site-icon] { width: 20px; height: 20px; }
 .peach-react [data-follow-issue] { display: block; margin: 18px 0 8px; color: var(--drop); font-size: var(--fs-sm); line-height: 1.7; overflow-wrap: anywhere; }
 .peach-react [data-follow-state] { flex: 1 1 100%; color: var(--drop); font-size: var(--fs-xs); }
 @media (max-width: 760px) {

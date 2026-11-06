@@ -16,7 +16,7 @@ export interface FollowDetailActionPorts {
 
 /** 舞台的打开、代次与卸载仍由舞台拥有者持有；域只决定筛选与返回地址。 */
 export function createFollowDetailActions(ports: FollowDetailActionPorts,
-  receipts: Pick<FollowDetailActions, 'toast' | 'failure'>): Omit<FollowDetailActions, 'mountPlayer'> {
+  receipts: Pick<FollowDetailActions, 'toast' | 'failure' | 'canFlip'>): Omit<FollowDetailActions, 'mountPlayer'> {
   return {
     ...receipts,
     close: () => ports.close(),

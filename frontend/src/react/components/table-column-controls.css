@@ -5,7 +5,13 @@
 .peach-react [data-board-data-table] td a { width: fit-content; max-width: 100%; align-self: flex-start; }
 /* 中间省略按元素自身宽度重算；链接随文字收缩时拉宽列也不会再展开，所以这类链接铺满单元格。 */
 .peach-react [data-board-data-table] td a:has(> [data-middle-truncate]) { width: 100%; }
-.peach-react [data-board-data-table] .react-aria-ColumnResizer { position: absolute; top: 0; right: 0; bottom: 0; width: 12px; cursor: col-resize; touch-action: none; }
-.peach-react [data-board-data-table] .react-aria-ColumnResizer::after { content: ''; position: absolute; top: 8px; bottom: 8px; left: 5px; width: 1px; background: var(--border-15); }
+/* 拖宽手柄骑在两列分界线上、左右各 10px，压在相邻表头之上：贴在格内 12px 时稍偏一点就按到表格本身，
+ * 起的是横向拖动。光标用左右箭头；拖动中整页锁成同一个光标且不选字，指针离开手柄也不变。 */
+.peach-react [data-board-data-table] .react-aria-ColumnResizer { position: absolute; top: 0; right: -10px; bottom: 0; z-index: 2; width: 20px; cursor: ew-resize; touch-action: none; }
+.peach-react [data-board-data-table] .react-aria-ColumnResizer::after { content: ''; position: absolute; top: 8px; bottom: 8px; left: 9px; width: 1px; background: var(--border-15); }
+/* 最后一列（后面只剩承接空白的那一格或没有格）往外伸会把表格撑出横向滚动，收回格内。 */
+.peach-react [data-board-data-table] th:is(:last-child, :has(+ th[data-table-space])) .react-aria-ColumnResizer { right: 0; width: 12px; }
+.peach-react [data-board-data-table] th:is(:last-child, :has(+ th[data-table-space])) .react-aria-ColumnResizer::after { left: 11px; }
+html[data-column-resizing], html[data-column-resizing] * { cursor: ew-resize !important; user-select: none !important; }
 .peach-react [data-board-data-table] .react-aria-ColumnResizer:is([data-hovered],[data-resizing],[data-focus-visible])::after { background: var(--ink); }
 .peach-react [data-board-data-table] .react-aria-ColumnResizer[data-focus-visible] { outline: 2px solid var(--tungsten); outline-offset: -2px; }

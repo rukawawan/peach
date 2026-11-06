@@ -187,12 +187,16 @@ describe('设计决定：控件、状态与首页顶部', () => {
     ]);
     try {
       const danger = await tokenColor(opened.page, '.peach-react', '--color-border-error-default');
-      const border = (status: string) => opened.page.locator(`li[data-status="${status}"]`)
-        .evaluate((element) => getComputedStyle(element).borderTopColor);
-      assert.equal(await border('failed'), danger, '失败卡的框线不是 danger 色');
-      assert.notEqual(await border('succeeded'), danger, '没失败的卡也用了 danger 框线');
+      // 框线画成不占盒子的 outline：只比颜色会放过「有色无宽、根本没画出来」的线，宽度一起比。
+      const frame = (status: string) => opened.page.locator(`li[data-status="${status}"]`)
+        .evaluate((element) => {
+          const style = getComputedStyle(element);
+          return style.outlineStyle === 'none' ? '' : `${style.outlineWidth} ${style.outlineColor}`;
+        });
+      assert.equal(await frame('failed'), `1px ${danger}`, '失败卡的框线不是 danger 色');
+      assert.notEqual(await frame('succeeded'), `1px ${danger}`, '没失败的卡也用了 danger 框线');
       // 一屏十几行里逐行读红字比看一眼哪张卡的框是红的慢：原因那行留正文色。
-      const reason = await opened.page.locator('li[data-status="failed"] p').last()
+      const reason = await opened.page.locator('li[data-status="failed"] [data-task-error]')
         .evaluate((element) => getComputedStyle(element).color);
       assert.notEqual(reason, danger, '结束原因那行字被涂成了 danger 色');
       assert.deepEqual(opened.problems, []);
@@ -340,7 +344,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
     }
   });
 
-  it('扫描卡的进度条走焦点环色，底槽是三级底，按下的那颗键转成忙态', { timeout: 60_000 }, async () => {
+  it('扫描卡的进度条走焦点环色，底槽是三级底，任务在跑时同步键标为不可用但仍可聚焦', { timeout: 60_000 }, async () => {
     const opened = await openProcessing(browser, '/data-cleanup', RUNNING_JOB);
     try {
       const card = opened.page.locator('section[aria-label="扫描与采集"]');
@@ -354,9 +358,10 @@ describe('设计决定：控件、状态与首页顶部', () => {
         await tokenColor(opened.page, '.peach-react', '--color-background-tertiary-default'));
       assert.equal(await fill(1),
         await tokenColor(opened.page, '.peach-react', '--color-border-focus-ring'));
-      // 忙态不改 `disabled`：控件仍可聚焦，重复触发由页面自己挡。
+      // 已有任务在跑只标 `aria-disabled`、不改 `disabled`：控件仍可聚焦，点了由卡片说明为什么没开始。
       const scan = card.getByRole('button', { name: '同步新增文件', exact: true });
-      assert.equal(await scan.getAttribute('aria-busy'), 'true');
+      assert.equal(await scan.getAttribute('aria-disabled'), 'true');
+      assert.equal(await scan.getAttribute('aria-busy'), null);
       assert.equal(await scan.evaluate((element) => (element as HTMLButtonElement).disabled), false,
         '用原生 disabled 挡的话按钮连焦点都拿不到');
       const split = card.locator('[data-split-button]');
@@ -440,7 +445,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
       await list.waitFor({ state: 'visible', timeout: 5_000 });
       const geometry = await alert.evaluate((element) => {
         const note = element.getBoundingClientRect();
-        const button = element.querySelector('button')!.getBoundingClientRect();
+        const button = element.querySelector('[data-note-action]')!.getBoundingClientRect();
         const items = element.querySelector('ul')!;
         return {
           padding: parseFloat(getComputedStyle(element).paddingRight),
@@ -451,7 +456,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
         };
       });
       assert.ok(geometry.noteRight - geometry.buttonRight - geometry.padding < 1,
-        '重试键没有贴着提示的右内边，读起来就不是这条提示的主动作');
+        '重试与归档没有贴着提示的右内边，读起来就不是这条提示的动作');
       assert.ok(geometry.noteRight - geometry.listRight - geometry.padding < 1,
         '问题清单没有铺满提示的宽度');
       assert.equal(geometry.client, geometry.offset, '原生滚动条还占着清单右边一列');
@@ -468,7 +473,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
         };
         // `divide-y` 把线画在每条的下缘（末条除外），所以量的是第一条的下边。
         const first = element.querySelectorAll('li')[0]!;
-        const log = element.querySelector('details p')!;
+        const log = element.querySelector('[aria-label="在资源管理器中显示"]')!.closest('.text-text-secondary')!.querySelector('p')!;
         return {
           divider: parseFloat(getComputedStyle(first).borderBottomWidth),
           dividerInk: paint(getComputedStyle(first).borderBottomColor),
@@ -486,7 +491,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
     }
   });
 
-  it('同一份问题日志只印一处，「7 天内不再问」与失败提示同一组留白', { timeout: 60_000 }, async () => {
+  it('一趟的问题收在同一块提示里，「7 天内不再问」、完整记录与导出都跟着它', { timeout: 60_000 }, async () => {
     const notes = { fetching_cover: 84, querying_metadata: 18 };
     const button = '[aria-label="在资源管理器中显示"]';
     const reveal = `#libraryProcessing ${button}`;
@@ -494,22 +499,12 @@ describe('设计决定：控件、状态与首页顶部', () => {
     try {
       const alert = failed.page.locator('#libraryProcessing [role="alert"]');
       await expectBody(failed.page, '/data-cleanup 失败提示与不再问提示', [alert], failed.problems);
-      await alert.locator('summary').click();
-      await alert.locator('ul').waitFor({ state: 'visible', timeout: 5_000 });
-      assert.equal(await failed.page.locator(reveal).count(), 1, '完整记录在两块提示里各印了一遍');
-      assert.equal(await alert.locator(button).count(), 1, '完整记录该跟着问题清单');
-      const spacing = await failed.page.evaluate(() => {
-        const box = (element: Element) => {
-          const style = getComputedStyle(element);
-          return { top: style.paddingTop, bottom: style.paddingBottom, left: style.paddingLeft };
-        };
-        const alert = document.querySelector('#libraryProcessing [role="alert"]')!;
-        const note = [...document.querySelectorAll('#libraryProcessing [role="note"]')]
-          .find((element) => element.textContent!.includes('7 天内不再问'))!;
-        return { alert: box(alert), note: box(note) };
-      });
-      assert.equal(spacing.note.top, spacing.note.bottom, '不再问提示的上下留白不一样');
-      assert.deepEqual(spacing.note, spacing.alert, '不再问提示和失败提示的内边距对不上');
+      assert.ok((await alert.textContent())!.includes('7 天内不再问'), '「7 天内不再问」没有并进失败提示');
+      assert.equal(await failed.page.locator('#libraryProcessing [role="note"]').count(), 0,
+        '失败提示旁边还另挂着一块同类提示');
+      assert.equal(await failed.page.locator(reveal).count(), 1, '完整记录印了不止一处');
+      assert.equal(await alert.locator(button).count(), 1, '完整记录该跟着问题提示');
+      assert.equal(await alert.getByRole('button', { name: '导出完整问题清单' }).count(), 1, '导出没有跟着完整记录');
       assert.deepEqual(failed.problems, []);
     } finally {
       await failed.close();
@@ -805,6 +800,46 @@ describe('设计决定：控件、状态与首页顶部', () => {
       })));
       assert.equal(await opened.page.locator('.search > .cleardissolve').count(), 0,
         '输入法开始组字后旧残影仍覆盖候选字');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('搜索框空着且没聚焦时占位推荐词隔几秒换一句，聚焦、打字或组字就停', { timeout: 60_000 }, async () => {
+    const opened = await openCatalog(browser);
+    try {
+      await opened.page.emulateMedia({ reducedMotion: 'no-preference' });
+      const input = opened.page.locator('#q');
+      const ghost = opened.page.locator('.search > .placeholderroll');
+      // 推荐词池在页面空闲时取，取到就把第一句换上去；之后每隔几秒换一句。
+      await opened.page.waitForFunction(() => document.querySelector<HTMLInputElement>('#q')?.dataset.suggestion,
+        null, { timeout: 15_000 });
+      // 第一句换上去时也走一次换句动画，等它走完再记「换之前」的那一句。
+      await ghost.waitFor({ state: 'detached', timeout: 2_000 });
+      const before = await input.getAttribute('placeholder');
+      await ghost.waitFor({ timeout: 8_000 });
+      const after = await input.getAttribute('placeholder');
+      assert.notEqual(after, before, '换句时 placeholder 没有改成新的一句');
+      assert.equal(after, await input.getAttribute('data-suggestion'), '占位字与空回车要搜的词对不上');
+      assert.equal(await input.evaluate((element) => getComputedStyle(element, '::placeholder').opacity), '0',
+        '换句的那一层在场时框里自己的占位字没有收起');
+      await ghost.waitFor({ state: 'detached', timeout: 2_000 });
+      assert.equal(await input.evaluate((element) => element.classList.contains('placeholderrolling')), false,
+        '换完之后仍压着输入框的占位字');
+
+      await ghost.waitFor({ timeout: 8_000 });
+      await input.type('新');
+      assert.equal(await ghost.count(), 0, '开始打字后换句的那一层仍盖在输入框上');
+      // 聚焦时不换句：人正对着这一句，换掉了回车搜的就不是刚看见的词。
+      await input.fill('');
+      await opened.page.waitForTimeout(6_000);
+      assert.equal(await ghost.count(), 0, '聚焦在搜索框上时占位字仍在换句');
+      await input.blur();
+      await ghost.waitFor({ timeout: 8_000 });
+      await input.evaluate((element) => element.dispatchEvent(new CompositionEvent('compositionstart', {
+        bubbles: true, data: '候',
+      })));
+      assert.equal(await ghost.count(), 0, '输入法开始组字后换句的那一层仍盖着候选字');
     } finally {
       await opened.close();
     }

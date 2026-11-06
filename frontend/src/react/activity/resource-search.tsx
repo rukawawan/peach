@@ -12,6 +12,7 @@ import { coverUrl } from '@peach/card-art';
 import type { MediaPage } from '../catalog-grid/types';
 import type { DownloadPrefill } from './cloud-download-dialog';
 import { sameWorkCode } from './work-code';
+import { composingKey } from '../components/ime';
 
 interface Candidate {
   id: string; uri: string; name: string; size: number; seeders: number; origins: string[];
@@ -25,7 +26,7 @@ function SearchSpinner({ className }: { className?: string }) {
 
 function preferredGoal(reason: string | undefined): string {
   if (['中字', '中文字幕'].includes(reason?.trim() ?? '')) return 'chinese';
-  if (['无码', '无码破解'].includes(reason?.trim() ?? '')) return 'uncensored';
+  if (['无码', '无码流出', '无码破解'].includes(reason?.trim() ?? '')) return 'uncensored';
   return 'quality';
 }
 
@@ -75,7 +76,7 @@ export function ResourceSearch({ initialCode, reason, choose, onSearch, onWork }
       <Input label="按番号查找资源" value={code} maxLength={80} placeholder="输入番号，按回车搜索" enterKeyHint="search"
         leadingIcon={action.busy ? SearchSpinner : RiSearchLine}
         isReadOnly={Boolean(action.busy)} aria-busy={Boolean(action.busy)} onChange={setCode} onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); search() }
+          if (event.key === 'Enter' && !composingKey(event.nativeEvent)) { event.preventDefault(); search() }
         }} />
       <div className="flex flex-col gap-1">
         <FieldLabel>优先寻找</FieldLabel>

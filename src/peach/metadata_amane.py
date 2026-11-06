@@ -295,6 +295,21 @@ def rebuild(tools_root: Path, *, runner: Runner = run_task_process, timeout: int
         return {"ok": False, "error": f"amane 安装目录无法读写：{redact(str(error))}"}
 
 
+def _uv_failure(output: str, limit: int = 800) -> str:
+    """uv 报错的首行说哪一步失败，末尾是 git 或构建的原始输出。太长时保留首行和末尾若干整行：
+    任务卡用首行当摘要，按字符截会让它从半个词读起。"""
+    lines = output.strip().splitlines()
+    if len(output.strip()) <= limit or len(lines) < 2:
+        return output.strip()[-limit:]
+    tail, size = [], 0
+    for line in reversed(lines[1:]):
+        size += len(line) + 1
+        if size > limit:
+            break
+        tail.append(line)
+    return "\n".join([lines[0], "…", *reversed(tail)])
+
+
 def _rebuild(tools_root, *, runner, timeout, root, proxy_options):
     from .error_reporting import redact
     if problem := bundle_problem(root):
@@ -317,7 +332,7 @@ def _rebuild(tools_root, *, runner, timeout, root, proxy_options):
     except OSError as exc:
         return {"ok": False, "error": f"无法启动 uv：{redact(str(exc))}"}
     if completed.returncode:
-        detail = (completed.stderr or completed.stdout or "").strip()[-800:]
+        detail = _uv_failure(completed.stderr or completed.stdout or "")
         return {"ok": False, "error": f"uv sync 失败（exit {completed.returncode}）：{redact(detail)}"}
     if not bridge_python(tools_root).is_file() or installed_version(tools_root) != locked_version(root):
         return {"ok": False, "error": "amane 安装未完成：运行环境中没有可用的包元数据"}

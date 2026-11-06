@@ -954,7 +954,7 @@ class VerificationTests(unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}))
         self.enterContext(mock.patch.object(coordinator, "require_pull_request", side_effect=
             lambda worker, branch, target, head: {"url": "https://github.com/example/peach/pull/1",
-                                                  "head": head, "base": target}))
+                                                  "head": head, "base": target, "refs": []}))
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()

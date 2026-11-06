@@ -90,6 +90,8 @@ class ConfigurationIsolationTests(unittest.TestCase):
                 stack.enter_context(patch.object(routes, "snapshot", return_value={"media_dirs": [], "port": 8900}))
                 stack.enter_context(patch.object(routes, "network_payload", return_value={"scope": "local"}))
                 stack.enter_context(patch.object(routes, "tunnel_payload", return_value={"state": "idle"}))
+                stack.enter_context(patch.object(routes, "api_token_payload", return_value={"rotatable": False}))
+                stack.enter_context(patch.object(routes, "certificate_payload", return_value=None))
                 for key, module, name in (("push_discovery", routes, "push_discovery_payload"),
                                           ("downloads", routes.web_downloads, "settings_payload")):
                     stack.enter_context(patch.object(module, name, side_effect=OSError("private-detail"))
@@ -268,21 +270,35 @@ class MediaConfigurationTests(unittest.TestCase):
 
     def test_runtime_fact_entries_list_dependencies_only_when_missing(self):
         from peach import web_entry
+        from peach.ffmpeg import BinaryChoice
         with tempfile.TemporaryDirectory() as directory:
             config = settings_file.load_config(environ={"PEACH_DATA_ROOT": str(Path(directory).resolve())})
-            with patch("peach.ffmpeg.FFmpegResolver.ffmpeg", return_value=Path("ffmpeg")), \
-                    patch("peach.ffmpeg.FFmpegResolver.ffprobe", return_value=Path("ffprobe")), \
-                    patch("peach.mp4recover.untrunc_path", return_value=Path("untrunc")):
-                present = [row["term"] for row in web_entry.runtime_fact_entries(config)]
-            with patch("peach.ffmpeg.FFmpegResolver.ffmpeg", return_value=None), \
-                    patch("peach.ffmpeg.FFmpegResolver.ffprobe", return_value=None), \
-                    patch("peach.mp4recover.untrunc_path", return_value=None):
-                missing = {row["term"]: row for row in web_entry.runtime_fact_entries(config)}
+
+            def facts(choice, untrunc, *, installable):
+                with patch("peach.ffmpeg.FFmpegResolver.ffmpeg", return_value=choice), \
+                        patch("peach.ffmpeg.FFmpegResolver.ffprobe", return_value=choice), \
+                        patch("peach.mp4recover.untrunc_path", return_value=untrunc), \
+                        patch("peach.media_tools.supported", return_value=installable):
+                    return {row["term"]: row for row in web_entry.runtime_fact_entries(config)}
+
+            present = facts(BinaryChoice(Path("ffmpeg"), "path"), Path("untrunc"), installable=True)
+            missing = facts(None, None, installable=False)
+            installable = facts(None, None, installable=True)
+            tools = config.directory("tools")
+            (tools / "ffmpeg").mkdir(parents=True)
+            (tools / "ffmpeg" / "manifest.json").write_text('{"version": "9.0.2"}', encoding="utf-8")
+            managed = facts(BinaryChoice(tools / "ffmpeg" / "bin" / "ffmpeg.exe", "peach-managed"),
+                            (tools / "untrunc" / "untrunc.exe").resolve(), installable=True)
         self.assertNotIn("FFmpeg", present)
         self.assertNotIn("untrunc", present)
         self.assertIn("版本", present)
         self.assertEqual(missing["FFmpeg"]["download_label"], "下载 FFmpeg")
         self.assertEqual(missing["untrunc"]["download_label"], "下载 untrunc")
+        self.assertEqual({term: (row.get("install_tool"), "download_url" in row) for term, row in installable.items()
+                          if term in ("FFmpeg", "untrunc")},
+                         {"FFmpeg": ("ffmpeg", False), "untrunc": ("untrunc", False)})
+        self.assertEqual(managed["FFmpeg"]["value"], "已安装，版本 9.0.2")
+        self.assertEqual(managed["untrunc"]["value"], "已安装在数据目录")
 
     def test_windows_cloud_sources_keep_policy_ids_and_offline_roots(self):
         roots, mounts, errors = media_config.validate([

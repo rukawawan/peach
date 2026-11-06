@@ -6,9 +6,27 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog_rules import is_jav_code, is_local_extra, normalise_code_key
+from .catalog_rules import is_jav_code, normalise_code_key, sql_is_local_extra
 from .entities import normalize_entity_name
 from .regions import infer_region
+
+#: 当前线程是不是后台写入者，见 `in_background`。
+_WRITER = threading.local()
+
+
+def in_background(target):
+    """把线程入口包成后台写入者：它提交的写入只让页面缓存「过期」，读者可以先拿旧值（ADR-0146）。
+
+    没包的线程照旧按前台算：测试、请求处理与显式失效写完就要读到新值。
+    """
+    def run(*args, **kwargs):
+        _WRITER.background = True
+        return target(*args, **kwargs)
+    return run
+
+
+def writing_in_background() -> bool:
+    return getattr(_WRITER, "background", False)
 
 
 class LedgerDatabase:
@@ -33,7 +51,7 @@ class LedgerDatabase:
         connection.create_function("is_jav_code", 1, is_jav_code, deterministic=True)
         roots = self.media_roots
         connection.create_function("peach_is_local_extra", 2,
-            lambda name, path: is_local_extra(name, path, library_roots=roots), deterministic=True)
+            lambda name, path: sql_is_local_extra(name, path, roots), deterministic=True)
         connection.create_function(
             "normalise_code_key", 1, normalise_code_key, deterministic=True)
         # 产地推断要和 Python 侧同一份实现。SQL 里重写一遍前缀名单的话，账本筛出来的

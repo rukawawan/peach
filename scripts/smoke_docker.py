@@ -1,4 +1,4 @@
-"""使用独立容器与临时卷验收镜像的初始化、鉴权、配置重载和持久化。"""
+"""使用独立容器与临时卷验收镜像的首次设置、鉴权、配置重载和持久化。"""
 from __future__ import annotations
 
 import argparse
@@ -18,9 +18,8 @@ def request(name: str, path: str, *, authenticated: bool = True, body: dict | No
             headers: dict | None = None):
     script = (
         "import json,urllib.request,urllib.error; from pathlib import Path; "
-        "token=Path('/data/secrets/auth-token').read_text().strip(); "
         "body=json.loads(__import__('sys').argv[1]); "
-        "headers={'X-Token':token} if body['auth'] else {}; "
+        "headers={'X-Token':Path('/data/secrets/auth-token').read_text().strip()} if body['auth'] else {}; "
         "headers=headers | (body['headers'] or {}); "
         "headers['Content-Type']='application/json'; "
         "req=urllib.request.Request('http://127.0.0.1:8900'+body['path'],"
@@ -37,13 +36,15 @@ def request(name: str, path: str, *, authenticated: bool = True, body: dict | No
                   json.dumps({"auth": authenticated, "path": path, "body": body, "headers": headers}))
 
 
-def ready(name: str) -> None:
+def ready(name: str, *, setup: bool = False) -> None:
+    """等到服务就绪；`setup` 为真时等的是全新数据卷上的首次设置服务（ADR-0149）。"""
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         try:
             response = json.loads(request(name, "/healthz?ready=1", authenticated=False))
-            if "status" not in response:
+            if "status" not in response and response.get("setup", False) == setup:
                 return
+            time.sleep(1)
         except subprocess.CalledProcessError:
             if docker("inspect", "-f", "{{.State.Running}}", name) != "true":
                 raise RuntimeError(docker("logs", name)) from None
@@ -108,6 +109,15 @@ def main() -> None:
         docker("volume", "create", volume)
         docker("run", "-d", "--name", name, "--network", "none",
                "--mount", f"type=volume,source={volume},target=/data", args.image)
+        ready(name, setup=True)
+        # 全新数据卷不再自动初始化：先答首次设置，设访问密码，后面的未登录请求才是 401。
+        assert docker("exec", name, "python", "-c",
+                      "from pathlib import Path; print(Path('/data/config.toml').exists())") == "False"
+        done = json.loads(request(name, "/api/setup", authenticated=False, body={
+            "media_dir": [], "skip_media": True, "scan_now": False, "access_enabled": True,
+            "access_password": "smoke-password", "access_confirm": "smoke-password"}))
+        assert done.get("url") == "/?onboarding=1", done
+        time.sleep(2)
         ready(name)
         assert docker("exec", name, "id", "-u") == "1000"
         assert json.loads(request(name, "/api/items")) is not None
@@ -155,7 +165,7 @@ def main() -> None:
         docker("restart", "--time", "75", name)
         ready(name)
         assert docker("exec", name, "cat", config_path) == original
-        print(json.dumps({"image": args.image, "checks": ["non-root", "ready", "auth", "configuration",
+        print(json.dumps({"image": args.image, "checks": ["first-setup", "non-root", "ready", "auth", "configuration",
                                                          "scan", "range", "vaapi-stack", "transcode-fallback",
                                                          "amane-prerequisites", "reload", "restart", "persistence"]}))
     finally:

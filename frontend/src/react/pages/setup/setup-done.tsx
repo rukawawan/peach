@@ -47,7 +47,9 @@ export function SetupDoneView({ done }: { done: SetupDone }) {
           {done.facts.map((fact) => (
             <Fact key={fact.term} term={fact.term}>
               {fact.value}
-              {fact.download_url
+              {fact.install_tool
+                ? <span className="text-text-secondary">可在配置页「应用与维护」里安装。</span>
+                : fact.download_url
                 ? <ExternalLink href={fact.download_url}>{fact.download_label ?? fact.download_url}</ExternalLink>
                 : null}
             </Fact>

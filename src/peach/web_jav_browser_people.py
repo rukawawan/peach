@@ -71,6 +71,21 @@ def _framed(original: Image.Image, focus: dict | None) -> Image.Image:
     return ImageOps.fit(image, (OUTPUT_PX, OUTPUT_PX), centering=tuple(centering))
 
 
+def entity_avatar(contract, preview, entity_id: int) -> str | None:
+    """已安装头像按人脸取景成小图 data URI；没装头像是空串，装了却读不出是 None。"""
+    if not contract.has_entity_image('performer', entity_id):
+        return ''
+    try:
+        path, _ = preview.entity_image('performer', entity_id)
+        with Image.open(path) as original:
+            image = _framed(original, contract.avatar_focus('performer', entity_id))
+        output = io.BytesIO()
+        image.save(output, format='JPEG', quality=75)
+        return 'data:image/jpeg;base64,' + base64.b64encode(output.getvalue()).decode('ascii')
+    except (PreviewUnavailable, OSError, ValueError):
+        return None
+
+
 def _page_names(performers) -> list[str]:
     """详情页出演者原文：去掉 ♀ 标记，男演员（♂）不参与；只在查询单个番号时使用。"""
     names = [str(name).strip() for name in performers or ()]
@@ -118,7 +133,9 @@ def cached_people(contract, preview, value: str, performers=()) -> dict:
                 if key and key not in people:
                     found = entities.resolve_entity(connection, 'performer', name)
                     people[key] = {'id': found['id'] if found else None, 'name': name}
-            for name in page_names:
+            # 详情页的出演者名只给账本与发现资料都没有人物的作品兜底：素人作品入库后账本记的是资料站认出的
+            # 真名，页面仍写店铺艺名，两者对不上时不能把艺名算成第二个人。
+            for name in page_names if not people else ():
                 person = _page_person(connection, name)
                 key = entities.normalize_entity_name(person['name'])
                 if key and key not in people and person['id'] not in excluded:
@@ -128,15 +145,8 @@ def cached_people(contract, preview, value: str, performers=()) -> dict:
                 if entity_id is None or not contract.has_entity_image('performer', entity_id):
                     continue
                 if entity_id not in avatars:
-                    try:
-                        path, _ = preview.entity_image('performer', entity_id)
-                        with Image.open(path) as original:
-                            image = _framed(original, contract.avatar_focus('performer', entity_id))
-                        output = io.BytesIO()
-                        image.save(output, format='JPEG', quality=75)
-                        avatars[entity_id] = 'data:image/jpeg;base64,' + base64.b64encode(output.getvalue()).decode('ascii')
-                    except (PreviewUnavailable, OSError, ValueError):
-                        avatars[entity_id] = ''
+                    avatars[entity_id] = entity_avatar(contract, preview, entity_id)
+                    if avatars[entity_id] is None:
                         person['avatar_unavailable'] = True
                 if avatars[entity_id]:
                     person['avatar'] = avatars[entity_id]

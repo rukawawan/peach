@@ -2,6 +2,7 @@ import { resolveFollowSort, SORT_OPTIONS, type SortDir, type SortKey } from './f
 import { islandButton, islandSelect } from './island-skeleton';
 import { configurationSkeleton } from './configuration-skeleton';
 import { javPageSkeleton } from './jav-skeleton';
+import { javTab } from './react/jav/jav-navigation';
 import { duplicatesSkeleton, qualityGoalsSkeleton, statsSkeleton, tasteSkeleton } from './management-skeletons';
 import { CONFIGURATION_SECTIONS } from './history/settings-route';
 import { FOLLOW_MANAGE_NAV as FOLLOW_TABS } from './react/follow-manage/manage-route';
@@ -26,7 +27,7 @@ const followReadings = () => `<div class="inline-grid w-full grid-cols-2 gap-3 s
 const followTabKey = (tab = '') => (FOLLOW_TABS.some(([key]) => key === tab) ? tab : 'list');
 const followTabs = (tab: string) => `<div data-section-nav data-section-items class="flex max-w-full flex-nowrap overflow-x-auto">${FOLLOW_TABS.map(([key, name]) => `<span class="whitespace-nowrap" aria-selected="${key === tab}">${name}</span>`).join('')}</div>`;
 /** Board UI `Checkbox` 的未勾静止态；给了字就是「全选本页」那种带标签的一枚。 */
-const followCheck = (label = '') => `<span class="group inline-flex items-center select-none gap-2"><span class="flex shrink-0 items-center justify-center rounded-sm size-4 border bg-background-primary-default shadow-xs border-border-checkbox-default"></span>${label ? `<span class="text-body-medium text-text-primary">${label}</span>` : ''}</span>`;
+export const followCheck = (label = '') => `<span class="group inline-flex items-center select-none gap-2"><span class="flex shrink-0 items-center justify-center rounded-sm size-4 border bg-background-primary-default shadow-xs border-border-checkbox-default"></span>${label ? `<span class="text-body-medium text-text-primary">${label}</span>` : ''}</span>`;
 
 /* 工具行：检查全部是主按钮，视图切换是一组两颗 ghost 纯图标键、选中那颗由 `aria-pressed` 标出，
    排序框写着地址栏那一档的名字，方向键朝着同一头。工具行窄于 740px 时 React 把带字的键收成
@@ -54,7 +55,7 @@ const followPageSize = (): number => {
    当前排序落在哪一列，那一列的指示就朝哪头。 */
 const TABLE_COLUMNS = [['select', ''], ['author', '创作者'], ['source', '来源'], ['provider', '站点'], ['status', '状态'], ['checked', '上次检查'], ['actions', '']] as const;
 const COLUMN_OF: Partial<Record<SortKey, string>> = { name: 'author', source: 'source', provider: 'provider', status: 'status', checked: 'checked' };
-const SORT_MARK = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12.7071 15.2929C12.3166 15.6834 11.6834 15.6834 11.2929 15.2929L7.70711 11.7071C7.07714 11.0771 7.52331 10 8.41421 10H15.5858C16.4767 10 16.9229 11.0771 16.2929 11.7071L12.7071 15.2929Z" fill="currentColor"/></svg>';
+export const SORT_MARK = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12.7071 15.2929C12.3166 15.6834 11.6834 15.6834 11.2929 15.2929L7.70711 11.7071C7.07714 11.0771 7.52331 10 8.41421 10H15.5858C16.4767 10 16.9229 11.0771 16.2929 11.7071L12.7071 15.2929Z" fill="currentColor"/></svg>';
 const followTable = (rows: number, { sort, dir }: { sort: SortKey; dir: SortDir }) => {
   const head = TABLE_COLUMNS.map(([id, name]) => {
     if (!name) return '<th></th>';
@@ -94,7 +95,8 @@ export function boardPageSkeleton(
   if (path === '/stats') {
     body = statsSkeleton();
   } else if (path === '/jav') {
-    body = javPageSkeleton(new URLSearchParams(location.search).get('tab') === 'wants' ? 'wants' : 'discover');
+    const tab = javTab(new URLSearchParams(location.search).get('tab'));
+    body = javPageSkeleton(tab === 'library' ? 'discover' : tab);
   } else if (path === '/taste') {
     body = tasteSkeleton();
   } else if (path === '/subscriptions') {
@@ -102,7 +104,7 @@ export function boardPageSkeleton(
   } else if (path.startsWith('/settings/') && path.split('/')[2]! in CONFIGURATION_SECTIONS) {
     body = configurationSkeleton(CONFIGURATION_SECTIONS[path.split('/')[2] as keyof typeof CONFIGURATION_SECTIONS]);
   } else if (path === '/tasks') {
-    body = `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">${['正在进行', '本次未执行', '最近完成'].map(title => `<section class="activitysection flex min-w-0 flex-col gap-3"><h3 class="text-title-2-medium text-text-primary">${title}</h3><div class="min-w-0 rounded-2xl shadow-card border border-border-button-default bg-background-secondary-default"><div class="flex flex-col gap-1.5 px-5 pt-5 pb-4"><span class="text-title-1-medium">${text('8em')}</span><span class="text-caption-1-regular">${text('14em')}</span>${text('60%')}${text('40%')}</div><div class="border-t border-separator-border px-5 py-2.5">${text('6em')}</div></div></section>`).join('')}</div></div>`;
+    body = `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">${['正在进行', '本次未执行', '最近完成'].map(title => `<section class="activitysection flex min-w-0 flex-col gap-3"><h3 class="text-title-2-medium text-text-primary">${title}</h3><div class="min-w-0 rounded-2xl shadow-card bg-background-secondary-default"><div class="flex flex-col gap-1.5 px-5 pt-5 pb-4"><span class="text-title-1-medium">${text('8em')}</span><span class="text-caption-1-regular">${text('14em')}</span>${text('60%')}${text('40%')}</div><div class="border-t border-separator-border px-5 py-2.5">${text('6em')}</div></div></section>`).join('')}</div></div>`;
   } else if (path === '/duplicates') {
     body = duplicatesSkeleton();
   } else if (path === '/quality-goals') {

@@ -113,7 +113,7 @@ class NpmAuditTests(unittest.TestCase):
         self.enterContext(contextlib.redirect_stdout(self.output))
 
     def test_docker_dependency_updates_have_a_takeover_recipe(self):
-        for manifest in ('Dockerfile', '.github/actions/actionlint/Dockerfile'):
+        for manifest in ('Dockerfile', '.github/actions/actionlint/Dockerfile', 'compose.yaml'):
             self.assertEqual(adopt.recipe_for([manifest])[0], 'docker')
 
     def test_high_and_critical_vulnerabilities_fail_without_network_retries(self):
@@ -189,6 +189,7 @@ class DependencyPolicyTests(unittest.TestCase):
         owners = {
             "tldextract": "tldextract",
             "AppKit": "pyobjc-framework-Cocoa",
+            "Foundation": "pyobjc-framework-Cocoa",
             "PIL": "pillow",
             "PyObjCTools": "pyobjc-framework-Cocoa",
             "apscheduler": "APScheduler",
@@ -196,6 +197,7 @@ class DependencyPolicyTests(unittest.TestCase):
             "browserexport": "browserexport",
             "ahocorasick": "pyahocorasick",
             "bs4": "beautifulsoup4",
+            "cryptography": "cryptography",
             "curl_cffi": "curl_cffi",
             "cv2": "opencv-python-headless",
             "dmgbuild": "dmgbuild",
@@ -213,6 +215,7 @@ class DependencyPolicyTests(unittest.TestCase):
             "psutil": "psutil",
             "pydantic": "pydantic",
             "pystray": "pystray",
+            "qrcode": "qrcode",
             "resvg_py": "resvg-py",
             "sentry_sdk": "sentry-sdk",
             "smbclient": "smbprotocol",

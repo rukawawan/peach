@@ -19,6 +19,15 @@ updates:
       time: "09:45"
       timezone: Asia/Taipei
 
+  # compose.yaml 里 watchtower profile 固定的 nickfedor/watchtower 版本。
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:45"
+      timezone: Asia/Taipei
+
   - package-ecosystem: uv
     directory: /
     schedule:

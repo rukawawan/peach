@@ -1,12 +1,15 @@
-"""通过系统文件关联或已安装的播放器打开已授权媒体。"""
+"""通过系统文件关联或已安装的播放器打开已授权媒体；mpv、IINA、VLC 接上观看进度回传。"""
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from . import playback_tracking as tracking
 from .media import normalized_path
 
 
@@ -42,7 +45,37 @@ def installed() -> dict[str, tuple[str, str]]:
     return result
 
 
-def open_media(path: Path, player: str = 'default') -> None:
+Track = Callable[[Callable[[], 'tracking.Probe'], Callable[[], bool]], bool]
+
+
+def _tracked_command(key: str, program: str, path: Path) -> tuple[list[str], Callable[[], 'tracking.Probe']] | None:
+    """mpv 与 IINA 开 JSON IPC，VLC 开只听回环的 HTTP 接口；名字、端口、密码每次随机。"""
+    token = secrets.token_hex(12)
+    mac = sys.platform == 'darwin'
+    if key in {'mpv', 'iina'}:
+        address = tracking.mpv_address(token)
+        if key == 'iina':
+            if not mac:
+                return None
+            command = [str(Path(program) / 'Contents/MacOS/iina-cli'), f'--mpv-input-ipc-server={address}']
+        else:
+            binary = str(Path(program) / 'Contents/MacOS/mpv') if mac else program
+            command = [binary, f'--input-ipc-server={address}']
+        return command, lambda: tracking.MpvProbe(tracking.connect_mpv(address))
+    if key == 'vlc' and not mac:
+        port, password = tracking.free_port(), secrets.token_urlsafe(18)
+        command = [program, '--extraintf=http', '--http-host=127.0.0.1', f'--http-port={port}',
+                   f'--http-password={password}']
+        return command, lambda: tracking.VlcProbe(port, password, path.name)
+    return None
+
+
+def open_media(path: Path, player: str = 'default', *, track: Track | None = None,
+               extra_args: Sequence[str] = ()) -> bool:
+    """打开文件；`track` 给了且播放器能回报进度时接上跟踪，返回是否接上。
+
+    `extra_args` 只给人工验收用（静音、暂停起播），接口不暴露。
+    """
     if not available():
         raise ValueError('此部署请使用网络播放地址或 M3U 播放列表')
     path = normalized_path(path)
@@ -54,6 +87,13 @@ def open_media(path: Path, player: str = 'default') -> None:
     chosen = installed().get(player) if player != 'default' else None
     if player != 'default' and chosen is None:
         raise ValueError('播放器未安装，请重新选择')
+    tracked = _tracked_command(player, chosen[1], path) if chosen and track else None
+    if tracked:
+        command, connect = tracked
+        process = subprocess.Popen([*command, *extra_args, str(path)], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   cwd=str(Path(command[0]).parent))
+        return track(connect, lambda: process.poll() is None)
     if sys.platform == 'darwin':
         command = ['/usr/bin/open']
         if chosen:
@@ -65,3 +105,4 @@ def open_media(path: Path, player: str = 'default') -> None:
                          cwd=str(Path(chosen[1]).parent))
     else:
         os.startfile(str(path), 'open')
+    return False

@@ -137,7 +137,7 @@ export function WantMagnets({ want, readOnly, downloads, provider, toast, onSour
               </div>
               <div data-resource-facts="" className="flex flex-wrap gap-x-2 gap-y-1 text-caption-1-regular text-text-secondary">
                 <ResourceFact icon={RiLink}>{candidate.source}</ResourceFact>
-                <ResourceFact icon={RiHardDrive2Line} title={`来源大小：${candidate.size}`}>{resourceSize(candidate.size)}</ResourceFact>
+                <ResourceFact icon={RiHardDrive2Line} title={candidate.size ? `来源大小：${candidate.size}` : undefined}>{resourceSize(candidate.size)}</ResourceFact>
                 {candidate.files ? <ResourceFact icon={RiFileList2Line}>{candidate.files.replaceAll('個', '个')}</ResourceFact> : null}
                 <ResourceFact icon={RiCalendarLine} title={candidate.source === 'JavDB 评论' ? '评论日期' : '收录日期'}>{candidate.date ? candidate.date.slice(0, 10) : '日期未知'}</ResourceFact>
                 {candidate.attributes.filter(value => value !== '高清').map((value) => <ResourceFact key={value} icon={RiPriceTag3Line}>{value}</ResourceFact>)}

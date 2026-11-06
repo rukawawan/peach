@@ -9,6 +9,10 @@
 它不给时长，`runtime` 留空。拒绝访问时回的是 Cloudflare 验证页，状态码可能是 403，也可能是 200：
 403 由 `SourceTransport` 整站冷却，200 的那张由 `parse` 认成 `cloudflare_challenge`，经 `holding()`
 进同一份冷却记录（上限 `scraping_access.SOURCES['avbase']['blocked_pause']`）。
+
+女优页 `/talents/<名字>`（2026-11-04 实测）也是 Next.js 页，`props.pageProps.talent` 是这位：`actors[]`
+是站上归到她名下的全部名义，`meta.basic_info` 是社区编辑的资料。补女优资料后继拿它作 minnano-av 的
+备援（ADR-0136），解析在 `talent_profile`；名字站上没有时回 404。
 """
 from __future__ import annotations
 
@@ -120,3 +124,98 @@ class AVBaseSource(SiteSource):
             director=first(info("director")),
             release_date=listing_date(products[0].get("date") if products else work.get("min_date")),
             cover_urls=_covers(code, products))
+
+
+# -- 女优页 ------------------------------------------------------------------
+
+TALENT_PAGE = "https://www.avbase.net/talents/{name}"
+_BLOOD_TYPES = frozenset({"A", "B", "O", "AB"})
+_CUP = re.compile(r"[A-Z]{1,2}")
+_FIRST_NUMBER = re.compile(r"\d+")
+
+
+def talent_url(name: str) -> str:
+    return TALENT_PAGE.format(name=urllib.parse.quote(name, safe=""))
+
+
+def _page_props(html: str) -> dict | None:
+    found = _NEXT_DATA.search(html or "")
+    try:
+        props = json.loads(found.group(1))["props"]["pageProps"] if found else None
+    except (ValueError, KeyError, TypeError):
+        return None
+    return props if isinstance(props, dict) else None
+
+
+def compact_talent_page(html: str) -> str:
+    """只留女优页里解析会读到的那两项，再包回 `__NEXT_DATA__`；认不出的页原样交回。
+
+    整页有 650～750 KB，多半是嵌在里面的作品表，补女优资料的页面缓存按人一页，整页存下来
+    一千位就是六七百 MB。验证页、404 页没有 `talent`，原样交回，撞墙判定照常看得到它们。
+    """
+    props = _page_props(html)
+    if props is None or not isinstance(props.get("talent"), dict):
+        return html
+    kept = {"talent": props["talent"],
+            "talents": [{"id": item.get("id")} for item in props.get("talents") or []
+                        if isinstance(item, dict)]}
+    data = json.dumps({"props": {"pageProps": kept}}, ensure_ascii=False).replace("</", "<\\/")
+    return f'<script id="__NEXT_DATA__" type="application/json">{data}</script>'
+
+
+def _date(value: object) -> str | None:
+    from datetime import date
+
+    text = str(value or "").strip()
+    try:
+        return date.fromisoformat(text).isoformat() if len(text) == 10 else None
+    except ValueError:
+        return None
+
+
+def _centimetres(value: object) -> int | None:
+    """`159`、`159.5` 取整数部分；空串、`0` 与没有数字的都是没填。"""
+    found = _FIRST_NUMBER.search(str(value or ""))
+    return int(found.group()) or None if found else None
+
+
+def _text(value: object) -> str | None:
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def talent_profile(html: str) -> dict | None:
+    """女优页上的资料，列与 `minnano_av.PROFILE_COLUMNS` 对齐；不是女优页返回 None。
+
+    另有 `talent_id`、`names`（`actors[]` 的名义，加上 `primary` 里不在其中的那个）、`talents`
+    （同名 talent 有几位）与 `raw`（`basic_info`、各名义的 FANZA 资料、SNS 原样）。
+
+    资料只取 `meta.basic_info`。同一页 `actors[].meta.fanza` 另有一份官方资料，两份可以不一致
+    （三上悠亜 B90/H 对 B84/F，FANZA 那份是旧值），不拿它补空格，只留在 `raw`。出道年、活动期、
+    出道作、博客与官网站上没有，留空。`primary.image_url` 是 DMM `actjpgs` 的 125×125，不作头像。
+    """
+    props = _page_props(html)
+    talent = props.get("talent") if props else None
+    if not isinstance(talent, dict) or talent.get("id") is None:
+        return None
+    meta = talent.get("meta") if isinstance(talent.get("meta"), dict) else {}
+    basic = meta.get("basic_info") if isinstance(meta.get("basic_info"), dict) else {}
+    actors = [actor for actor in talent.get("actors") or [] if isinstance(actor, dict)]
+    primary = talent.get("primary") if isinstance(talent.get("primary"), dict) else {}
+    names = list(dict.fromkeys(name for name in map(_named, [*actors, primary]) if name))
+    cup = str(basic.get("cup") or "").strip().upper()
+    blood = str(basic.get("blood_type") or "").strip().upper()
+    return {
+        "talent_id": str(talent["id"]), "names": names, "talents": len(props.get("talents") or []),
+        "kana": _text(primary.get("ruby")), "romaji": None,
+        "birth_date": _date(basic.get("birthday")),
+        "height_cm": _centimetres(basic.get("height")), "bust_cm": _centimetres(basic.get("bust")),
+        "cup": cup if _CUP.fullmatch(cup) else None,
+        "waist_cm": _centimetres(basic.get("waist")), "hip_cm": _centimetres(basic.get("hip")),
+        "blood_type": blood if blood in _BLOOD_TYPES else None,
+        "birthplace": _text(basic.get("prefectures")), "hobbies": _text(basic.get("hobby")),
+        "debut_year": None, "active_until": None, "debut_title": None, "debut_date": None,
+        "blog_url": None, "site_url": None, "tags": [],
+        "raw": {"basic_info": basic, "sns": meta.get("sns") or [],
+                "fanza": {_named(actor): actor["meta"].get("fanza") for actor in actors
+                          if isinstance(actor.get("meta"), dict) and _named(actor)}},
+    }

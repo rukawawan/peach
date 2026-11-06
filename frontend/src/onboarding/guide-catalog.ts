@@ -153,6 +153,7 @@ export const SETTING_CHAPTERS: GuideChapter[] = [
     ['startup', '开机自启', '设置开机启动、仅启动托盘和桌面快捷方式。可用选项随平台变化。'],
     ['transcode', '视频播放', '播放转码方式决定兼容播放使用的处理方式；抽帧解码在媒体库与入库中单独设置。修改后自动保存。'],
     ['storage', '存储空间', '查看占用，按需要清理缓存和旧备份。迁移数据目录会移动资料与缓存；媒体文件目录单独管理。'],
+    ['ledger-backups', '账本备份', '立即备份当前账本，或从列表里的一份备份恢复。恢复会替换当前账本，替换前先另存一份；只有写入端能恢复。'],
     ['reporting', '数据上传', '版本统计与错误诊断、馆藏与口味明细是独立选择。明细上传前可查看预览，按自己的意愿开启。'],
     ['facts', '运行信息与新手教程', '运行信息用于核对环境。新手教程可以随时重开，阅读进度随本机账本在所有设备间共享。'],
     ['uninstall', '卸载 Peach', '卸载移除程序；完全卸载还移除设置、资料库、记录、凭据和缓存。执行前核对页面列出的数据目录与确认内容。'],
@@ -275,12 +276,13 @@ const FIELD_DETAILS: Record<string, readonly [string, string][]> = {
 for (const chapter of SETTING_CHAPTERS) for (const item of chapter.steps) {
   item.details = FIELD_DETAILS[item.id];
   if (item.id === 'preview' || item.id === 'transcode') item.scope = '运行 Peach 的电脑 · 修改后自动保存';
-  if (item.id === 'follow-options' || item.id === 'sources' || item.id === 'reporting' || item.id === 'storage') item.scope = '按页面中各项的保存或确认动作生效';
+  if (item.id === 'follow-options' || item.id === 'sources' || item.id === 'reporting' || item.id === 'storage'
+    || item.id === 'ledger-backups') item.scope = '按页面中各项的保存或确认动作生效';
 }
 export const GUIDE_CHAPTERS = [...INTERFACE_CHAPTERS, ...SETTING_CHAPTERS];
 
 export interface GuideTopic { id: string; kind: GuideChapter['kind']; title: string; summary: string; chapters: string[] }
-/** 目录按使用意图组织；小章节可单独阅读，页内说明继续对应实际设置分区。 */
+/** 目录按使用意图组织；小章节可单独阅读，设置步骤对应实际设置分区。 */
 export const GUIDE_TOPICS: GuideTopic[] = [
   { id: 'browse', kind: 'interface', title: '查找与发现', summary: '搜索播放、人物标签、JAV 追新', chapters: ['find-play', 'entities', 'jav'] },
   { id: 'collect', kind: 'interface', title: '收藏与关注', summary: '标记列表、创作者更新、口味统计', chapters: ['save', 'follow', 'insights'] },
@@ -291,18 +293,6 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   { id: 'storage', kind: 'settings', title: '媒体与下载', summary: '媒体库、目录、读取与下载渠道', chapters: ['library', 'downloads'] },
   { id: 'system', kind: 'settings', title: '连接与维护', summary: '网络访问、应用维护、系统诊断', chapters: ['network', 'app-maintenance', 'diagnostics'] },
 ];
-export const SECTION_GUIDES: Record<string, string> = {
-  '来源凭据': 'credentials', '关注采集': 'follow-options', '检查更新': 'updates', '运行信息': 'facts',
-  '媒体库与目录': 'media', '挂载状态': 'mounts', 'CloudDrive 代理': 'cloud-proxy', '自动发现新文件': 'discovery',
-  '番号识别规则': 'codes', '视频预览': 'preview', '资源搜索': 'indexers', '作品资料站点': 'entry-links',
-  '云下载': 'download', 'PikPak 账号': 'pikpak', '浏览器添加 JAV': 'browser', '访问地址': 'port',
-  'Peach 代理': 'proxy', '访问密码': 'access', 'Cloudflare 公网入口': 'tunnel', '自动更新': 'automatic-updates',
-  '开机自启': 'startup', '视频播放': 'transcode', '存储空间': 'storage', '数据上传': 'reporting', '卸载 Peach': 'uninstall',
-};
-export function sectionGuide(title: string): GuideStep | undefined {
-  const id = SECTION_GUIDES[title] || title;
-  return id ? SETTING_CHAPTERS.flatMap(chapter => chapter.steps).find(item => item.id === id) : undefined;
-}
 export function contextualChapter(path: string): GuideChapter {
   if (path === '/') return INTERFACE_CHAPTERS[0]!;
   return SETTING_CHAPTERS.find(chapter => chapter.steps[0]?.route === path)

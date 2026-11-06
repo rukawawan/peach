@@ -143,7 +143,8 @@ followState.followDetailActions = createFollowDetailActions({view:followView,ado
     rememberReturn:path=>writeShell({followDetailReturnPath:path}),close:()=>void closeFollowDetail(),
     open:(id,index,preserve)=>void openFollowDetail(id,true,index,preserve),drawer:renderFollowDrawer,
     openAuthor:name=>navigationState.navigatePath(entityPath('creator',name))},
-    {toast:(message,{undo}={})=>receiptsState.actionReceipt(message,{undo}),failure:receiptsState.actionFailure});
+    {toast:(message,{undo}={})=>receiptsState.actionReceipt(message,{undo}),failure:receiptsState.actionFailure,
+     canFlip:followState.followFeedActions.canFlip});
 }
 
 export function connectFollowController(){

@@ -76,7 +76,6 @@ describe('视频退出续播', () => {
         assert.deepEqual(opened.problems.filter((line) => !line.includes('VIDEOJS')), []);
       } finally {
         if (await opened.page.locator('#stage[open]').count()) await opened.page.locator('#closeStage').click();
-        await opened.page.unrouteAll({ behavior: 'ignoreErrors' });
         await opened.close();
       }
     });

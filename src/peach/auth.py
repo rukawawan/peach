@@ -16,6 +16,8 @@ import os
 import secrets
 from pathlib import Path
 
+from .fsutil import atomic_write_text
+
 #: 口令文件名，固定在设置文件声明的 `secrets` 目录下。
 TOKEN_FILENAME = "auth-token"
 
@@ -44,17 +46,25 @@ def ensure_token(secrets_dir: Path) -> tuple[str, bool]:
 
 
 def write_token(secrets_dir: Path) -> str:
-    """生成新口令并覆盖写入，返回新口令。旧口令签发的 cookie 立即失效。"""
+    """生成新口令并原子替换写入，返回新口令。半截写入会让下次启动读到一份谁也不知道的口令。"""
     path = token_path(secrets_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(TOKEN_BYTES)
-    path.write_text(token + "\n", encoding="utf-8")
-    if os.name != "nt":
-        # Windows 的 chmod 只动只读位，收权限靠 `peach-data` 本身在用户目录下。
-        path.chmod(0o600)
+    # Windows 的 chmod 只动只读位，收权限靠 `peach-data` 本身在用户目录下。
+    atomic_write_text(path, token + "\n", mode=0o600)
     return token
 
 
 def resolve_token(explicit: str, secrets_dir: Path) -> str:
     """取用顺序：`--token` > `PEACH_TOKEN` > 口令文件。"""
     return (explicit or os.environ.get("PEACH_TOKEN", "") or read_token(secrets_dir)).strip()
+
+
+def token_file(explicit: str, secrets_dir: Path) -> Path | None:
+    """这次取到的口令来自口令文件时返回它的路径；被 `--token` 或 `PEACH_TOKEN` 覆盖时返回 None。
+
+    配置页换口令只改口令文件，覆盖值来自启动参数，换了文件下次启动照样用覆盖值。
+    """
+    if explicit or os.environ.get("PEACH_TOKEN", ""):
+        return None
+    return token_path(secrets_dir) if read_token(secrets_dir) else None

@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/base/buttons/button';
 import { CloudDownloadDialog, type DownloadPrefill } from '../activity/cloud-download-dialog';
 import { JAV_TABS, javPath } from './jav';
 import { BoardTabs } from '../components/board-tabs';
 
-export function JavHeader({ tab, navigate, find }: {
-  tab: string; navigate(path: string): void; find(): void;
+/** 页头一行：标题、分区自己的筛选框（同名册页的 `IndexSearch`，靠右）、查找资源。馆藏用目录顶栏的搜索，不传。 */
+export function JavHeader({ tab, navigate, find, search }: {
+  tab: string; navigate(path: string): void; find(): void; search?: ReactNode;
 }) {
   return <div className="flex w-full flex-col gap-4">
-    <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-3 max-board-narrow:gap-x-2">
       <h2 data-page-title="" className="text-display-4-medium text-text-primary max-board-narrow:text-title-1-medium">JAV</h2>
-      <Button variant="primary" onClick={find}>查找资源</Button>
+      {search}
+      <Button variant="primary" className={search ? 'flex-none' : 'ml-auto flex-none'} onClick={find}>查找资源</Button>
     </div>
     <BoardTabs tabs={JAV_TABS.map(([value, label]) => ({ value, label }))} value={tab}
       label="JAV 分区" className="" onChange={key => navigate(javPath(key))} />

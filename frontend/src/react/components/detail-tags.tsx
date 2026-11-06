@@ -1,18 +1,24 @@
 /* 本地与在线详情共用标签外观、选择器和标签名称编辑。 */
 import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { RiArrowDownSLine, RiArrowUpSLine } from '@remixicon/react';
 import { spinnerHtml, wireAnchoredMenu } from '@peach/legacy/ui';
 import { Button } from '@/components/base/buttons/button';
 import { foldName, icon } from '@peach/legacy/core';
 import { apiGet } from '../../api';
 import { pickerSections, recentTags, type DetailTag, type TagCount } from '../item-detail/item-detail';
 import { TagEditor, type ManagedTag, type TagScope } from '../index/tag-operations';
+import { composingKey } from './ime';
 import { Note } from './note';
 import { useOverlayScrollbar } from './overlay-scrollbar';
 import { useAction, busyProps } from '../settings/use-action';
 import { queryClient } from '../query';
 
 const Glyph = ({ name }: { name: string }) => <span className="contents" dangerouslySetInnerHTML={{ __html: icon(name) }} />;
+/* 标签多时先露前面一截：在线来源一帖常挂上百个标签，全摊开会把侧栏推成一整屏胶囊。来源分类排在
+   前面（作品、角色、作者），收起时留下的正是它们。只多出几个时不折，省得为三两个标签多点一下。 */
+const TAGS_SHOWN = 20;
+const TAGS_SLACK = 4;
 interface DetailTagsProps {
   tags: DetailTag[]; candidates: readonly TagCount[]; scope?: TagScope; id?: string; adding?: boolean;
   label(tag: string): string; onOpen(tag: string): void; onAdd(tag: string): void; onRemove(tag: DetailTag): void;
@@ -34,9 +40,15 @@ export function DetailTags({ tags, candidates, scope = 'local', id, adding, labe
     if (!row) throw new Error('标签已变化，请重新打开详情');
     return row;
   }, row => setEditing(row)) };
+  const [open, setOpen] = useState(false);
+  /* 刚加上的标签按名字排进去，多半落在收起的那一截里，看着像没加上：收起时它们也露在外面。 */
+  const [added, setAdded] = useState<readonly string[]>([]);
+  const add = (tag: string) => { setAdded(keys => [...keys, foldName(tag)]); onAdd(tag) };
+  const long = tags.length > TAGS_SHOWN + TAGS_SLACK;
+  const shown = long && !open ? tags.filter((tag, index) => index < TAGS_SHOWN || added.includes(foldName(tag.k))) : tags;
   return <>
     <div data-stage-tags="" data-detail-tags="" id={id}>
-      {tags.map(tag => <span key={tag.k} data-detail-tag="" data-tag-cat={tag.cat}>
+      {shown.map(tag => <span key={tag.k} data-detail-tag="" data-tag-cat={tag.cat}>
         <button type="button" data-tag={tag.k} data-follow-tag={scope === 'online' ? tag.k : undefined}
           title={label(tag.k)} onClick={() => onOpen(tag.k)}>{label(tag.k)}</button>
         <button type="button" data-edit-tag={tag.k} title="修改标签名称" aria-label={`修改标签 ${label(tag.k)}`}
@@ -44,7 +56,10 @@ export function DetailTags({ tags, candidates, scope = 'local', id, adding, labe
         <button type="button" data-remove-tag={tag.k} title="从此内容隐藏该标签" aria-label={`删除标签 ${label(tag.k)}`}
           {...busyAttrs(tag.k)} onClick={() => onRemove(tag)}><Glyph name="x" /></button>
       </span>)}
-      <TagPicker tags={tags} candidates={options} label={label} onAdd={onAdd} adding={adding} scope={scope}
+      {long ? <Button variant="secondary" size="small" data-tags-more="" aria-expanded={open}
+        trailingIcon={open ? RiArrowUpSLine : RiArrowDownSLine} onClick={() => setOpen(!open)}>
+        {open ? '收起' : `还有 ${tags.length - shown.length} 个`}</Button> : null}
+      <TagPicker tags={tags} candidates={options} label={label} onAdd={add} adding={adding} scope={scope}
         onOpen={() => setAsked(true)} loading={inventory.isFetching} />
     </div>
     {action.error ? <Note tone="error">{action.error}</Note> : null}
@@ -108,7 +123,7 @@ function TagPicker({ tags, candidates, label, onAdd, adding, scope, onOpen, load
   };
   const keydown = (event: KeyboardEvent<HTMLInputElement>) => {
     /* 选字那一下的回车是定字，不是「新建这个标签」——半截拼音会真的建成标签。 */
-    if (event.nativeEvent.isComposing) return;
+    if (composingKey(event.nativeEvent)) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); plus.current?.focus(); return }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();

@@ -1,7 +1,8 @@
 /* 重复文件页：同番号、时长相近、分卷标记一致的几份文件归成一组，每组挑一个留下。
  *
  * 顶上一块汇总、一条批量保留的玻璃条，下面每组一张卡：组头说明判据与可回收多少，行里是
- * 每一份文件。留谁由人点；其余的走 `/api/batch` 的 `dispose` 进回收站，回执上带撤销。 */
+ * 每一份文件。留谁由人点；其余的走 `/api/batch` 的 `dispose` 进回收站，回执上带撤销。
+ * 几份都要留的点「都保留」，这组不再列出，组员有增减时自己回来。 */
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { confirmModal, MEDIA_SOURCE_ICONS } from '@peach/legacy/ui';
@@ -24,7 +25,7 @@ import { queryClient } from '../query';
 import { SourceMark } from '../settings/section';
 import { busyProps } from '../settings/use-action';
 import {
-  batchOperate, bulkCloudPreferences, distinctName, DUPLICATES_KEY, duplicateVictims, fetchDuplicates, KEEP_LABELS,
+  batchOperate, bulkCloudPreferences, distinctName, DUPLICATES_KEY, duplicateVictims, fetchDuplicates, keepGroup, KEEP_LABELS,
   mixedCloudPreferences, sharedNamePrefix, victimBytes, type DuplicateFile, type DuplicateGroup, type KeepRule,
 } from './duplicates';
 
@@ -116,6 +117,26 @@ export function DuplicatesPage({ openItem, toast, failure }: DuplicatesProps) {
     },
     onSettled: () => setPending(''),
   });
+  // 「都保留」不进回收站，只是让这组不再列出；回执上撤销就把它放回来。
+  const keep = useMutation({
+    mutationFn: (group: DuplicateGroup) => keepGroup(group.files.map((file) => file.id), true),
+    onSuccess: (_result, group) => {
+      refresh();
+      toast(`${group.code} 这组都保留，不再列出`, {
+        undo: async () => {
+          try {
+            await keepGroup(group.files.map((file) => file.id), false);
+          } catch (cause) {
+            failure('撤销都保留', cause);
+          } finally {
+            refresh();
+          }
+        },
+      });
+    },
+    onError: (cause) => failure('标记都保留', cause),
+    onSettled: () => setPending(''),
+  });
 
   const data = duplicates.data;
   if (!data) {
@@ -140,7 +161,12 @@ export function DuplicatesPage({ openItem, toast, failure }: DuplicatesProps) {
       onConfirm: () => { setPending(key); return dispose.mutateAsync(ids) },
     });
   };
-  const busy = (key: string) => busyProps(pending === key && dispose.isPending);
+  const busy = (key: string) => busyProps(pending === key && (dispose.isPending || keep.isPending));
+  const keepAll = (group: DuplicateGroup, key: string) => {
+    if (keep.isPending || dispose.isPending) return;
+    setPending(key);
+    keep.mutate(group);
+  };
 
   return (
     <div className="mx-auto w-full max-w-board pb-10.5">
@@ -192,6 +218,8 @@ export function DuplicatesPage({ openItem, toast, failure }: DuplicatesProps) {
                         <SourceLabel source={location} label={`留 ${LOC[location] || location}`} />
                       </Button>
                     ))}
+                    <Button variant="secondary" size="small" {...busy(key('keep'))}
+                      onClick={() => keepAll(group, key('keep'))}>都保留</Button>
                     <Button variant="danger" size="small" {...busy(key('all'))}
                       onClick={() => run({ groups: one, keep: 'all', key: key('all') })}>整组回收</Button>
                   </span>
@@ -206,6 +234,11 @@ export function DuplicatesPage({ openItem, toast, failure }: DuplicatesProps) {
       {groups.length > 0 && data.total > groups.length
         ? <p className="text-center text-caption-1-regular text-text-secondary">
             {`显示可回收最多的前 ${groups.length.toLocaleString()} 组，共 ${Number(data.total).toLocaleString()} 组；处理掉这些后，其余的会补上来。`}
+          </p>
+        : null}
+      {data.kept
+        ? <p className="mt-2 text-center text-caption-1-regular text-text-secondary">
+            {`另有 ${data.kept.toLocaleString()} 组标记了都保留，不再列出；组里文件有增减时会重新列出。`}
           </p>
         : null}
     </div>

@@ -84,9 +84,12 @@ export function clampWall(camera: WallCamera, viewport: WallSize, extent: WallSi
   return { ...camera, x: clamp(camera.x, extent.width, viewport.width), y: clamp(camera.y, extent.height, viewport.height) };
 }
 
+/** 视口每边多铺的磁贴范围（屏幕像素），镜头按它决定何时重新发布。 */
+export const WALL_CULL_PAD = 180;
+
 export function visibleWallTiles(count: number, finite: boolean, camera: WallCamera, viewport: WallSize): WallTile[] {
   if (!count || !viewport.width || !viewport.height) return [];
-  const pad = 180 / camera.scale;
+  const pad = WALL_CULL_PAD / camera.scale;
   const view = { x: -camera.x / camera.scale - pad, y: -camera.y / camera.scale - pad,
     width: viewport.width / camera.scale + pad * 2, height: viewport.height / camera.scale + pad * 2 };
   const shape = wallShape(count, finite);

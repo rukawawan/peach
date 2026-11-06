@@ -18,7 +18,7 @@ JACKET = "https://pics.dmm.co.jp/digital/video/118abw00358/118abw00358pl.jpg"
 DETAIL = {"content_id": "118abw358", "dvd_id": "ABW-358", "title": "Remu Style", "release_date": "2023-05-26",
           "runtime_minutes": 210, "director": "Charlie Nakata", "maker": {"name": "Prestige"},
           "label": {"name": "ABSOLUTELY WONDERFUL"}, "series": {"name": "HOW TO SEX"},
-          "images": {"jacket_image": JACKET},
+          "images": {"jacket_image": {"large": " ", "large2": JACKET}},
           "actresses": [{"name": "Remu Suzumori"}], "categories": [{"name": "Slender"}, {"name": "Variety"}]}
 COMBINED = {"content_id": "118abw358", "title_ja": "涼森れむ流", "series_name_ja": "保健室の先生",
             "label_name_ja": "ABSOLUTELY WONDERFUL", "maker_name_ja": "プレステージ",

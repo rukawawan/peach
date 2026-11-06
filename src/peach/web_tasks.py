@@ -16,6 +16,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
+from .ingest_notices import NOTICES
 from .task_runs import ACTIVE_STATUSES, TERMINAL_STATUSES
 from .task_results import RESULT_FIELDS, result_counts
 from .web_result_versions import result_versions
@@ -26,6 +27,20 @@ RECENT_LIMIT = 20
 #: 账本还没跑到 0028 时页面上显示这一句。迁移是单独一步，升级后第一次打开活动页
 #: 撞上没有这张表是正常路径，不该是一个 500。
 NO_TABLE = "数据库缺少任务记录表，请按运行文档检查备份后执行 peach migrate upgrade --yes"
+
+
+def q_result_updates(contract, _args):
+    """每个页面常驻的轻量轮询：结果版本、入库通知与有没有任务在排或在跑，不组装任务列表。
+
+    全局组件只用这三样，却曾每两秒取一次完整的 `/api/tasks`；任务一多，那份组装就把服务进程
+    占满，所有页面一起变慢。完整列表只留给任务中心页。
+    """
+    try:
+        busy = any(contract.task_runs.query(status=status, limit=1) for status in ACTIVE_STATUSES)
+    except sqlite3.OperationalError:
+        busy = False
+    return {"ok": True, "result_versions": result_versions(contract),
+            "ingest_notices": NOTICES.snapshot(), "busy": busy}
 
 
 def q_tasks(contract, args):
@@ -71,6 +86,8 @@ def _tasks(contract, args):
         "filtered": False,
         "available": True,
         "result_versions": result_versions(contract),
+        # 逐部到来的入库通知，页面常驻的任务轮询拿去弹 toast（`ingest_notices`）。
+        "ingest_notices": NOTICES.snapshot(),
         "running": [payload(row) for row in running],
         # 被挡掉的那些也在 `finished` 里（它们是 `cancelled`），这里单独再挑一份：
         # 「为什么没跑」是用户来这一页的主要问题，不该让他在完成列表里自己找。
@@ -125,9 +142,13 @@ def _payload_reader(contract):
         with contract.cache_lock:
             if not hasattr(contract, 'task_resource_monitor'):
                 contract.task_resource_monitor = Monitor(contract.task_runs)
+    # 控制状态与资源占用只对自己或后代还在排在跑的那几条有内容；其余的不逐条再问。
+    live = contract.task_runs.live_ids()
 
     def payload(row):
         result = row.payload()
+        if row.id not in live:
+            return _with_checkpoint(row, result)
         from .task_control import projection
         control = projection(contract.task_runs, row)
         if control is not None:
@@ -135,6 +156,9 @@ def _payload_reader(contract):
         resources = contract.task_resource_monitor.for_run(row)
         if resources is not None:
             result['resources'] = resources
+        return _with_checkpoint(row, result)
+
+    def _with_checkpoint(row, result):
         if row.task_key not in RESULT_FIELDS or row.status not in ('succeeded', 'failed'):
             return result
         if all(field in row.result_summary for field in RESULT_FIELDS[row.task_key]):

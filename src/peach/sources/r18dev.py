@@ -106,7 +106,10 @@ class R18DevSource(SiteSource):
         if not identifies_code(code, {'content_id': raw.get('content_id')}):
             raise SourceFailure(FailureReason.PARSE_ERROR, '来源返回的番号不匹配')
         name = lambda key: (raw.get(key) or {}).get('name', '')
+        # `{"large": " ", "large2": "https://…pl.jpg"}`：空着的那一格是一个空格，按出现顺序取有值的。
         jacket = (raw.get('images') or {}).get('jacket_image')
+        covers = tuple(dict.fromkeys(url.strip() for url in jacket.values()
+                                     if isinstance(url, str) and url.strip())) if isinstance(jacket, dict) else ()
         return SiteRecord(
             source=self.config.name, provenance=self.config.provider, code=code, source_url=page.url,
             title=raw.get('title') or '',
@@ -115,7 +118,7 @@ class R18DevSource(SiteSource):
             director=raw.get('director') or '', release_date=raw.get('release_date') or '',
             runtime=raw.get('runtime_minutes'),
             tags=tuple(row.get('name', '') for row in raw.get('categories', [])),
-            cover_urls=(jacket,) if jacket else (),
+            cover_urls=covers,
             extra={'content_id': raw.get('content_id'), 'raw': raw})
 
     def japanese(self, record: SiteRecord, *, session: Session) -> SiteRecord:

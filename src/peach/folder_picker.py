@@ -9,14 +9,16 @@
 调用方只在回环地址上开放这条路：否则局域网里任何人都能让这台电脑弹窗。
 
 Windows 这里刻意用 `powershell.exe`（Windows PowerShell 5.1）：它在每台 Windows 上都有，
-pwsh 7 是另装的。它自带的 `FolderBrowserDialog` 是 XP 时代的树形面板、没有地址栏，所以
+pwsh 7 是另装的。它按 `%SystemRoot%` 下的绝对路径启动，不依赖服务进程的 PATH。它自带的 `FolderBrowserDialog` 是 XP 时代的树形面板、没有地址栏，所以
 用 `Add-Type` 编一段 COM 互操作直接调 `IFileOpenDialog`。脚本以 `-EncodedCommand` 传入，
 避开引号与中文的转义。
 """
 from __future__ import annotations
 
 import base64
+import ntpath
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -43,6 +45,9 @@ _LOCK = threading.Lock()
 DIALOG_TIMEOUT_SECONDS = 15 * 60
 
 PROMPT = "选择媒体目录"
+
+#: osascript 没法弹窗的错误码：-1713 当前会话不允许用户交互，-1743 未获自动化授权。
+_MACOS_NO_DIALOG = frozenset({"-1713", "-1743"})
 
 #: `IFileOpenDialog` 的最小互操作：vtable 顺序必须与 shobjidl 一致，一个都不能少。
 #: FOS_NOCHANGEDIR 0x8 不改进程工作目录，FOS_PICKFOLDERS 0x20 选文件夹，
@@ -158,11 +163,19 @@ def _applescript_string(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _windows_powershell() -> str:
+    """系统目录里的 Windows PowerShell；服务进程的 PATH 可能缺了它，按名字查找会找不到。"""
+    root = os.environ.get("SystemRoot")
+    if not root:
+        return "powershell.exe"
+    return ntpath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
 def command(initial: str | None, platform: str = sys.platform) -> tuple[list[str], dict[str, str]]:
     """这个平台弹对话框的命令行，以及要附加的环境变量。"""
     if platform == "win32":
         encoded = base64.b64encode(_WINDOWS_SCRIPT.encode("utf-16-le")).decode("ascii")
-        argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", encoded]
+        argv = [_windows_powershell(), "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", encoded]
         return argv, {"PEACH_PICK_INITIAL": initial or ""}
     if platform == "darwin":
         script = f'choose folder with prompt "{_applescript_string(PROMPT)}"'
@@ -185,13 +198,20 @@ def pick_folder(initial: str | None = None, *, platform: str = sys.platform,
                          timeout=DIALOG_TIMEOUT_SECONDS, creationflags=flags)
         except subprocess.TimeoutExpired:
             return None
+        except OSError as exc:
+            # 对话框程序不存在或起不来，与不支持的平台同样处理：这台机器不提供对话框。
+            raise PickerUnsupported("这台电脑上打不开系统文件夹对话框") from exc
     finally:
         _LOCK.release()
     stderr = (result.stderr or b"").decode("utf-8", "replace")
     if result.returncode != 0:
-        # osascript 在用户取消时以 1 退出，stderr 是 "User canceled."；这不是失败。
-        if "canceled" in stderr.lower():
-            return None
+        # osascript 失败时以 1 退出，消息跟随系统语言（中文是「用户已取消。」），
+        # 末尾括号里的 AppleScript 错误码不变，所以按错误码判断。
+        codes = set(re.findall(r"\((-\d+)\)", stderr))
+        if "-128" in codes:
+            return None  # 用户取消，不是失败。
+        if codes & _MACOS_NO_DIALOG:
+            raise PickerUnsupported("这台电脑上的 Peach 没有弹出对话框的权限")
         raise PickerUnavailable("没能打开文件夹对话框")
     text = (result.stdout or b"").decode("utf-8", "replace").strip()
     if platform == "darwin" and len(text) > 1:

@@ -75,14 +75,15 @@ def plan(db_path: Path, directory: Path) -> tuple[list[Migration], list[Migratio
     return all_migrations, [m for m in all_migrations if m.version not in done]
 
 
-def sqlite_backup(source: Path, destination: Path) -> None:
+def sqlite_backup(source: Path, destination: Path, *, pages: int = -1, progress=None) -> None:
+    """`pages` 与 `progress` 原样交给 `Connection.backup`：分页复制时每页之间放开源库的读锁，并报进度。"""
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise FileExistsError(destination)
     src = sqlite3.connect(source)
     dst = sqlite3.connect(destination)
     try:
-        src.backup(dst)
+        src.backup(dst, pages=pages, progress=progress)
     finally:
         dst.close()
         src.close()

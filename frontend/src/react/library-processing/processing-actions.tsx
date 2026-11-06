@@ -80,10 +80,14 @@ function ProcessingPrompt({ command, speed, dialog, onSpeed, busy }: {
   </div>;
 }
 
-/** 扫描和已有作品补全共用资料流水线，视频预览由媒体库设置决定。 */
-export function ProcessingActions({ busy, scan = false, metadataOnly = false, speedMode = 'standard', pendingCount = 0, onRun }: {
-  busy: boolean; scan?: boolean; metadataOnly?: boolean; speedMode?: ProcessingSpeed; pendingCount?: number;
+/** 扫描和已有作品补全共用资料流水线，视频预览由媒体库设置决定。
+ *
+ * `busy` 是这次启动还在路上，按钮标 `aria-busy`，点击由共享的忙碌拦截吞掉。`occupied` 是已有
+ * 任务在跑：按钮只标 `aria-disabled`，点击仍会到达，由 `onOccupied` 告诉人为什么没有开始。 */
+export function ProcessingActions({ busy, occupied = false, scan = false, metadataOnly = false, speedMode = 'standard', pendingCount = 0, onRun, onOccupied }: {
+  busy: boolean; occupied?: boolean; scan?: boolean; metadataOnly?: boolean; speedMode?: ProcessingSpeed; pendingCount?: number;
   onRun(command: LibraryProcessingCommand): void | Promise<unknown>;
+  onOccupied?(): void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const prompt = useRef<ReturnType<typeof formModal> | null>(null);
@@ -105,8 +109,11 @@ export function ProcessingActions({ busy, scan = false, metadataOnly = false, sp
     { label: '仅补全影片资料', description: '补影片资料、封面和人物资料', command: { stage: 'metadata' as const } },
     { label: '仅补全预览图', description: '为已入库的本地视频生成九宫格', command: { stage: 'previews' as const } },
   ];
+  const blocked = busy || occupied;
+  const blockedProps = busy ? busyProps(true) : occupied ? { 'aria-disabled': true } as const : {};
   const run = (command: LibraryProcessingCommand) => {
     if (busy) return;
+    if (occupied) { onOccupied?.(); return }
     setOpen(false);
     if (!scan) {
       void Promise.resolve(onRun(command)).catch(() => { /* 错误由任务入口留在原位 */ });
@@ -146,16 +153,19 @@ export function ProcessingActions({ busy, scan = false, metadataOnly = false, sp
   };
   return <>
     {promptView ? createPortal(<ProcessingPrompt command={promptView.command} dialog={promptView.dialog}
-      speed={speedMode} busy={busy} onSpeed={value => { selectedSpeed.current = value }} />, promptView.host) : null}
-    {promptView ? createPortal(<LinkButton href="/settings/library" size="small" variant="primary" trailingIcon={RiArrowRightLine} disabled={busy}
+      speed={speedMode} busy={blocked} onSpeed={value => { selectedSpeed.current = value }} />, promptView.host) : null}
+    {promptView ? createPortal(<LinkButton href="/settings/library" size="small" variant="primary" trailingIcon={RiArrowRightLine} disabled={blocked}
       onClick={event => {
         if (promptView.dialog.confirmButton.getAttribute('aria-busy') === 'true') { event.preventDefault(); return }
         promptView.dialog.close();
       }}>管理媒体库</LinkButton>, promptView.footer) : null}
     <span data-button-group data-split-button data-variant="primary">
-      <Button {...busyProps(busy)} onClick={() => run(primary.command)}>{primary.label}</Button>
+      <Button {...blockedProps} onClick={() => run(primary.command)}>{primary.label}</Button>
       <Button ref={trigger} iconOnly leadingIcon={RiArrowDownSLine} aria-label="更多同步方式"
-        aria-haspopup="dialog" aria-expanded={open} {...busyProps(busy)} onClick={() => { if (!busy) setOpen(!open) }} />
+        aria-haspopup="dialog" aria-expanded={open} {...blockedProps} onClick={() => {
+          if (busy) return;
+          if (occupied) onOccupied?.(); else setOpen(!open);
+        }} />
     </span>
     <Popover triggerRef={trigger} isOpen={open} onOpenChange={setOpen} placement="bottom end" offset={4}
       className={MENU_POPOVER_SURFACE}>

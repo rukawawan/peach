@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .repository import in_background
 from .task_runs import TaskRunHandle, TaskRunStore
 
 LOGGER = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ class FollowupRunner:
                 if thread is not None and thread.is_alive():
                     continue
                 thread = threading.Thread(
-                    target=self._work, args=(keys,), daemon=True,
+                    target=in_background(self._work), args=(keys,), daemon=True,
                     name=f"PeachFollowup-{lane}")
                 self._threads[lane] = thread
                 thread.start()

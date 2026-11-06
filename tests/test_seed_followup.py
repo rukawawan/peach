@@ -83,7 +83,7 @@ class PlanTests(Case):
     def test_a_version_never_landed_is_planned_even_without_new_entities(self):
         found = self.plan(since_entity_id=10 ** 9)
         self.assertEqual([(item.key, item.task_key, item.label) for item in found],
-                         [(KEY, "seed-import", f"导入初始资料：{VERSION}")])
+                         [(KEY, "seed-import", f"初始资料导入：{VERSION}")])
 
     def test_a_landed_version_is_planned_again_only_when_new_entities_appear(self):
         self.finished_run(KEY)

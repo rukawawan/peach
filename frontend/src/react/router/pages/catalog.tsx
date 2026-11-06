@@ -33,6 +33,7 @@ import { ShellActionsContext, useOpenEpoch } from '../router';
 import type { CatalogShell, ShellActions } from '../shell-actions';
 import { JavLibraryHeader } from '../../jav/jav-header';
 import { CatalogFolders } from '../../catalog-folders/catalog-folders-page';
+import { removeWallBootSkeleton } from '../../video-wall/wall-boot';
 
 const readOpens = () => pageOpens;
 
@@ -194,6 +195,7 @@ export function CatalogMatch() {
     chrome.forEach(node => { node.inert = true });
     return () => {
       document.body.removeAttribute('data-wall-open');
+      removeWallBootSkeleton();
       chrome.forEach((node, index) => { node.inert = inert[index] || false });
     };
   }, [pathname]);

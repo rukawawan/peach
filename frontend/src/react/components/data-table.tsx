@@ -101,7 +101,7 @@ export function DataTable<T extends RowData>({ label, items, columns, rowId, row
   const chosen = table.getSelectedRowModel().rows.map((row) => row.original);
   return (
     <div data-data-table-panel={panel || undefined} className={panel
-      ? cardClass({ padding: 'none', bordered: 'line', className: 'flex flex-col gap-4 px-6 py-5 max-sm:px-4' })
+      ? cardClass({ padding: 'none', className: 'flex flex-col gap-4 px-6 py-5 max-sm:px-4' })
       : 'flex min-w-0 flex-col gap-4'}>
       <div data-responsive-toolbar="" role="toolbar" aria-label={`${label}工具栏`}>
         <div data-toolbar-heading="">

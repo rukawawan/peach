@@ -102,7 +102,17 @@ export function initBoardTooltip() {
       next.setAttribute('aria-describedby', [described, tip.id].filter(Boolean).join(' '));
     }, delay);
   };
+  /* 指针没动、只是脚下的元素变了（提示收起、内容重排）时，浏览器按原坐标补发 pointerover／pointerout。
+     这不是用户把指针移到了别处：键盘刚聚焦的控件的提示不能被它收掉，也不能换成指针下那个元素的提示。
+     真正越过边界时浏览器先发边界事件再发带新坐标的 pointermove，记下的坐标还是上一处。 */
+  let resting: { x: number; y: number } | null = null;
+  const unmoved = (event: PointerEvent) => event.pointerType === 'mouse' && resting !== null
+    && event.clientX === resting.x && event.clientY === resting.y;
+  document.addEventListener('pointermove', event => {
+    if (event.pointerType === 'mouse') resting = { x: event.clientX, y: event.clientY };
+  }, true);
   document.addEventListener('pointerover', event => {
+    if (unmoved(event)) return;
     if (editableTip()) {
       if (target?.contains(event.target as Node)) clearTimeout(exitTimer);
       if (tip.contains(event.target as Node)) { clearTimeout(exitTimer); return; }
@@ -111,6 +121,8 @@ export function initBoardTooltip() {
   });
   document.addEventListener('pointerout', event => {
     if (!target || target.contains(event.relatedTarget as Node | null)) return;
+    // 锚点自己在静止的指针下消失时照样收起，别处补发的离开不算。
+    if (unmoved(event) && !target.contains(event.target as Node)) return;
     if (editableTip()) {
       if (tip.contains(event.relatedTarget as Node | null) || editingTip()) return;
       clearTimeout(exitTimer); exitTimer = setTimeout(hide, 250);

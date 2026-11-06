@@ -40,9 +40,9 @@ kind: reference
 
 ## 代码入口
 
-- `frontend/src/onboarding/guide-catalog.ts`：章节、目标和说明；目录与设置页帮助共用。
+- `frontend/src/onboarding/guide-catalog.ts`：章节、目标和说明；配置页各分区不挂导览说明，字段说明写在设置行里。
 - `frontend/src/onboarding/guide-state.ts`：邀请和阅读进度，不改安装完成状态。
 - `frontend/src/onboarding/guide-driver.ts`：路由切换、目标查找、几何跟踪与 Driver.js 适配。
-- `frontend/src/react/onboarding/`：目录、引导区、步骤说明和页内帮助。
+- `frontend/src/react/onboarding/`：目录、引导区、步骤说明和偏好设置的章节入口。
 
 验证覆盖直接开始、退出、路由及目标缺失、移动端候选切换、滚动、节点替换与定位清理。界面预览与确认遵守 [界面验收预览](UI_PREVIEW.md)。

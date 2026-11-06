@@ -604,7 +604,7 @@ class HeaderRepairStore:
             job.update(job_id, status='complete' if made else 'failed',
                        repaired=int(made), error='' if made else '播放文件头未能修复')
 
-        job.start(work, initial={'stage': '读取帧时间戳', 'message': source.name, 'asset_id': asset_id})
+        job.start(work, initial={'stage': '读取帧时间戳', 'name': source.name, 'asset_id': asset_id})
 
     def stop(self):
         with self._guard:

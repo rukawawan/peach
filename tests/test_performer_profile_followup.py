@@ -27,6 +27,7 @@ from peach.performer_profiles import read_profile, write_profile
 from peach.repository import LedgerDatabase
 from peach.review_csv import read_rows
 from peach.scraping_access import paused_until
+from peach.sources import avbase
 from support.ledger import fresh_ledger
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +132,34 @@ def avwikidb_movie(code: str, floor: str, cid: str, *cast: tuple[str, int],
     return {"adultVideoId": code, "floor": floor, "fanzaContentId": cid, "mgsImageUrl": None,
             "actorUnknown": unknown,
             "actor": [{"name": name, "fanzaAvActressId": number} for name, number in cast]}
+
+
+def avbase_talent(talent_id: int, *names: str, talents: int = 1, **basic) -> str:
+    """avbase 女优页：按 2026-11-04 实测的小笠原菜乃（talent 69214）裁剪，作品表只留一部占位。
+
+    `basic` 覆盖 `meta.basic_info` 的键；FANZA 那份资料故意写成另一组值，解析不该拿它。
+    """
+    info = {"birthday": "2005-04-12", "height": "159", "bust": "90", "waist": "53", "hip": "84",
+            "cup": "I", "hobby": "サウナ・映画鑑賞", "prefectures": "岡山県", "blood_type": None, **basic}
+    actors = [{"id": talent_id + index, "name": name, "ruby": "おがさわらなの",
+               "image_url": "https://pics.dmm.co.jp/mono/actjpgs/ogasawara_nano.jpg",
+               "meta": {"fanza": {"birthday": "2004-01-01", "height": "150", "bust": "80"}}}
+              for index, name in enumerate(names)]
+    talent = {"id": talent_id, "frozen": False, "actors": actors, "primary": actors[0],
+              "profile": "", "meta": {"sns": [{"id": "nano_ogasawara", "sns": "twitter"}],
+                                      "basic_info": info}}
+    props = {"talent": talent, "talents": [{"id": talent_id + n} for n in range(talents)],
+             "works": [{"work_id": "START-399", "title": "x" * 2000}], "total": 24}
+    data = json.dumps({"props": {"pageProps": props}, "page": "/talents/[name]"}, ensure_ascii=False)
+    data = data.replace("<", "\\u003c")  # Next.js 写 `__NEXT_DATA__` 时把 `<` 转义成这样
+    return (f'<!DOCTYPE html><html lang="ja"><body><div id="__next"></div>'
+            f'<script id="__NEXT_DATA__" type="application/json">{data}</script></body></html>')
+
+
+# 站上没有这个名字：HTTP 404，Next.js 的错误页。
+AVBASE_MISSING = ('<!DOCTYPE html><html><head><title>404: This page could not be found</title></head><body>'
+                  '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":'
+                  '{"statusCode":404}},"page":"/_error"}</script></body></html>')
 
 
 AVWIKIDB_SINGLE = avwikidb_works([
@@ -243,6 +272,39 @@ class ParsingTests(unittest.TestCase):
         page = AVWIKIDB_SINGLE.replace('"movies":', '"singleCount": 2, "movies":')
         self.assertEqual(avwikidb.single_count(page), 2)
 
+    def test_the_talent_page_fills_the_profile_columns_from_basic_info_only(self):
+        """同一页 FANZA 那份资料是另一组旧值，不拿它；出道年、博客这几项站上没有，留空。"""
+        found = avbase.talent_profile(avbase_talent(69214, "小笠原菜乃", "旧名なの"))
+        self.assertEqual({column: found[column] for column in minnano_av.PROFILE_COLUMNS}, {
+            "kana": "おがさわらなの", "romaji": None, "birth_date": "2005-04-12", "height_cm": 159,
+            "bust_cm": 90, "cup": "I", "waist_cm": 53, "hip_cm": 84, "blood_type": None,
+            "birthplace": "岡山県", "hobbies": "サウナ・映画鑑賞", "debut_year": None,
+            "active_until": None, "debut_title": None, "debut_date": None, "blog_url": None,
+            "site_url": None})
+        self.assertEqual((found["talent_id"], found["names"], found["talents"]),
+                         ("69214", ["小笠原菜乃", "旧名なの"], 1))
+        self.assertEqual(found["raw"]["fanza"]["小笠原菜乃"]["height"], "150")
+
+    def test_blank_and_malformed_talent_values_stay_empty(self):
+        found = avbase.talent_profile(avbase_talent(
+            1, "甲", birthday="", height="158.5", bust="0", cup="f", hip="-", blood_type="AB",
+            prefectures="", hobby=""))
+        self.assertEqual((found["birth_date"], found["height_cm"], found["bust_cm"], found["cup"],
+                          found["hip_cm"], found["blood_type"], found["birthplace"], found["hobbies"]),
+                         (None, 158, None, "F", None, "AB", None, None))
+        self.assertIsNone(avbase.talent_profile(avbase_talent(1, "甲", birthday="2005-02-30"))
+                          ["birth_date"])
+
+    def test_a_missing_name_page_is_not_a_talent(self):
+        self.assertIsNone(avbase.talent_profile(AVBASE_MISSING))
+
+    def test_the_cached_talent_page_keeps_only_what_the_parser_reads(self):
+        page = avbase_talent(69214, "小笠原菜乃", hobby="</script>")
+        small = avbase.compact_talent_page(page)
+        self.assertEqual(avbase.talent_profile(small), avbase.talent_profile(page))
+        self.assertNotIn("START-399", small)
+        self.assertEqual(avbase.compact_talent_page(AVBASE_MISSING), AVBASE_MISSING)
+
     def test_romaji_compares_word_order_free(self):
         self.assertEqual(avwikidb.romaji_key("Hikaru Minazuki"), avwikidb.romaji_key("Minazuki Hikaru"))
         self.assertNotEqual(avwikidb.romaji_key("Hikaru Minazuki"), avwikidb.romaji_key("Hikari Minazuki"))
@@ -266,6 +328,7 @@ class Case(unittest.TestCase):
             MINNANO_URL: (200, MINNANO_PROFILE)})
         self.avwikidb = Transport({WORK_URL: (200, AVWIKIDB_WORK), ACTOR_URL: (200, AVWIKIDB_ACTOR)})
         self.javdb = Transport({}, empty_search=javdb_search())
+        self.avbase = Transport({})
 
     def entity(self, name: str, *aliases: str) -> int:
         with self.database.write_transaction(notify=False) as connection:
@@ -309,6 +372,10 @@ class Case(unittest.TestCase):
         cache = self.generated / "provider-cache"
         return {followup.MINNANO: alias.MinnanoPages(
                     cache / "minnano", self.cooldown, self.minnano, limiter=NoWait(),
+                    max_age=followup.REFRESH),
+                followup.AVBASE: alias.MinnanoPages(
+                    cache / "avbase", self.cooldown, followup.TalentPages(self.avbase),
+                    limiter=NoWait(), max_requests=alias.MAX_KEYS, source=followup.AVBASE,
                     max_age=followup.REFRESH),
                 followup.AVWIKIDB: alias.MinnanoPages(
                     cache / "avwikidb", self.cooldown, self.avwikidb, limiter=NoWait(),
@@ -504,6 +571,112 @@ class AvwikidbTests(Case):
         self.work(5, fc2, code="FC2-PPV-1234567")
         with self.database.read_connection() as connection:
             self.assertEqual(followup.work_codes(connection, fc2), [])
+
+
+class AvbaseTests(Case):
+    """minnano-av 上没有她时，avbase 女优页补资料；有别的来源那一行时只记冲突（ADR-0136）。"""
+
+    NANO_URL = avbase.talent_url("小笠原菜乃")
+    MEGURI_URL = avbase.talent_url("美ノ嶋めぐり")
+
+    def test_she_is_missing_on_minnano_so_avbase_writes_the_row_and_binds_the_talent(self):
+        nano = self.entity("小笠原菜乃")
+        self.work(1, nano)
+        self.avbase.pages[self.NANO_URL] = (200, avbase_talent(69214, "小笠原菜乃"))
+        summary = self.run_followup(nano, run_id=5)
+        found = self.profile(nano)
+        self.assertEqual((found["birth_date"], found["height_cm"], found["cup"]), ("2005-04-12", 159, "I"))
+        self.assertEqual((found["source"], found["source_url"]), (f"{followup.SOURCE}@5", self.NANO_URL))
+        number, metadata = self.refs(nano)[followup.AVBASE]
+        self.assertEqual((number, metadata["batch"], metadata["names"]),
+                         ("69214", f"{followup.SOURCE}@5", ["小笠原菜乃"]))
+        self.assertTrue(summary["landed"])
+        self.assertEqual({row["action"] for row in self.review() if row["site"] == followup.AVBASE},
+                         {followup.BIND, followup.WRITE})
+        cached = next((self.generated / "provider-cache" / "avbase").glob("*.json")).read_text(encoding="utf-8")
+        self.assertNotIn("START-399", cached, "缓存里只留裁过的那两项")
+
+    def test_an_alias_key_is_tried_after_a_404(self):
+        nano = self.entity("小笠原菜乃", "旧名なの")
+        self.work(1, nano)
+        self.avbase.pages[self.NANO_URL] = (404, AVBASE_MISSING)
+        self.avbase.pages[avbase.talent_url("旧名なの")] = (200, avbase_talent(69214, "旧名なの"))
+        self.run_followup(nano)
+        self.assertEqual(self.refs(nano)[followup.AVBASE][0], "69214")
+
+    def test_a_minnano_row_is_kept_and_only_the_disagreement_is_recorded(self):
+        meguri = self.entity("美ノ嶋めぐり")
+        self.work(1, meguri)
+        self.ref(meguri, alias.MINNANO, "387589")
+        self.avbase.pages[self.MEGURI_URL] = (200, avbase_talent(
+            47000, "美ノ嶋めぐり", birthday="2001-12-09", height="156"))
+        summary = self.run_followup(meguri)
+        found = self.profile(meguri)
+        self.assertEqual((found["birth_date"], found["source_url"]), ("2001-12-08", MINNANO_URL))
+        metadata = self.refs(meguri)[followup.AVBASE][1]
+        self.assertEqual(metadata["conflicts"], [
+            {"field": "birth_date", alias.MINNANO: "2001-12-08", followup.AVBASE: "2001-12-09"}])
+        self.assertEqual(summary["conflicts"], 1)
+        self.assertIn("birth_date：minnano-av 2001-12-08，avbase 2001-12-09；资料表不改",
+                      [row["detail"] for row in self.review()])
+
+    def test_an_avbase_row_does_not_keep_minnano_away(self):
+        """avbase 补的一行不算 minnano-av 的「未过期」：她后来上了 minnano-av，下一轮整行换成那边的。"""
+        meguri = self.entity("美ノ嶋めぐり")
+        self.work(1, meguri)
+        self.avbase.pages[self.MEGURI_URL] = (200, avbase_talent(47000, "美ノ嶋めぐり"))
+        self.minnano.pages.pop(minnano_av.search_url("美ノ嶋めぐり"))
+        self.run_followup(meguri, run_id=7)
+        self.assertEqual(self.profile(meguri)["source_url"], self.MEGURI_URL)
+        self.ref(meguri, alias.MINNANO, "387589")
+        self.run_followup(meguri, run_id=8)
+        found = self.profile(meguri)
+        self.assertEqual((found["source_url"], found["birth_date"]), (MINNANO_URL, "2001-12-08"))
+        self.assertEqual(self.avbase.calls, [self.MEGURI_URL], "avbase 编号已绑、未过期，第二轮不再问")
+
+    def test_a_name_missing_everywhere_is_a_miss_not_unfetched(self):
+        nano = self.entity("小笠原菜乃")
+        self.work(1, nano)
+        summary = self.run_followup(nano)
+        self.assertTrue(summary["sites"][followup.AVBASE].startswith(followup.MISS))
+        self.assertEqual(summary["outcome"], "哪一站都没对上她")
+        self.assertIsNone(self.profile(nano))
+
+    def assert_nothing_written(self, page: str) -> None:
+        nano = self.entity("小笠原菜乃")
+        self.work(1, nano)
+        self.avbase.pages[self.NANO_URL] = (200, page)
+        summary = self.run_followup(nano)
+        self.assertTrue(summary["sites"][followup.AVBASE].startswith(followup.MISS))
+        self.assertIsNone(self.profile(nano))
+        self.assertNotIn(followup.AVBASE, self.refs(nano))
+
+    def test_a_page_that_does_not_list_her_name_writes_nothing(self):
+        self.assert_nothing_written(avbase_talent(1, "別人"))
+
+    def test_a_name_shared_by_two_talents_writes_nothing(self):
+        self.assert_nothing_written(avbase_talent(1, "小笠原菜乃", talents=2))
+
+    def test_a_refusal_pauses_avbase_and_writes_nothing(self):
+        nano = self.entity("小笠原菜乃")
+        self.work(1, nano)
+        self.avbase.pages[self.NANO_URL] = (403, "")
+        summary = self.run_followup(nano)
+        self.assertTrue(summary["sites"][followup.AVBASE].startswith(followup.UNFETCHED))
+        self.assertTrue(paused_until(self.cooldown, followup.AVBASE))
+        self.assertIsNone(self.profile(nano))
+
+    def test_the_batch_reverts_the_row_and_the_talent_number(self):
+        nano = self.entity("小笠原菜乃")
+        self.work(1, nano)
+        self.avbase.pages[self.NANO_URL] = (200, avbase_talent(69214, "小笠原菜乃"))
+        self.run_followup(nano, run_id=5)
+        base = ["--db", str(self.db), "--logo-root", str(self.root / "logos"),
+                "--source", followup.SOURCE, "--apply", "--backup", str(self.root / "b.db")]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(load_revert().main(base), 0)
+        self.assertIsNone(self.profile(nano))
+        self.assertNotIn(followup.AVBASE, self.refs(nano))
 
 
 class JavdbTests(Case):

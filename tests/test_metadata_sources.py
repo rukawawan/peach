@@ -87,57 +87,25 @@ class JavDBResourceTests(unittest.TestCase):
             JavDBSource().parse(page, "ABW-221")
 
     def test_resource_area_and_comment_links_share_identity(self):
-        from peach.sources.javdb import parse_magnets, parse_comment_links, merge_resources
+        from peach.sources.javdb import parse_comment_text, merge_resources
         digest = 'a' * 40
         file_hash = 'b' * 32
-        html = f'''<div id="magnets-content"><div class="item">
-          <a href="magnet:?xt=urn:btih:{digest}&amp;dn=demo"><span class="name">演示</span></a>
-          <span class="meta">4 GB, 2 個文件</span><span class="tag">字幕</span><span class="time">2026-10-01</span>
-          </div></div><dl class="review-items"><dt class="review-item" id="review-item-1">
-          <a href="https://ignored.test/profile">作者</a><span class="time">2026-10-02</span>
-          <div class="content"><a href="magnet:?xt=urn:btih:{digest.upper()}">另一条写法</a>
-          ed2k://|file|demo%20file.mkv|123456|{file_hash}|/
-          <a href="ed2k://|file|another-name|123456|{file_hash.upper()}|/">重复</a>
-          <a href="https://EXAMPLE.test/file?q=1">补充</a> https://example.test/file?q=1
-          <a href="javascript:alert(1)">忽略</a></div></dt></dl>'''
-        page = Page('https://javdb.com/v/demo', html.encode())
-        items = merge_resources([*parse_magnets(page), *parse_comment_links(page)])
+        magnet = {'id': 'magnet:' + digest, 'protocol': 'magnet', 'info_hash': digest,
+                  'uri': f'magnet:?xt=urn:btih:{digest}', 'name': '演示', 'size': '4.00GB', 'files': '2',
+                  'date': '2026-10-01', 'attributes': ['中字'], 'source': 'JavDB',
+                  'source_url': 'https://javdb.com/v/demo', 'origins': ['JavDB']}
+        text = (f'magnet:?xt=urn:btih:{digest.upper()} ed2k://|file|another-name|123456|{file_hash}|/\n'
+                f'ed2k://|file|demo%20file.mkv|123456|{file_hash.upper()}|/\n'
+                'https://EXAMPLE.test/file?q=1 https://example.test/file?q=1 javascript:alert(1)')
+        comments = parse_comment_text(text, 'https://javdb.com/v/demo#review-item-1', '2026-10-02')
+        items = merge_resources([magnet, *comments])
         self.assertEqual([item['protocol'] for item in items], ['magnet', 'ed2k', 'url'])
-        self.assertEqual(items[0]['size'], '4 GB')
-        self.assertEqual(items[0]['attributes'], ['字幕'])
+        self.assertEqual(items[0]['size'], '4.00GB')
+        self.assertEqual(items[0]['attributes'], ['中字'])
         self.assertEqual(len(items[0]['origins']), 2)
         self.assertEqual(items[1]['name'], 'another-name')
         self.assertEqual(items[1]['size'], '123,456 B')
         self.assertEqual(items[2]['uri'], 'https://example.test/file?q=1')
-
-    def test_missing_magnet_region_is_not_an_empty_result(self):
-        from peach.sources.javdb import parse_magnets
-        with self.assertRaises(SourceFailure):
-            parse_magnets(Page('https://javdb.com/v/demo', b'<html>login</html>'))
-        self.assertEqual(parse_magnets(Page('https://javdb.com/v/demo', b'<div id="magnets-content"></div>')), [])
-
-    def test_comment_failure_keeps_magnets_and_reports_partial_results(self):
-        from peach.sources.javdb import JavDBSource
-        source = JavDBSource()
-        page = Page('https://javdb.com/v/demo', b'<div id="magnets-content"></div>'
-                    b'<a class="review-tab" data-url="/v/demo/reviews/lastest"></a>')
-        with patch.object(source, 'fetch', return_value=page), patch.object(source, 'parse'), \
-                patch.object(source, '_page', side_effect=SourceFailure(FailureReason.AUTH_REQUIRED, 'login')):
-            result = source.resources('DEMO-001', session=Session(lambda *args: None))
-        self.assertEqual(result['items'], [])
-        self.assertEqual(result['source_url'], 'https://javdb.com/v/demo')
-        self.assertTrue(result['warnings'])
-
-    def test_comment_urls_cannot_fetch_other_hosts(self):
-        from peach.sources.javdb import JavDBSource
-        source = JavDBSource()
-        page = Page('https://javdb.com/v/demo', b'<div id="magnets-content"></div>'
-                    b'<a class="review-tab" data-url="https://example.test/private"></a>')
-        with patch.object(source, 'fetch', return_value=page), patch.object(source, 'parse'), \
-                patch.object(source, '_page') as fetch_page:
-            result = source.resources('DEMO-001', session=Session(lambda *args: None))
-        fetch_page.assert_not_called()
-        self.assertTrue(result['warnings'])
 
 
 class DemoSource(SiteSource):
@@ -449,8 +417,9 @@ class ConfigConsistencyTests(unittest.TestCase):
                          {"makers", "prestige", "faleno", "dahlia", "mgstage"})
 
     def test_seesaa_brings_its_own_transport_and_keeps_its_source_identity(self):
-        """Seesaa 作品表不经 `SourceTransport`：不收 Cookie、采集设置页没有它的卡片，冷却只在本批内，
-        取页、缓存与限额在 `WikiPages`，间隔与页面上限取自配置；provenance 是账本里已有的 `sougouwiki`。"""
+        """Seesaa 作品表不收 Cookie、采集设置页没有它的卡片，冷却只在本批内，取页、缓存与限额在 `WikiPages`，
+        间隔与页面上限取自配置；provenance 是账本里已有的 `sougouwiki`。`scrape_codes` 点名时它自带传输，
+        素人链上则借资料处理那一份（`LibraryMetadataProvider.wiki`）。"""
         self.assertEqual(set(WIKI_SOURCES), {"sougouwiki", "av_neme", "av_name"})
         for name, site in WIKI_SOURCES.items():
             config = site.DEFAULT

@@ -631,7 +631,7 @@ function CoverageMetric({ term, value, rest }: { term: string; value: number; re
           <span className="ml-1.5 text-caption-1-regular text-text-secondary">{`${rest.toLocaleString()} 项待补`}</span>
         </b>
       </p>
-      <Progress label={`${term}：${value.toLocaleString()} / ${total.toLocaleString()}`}
+      <Progress meter label={`${term}：${value.toLocaleString()} / ${total.toLocaleString()}`}
         value={value} max={total} />
     </div>
   );

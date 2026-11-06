@@ -2,7 +2,7 @@ import type { InfiniteData } from '@tanstack/react-query';
 import { apiGet } from '../../api';
 import {
   FOLLOW_PAGE, collectionItems, entityFollowView, followPageUrl, groupMediaKinds, itemForMedia,
-  type FollowGroup, type FollowMedia, type FollowPage,
+  type FollowGroup, type FollowItem, type FollowMedia, type FollowPage,
 } from '../follow-feed/follow-feed';
 import type { FollowDetailData } from './follow-detail';
 
@@ -31,6 +31,29 @@ export function followRelatedGroups(pages: readonly FollowPage[], current: Follo
     return { group, order, sameAuthor, common };
   }).sort((a, b) => Number(b.sameAuthor) - Number(a.sameAuthor) || b.common - a.common || a.order - b.order)
     .slice(0, limit).map(row => row.group);
+}
+
+/** 接着看那张卡的推荐理由：同创作者，加上和当前这条共有的标签。标签按这几页里出现的次数从少到多排，
+ *  最能说明「为什么是它」的排在前面；人人都有的泛标签落到后面，一行写不下就被截掉。来源标成 metadata
+ *  （时长、有声、待标注）与 artist（同创作者已经说了）的不算理由。 */
+const NOT_A_REASON = new Set(['metadata', 'artist']);
+export function followRelatedReasons(pages: readonly FollowPage[], current: FollowDetailData, media: FollowMedia) {
+  /* 比的是详情那一份全部标签：卡片上的内容标签只收来源分过类的 general，没分类的帖子一枚都没有。 */
+  const all = (row: FollowItem & { detail_tags?: string[] }) => row.detail_tags || row.tags || [];
+  const mine = new Set(all(current.item));
+  const author = current.sources.find(source => source.id === current.item.source_id)?.author_key;
+  const sources = new Map(pages.flatMap(page => page.sources || []).map(source => [source.id, source]));
+  const seen = new Map<string, number>();
+  for (const group of pages.flatMap(page => page.groups || [])) {
+    for (const tag of all(itemForMedia(group, media))) seen.set(tag, (seen.get(tag) || 0) + 1);
+  }
+  return (group: FollowGroup) => {
+    const item = itemForMedia(group, media);
+    const source = item.source_id === undefined ? undefined : sources.get(item.source_id);
+    const tags = all(item).filter(tag => mine.has(tag) && !NOT_A_REASON.has(item.tag_types?.[tag] || ''))
+      .sort((a, b) => (seen.get(a) || 0) - (seen.get(b) || 0) || a.localeCompare(b));
+    return { reasons: author && source?.author_key === author ? ['同创作者'] : [], tags };
+  };
 }
 
 /** 复用关注分页和缓存结构。最多读三页；同作者不足时补全库未看内容，换条仍可直接命中列表缓存。 */

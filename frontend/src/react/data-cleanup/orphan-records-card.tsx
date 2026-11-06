@@ -12,6 +12,7 @@ import { Button } from '@/components/base/buttons/button';
 import { Select, SelectItem } from '../components/select';
 
 import { errorMessage } from '../../api';
+import { ORPHAN_RECORDS_TEXT } from '../../cleanup-tool-skeletons';
 import { DataTable, type DataColumn } from '../components/data-table';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
@@ -135,7 +136,7 @@ export function OrphanRecordsCard({ toast }: { toast(message: string): void }) {
             </Fieldset>
           : <DataTable label="文件已消失的作品" items={items} columns={columns}
               title="文件已丢失的记录" titleId="orphan-records-title" unit="条作品"
-              description="这些作品的源文件已删除，喜欢、稍后看、播放列表与观看历史仍保留。选择替代文件后，这些记录会转移到该文件，旧作品记录随之删除。"
+              description={ORPHAN_RECORDS_TEXT}
               rowId={(item) => String(item.id)} rowLabel={(item) => item.name}
               selected={selected} onSelected={setSelected}
               actions={(chosen) => <Button variant="danger" size="small" disabled={!chosen.length}

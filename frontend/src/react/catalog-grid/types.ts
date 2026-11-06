@@ -47,6 +47,8 @@ export interface MediaItem {
   creator_entity?: MediaEntityRef | null;
   studio?: string;
   why?: string;
+  /** 接着看：与当前作品共有的标签，稀有的在前（`/api/related`）。 */
+  why_tags?: string[];
   feedback?: string;
   disposal?: string;
   disposal_reason?: 'manual' | 'junk' | 'duplicate' | 'missing' | null;

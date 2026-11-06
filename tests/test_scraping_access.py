@@ -168,7 +168,7 @@ class ScrapingAccessTests(unittest.TestCase):
 
     def test_connections_do_not_claim_session_validity_or_echo_exception_urls(self):
         contract = SimpleNamespace(follow_secrets_root=self.root)
-        with patch("peach.web_scraping.SourceTransport") as factory:
+        with patch("peach.source_checks.SourceTransport") as factory:
             factory.return_value.side_effect = httpx.ConnectError("https://secret:password@example.org/")
             result = w_scraping_check(contract, {"source": "fc2cmadb"})
         self.assertFalse(result["session_verified"])
@@ -193,7 +193,7 @@ class ScrapingAccessTests(unittest.TestCase):
                  (HttpResponse(200, {}, b"<html>ok</html>", login), "ok", True, "", "登录"))
         for response, kind, ok, says, avoids in cases:
             with self.subTest(status=response.status, url=response.url), \
-                    patch("peach.web_scraping.SourceTransport") as factory:
+                    patch("peach.source_checks.SourceTransport") as factory:
                 factory.return_value.return_value = response
                 result = w_scraping_check(contract, {"source": "fc2cmadb"})["results"][0]
             self.assertEqual((result["kind"], result["ok"]), (kind, ok))
@@ -218,7 +218,7 @@ class ScrapingAccessTests(unittest.TestCase):
             (HttpResponse(200, {}, b"<title>Just a moment</title>", "https://airav.io/"), "cloudflare_challenge"),
         ]
         for outcome, reason in cases:
-            with self.subTest(reason=reason), patch("peach.web_scraping.SourceTransport") as factory:
+            with self.subTest(reason=reason), patch("peach.source_checks.SourceTransport") as factory:
                 if isinstance(outcome, Exception):
                     factory.return_value.side_effect = outcome
                 else:
@@ -602,7 +602,7 @@ class ScrapingAccessTests(unittest.TestCase):
             result = _fetch_cover(contract, "ABW-232")
         self.assertEqual(result["reason"], "network")
         self.assertIn(MOBILE_BROADBAND_HINT, result["error"])
-        with patch("peach.web_scraping.SourceTransport") as factory:
+        with patch("peach.source_checks.SourceTransport") as factory:
             factory.return_value.side_effect = httpx.ConnectError("EOF occurred in violation of protocol")
             checks = {item["label"]: item for item in
                       w_scraping_check(SimpleNamespace(follow_secrets_root=self.root), {"source": "dmm"})["results"]}
@@ -795,3 +795,93 @@ class BrowserFallbackTests(unittest.TestCase):
         with patch("peach.browser_transport.shared", side_effect=AssertionError("avwikidb 不走浏览器")), \
                 self.assertRaises(SourcePaused):
             transport(HttpRequest("GET", "https://avwikidb.com/actor/x/", {}), 1, 100)
+
+
+class SourcePreflightTests(unittest.TestCase):
+    def test_batch_deduplicates_and_preserves_target_failures(self):
+        from peach.source_preflight import check_sources
+        def check(root, source, **options):
+            self.assertTrue(options['preflight'])
+            return {'results': [{'label': '来源页面', 'ok': source == 'dmm'},
+                                {'label': '高清图片 CDN', 'ok': False, 'reason': 'network'}]}
+        with patch('peach.source_preflight.check_source', side_effect=check) as checked:
+            result = check_sources(Path('/unused'), ['dmm', 'javdb', 'dmm'])
+        self.assertEqual(checked.call_count, 2)
+        self.assertEqual([row['source'] for row in result['sources']], ['dmm', 'javdb'])
+        self.assertFalse(result['ok'])
+        self.assertTrue(all(not row['session_verified'] for row in result['sources']))
+        with patch('peach.source_preflight.check_source') as checked:
+            for selected in ([], ['unknown'], ['dmm', 'unknown']):
+                with self.assertRaises(ValueError):
+                    check_sources(Path('/unused'), selected)
+            checked.assert_not_called()
+
+    def test_preflight_bounds_requests_and_uses_no_browser(self):
+        from peach.source_checks import check_source
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch('peach.source_checks.SourceTransport') as factory:
+                factory.return_value.return_value = HttpResponse(200, {}, b'<html></html>')
+                result = check_source(root, 'javdb', preflight=True)
+            self.assertTrue(result['results'][0]['ok'])
+            factory.assert_called_once_with(root, max_requests=12, max_bytes=12 * 65536,
+                                            max_seconds=15, allow_browser=False)
+            factory.return_value.close.assert_called_once()
+
+    def test_each_source_reaches_caller_thread_with_report_outcome(self):
+        from peach.source_preflight import check_sources
+        reasons = {'dmm': 'cloudflare_challenge', 'javdb': 'cooldown', 'javbus': 'server_error'}
+        def check(root, source, **options):
+            return {'results': [{'label': '来源页面', 'ok': False, 'reason': reasons[source]}]}
+        seen = []
+        with patch('peach.source_preflight.check_source', side_effect=check):
+            result = check_sources(Path('/unused'), list(reasons), on_result=lambda row: seen.append(
+                (row['source'], threading.current_thread())))
+        self.assertEqual({source for source, _ in seen}, set(reasons))
+        self.assertTrue(all(thread is threading.current_thread() for _, thread in seen))
+        self.assertEqual([row['results'][0]['outcome_label'] for row in result['sources']],
+                         ['登录或人机验证', '冷却', 'HTTP 错误'])
+
+    def test_cooling_source_reports_cooldown_without_request(self):
+        from peach.scraping_access import _pause, cooldown_path
+        from peach.source_preflight import check_sources
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _pause(cooldown_path(root, 'javdb'), time.time() + 600)
+            with patch.object(SourceTransport, '_transport_for', side_effect=AssertionError('冷却中不应发请求')):
+                row = check_sources(root, ['javdb'])['sources'][0]['results'][0]
+        self.assertEqual((row['outcome'], row['outcome_label']), ('cooldown', '冷却'))
+
+    def test_check_all_job_counts_progress_and_keeps_result(self):
+        from peach.jobs import BackgroundJob
+        from peach.source_preflight import default_sources
+        from peach.web_scraping import w_scraping_check_all
+        job =BackgroundJob('test-source-check', task_key='source-check')
+        contract = SimpleNamespace(follow_secrets_root=Path('/unused'), source_check_job=job)
+        def check(root, source, **options):
+            return {'results': [{'label': '来源页面', 'ok': source == 'dmm',
+                                 'reason': 'ok' if source == 'dmm' else 'timeout'}]}
+        with patch('peach.source_preflight.check_source', side_effect=check):
+            started = w_scraping_check_all(contract, {})
+            job.thread.join(10)
+        state = job.snapshot()
+        self.assertEqual((started['status'], started['checked']), ('running', 0))
+        self.assertEqual(state['status'], 'complete')
+        self.assertEqual(state['checked'], state['total'])
+        self.assertEqual([row['source'] for row in state['results']], default_sources())
+        self.assertEqual(state['failed'], state['total'] - 1)
+
+    def test_http_only_transport_does_not_launch_or_fix_browser_route(self):
+        from peach.scraping_access import SourcePaused, fix_to_browser, fixed_to_browser
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fix_to_browser(root, 'minnano-av')
+            transport = SourceTransport(root, allow_browser=False)
+            with patch.object(transport, '_browser_for', side_effect=AssertionError('不能启动浏览器')), \
+                    patch('peach.scraping_access.client_for') as client:
+                client.return_value = httpx.Client(transport=httpx.MockTransport(
+                    lambda request: httpx.Response(403, content=b'blocked')))
+                with self.assertRaises(SourcePaused):
+                    transport(HttpRequest('GET', 'https://www.minnano-av.com/', {}), 1, 1024)
+            transport.close()
+            self.assertTrue(fixed_to_browser(root, 'minnano-av'))

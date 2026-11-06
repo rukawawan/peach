@@ -56,6 +56,8 @@ def scan_lines(path: str, source: str, *, skip_code_fences: bool) -> list[Findin
             continue
         if fence is None:
             found.extend(_scan_text(path, line_no, raw))
+            # 只查 Markdown；源码注释与界面字串不在此列。
+            found.extend(_scan_text(path, line_no, raw, group="doc_terms"))
     return found
 
 
@@ -122,7 +124,7 @@ def scan_html(path: str, source: str) -> list[Finding]:
 
 
 def targets(root: Path) -> list[Path]:
-    picked = [root / name for name in ("AGENTS.md", "README.md", "README.zh-CN.md")]
+    picked = [root / name for name in ("AGENTS.md", "CONTRIBUTING.md", "README.md", "README.zh-CN.md")]
     picked.extend(sorted((root / "docs").glob("*.md")))
     picked.extend(sorted((root / ".claude/skills").glob("*/SKILL.md")))
     picked.extend(sorted((root / "web").glob("*.html")))

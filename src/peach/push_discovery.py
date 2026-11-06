@@ -43,6 +43,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Callable
 
 from .fsutil import atomic_write_text
+from .repository import in_background
 
 LOGGER = logging.getLogger(__name__)
 
@@ -402,7 +403,7 @@ class DiscoveryQueue:
             return
         self._stopping = False
         self._thread = threading.Thread(
-            target=self._loop, name="PeachPushDiscovery", daemon=True)
+            target=in_background(self._loop), name="PeachPushDiscovery", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -642,7 +643,7 @@ class PushDiscoveryService:
         except (OSError, ValueError):
             return None
 
-    def _ingest(self, location: str, path: str, move_from=None) -> bool:
+    def _ingest(self, location: str, path: str, move_from=None, *, notify: bool = True) -> bool:
         from .record_rehome import reattach_in
         from .scan import ingest_path
         result = ingest_path(self.db_path, location, path,
@@ -652,9 +653,36 @@ class PushDiscoveryService:
             self._measure(location, path)
             # 登记时已按番号接回过一轮；探到时长之后，要靠时长分辨的那几条再判一次。
             reattach_in(self.db_path, [result.asset_id] if result.new else [])
+            if notify and result.new and not move_from and result.asset_id:
+                self._notify(result.asset_id)
         if result.found and self.after_ingest:
             self.after_ingest()
         return result.found
+
+    def _notify(self, asset_id: int) -> None:
+        """新登记的是一部影片时记一条入库通知，页面据此弹 toast（`ingest_notices`）。
+
+        同番号有未失败的云下载任务时不记：网盘通知可能比云下载对账先到，那部作品整理完成时
+        云下载那一侧会记一条，同一部不弹两次。
+        """
+        from contextlib import closing
+
+        from .catalog_rules import normalise_code_key, release_code_from_filename
+        from .ingest_notices import NOTICES
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            row = connection.execute("SELECT code,path FROM asset WHERE id=? AND medium='video'",
+                                     (asset_id,)).fetchone()
+            if row is None:
+                return
+            # 刚登记时番号还没采集，按文件名认。
+            name = PureWindowsPath(row[1]).name
+            code = row[0] or release_code_from_filename(name) or ""
+            downloading = bool(code) and any(
+                normalise_code_key(task_code) == normalise_code_key(code) for (task_code,) in connection.execute(
+                    "SELECT code FROM download_task WHERE code IS NOT NULL AND code<>''"
+                    " AND state NOT IN ('failed','cancelled')"))
+        if not downloading:
+            NOTICES.add("discovered", int(asset_id), code or PureWindowsPath(name).stem)
 
     def _measure(self, location: str, path: str) -> None:
         """登记完顺手探时长与分辨率。探不成不影响这一条已经入库，全量扫描还会再补。"""
@@ -693,7 +721,8 @@ class PushDiscoveryService:
         """
         if ignored(PureWindowsPath(path).name):
             return False
-        return self._ingest(location, path)
+        # 云下载整理完成时另有一条通知，这里落地登记不再弹。
+        return self._ingest(location, path, notify=False)
 
     def submit_cloud(self, cloud_path: str) -> str:
         """webhook 收到一条云端路径：映射成账本路径再进队列，返回那条账本路径。"""

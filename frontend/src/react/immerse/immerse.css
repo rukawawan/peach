@@ -50,6 +50,8 @@ body[data-immerse-open]{overflow:hidden}
 [data-immerse-ui]{position:absolute;left:20px;bottom:20px;width:min(520px,calc(50% - 28.125vh - 36px));
   padding:0;color:#f1f1f1;pointer-events:none}
 [data-immerse][data-wide] [data-immerse-ui]{width:min(500px,calc(36vw - 56px))}
+/* 进度条预览出来时让开：作者与标题在它正下方，透过时间浮签的半透明底会读成一团。 */
+[data-immerse]:has([data-immerse-bar] [data-player-seek-preview]:not([hidden])) [data-immerse-ui]{visibility:hidden}
 [data-immerse-actions]{position:absolute;left:calc(100% + 12px);bottom:8px;width:72px;
   display:flex;flex-direction:column;align-items:center;gap:16px}
 [data-immerse-stage][data-wide] [data-immerse-actions]{left:auto;right:12px;bottom:18px}
@@ -64,10 +66,11 @@ body[data-immerse-open]{overflow:hidden}
   cursor:pointer;touch-action:none;display:flex;align-items:flex-end}
 [data-immerse-bar]::before{content:"";position:absolute;left:0;right:0;bottom:0;height:4px;
   background:rgba(255,255,255,.16);transition:height .12s}
-[data-immerse-bar] i{position:relative;display:block;height:4px;width:0;background:var(--tungsten);
+/* 只管直接子元素：上方那块画面预览里的取景框也是 `<i>`。 */
+[data-immerse-bar]>i{position:relative;display:block;height:4px;width:0;background:var(--tungsten);
   transition:height .12s}
-[data-immerse-bar]:hover::before,[data-immerse-bar]:hover i,
-[data-immerse-bar][data-scrubbing]::before,[data-immerse-bar][data-scrubbing] i{height:9px}
+[data-immerse-bar]:hover::before,[data-immerse-bar]:hover>i,
+[data-immerse-bar][data-scrubbing]::before,[data-immerse-bar][data-scrubbing]>i{height:9px}
 [data-immerse-author]{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:var(--fs-md);line-height:1.2}
 /* 作者名单行省略、元信息不折：十几位共演时名字收成一截，「· 时长 · 横屏 · 序号」照旧排在后面。 */
 [data-immerse-author]>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f1f1f1;font-weight:600;text-decoration:none;pointer-events:auto}

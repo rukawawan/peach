@@ -93,7 +93,7 @@ function Coverage({ term, value, total }: { term: string; value: Count; total: n
             : null}
         </b>
       </p>
-      <Progress label={`${term}：${fmtCount(value)} / ${total.toLocaleString()}`}
+      <Progress meter label={`${term}：${fmtCount(value)} / ${total.toLocaleString()}`}
         value={known(value) ? within(value, max) : 0} max={max} />
     </div>
   );
@@ -197,7 +197,7 @@ function VolumeRow({ volume }: { volume: StorageVolume }) {
         ) : volume.online ? <StatusLabel>容量未取得</StatusLabel> : <ConnectionStatus online={false} />}
       </header>
       {total != null
-        ? <Progress label={`${volume.label}空间使用率`} value={within(used, Math.max(total, 1))} max={Math.max(total, 1)} />
+        ? <Progress meter label={`${volume.label}空间使用率`} value={within(used, Math.max(total, 1))} max={Math.max(total, 1)} />
         : null}
       <p className="flex justify-between gap-3 text-caption-1-regular text-text-secondary">
         <span className="min-w-0 break-words">{volume.root ?? '未映射'}</span>
@@ -272,7 +272,7 @@ function RecentWatches({ rows, hasMedia }: { rows: RecentPlay[]; hasMedia: boole
               </p>
             </div>
             <div className="min-w-0 basis-40">
-              <Progress label={`真实观看 ${real.toFixed(0)}%`} value={real} />
+              <Progress meter label={`真实观看 ${real.toFixed(0)}%`} value={real} />
               <small className="mt-1.5 block text-caption-1-regular text-text-secondary">
                 {`真实 ${real.toFixed(0)}% · 到达 ${reachedShare(row).toFixed(0)}%`}
               </small>
@@ -302,7 +302,7 @@ function TagSources({ sources, videos }: { sources: TagSource[]; videos: number 
               <small className="ml-1 text-caption-1-regular font-normal text-text-secondary">个视频</small>
             </b>
           </header>
-          <Progress label={`${source.k} 覆盖视频`} value={within(source.assets, Math.max(videos, 1))}
+          <Progress meter label={`${source.k} 覆盖视频`} value={within(source.assets, Math.max(videos, 1))}
             max={Math.max(videos, 1)} />
           <small className="text-caption-1-regular text-text-secondary">{source.n.toLocaleString()} 条标签</small>
         </article>

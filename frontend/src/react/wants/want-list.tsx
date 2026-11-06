@@ -24,6 +24,7 @@ import { WantMagnets } from './want-magnets';
 import { cachedMagnetStates } from './resource-cache';
 import { SEGMENT, SEGMENTED_TRACK, SegmentedRadioGroup } from '../components/segmented';
 import { busyProps, useAction } from '../settings/use-action';
+import { composingKey } from '../components/ime';
 import {
   addWant, fetchWants, invalidateWants, PHASES, removeWants, resetWants, searchNote, wantName,
   WANTS_KEY, type Want,
@@ -59,7 +60,7 @@ function WantRow({ want, readOnly, busy, onReset, onRemove, onCloudDownload, dow
   const source = want.link || resolvedSource || (want.code ? `https://javdb.com/search?q=${encodeURIComponent(want.code)}&f=all` : '');
   return (
     <li data-want-id={want.id}
-      className={cardClass({ bordered: 'soft', className: 'flex flex-col gap-4 max-sm:p-4' })}>
+      className={cardClass({ className: 'flex flex-col gap-4 max-sm:p-4' })}>
       <div className="flex min-w-0 items-start gap-4 max-sm:gap-3">
       <Cover want={want} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -165,7 +166,7 @@ export function WantList({ readOnly, toast, query = '', clearQuery }: WantListPr
     });
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); add() }
+    if (event.key === 'Enter' && !composingKey(event.nativeEvent)) { event.preventDefault(); add() }
   };
   const remove = (want: Want) => {
     void action.run(`remove:${want.id}`, (signal) => removeWants([want.id], signal), () => {

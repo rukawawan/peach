@@ -1,9 +1,10 @@
 import { fmtSize } from '@peach/legacy/core';
 
-/** 来源的字节数按馆藏容量口径展示，其他来源单位保留。 */
-export function resourceSize(value: string): string {
-  const bytes = /^([\d,]+)\s*B$/i.exec(value.trim());
-  if (/^[\d,.]+$/.test(value.trim())) return '大小未知';
+/** 来源的字节数按馆藏容量口径展示，其他来源单位保留；来源没给大小时显示未知。 */
+export function resourceSize(value: string | null | undefined): string {
+  const text = (value ?? '').trim();
+  const bytes = /^([\d,]+)\s*B$/i.exec(text);
+  if (/^[\d,.]+$/.test(text)) return '大小未知';
   return bytes ? fmtSize(Number(bytes[1].replaceAll(',', ''))) : value || '大小未知';
 }
 

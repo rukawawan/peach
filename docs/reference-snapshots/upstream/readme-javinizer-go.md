@@ -56,6 +56,7 @@ curl -o ./data/config.yaml \
   https://raw.githubusercontent.com/javinizer/javinizer-go/main/configs/config.yaml.example
 
 docker run --rm \
+  --hostname javinizer \
   -e JAVINIZER_SETUP_TRUSTED_CIDRS=172.16.0.0/12 \
   --user "$(id -u):$(id -g)" \
   -p 8765:8765 \
@@ -327,6 +328,8 @@ javinizer scrape IPX-535
 javinizer scrape SSIS-123 --force   # force-refresh cached metadata
 ```
 
+`--force` bypasses cached scraper metadata while preserving movie-specific actor names, suppression, ordering, identity reassignments, and collision decisions. A failed or cancelled refresh leaves the saved movie intact. In batch jobs, forced refresh metadata becomes available for review only after it is saved successfully. If a scraper returns a content identity conflicting with a known requested movie or another saved display ID, the refresh reports a conflict instead of transferring those choices. A changed display ID requires an explicit matching content ID for an existing movie; search for the intended distinct movie ID to scrape it separately. Scraped results with no usable actor evidence preserve saved credits, since an empty source cast may mean missing or unparsed metadata. Explicit cast removal in the editor still applies. Existing alternate search/URL inputs retain their normal resolution; a key that does not already identify a saved movie cannot establish its prior owner.
+
 ### Update metadata in place
 
 Re-scrape and merge into already-organized files (supports merge presets/strategies):
@@ -356,6 +359,9 @@ javinizer genre add "Creampie" "Cream Pie"
 javinizer word add "censored" "original"
 
 # Actress database
+javinizer actress list                             # find verified database IDs
+javinizer actress search "name"                    # search names and DMM IDs
+javinizer actress credit add ABC-123 --actress-id 12 # add a persistent database credit
 javinizer actress merge --target <id> --source <id>   # merge duplicates
 javinizer actress export
 
@@ -452,6 +458,7 @@ Docker deployments support environment-variable overrides. Defaults shown are fo
 |----------|-------------|---------|
 | `PUID` / `PGID` | Runtime user/group ID for the container process | `1000` |
 | `USER_ID` / `GROUP_ID` | Legacy aliases for `PUID`/`PGID` | `1000` |
+| `JAVINIZER_HOME` | Persistent application state; sweep signing key is stored in `cache/Javinizer` | `/javinizer` |
 | `JAVINIZER_CONFIG` | Path to config file | `/javinizer/config.yaml` |
 | `JAVINIZER_DB` | Path to SQLite database | `/javinizer/javinizer.db` |
 | `JAVINIZER_LOG_DIR` | Relocate file log targets to this directory | `/javinizer/logs` |
@@ -502,6 +509,7 @@ See `.env.example` for Docker Compose configuration.
 | [Template System](./docs/04-template-system.md) | Output naming templates |
 | [Genre Management](./docs/05-genre-management.md) | Genre replacement rules |
 | [User Guide](./docs/14-user-guide.md) | Web UI workflows |
+| [Existing Video Destinations](./docs/video-collision-policy.md) | Review, skip, replace, recovery, and Undo |
 | [Architecture](./docs/16-architecture.md) | System architecture overview |
 | [Development](./docs/09-development.md) | Contributing and dev setup |
 | [Testing](./docs/12-testing-guide.md) | Testing practices and coverage |

@@ -8,6 +8,15 @@ export const DISCOVERY_SORTS = [
   ['code', '番号', '按番号排序'],
 ] as const;
 export type DiscoverySort = typeof DISCOVERY_SORTS[number][0];
+/** 新作分区的排序：发行时间打头（默认），其余同「发现」；`random` 是「换一批」，没有对应的排序键。 */
+export const RELEASE_SORTS = [
+  ['release_date', JAV_RELEASE_SORT[1], '按发行日期排序'],
+  ['source_score', '来源评分', '按来源评分排序'],
+  ['duration', '时长', '按时长排序'],
+  ['code', '番号', '按番号排序'],
+  ['taste', '口味', '按口味匹配排序'],
+] as const;
+export type ReleaseSort = typeof RELEASE_SORTS[number][0] | 'random';
 export type DiscoveryDirection = 'asc' | 'desc';
 
 export function discoveryScore(value: number | null | undefined): string {

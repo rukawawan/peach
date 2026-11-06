@@ -18,7 +18,7 @@ from . import seed_pack, seed_corrections, seed_validation
 from .followups import Followup, FollowupType, register
 
 TASK_KEY = "seed-import"
-TASK_LABEL = "导入初始资料"
+TASK_LABEL = "初始资料导入"
 REVIEW_FILE = "seed-landing.csv"
 FIELDS = ("kind", "entity", "field", "ours", "source", "theirs", "detail", "batch", "withdrawal_id", "evidence")
 #: 活动页摘要里的计数键与它们的中文名，按这个顺序拼结论。

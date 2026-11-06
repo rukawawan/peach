@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchFollowRelated, followRelatedGroups } from '../../src/react/follow-detail/follow-related';
+import { fetchFollowRelated, followRelatedGroups, followRelatedReasons } from '../../src/react/follow-detail/follow-related';
 import type { FollowDetailData, FollowDetailItem } from '../../src/react/follow-detail/follow-detail';
 import type { FollowGroup, FollowItem, FollowPage } from '../../src/react/follow-feed/follow-feed';
 
@@ -25,6 +25,18 @@ describe('关注接着看', () => {
   it('同创作者优先，再按共同标签排序，遵守数量', () => {
     const rows = [group(item(3, { source_id: 2, tags: ['solo'] })), group(item(4)), group(item(5, { tags: ['solo'] }))];
     expect(followRelatedGroups([page(rows)], current, 'videos', 2).map(row => row.primary.id)).toEqual([5, 4]);
+  });
+  it('推荐理由写同创作者和共同标签，少见的标签排在前面，作者与元数据标签不算', () => {
+    const shown: FollowDetailData = { ...current, item: item(1, { tags: ['solo', 'rare', 'pov', 'kou', 'tagme'] }) };
+    const rows = [group(item(3, { tags: ['solo', 'pov', 'rare', 'kou', 'tagme'], tag_types: { kou: 'artist', tagme: 'metadata' } })),
+      group(item(4, { source_id: 2, tags: ['solo', 'pov'] })),
+      group(item(5, { source_id: 2, tags: ['solo'] }))];
+    const reason = followRelatedReasons([page(rows)], shown, 'videos');
+    expect(rows.map(reason)).toEqual([
+      { reasons: ['同创作者'], tags: ['rare', 'pov', 'solo'] },
+      { reasons: [], tags: ['pov', 'solo'] },
+      { reasons: [], tags: ['solo'] },
+    ]);
   });
   it('混合媒体按当前视图选择卡面，已看的卡面不进入推荐', () => {
     const mixed = group(item(7, { media_kind: 'image' }), [item(8, { published_at: '2026-10-10', status: 'seen' })]);

@@ -65,10 +65,13 @@ def _closeness_features(left, right, weights: Mapping[int, float]) -> float:
     return score
 
 
+TAG_REASON = "标签接近"
+
+
 def _reasons_features(a: Mapping[str, set[int]], b: Mapping[str, set[int]]) -> list[str]:
     return [label for kind, label in (
         ("creator", "同创作者"), ("series", "同系列"),
-        ("performer", "同出演者"), ("tag", "标签接近"), ("studio", "同厂牌"),
+        ("performer", "同出演者"), ("tag", TAG_REASON), ("studio", "同厂牌"),
     ) if a[kind] & b[kind]]
 
 
@@ -111,6 +114,9 @@ def rank_related(source: Mapping, candidates: Iterable[Mapping], limit: int,
         if not reasons and not relevance_for:
             continue
         candidate["why"] = " · ".join(reasons[:2])
+        # 「标签接近」本身说不出接近在哪：共同标签按 IDF 从稀有到常见交出去，由调用方换成名字。
+        candidate["shared_tags"] = sorted(source_feature[0]["tag"] & feature[0]["tag"],
+                                          key=lambda tag: (-weights.get(tag, 1.0), tag))
         candidate["related_score"] = round(relevance, 4)
         entries.append(_Entry(candidate, feature, relevance,
                               _stable_key(stable_seed, int(candidate["id"]))))

@@ -216,6 +216,32 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(len(self._rows()), 3)
 
 
+class SmbDiscoveryTests(unittest.TestCase):
+    """SMB 共享上的作品不是操作系统路径，同目录字幕经 SMB 列目录发现。"""
+
+    def _video(self):
+        from peach.smb_media import SmbResource
+        from peach.smb_transport import SmbConnection
+        return SmbResource("nas", r"R:\Media", "smb://files.invalid/media", ("ABP-758", "ABP-758.mp4"),
+                           SmbConnection("files.invalid", "media"))
+
+    def test_sidecars_next_to_an_smb_video_are_listed_through_the_share(self):
+        from peach.smb_media import SmbResource
+        from peach.smb_transport import SmbEntry
+        listing = [SmbEntry(9, 1, 1, False, "ABP-758.mp4"), SmbEntry(3, 1, 1, False, "ABP-758.chs.srt"),
+                   SmbEntry(3, 1, 1, False, "OTHER-1.srt"), SmbEntry(0, 1, 1, True, "ABP-758.srt"),
+                   SmbEntry(3, 1, 1, False, "ABP-758.ass", True)]
+        with mock.patch.object(SmbResource, "scandir", return_value=listing):
+            found = subtitles.discover_sidecars(self._video(), scan.VIDEO)
+        self.assertEqual([(row["name"], row["path"], row["language"]) for row in found],
+                         [("ABP-758.chs.srt", r"R:\Media\ABP-758\ABP-758.chs.srt", "zh-Hans")])
+
+    def test_an_unreachable_share_yields_no_sidecars(self):
+        from peach.smb_media import SmbResource
+        with mock.patch.object(SmbResource, "scandir", side_effect=OSError(113, "SMB 连接不可用")):
+            self.assertEqual(subtitles.discover_sidecars(self._video(), scan.VIDEO), [])
+
+
 class DecodeTests(unittest.TestCase):
     def test_a_bom_names_the_encoding(self):
         self.assertEqual(subtitles.decode("台词".encode("utf-8-sig")), "台词")

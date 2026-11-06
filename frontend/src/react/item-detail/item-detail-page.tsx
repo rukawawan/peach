@@ -571,7 +571,7 @@ function Tags({ item, write, helpers, actions }: {
   item: DetailItem; write: DetailWrite; helpers: ItemDetailHelpers; actions: ItemDetailActions;
 }) {
   return <div data-item-tags="">
-    <DetailTags id="detailTags" tags={detailTags(item, helpers)} candidates={helpers.tagCandidates()} label={helpers.tagLabel}
+    <DetailTags key={item.id} id="detailTags" tags={detailTags(item, helpers)} candidates={helpers.tagCandidates()} label={helpers.tagLabel}
       adding={[...write.busy].some(key => key.startsWith('add:'))}
       onOpen={actions.openTag} onAdd={write.addTag} onRemove={write.removeTag} busyAttrs={tag => write.busyAttrs(`tag:${tag}`)} />
   </div>;

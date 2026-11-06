@@ -49,8 +49,10 @@ export function RadialCard(
   const shown = slices[focus];
   const toggle = (index: number) => setPinned((at) => (at === index ? -1 : index));
   const ceiling = radialCeiling(slices.map((row) => row.value));
+  /* 原始数放 `count` 列，不叫 `value`：Recharts 算扇区时把这一行展开后又写一遍 `value`，填的是
+     画图那一列（`arc`），浮层读到的就成了垫高的弧长。 */
   const data = slices.map((row, index) => (
-    { slice: sliceKey(index), value: row.value, arc: radialArc(row.value, ceiling) }));
+    { slice: sliceKey(index), count: row.value, arc: radialArc(row.value, ceiling) }));
 
   return (
     <section className={CHART_CARD}>
@@ -78,7 +80,7 @@ export function RadialCard(
             onClick: (_entry: unknown, index: number) => toggle(index),
             onMouseEnter: (_entry: unknown, index: number) => setHovered(index),
           }} />
-          <ChartTip nameKey="slice" valueKey="value" hideLabel />
+          <ChartTip nameKey="slice" valueKey="count" hideLabel />
         </EvilRadialChart>
       </div>
       <div className="inline-grid w-full grid-cols-3 gap-2 max-sm:grid-cols-2">

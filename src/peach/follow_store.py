@@ -108,6 +108,7 @@ _OFFICIAL_IDENTITY_PROVIDERS = follow_providers.official_identity_providers()
 #: 资源的楼层各自成组；这条口径登记在 `follow_providers`，不在这里点名站点。
 _RELEASE_KEY_PER_POST = follow_providers.release_key_per_post()
 _SEQUENTIAL_UPLOADS = follow_providers.sequential_upload_providers()
+_SITE_WIDE_CHARACTERS = follow_providers.site_wide_character_providers()
 
 #: 完整候选（列表 + 详情都取到了）更新已有行时用的 SET 子句。
 _FULL_UPDATE = (
@@ -178,7 +179,7 @@ def _carry_image_dims(metadata: dict, previous_json: str | None) -> dict:
 #: published_at、group_hint 一概不动，metadata 用 `json_patch` 并进去而
 #: 不是整块替换——否则跳过第二阶段就等于把上一轮取到的细节抹掉，而抹掉之后
 #: 「详情本来就没有」和「这次没去问」在数据里长得一模一样。
-#: 时长只补空：rule34xxx 的时长读自原文件头，帖子页被限流挡回来时它照样取得到，
+#: 时长只补空：rule34xxx 的时长读自原文件头，上传时间被限流挡回来时它照样取得到，
 #: 这时候选仍是 partial，已有的时长不覆盖，空着的补上。
 _PARTIAL_UPDATE = (
     "  title=excluded.title, url=excluded.url, version=excluded.version,"
@@ -199,8 +200,8 @@ _ENRICHED_PREDICATES = {
     # kemono 系：详情页只用来判「这一帖交付了资源没有」，没有要补的列。判过保留的帖子
     # 才会落库，所以行在 ledger 里本身就是判定结果，库里有的帖子不必再探。
     "kept": "1",
-    # rule34xxx：分类只有帖子页给，时长只有原文件头给，两样都有才算补齐。只看分类的话，
-    # 时长功能上线前补过分类的行、文件头那次没读到的行，常规检查永远不会再问。
+    # rule34xxx：分类随 dapi 的 `tag_info` 到，时长只有原文件头给，两样都有才算补齐。
+    # 只看分类的话，时长功能上线前补过分类的行、文件头那次没读到的行，常规检查永远不会再问。
     "tag_types_duration": (
         "json_extract(metadata_json,'$.tag_types') IS NOT NULL"
         " AND (duration IS NOT NULL OR (lower(COALESCE(media_url,'')) NOT LIKE '%.mp4'"
@@ -488,6 +489,11 @@ class FollowStore:
                 updated += 1
             else:
                 added += 1
+        if fetch.provider in _SITE_WIDE_CHARACTERS:
+            self._promote_characters(fetch.provider, {
+                str(tag) for candidate in fetch.candidates if not candidate.partial
+                for tag, kind in (candidate.extra.get("tag_types") or {}).items()
+                if kind == "character"})
         if not complete:
             return RecordOutcome(source_id, len(fetch.candidates), added, updated)
         if page:
@@ -505,6 +511,42 @@ class FollowStore:
                 (fetch.etag, fetch.last_modified, stamp, stamp, source_id))
         return RecordOutcome(source_id, len(fetch.candidates), added, updated,
                              evidence_path=evidence, evidence_error=evidence_error)
+
+    def _promote_characters(self, provider: str, characters: set[str]) -> int:
+        """同站旧条目里记成 general 的同名标签改记 character，返回改了几行。
+
+        详情页探过的行不再重探，站方事后把标签改成角色时，只有新条目会记上。
+        这里只往 character 改、不往回改：一页没解析出角色分组时全是 general，
+        拿它去降级旧行，会把一次改版或一页残缺扩散到整站。跨来源也改：同一个角色
+        常出现在不同作者的作品里。
+        """
+        if not characters:
+            return 0
+        connection = self._connect()
+        rows = connection.execute(
+            "SELECT i.id, i.metadata_json FROM follow_item i"
+            " JOIN follow_source s ON s.id=i.source_id WHERE s.provider=?"
+            " AND json_extract(i.metadata_json,'$.tag_types') IS NOT NULL",
+            (provider,)).fetchall()
+        changed = 0
+        for item_id, raw in rows:
+            try:
+                metadata = json.loads(raw or "{}")
+            except ValueError:
+                continue
+            types = metadata.get("tag_types") if isinstance(metadata, dict) else None
+            if not isinstance(types, dict):
+                continue
+            promoted = {tag: "character" for tag in characters
+                        if types.get(tag) == "general"}
+            if not promoted:
+                continue
+            connection.execute(
+                "UPDATE follow_item SET metadata_json=? WHERE id=?",
+                (json.dumps({**metadata, "tag_types": {**types, **promoted}},
+                            ensure_ascii=False), item_id))
+            changed += 1
+        return changed
 
     def _replace_candidate_profile_links(
         self,
@@ -574,6 +616,16 @@ class FollowStore:
             seen.add(key)
             links.append({"service": service, "handle": handle, "url": source})
         self.merge_source_metadata(source_id, {"official_links": links}, moment=moment)
+
+    def latest_item_stamps(self) -> list[tuple[int, str]]:
+        """每条来源最近一条条目的时间文本：发布时间，没有就用第一次见到的时间。
+
+        定时检查按它判来源活不活跃（`follow_check.check_interval`）。一条都没有的来源不在结果里。
+        """
+        return [(int(row[0]), str(row[1])) for row in self._connect().execute(
+            "SELECT source_id, max(COALESCE(NULLIF(published_at,''), first_seen_at))"
+            " FROM follow_item GROUP BY source_id HAVING max(COALESCE(NULLIF(published_at,''),"
+            " first_seen_at)) IS NOT NULL")]
 
     def enriched_external_ids(self, source_id: int, mark: str) -> frozenset[str]:
         """这条来源里细节已经补齐、不必再打详情页的条目 id。

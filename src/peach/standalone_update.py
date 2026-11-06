@@ -18,7 +18,7 @@ import zipfile
 import httpx
 from filelock import FileLock, Timeout
 
-from . import __version__, desktop_installer, distribution, release_updates, settings_file, update_packages
+from . import __version__, desktop_installer, distribution, release_signing, release_updates, settings_file, update_packages
 from .fsutil import atomic_write_text
 from .windows_update import replace_with_retry
 from . import update_tasks
@@ -112,14 +112,15 @@ def extract(archive: Path, destination: Path, progress, *, tool_files: set[str] 
 
 
 def download(url: str, archive: Path, size: int, digest: str, progress) -> None:
-    sources = release_updates.download_sources(url)
-    for index, source in enumerate(sources):
+    failures = []
+    for source in release_updates.download_sources(url):
         try:
             _download_once(source, archive, size, digest, progress)
             return
-        except (httpx.HTTPError, ValueError):
-            if index == len(sources) - 1:
-                raise
+        except (httpx.HTTPError, ValueError) as exc:
+            failures.append(exc)
+    # 镜像常落后几个版本：备用源的 404 不能盖住主源的校验失败，没有校验失败时报主源的原因。
+    raise next((exc for exc in failures if isinstance(exc, ValueError)), failures[0])
 
 
 def _download_once(url: str, archive: Path, size: int, digest: str, progress) -> None:
@@ -179,6 +180,43 @@ def prepare_tools(stage: Path, target: Path, transaction: Path, release: dict, d
             raise ValueError(f"{tool} 工具复用校验失败")
 
 
+def _fetch_small(client, url: str) -> bytes:
+    body = bytearray()
+    with client.stream("GET", url) as response:
+        response.raise_for_status()
+        for chunk in response.iter_bytes(64 * 1024):
+            body += chunk
+            if len(body) > release_signing.MAX_BYTES:
+                raise ValueError("发布签名文件过大")
+    return bytes(body)
+
+
+def signed_release(release: dict) -> dict:
+    """源码带发布公钥时，更新包与完整包的摘要只取签名验过的 `SHA256SUMS.txt`（ADR-0137）。
+
+    两个公开源依次尝试；都验不过就不升级，已装版本原样保留。
+    """
+    if not release_signing.PUBLIC_KEYS:
+        return release
+    from .peach_proxy import http_client
+    directory, name = release["asset_url"].rsplit("/", 1)
+    digests = {}
+    for url in release_updates.download_sources(f"{directory}/{release_signing.SUMS}"):
+        try:
+            with http_client(follow_redirects=True, timeout=30) as client:
+                sums = _fetch_small(client, url)
+                signature = _fetch_small(client, url + ".sig")
+            digests = release_signing.verify(sums, signature)
+            break
+        except (httpx.HTTPError, ValueError):
+            continue
+    if name not in digests:
+        raise ValueError("发布签名校验未通过，已停止更新；请到发布页手动下载新版本")
+    full = release.get("full_url")
+    full = digests.get(full.rsplit("/", 1)[1]) if isinstance(full, str) else None
+    return dict(release, asset_digest="sha256:" + digests[name], full_digest=full and "sha256:" + full)
+
+
 def checked_asset(digest: object, size: object, label: str) -> tuple[str, int]:
     if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) != 71:
         raise ValueError(f"{label}缺少 SHA-256 校验信息")
@@ -208,6 +246,7 @@ def prepare(data: dict, lock: FileLock) -> None:
         release = release_updates.check()
         if release["state"] != "available":
             raise ValueError(release["message"])
+        release = signed_release(release)
         digest, total = checked_asset(release.get("asset_digest"), release.get("asset_size", 0), "更新包")
         target = Path(sys.executable).resolve().parent
         if state_path().resolve().is_relative_to(target):

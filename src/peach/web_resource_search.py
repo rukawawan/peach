@@ -1,4 +1,5 @@
 """资源搜索的只读 Web 契约；下载仍由云下载写入口接收。"""
+from .javdb_public import public_cache_scope
 from .magnet_chain import HIGH_QUALITY, rank_candidates, search as direct_search
 from .resource_search import Filters, Indexers, Search
 
@@ -23,9 +24,10 @@ def q_resource_search(contract, args) -> dict:
     skip = [str(value) for value in args.get("skip") or () if isinstance(args.get("skip"), (list, tuple))]
     excluded = set(blocked) | set(skip)
     code = str(args.get("code") or "")
-    direct = direct_search(
-        contract.follow_secrets_root, code, min_size=filters.min_size,
-        max_size=filters.max_size, goal=filters.goal, stop_on_preferred=not skip)
+    with public_cache_scope(contract.cover_root.parent / 'jav-public'):
+        direct = direct_search(
+            contract.follow_secrets_root, code, min_size=filters.min_size,
+            max_size=filters.max_size, goal=filters.goal, stop_on_preferred=not skip)
     direct["items"] = [row for row in direct["items"] if row["info_hash"] not in excluded]
     # manko.fun 给出高清候选时按用户指定的优先级短路，不再消耗后备索引器请求。
     if not skip and direct["items"] and direct["items"][0]["source"] == "manko.fun" \

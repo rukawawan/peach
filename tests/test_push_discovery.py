@@ -383,6 +383,28 @@ class IngestPathTests(_ServiceCase):
         arrival = scan.ingest_path(self.db, '115', self.ledger('115', 'cloud.mp4'), **options)
         self.assertEqual(pending(self.db), [arrival.asset_id])
 
+    def test_a_new_video_from_the_queue_leaves_one_ingest_notice(self):
+        """推送队列登记的新影片记一条入库通知；同一路径再来、图片、云下载落地与同番号云下载都不记。"""
+        from contextlib import closing
+
+        from peach.ingest_notices import IngestNotices
+        notices = IngestNotices()
+        service = self.service()
+        for name in ("SSIS-057.mp4", "photo.jpg", "landed.mp4", "ABW-123.mp4"):
+            (self.media / name).write_bytes(b"0" * 8)
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            connection.execute(
+                "INSERT INTO download_task(provider,source_uri,target,code,state,updated_at)"
+                " VALUES('115','magnet:?xt=urn:btih:x','/115/云下载','ABW-123','remote_done','2026-11-05T00:00:00+00:00')")
+        with mock.patch("peach.ingest_notices.NOTICES", notices):
+            self.assertTrue(service._ingest("local", self.ledger("local", "SSIS-057.mp4")))
+            self.assertTrue(service._ingest("local", self.ledger("local", "SSIS-057.mp4")))
+            self.assertTrue(service._ingest("local", self.ledger("local", "photo.jpg")))
+            self.assertTrue(service.ingest_now("local", self.ledger("local", "landed.mp4")))
+            self.assertTrue(service._ingest("local", self.ledger("local", "ABW-123.mp4")))
+        items = notices.snapshot()["items"]
+        self.assertEqual([(item["kind"], item["label"]) for item in items], [("discovered", "SSIS-057")])
+
     def test_one_file_lands_as_one_row_with_the_ledger_shape(self):
         (self.media / "创作者").mkdir()
         (self.media / "创作者" / "a.mp4").write_bytes(b"0" * 12)

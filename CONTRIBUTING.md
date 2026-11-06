@@ -1,6 +1,6 @@
 # 参与 Peach
 
-Issues and pull requests are welcome. Maintainer-authored changes follow the same PR workflow. Small fixes (bugs, copy, documentation, tests) can go straight to a PR; complex bugs and large changes — new features, default behavior, connectors, contract or data-layer changes, anything an ADR covers — should have an issue first. Read [`AGENTS.md`](AGENTS.md) before opening a PR: it is the single entry point for development rules, and reviews follow it. Each platform has exactly one test entry point: `& .\scripts\test.ps1` on Windows and `./scripts/test.sh` on macOS/Linux. By submitting a contribution you agree to license it under AGPL-3.0-or-later. The rest of this document is in Chinese.
+Issues and pull requests are welcome. Maintainer-authored changes follow the same PR workflow. Small fixes (bugs, copy, documentation, tests) can go straight to a PR; complex bugs and large changes — new features, default behavior, connectors, contract or data-layer changes, anything an ADR covers — should have an issue first. Read [`AGENTS.md`](AGENTS.md) before opening a PR: it is the single entry point for development rules, and reviews follow it. Issues follow the templates in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/); the terms and delivery format in `AGENTS.md` are for code changes only. Each platform has exactly one test entry point: `& .\scripts\test.ps1` on Windows and `./scripts/test.sh` on macOS/Linux. By submitting a contribution you agree to license it under AGPL-3.0-or-later. The rest of this document is in Chinese.
 
 Peach 是单人自托管应用，由一个人维护。欢迎提 Issue 和 PR。维护者自己的改动也遵循同一套流程，通过 PR 保留审阅与验证记录。
 
@@ -10,6 +10,16 @@ Peach 是单人自托管应用，由一个人维护。欢迎提 Issue 和 PR。�
 提交贡献即表示同意以 AGPL-3.0-or-later 授权。
 
 ## 开 Issue
+
+Issue 按 [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) 的模板写：缺陷用 `bug_report.md`，建议用 `feature_request.md`。保留模板的章节标题和顺序，逐节填写；可选章节没有内容可以删掉，原因分析等额外信息放在模板章节之后。从网页「New issue」选模板最省事。用 AI 工具或命令行提交时，复制模板文件，去掉开头的 `---` 信息块和 `<!-- -->` 注释，填好后提交：
+
+```text
+gh issue create --repo peach-mitao/peach --title "<标题>" --type Bug --body-file <填好的模板>
+```
+
+建议把 `Bug` 换成 `Feature`；没有设置类型的权限时省略 `--type`，按模板章节写的 issue 会自动补上类型。正文写给维护者和其他用户看，用通用技术说法；`AGENTS.md` 与技能里的术语和交付格式只用于改代码，不用于 issue。用命令行或 API 提交、既没有类型也没有模板章节的 issue 会被自动关闭，按模板补齐章节后自动重开。
+
+Write issues with the templates in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/): `bug_report.md` for bugs, `feature_request.md` for features. Keep the template headings in order and fill in each one; drop optional sections you have nothing for, and put extra material such as a root-cause analysis after the template sections. The web form under New issue is the easiest path. When an AI tool or the command line submits the issue, copy the template file, remove the leading `---` block and the `<!-- -->` comments, fill it in, and submit it with the command above; use `--type Feature` for features, and leave out `--type` if you lack permission to set it: issues that follow a template get their type automatically. Write for maintainers and other users in plain technical language; the terms and delivery format in `AGENTS.md` and the skills are for code changes, not issues. Issues submitted through the command line or the API with neither a type nor the template sections are closed automatically, and reopen once the sections are filled in.
 
 公开截图、录屏和附件使用不含露骨画面的演示资料，并遮盖隐私信息；不要上传影片、封面原图或数据库。公开内容与素材许可要求见[文档规范](docs/WRITING.md#公开与私有记录)。
 
@@ -45,7 +55,7 @@ Use demo data without sexually explicit imagery in public screenshots, recording
 
 `status:needs-info` 表示缺少定位所需的信息，回复中应列明具体缺口；`status:needs-verification` 表示修复已有可下载版本，等待目标环境验证。两者互斥，条件消失时移除。未处理、处理中、已关闭不另设状态标签。没有明确影响的平台或模块可以留空。
 
-`bug`、`enhancement` 保留给 PR 和未设置 Type 的 issue；使用 Type 的新 issue 不重复添加同义标签。`dependencies`、`javascript`、`github_actions`、`python:uv` 用于对应依赖更新，`documentation`、`accessibility` 等按实际内容使用。标签名称保持稳定，颜色和双语说明以清单为准；修改清单时同步 GitHub 并回读核对，不批量删除或重命名已有标签。
+`bug`、`enhancement` 保留给 PR 和未设置 Type 的 issue；使用 Type 的新 issue 不重复添加同义标签。`dependencies`、`javascript`、`github_actions`、`python:uv`、`docker` 用于对应依赖更新，`documentation`、`accessibility` 等按实际内容使用。标签名称保持稳定，颜色和双语说明以清单为准；修改清单时同步 GitHub 并回读核对，不批量删除或重命名已有标签。
 
 ### 关闭、重开与关联
 

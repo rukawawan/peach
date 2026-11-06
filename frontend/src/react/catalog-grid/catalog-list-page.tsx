@@ -26,12 +26,14 @@ import { completionRowRemembered, rememberCompletionRow } from '../library-proce
 import { catalogParams } from './catalog-grid';
 import type { CatalogGridProps, MediaItem, MediaPage } from './types';
 import { useCatalogTablePreferences } from './catalog-column-widths';
+import { catalogColumns } from './catalog-table-columns';
 import { CatalogRating, catalogTableDate } from './catalog-table-controls';
 import { TableColumnControls, TableColumnResizer } from '../components/table-column-controls';
 import { TableSelectionHeader } from '../components/table-selection-header';
 import './catalog-list.css';
 
 const features = tableFeatures({ rowSortingFeature, rowSelectionFeature, rowPaginationFeature, columnVisibilityFeature });
+const COLUMN_ORDER = catalogColumns.map(column => column.id);
 const sortOptions = [
   { id: 'name', label: '名称' }, { id: 'dur', label: '时长' }, { id: 'size', label: '体积' },
   { id: 'new', label: '入库时间' }, { id: 'release', label: '发行时间' },
@@ -62,7 +64,7 @@ export function CatalogListPage(props: CatalogGridProps) {
   const result = useQuery({
     queryKey: ['catalog-grid', 'table', scope, params, props.revision, pagination, sorting],
     placeholderData: keepPreviousData,
-    queryFn: async ({ signal }): Promise<MediaPage> => {
+    queryFn: async ({ signal }): Promise<MediaPage & { libraryEmpty?: boolean }> => {
       const options = { limit: pagination.pageSize, sort: sort?.id, dir: sort ? sort.desc ? 'desc' : 'asc' : undefined };
       if (props.mode === 'entity') return props.fetchPage?.(offset, signal, options) || { items: [], total: 0 };
       const query = new URLSearchParams(params);
@@ -71,7 +73,10 @@ export function CatalogListPage(props: CatalogGridProps) {
       query.delete('count');
       if (options.sort) query.set('sort', options.sort);
       if (options.dir) query.set('dir', options.dir);
-      return apiGet<MediaPage>(`/api/items?${query}`, signal);
+      const page = await apiGet<MediaPage>(`/api/items?${query}`, signal);
+      /* 与卡片网格同一判据（`fetchCatalogPage`）：第一页为空、又不是回收站，再问整个馆藏有没有东西，空态据此分「还没有作品」与「没有符合的」。 */
+      if (offset || page.items?.length || props.filters?.state === 'trash') return page;
+      return { ...page, libraryEmpty: (await apiGet<MediaPage>('/api/items?limit=1&thumb=0', signal)).total === 0 };
     },
   });
   const items = result.data?.items || [];
@@ -98,6 +103,7 @@ export function CatalogListPage(props: CatalogGridProps) {
   const rowSelection: RowSelectionState = props.selectMode ? Object.fromEntries([...props.selected].map(id => [String(id), true])) : {};
   const columns = useMemo(() => {
     const helper = createColumnHelper<typeof features, MediaItem>();
+    /* 列的先后照 `catalogColumns`，与骨架、「显示列」里的顺序同一份。 */
     return helper.columns([
       helper.display({ id: 'select', header: ({ table }) => <TableSelectionHeader table={table} label="全选本页作品" disabled={result.isPlaceholderData} />,
       cell: ({ row }) => <Checkbox slot={null} aria-label={`选择 ${props.helpers.displayName(row.original, row.original.name || '')}`}
@@ -105,6 +111,8 @@ export function CatalogListPage(props: CatalogGridProps) {
         isSelected={row.getIsSelected()} onChange={on => row.toggleSelected(on)} /> }),
       helper.accessor(item => item.name || '', { id: 'name', header: '作品', enableSorting: true,
         cell: ({ row }) => <ListIdentity item={row.original} props={props} disabled={result.isPlaceholderData} /> }),
+      helper.display({ id: 'library', header: '媒体库', cell: ({ row }) => <ListLibrary item={row.original} /> }),
+      helper.display({ id: 'people', header: '艺人', cell: ({ row }) => <ListPeople item={row.original} props={props} /> }),
       /* 标签与卡片同一套：关注条目的标签不可点，其余点一下按这个标签筛选。 */
       helper.display({ id: 'tags', header: '标签', cell: ({ row }) => {
         const item = row.original;
@@ -140,7 +148,7 @@ export function CatalogListPage(props: CatalogGridProps) {
         cell: ({ row }) => catalogTableDate(row.original.first_seen) }),
       helper.accessor(item => item.release_date, { id: 'release', header: '发行时间', enableSorting: true,
         cell: ({ row }) => row.original.release_date || '—' }),
-    ]);
+    ]).sort((a, b) => COLUMN_ORDER.indexOf(a.id!) - COLUMN_ORDER.indexOf(b.id!));
   }, [props.helpers, props.actions, props.layout, props.selectMode, result.isPlaceholderData]);
   const table = useTable({
     features, columns, data: items, getRowId: item => String(item.id),
@@ -161,6 +169,13 @@ export function CatalogListPage(props: CatalogGridProps) {
       }
     },
   });
+  /* 一部都没有时与卡片网格同一份空态（壳给的 `emptyHtml`：回收站、馆藏全空、筛选无结果各一种），
+     不画空表格与列设置；资料页不给空态，它自己在作品区外说「还没有视频」。 */
+  if (result.data && !result.isPlaceholderData && !result.isError && total === 0) {
+    const html = props.emptyHtml?.({ trash: props.mode !== 'entity' && props.filters?.state === 'trash',
+      libraryEmpty: !!(result.data as { libraryEmpty?: boolean }).libraryEmpty }) || '';
+    return <div data-catalog-view-mode="list" data-media-empty="" dangerouslySetInnerHTML={{ __html: html }} />;
+  }
   return <div data-catalog-view-mode="list" data-catalog-table="" aria-busy={result.isFetching || undefined} className="flex min-w-0 flex-col gap-4">
     <div className="flex flex-wrap justify-end gap-2" role="toolbar" aria-label="作品列表工具栏">
       <div data-toolbar-actions="">
@@ -222,11 +237,8 @@ function ListIdentity({ item, props, disabled }: { item: MediaItem; props: Catal
   const name = props.helpers.displayName(item, rawName).trim() || '未命名作品';
   const titleHtml = props.helpers.titleHtml(item, rawName).trim() || '未命名作品';
   useEntityNames();
-  const { avatar, who } = identityParts(item);
   const watched = !parts && Number(item.play_seconds) > 0 && Number(item.duration) > 0
     ? Math.min(Number(item.play_seconds) / Number(item.duration), 1) : 0;
-  const tints = useLibraryTints({ names: true });
-  const tint = item.library_id ? tints.get(item.library_id) : undefined;
   const flaggedBy = [Number(item.liked) > 0 ? '喜欢' : '', Number(item.o_count) > 0 ? '有高潮记录' : ''].filter(Boolean);
   const glyph = (name: string) => <svg viewBox="0 0 24 24" aria-hidden="true"><use href={`#i-${name}`} /></svg>;
   const open = (event: MouseEvent<HTMLElement>) => {
@@ -236,15 +248,7 @@ function ListIdentity({ item, props, disabled }: { item: MediaItem; props: Catal
     const opener = props.filters?.state === 'trash' ? props.actions.openResource : props.actions.open;
     opener(item, event.currentTarget);
   };
-  /* 头像与署名和卡片同一套：点头像或人名打开人物、厂牌页，没有署名的那批打开「未归属」。 */
-  const openOwner = (event: MouseEvent<HTMLElement>) => {
-    if (props.selectMode) return;
-    const target = event.target as HTMLElement;
-    const entity = target.closest<HTMLElement>('[data-entity-kind]');
-    if (entity) { props.actions.openEntity(entity.dataset.entityKind || '', entity.dataset.entityName || ''); return }
-    if (target.closest('[data-open-unowned]')) props.actions.openUnowned();
-  };
-  return <div data-list-identity="" onClick={openOwner}>
+  return <div data-list-identity="">
     <button type="button" data-list-open="" disabled={disabled} tabIndex={-1} aria-hidden="true" onClick={open}>
       <span data-list-picture="">{artwork.html
         ? <ArtSlot artwork={artwork} relayout={root => relayoutCovers(root, 'small')} /> : <span>无预览</span>}
@@ -264,16 +268,31 @@ function ListIdentity({ item, props, disabled }: { item: MediaItem; props: Catal
           </span>
           : null}</span>
     </button>
-    {avatar}
     <span data-list-text="">
       <button type="button" data-list-name="" disabled={disabled} title={name} aria-label={`打开 ${name}`} onClick={open}
         dangerouslySetInnerHTML={{ __html: titleHtml }} />
-      <span data-list-byline="">
-        {tint?.name ? <span data-list-library="" title={`媒体库：${tint.name}`}>
-          <SourceMark mark={tint.icon} />{tint.name}
-        </span> : null}
-        {who}
-      </span>
     </span>
   </div>;
+}
+
+/** 媒体库那一列：标识加名字，与侧栏媒体库切换同一套。没有归属媒体库的写「—」。 */
+function ListLibrary({ item }: { item: MediaItem }) {
+  const tints = useLibraryTints({ names: true });
+  const tint = item.library_id ? tints.get(item.library_id) : undefined;
+  return tint?.name ? <span data-list-library="" title={`媒体库：${tint.name}`}><SourceMark mark={tint.icon} /><span>{tint.name}</span></span> : '—';
+}
+
+/** 艺人那一列：头像与署名和卡片同一套（`identityParts`）。点头像或人名打开人物、厂牌页，没有署名的那批
+ *  打开「未归属」；选择模式下不跳。 */
+function ListPeople({ item, props }: { item: MediaItem; props: CatalogGridProps }) {
+  useEntityNames();
+  const { avatar, who } = identityParts(item);
+  const openOwner = (event: MouseEvent<HTMLElement>) => {
+    if (props.selectMode) return;
+    const target = event.target as HTMLElement;
+    const entity = target.closest<HTMLElement>('[data-entity-kind]');
+    if (entity) { props.actions.openEntity(entity.dataset.entityKind || '', entity.dataset.entityName || ''); return }
+    if (target.closest('[data-open-unowned]')) props.actions.openUnowned();
+  };
+  return <div data-list-people="" onClick={openOwner}>{avatar}{who}</div>;
 }

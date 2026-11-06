@@ -1,44 +1,33 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { entityPath } from '@peach/legacy/core';
-import { RiCompassLine, RiExternalLinkLine } from '@remixicon/react';
+import { RiCompassLine } from '@remixicon/react';
 import { Button, ButtonLink } from '@/components/base/buttons/button';
-import { Input } from '@/components/base/input/input';
 import { Chip } from '@/components/base/badges/chip';
 import { appSettingsStore, javLayout, storeJavLayout, JAV_LAYOUTS, cardRatio, gridLayout } from '@peach/appearance';
-import { coverUrl } from '@peach/card-art';
-import { relayoutCovers } from '../../card-art/framing';
 import { wireHorizontalScroller } from '../../ui-kit/scroll';
-import { DiscoveryFaces } from './discovery-faces';
 import { javContentSkeleton, javTagSkeleton, JAV_RECOMMENDATION_GRID } from '../../jav-skeleton';
 import { errorMessage } from '../../api';
-import { textLang } from '../../core/text-lang';
 import { CloudDownloadDialog, type DownloadPrefill } from '../activity/cloud-download-dialog';
 import { Note } from '../components/note';
 import { EmptyState } from '../components/empty-state';
 import { WantList } from '../wants/want-list';
 import { addWant, invalidateWants } from '../wants/wants';
 import { busyProps, useAction } from '../settings/use-action';
-import { discoveryArtwork, discoveryKey, fetchDiscoveries, type DiscoveryScope } from './jav';
+import { discoveryKey, fetchDiscoveries, writeJavQuery, type DiscoveryScope } from './jav';
+import { DiscoveryCard, resourcePrefill } from './discovery-card';
+import { Releases } from './jav-releases';
 import { JavHeader } from './jav-header';
+import { IndexSearch } from '../index/index-search';
 import { spriteGlyph } from '../components/sprite-glyph';
 import { FilterGlassRows, FilterIconButton, FilterPill, GlassPill } from '../components/filter-glass';
 import { LibraryShortcuts } from '../library-shortcuts/shortcut-controls';
-import { ArtSlot } from '../components/art-slot';
 import { Segments, SortKeys } from '../entity-filter/entity-filter-page';
 import { TaskProgress } from '../components/task-progress';
 import { DISCOVERY_SORTS, discoveryScore, recommendationScore, type DiscoverySort } from './discovery-sorts';
 
-const SearchGlyph = spriteGlyph('search');
 const MetadataStopGlyph = spriteGlyph('x');
 const MetadataRefreshGlyph = spriteGlyph('refresh-cw');
-import { peachHistory, shellNavigate } from '@peach/history';
-
-function writeJavQuery(patch: Record<string, string>): void {
-  const params = new URLSearchParams(location.search);
-  for (const [key, value] of Object.entries(patch)) { if (value) params.set(key, value); else params.delete(key) }
-  shellNavigate(location.pathname + (params.size ? `?${params}` : ''), { replace: true, state: peachHistory.navigation.location.state });
-}
+const SEARCH_LABELS: Record<string, string> = { releases: '筛选新作', discover: '筛选推荐', wants: '筛选想要' };
 
 export function JavPage({ tab, readOnly, navigate, receipt }: {
   tab: string; readOnly: boolean; navigate(path: string): void; receipt(message: string): void;
@@ -46,14 +35,12 @@ export function JavPage({ tab, readOnly, navigate, receipt }: {
   const [download, setDownload] = useState<DownloadPrefill | null>(null);
   const [text, changeText] = useState(() => new URLSearchParams(location.search).get('q') || '');
   const setText = (value: string) => { changeText(value); writeJavQuery({ q: value }) };
-  const search = (event: FormEvent) => { event.preventDefault() };
   return <div className="flex w-full flex-col gap-6">
-    <JavHeader tab={tab} navigate={navigate} find={() => setDownload({})} />
-    <form aria-label={tab === 'discover' ? '筛选推荐' : '筛选想要'} onSubmit={search}>
-      <Input type="search" aria-label={tab === 'discover' ? '筛选推荐' : '筛选想要'} placeholder="筛选番号、女优或标题" leadingIcon={SearchGlyph}
-        value={text} onChange={setText} enterKeyHint="search" />
-    </form>
-    {tab === 'discover'
+    <JavHeader tab={tab} navigate={navigate} find={() => setDownload({})}
+      search={<IndexSearch label={SEARCH_LABELS[tab] || '筛选'} value={text} onQuery={setText} />} />
+    {tab === 'releases'
+      ? <Releases readOnly={readOnly} receipt={receipt} resource={setDownload} query={text.trim()} navigate={navigate} clearText={() => setText('')} />
+      : tab === 'discover'
       ? <Discover readOnly={readOnly} receipt={receipt} resource={setDownload} query={text.trim()} navigate={navigate} clearText={() => setText('')} />
       : <WantList readOnly={readOnly} toast={receipt} query={text.trim()} clearQuery={() => setText('')} />}
     <CloudDownloadDialog prefill={download} close={() => setDownload(null)} receipt={receipt} />
@@ -144,7 +131,7 @@ function Discover({ readOnly, receipt, resource, query, navigate, clearText }: {
       </>} />
     {waiting ? <div role="status" aria-label="正在读取推荐" dangerouslySetInnerHTML={{ __html: javContentSkeleton('discover', layout) }} /> : null}
     {discoveries.error ? <Note tone="error" title="推荐未取得">{errorMessage(discoveries.error)}</Note> : null}
-    {scope === 'external' && metadata?.status === 'running' ? <div data-jav-metadata="" className="min-w-0"><TaskProgress embedded
+    {scope === 'external' && metadata?.status === 'running' ? <div data-jav-metadata="" className="min-w-0"><TaskProgress
         label={`正在读取作品资料 · ${metadata.completed} / ${metadata.total} 部`} value={metadata.completed} total={metadata.total} /></div> : null}
     {metadata && metadata.status !== 'running' && (metadata.status !== 'complete' || metadata.failed > 0)
       ? <Note tone="neutral" action={<Button variant="secondary" {...busyProps(metadataAction.busy === 'retry')}
@@ -160,51 +147,21 @@ function Discover({ readOnly, receipt, resource, query, navigate, clearText }: {
     {action.error ? <Note tone="error">{action.error}</Note> : null}
     <div data-media-grid="" className={JAV_RECOMMENDATION_GRID} style={{ '--card-ratio': ratio } as CSSProperties}>
       {items.map(item => {
-        const performers = item.performer_refs?.length ? item.performer_refs.map(person => person.name).join('、') : item.performers;
-        const artwork = discoveryArtwork(item, layout, settings.value.javImage);
         const recommendation = recommendationScore(item.taste_score ?? item.score);
         const scoreDetails = [recommendation.label, `口味 ${discoveryScore(item.taste_score ?? item.score)}`,
           discoveries.data?.ranking_method === 'mmr' && item.ranking_score != null ? `排序 ${discoveryScore(item.ranking_score)}` : '',
           item.source_score != null ? `来源评分 ${item.source_score.toFixed(1)} / 5` : '', ...(item.reasons || [])].filter(Boolean).join(' · ');
-        return <article key={item.id} data-media-card="" data-jav-card="" onClick={event => {
-        if (!(event.target as HTMLElement).closest('a,button,input')) navigate(item.asset_id ? `/assets/${item.asset_id}` : `/works/${encodeURIComponent(item.code)}`);
-      }}>
-        <a href={item.asset_id ? `/assets/${item.asset_id}` : `/works/${encodeURIComponent(item.code)}`} aria-label={`查看 ${item.code} 详情`}
-          onClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) { event.preventDefault(); navigate(event.currentTarget.getAttribute('href')!) } }}
-          data-media-pic="" data-jav-cover-box="" className="relative inline-grid place-items-center overflow-hidden rounded-2lg bg-background-tertiary-default">
-          {artwork ? <ArtSlot artwork={{ kind: 'cover', html: artwork }} identity={discoveryArtwork(item, 'small', settings.value.javImage)}
-            relayout={root => relayoutCovers(root, layout)} /> : <span data-media-nopic="">无封面</span>}
-        </a>
-        <div data-media-meta="">
-          <DiscoveryFaces item={item} />
-          <div data-media-text="">
-            <h3 data-jav-title="" data-media-title="" title={`${item.code} · ${item.title || '标题未取得'}`}><b>{item.code}</b> {item.title ? <span lang={textLang(item.title)}>{item.title}</span> : '标题未取得'}</h3>
-            <div data-media-byline="">
-              {item.performer_refs?.[0]?.id ? <a data-media-who="" href={entityPath('performer', item.performer_refs[0].name)} title={performers}>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-user-round" /></svg><span>{item.performer_refs[0].name}</span></a>
-                : <span data-media-who="" title={performers}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-user-round" /></svg><span>{item.performer_refs?.[0]?.name || performers}</span></span>}
-              {(item.performer_refs?.length || 0) > 1 ? <span data-media-who-more="">等 {item.performer_refs!.length} 人</span> : null}
-              {item.release_date ? <time data-media-release="" dateTime={item.release_date}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-calendar" /></svg>{item.release_date}</time> : null}
-            </div>
-        <div data-jav-tags="" data-media-tags="">
-          <button data-jav-taste-score="" type="button" title={scoreDetails} aria-label={`推荐分 ${recommendation.score}，${recommendation.label}`}
+        return <DiscoveryCard key={item.id} item={item} layout={layout} javImage={settings.value.javImage} readOnly={readOnly}
+          navigate={navigate} tag={tag} onTag={setTag} wanting={action.busy === String(item.id)}
+          onWant={() => { void action.run(String(item.id), signal => addWant({ code: item.code }, signal), () => {
+            receipt('已加入想要'); void invalidateWants(); void discoveries.refetch();
+          }) }}
+          onResource={() => resource(resourcePrefill(item))}
+          badge={<button data-jav-taste-score="" type="button" title={scoreDetails} aria-label={`推荐分 ${recommendation.score}，${recommendation.label}`}
             className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-border-focus-ring">
             <Chip color={recommendation.color}>{recommendation.label}</Chip>
-          </button>
-          {(item.tags || []).slice(0, 4).map(name =>
-          <button type="button" data-media-tag="" key={name} aria-pressed={tag === name} onClick={() => setTag(tag === name ? '' : name)}>{name}</button>)}</div>
-          </div>
-        </div>
-        <div data-jav-actions="" className="flex flex-wrap gap-2">
-          {item.link ? <ButtonLink data-button-link="" variant="secondary" trailingIcon={RiExternalLinkLine} href={item.link} target="_blank" rel="noopener noreferrer">作品来源</ButtonLink> : null}
-          <Button variant="ghost" disabled={readOnly || item.wanted || !!item.asset_id} {...busyProps(action.busy === String(item.id))} onClick={() => {
-            void action.run(String(item.id), signal => addWant({ code: item.code }, signal), () => {
-              receipt('已加入想要'); void invalidateWants(); void discoveries.refetch();
-            });
-          }}>{item.asset_id ? '已入库' : item.wanted ? '已加入想要' : '想要'}</Button>
-          <Button variant="secondary" onClick={() => resource({ ...item, cover: item.has_cover ? coverUrl(item, true) : item.cover_url, origin: `${item.asset_id ? 'asset' : 'feed'}:${item.id}` })}>查找资源</Button>
-        </div>
-      </article>})}
+          </button>} />;
+      })}
     </div>
   </section>;
 }

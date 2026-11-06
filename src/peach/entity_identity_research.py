@@ -82,7 +82,7 @@ def wiki_finding(entity_id, name, keys, pages):
 
     `pages` 是站名到 `performer_alias_followup.WikiSitePages` 的映射：站上没有的页抛
     `LookupError`，其余取页失败抛 `RuntimeError`。同名页是多位出演者的作品一览就记
-    `identity=release` 的 observed，并否掉 `identity=unknown`（查创作者身份后继照写；经 `apply()`
+    `identity=release` 的 observed，并否掉 `identity=unknown`（创作者身份查找后继照写；经 `apply()`
     的清单人可以改过，一律降为 candidate）；页都不存在时只更新 unknown 候选
     的证据，写明实际问过哪几页。没有页以外的取页失败是未取得，交 None，不冻成「没有」。
     """

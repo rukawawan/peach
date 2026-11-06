@@ -1,0 +1,24 @@
+{
+ "format": 1,
+ "source": "r18dev",
+ "code": "SSIS-9998",
+ "recorded": "2026-11-04",
+ "note": "站上没有的番号",
+ "outcome": "not_found",
+ "failure": {
+  "reason": "not_found",
+  "message": "HTTP 404"
+ },
+ "interactions": [
+  {
+   "method": "GET",
+   "url": "https://r18.dev/videos/vod/movies/detail/-/dvd_id=SSIS-9998/json",
+   "response": {
+    "status": 404,
+    "url": "https://r18.dev/videos/vod/movies/detail/-/dvd_id=SSIS-9998/json",
+    "content_type": "text/html; charset=utf-8",
+    "text": "<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n"
+   }
+  }
+ ]
+}

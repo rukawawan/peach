@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { it } from 'node:test';
 import type { Browser } from 'playwright-core';
 import { installDesignBrowser } from './design-fixture.ts';
-import { visit, VIEWPORTS } from './harness.ts';
+import { requiredEnv, visit, VIEWPORTS } from './harness.ts';
 
 let browser: Browser;
 installDesignBrowser((value) => { browser = value });
@@ -65,6 +65,41 @@ for (const viewport of [...VIEWPORTS, { name: 'narrow', width: 320, height: 844,
         await opened.page.screenshot({ path: resolve(`../build/toast-preview/${viewport.name}-${scenario.name}.png`),
           clip: { x: rect.x - 14, y: rect.y - 14, width: rect.width + 28, height: rect.height + 28 } });
       }
+    } finally {
+      await opened.close();
+    }
+  });
+}
+
+for (const viewport of VIEWPORTS) {
+  it(`${viewport.name} 的失败回执自己是红框，停在右下角小窗之上不压住它`, { timeout: 60_000 }, async () => {
+    // 小窗挂在舞台里：进一次详情，那块节点才在。
+    const opened = await visit(browser, `/assets/${requiredEnv('PEACH_E2E_ITEM')}`, viewport);
+    try {
+      const mini = opened.page.locator('#miniplayer');
+      await mini.waitFor({ state: 'attached' });
+      await mini.evaluate((node) => { (node as HTMLElement).hidden = false });
+      await opened.page.evaluate(async () => {
+        const entry = '/dist/peach-app.js';
+        const ui = await import(entry);
+        ui.showToast(document.getElementById('toasts'), { success: '<svg/>', error: '<svg/>' },
+          'stack-preview', { html: '检查失败：来源暂时无法连接，请稍后重试。', alert: true, timeout: Infinity, action: null });
+      });
+      const toast = opened.page.locator('[data-sonner-toast][data-type=error]');
+      await toast.waitFor();
+      await opened.page.waitForFunction(() => [...document.querySelectorAll('[data-sonner-toast]')]
+        .every((node) => node.getAttribute('data-mounted') === 'true' && node.getAnimations().length === 0));
+      const [toastBox, miniBox] = [(await toast.boundingBox())!, (await mini.boundingBox())!];
+      assert.ok(toastBox.y + toastBox.height <= miniBox.y, JSON.stringify({ toastBox, miniBox }));
+      const colors = await toast.evaluate((node) => {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--color-border-error-default)';
+        document.body.append(probe);
+        const expected = getComputedStyle(probe).color;
+        probe.remove();
+        return { border: getComputedStyle(node).borderTopColor, expected };
+      });
+      assert.equal(colors.border, colors.expected);
     } finally {
       await opened.close();
     }

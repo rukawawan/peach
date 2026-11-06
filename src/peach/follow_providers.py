@@ -44,6 +44,9 @@ class ProviderSpec:
     #: 站内 id 是全站递增的上传序号，同一作者一次连传的几条 id 相距很近。
     #: 关注页据此把同一批导出的短片认成一包（ADR-0045）。
     sequential_upload_ids: bool = False
+    #: 站方的角色分类挂在标签本身上，不随作品变：同一标签在每个详情页都落在同一分组。
+    #: 站方事后把某个标签改成角色时，新探到的条目先记上，同站旧条目里的同名标签跟着改。
+    site_wide_characters: bool = False
     #: 直链媒体可以落在任意公网主机。给帖子里贴的第三方图床用：图站有几十家、还在
     #: 换，白名单追不上；而这类媒体本来就不带凭据取，代理到哪个公网主机都泄露不了
     #: 什么。安全边界改由 `follow_stream` 守：明文 http、IP 字面量、本机与局域网专用
@@ -102,6 +105,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
                      hosts=("rule34video.com", "boomio-cdn.com"),
                      url_hosts=("rule34video.com",),
                      priority=30, backfill=True, sequential_upload_ids=True,
+                     site_wide_characters=True,
                      excluded_external_ids=("4533145",)),
         ProviderSpec("rule34xxx", "Rule34.xxx",
                      source_url="https://rule34.xxx/index.php?page=post&s=list&tags={ref}",
@@ -192,6 +196,12 @@ def sequential_upload_providers() -> frozenset[str]:
     """站内 id 是全站递增上传序号的来源。"""
     return frozenset(key for key, spec in PROVIDERS.items()
                      if spec.sequential_upload_ids)
+
+
+def site_wide_character_providers() -> frozenset[str]:
+    """角色分类挂在标签上、同站旧条目要跟着新分类改的来源。"""
+    return frozenset(key for key, spec in PROVIDERS.items()
+                     if spec.site_wide_characters)
 
 
 def excluded_external_ids() -> dict[str, frozenset[str]]:

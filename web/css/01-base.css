@@ -392,6 +392,9 @@ button.danger.danger:disabled{
 .ov-x .ovthumb{left:0;bottom:0;height:3px}
 .ov-y:hover .ovthumb,.ov-y.dragging .ovthumb{width:6px}
 .ov-x:hover .ovthumb,.ov-x.dragging .ovthumb{height:6px}
+/* 横排、表格按住拖动（`wireHorizontalScroller`）时整页锁成「抓取中」并且不选字：只给滚动容器写光标的话，
+   内容在指针底下移动，按钮的手形、文字的竖线轮流冒出来，看着一直在闪。 */
+html[data-drag-scrolling],html[data-drag-scrolling] *{cursor:grabbing!important;user-select:none!important}
 .ovtrack.page{position:fixed;top:0;bottom:0;right:0;z-index:91;pointer-events:none}
 @media (pointer:fine){.ovtrack.page .ovthumb{pointer-events:auto}}
 .ovtrack.page:hover .ovthumb{width:3px}

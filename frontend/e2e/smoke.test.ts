@@ -228,17 +228,23 @@ describe('路由冒烟', () => {
     }
   }
 
-  /* 任务页与常驻的结果更新共用查询：离页卸掉任务页，结果更新继续低频读取。
-     固定空态让轮询保持十秒间隔；回到任务页前撤掉拦截，再读取服务端真实任务。
+  /* 任务页读完整任务列表，常驻的结果更新只读轻量版本：离页卸掉任务页后不再读任务列表，
+     结果更新继续低频读取。固定空态让轮询保持十秒间隔；回到任务页前撤掉拦截，再读取服务端真实任务。
      换页走 pushState + popstate：侧栏按钮、抽屉和浏览器后退最后走的都是这一条路。 */
   it('离开任务页卸载旧根，全局结果轮询持续，返回读取真实任务', { timeout: 120_000 }, async () => {
     const polls: number[] = [];
+    const updates: number[] = [];
     const opened = await visit(browser, '/tasks', DESKTOP, async (page) => {
       await page.route('**/api/tasks', route => route.fulfill({ json: {
         available: true, running: [], skipped: [], finished: [], finished_has_more: false,
       } }));
+      await page.route('**/api/result-updates', route => route.fulfill({ json: {
+        ok: true, busy: false, result_versions: {}, ingest_notices: { epoch: 'smoke', items: [] },
+      } }));
       page.on('request', (request) => {
-        if (new URL(request.url()).pathname === '/api/tasks') polls.push(performance.now());
+        const path = new URL(request.url()).pathname;
+        if (path === '/api/tasks') polls.push(performance.now());
+        if (path === '/api/result-updates') updates.push(performance.now());
       });
     });
     try {
@@ -262,6 +268,7 @@ describe('路由冒烟', () => {
       await expectBody(opened.page, '/stats', [statsInventoryTab(opened.page)]);
       await settle(opened.page);
       const leftAt = polls.length;
+      const updatesAt = updates.length;
       // 统计页自己也是 React 档：管理区正文里应当只剩它那一棵根。
       assert.equal(await opened.page.locator('#stats .peach-react').count(), 1,
         '管理区正文里不是只剩统计页那一棵 React 根');
@@ -271,12 +278,14 @@ describe('路由冒烟', () => {
       // 十二秒覆盖一次十秒轮询；允许观察窗口跨过两次，但每次必须至少相隔八秒。
       // 两秒余量容纳导航与计时误差，也能拒绝活跃任务的两秒节律或并行的重复请求。
       await opened.page.waitForTimeout(12_000);
-      const continued = polls.slice(leftAt);
+      // 离开任务页后，全局轮询只读轻量的结果版本，不再组装整张任务列表。
+      assert.equal(polls.length, leftAt, `离开任务页后仍在读取完整任务列表：${polls.length - leftAt} 次`);
+      const continued = updates.slice(updatesAt);
       assert.ok(continued.length >= 1 && continued.length <= 2,
         `离开任务页后全局结果轮询应持续单路低频读取，十二秒内看到 ${continued.length} 次请求`);
-      for (let index = leftAt; index < polls.length; index += 1) {
-        assert.ok(polls[index] - polls[index - 1] >= 8_000,
-          `全局任务轮询间隔过短：${Math.round(polls[index] - polls[index - 1])}ms`);
+      for (let index = Math.max(1, updatesAt); index < updates.length; index += 1) {
+        assert.ok(updates[index] - updates[index - 1] >= 8_000,
+          `全局结果轮询间隔过短：${Math.round(updates[index] - updates[index - 1])}ms`);
       }
 
       await opened.page.unroute('**/api/tasks');

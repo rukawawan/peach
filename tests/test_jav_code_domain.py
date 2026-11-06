@@ -328,6 +328,44 @@ class DatedCodeSeparatorTests(unittest.TestCase):
             self.assertFalse(is_uncensored_code(value), value)
 
 
+class ShortSerialWidthTests(unittest.TestCase):
+    """登记过的字母段，短号按原写保留：#296 的 `MCDV-24` 与 `MCDV-024` 是两部片。
+
+    JavDB 实测：`MCDV-24` 是メルシーボークー的无码片（2015-06-25，110 分钟），
+    `MCDV-024` 是クリスタル映像的有码片（2004-12-10，130 分钟）。其余字母段的短号仍是
+    补零号的省略写法，两头都钉住，免得有人把例外推广成通用规则（ADR-0133）。
+    """
+
+    def test_other_prefixes_still_pad_short_serials(self):
+        self.assertEqual(normalise_code_key("LAF-41"), "LAF-041")
+        self.assertEqual(release_code_from_filename("laf41.mp4"), "LAF-041")
+        self.assertTrue(same_release_code("MESU-088", "MESU-88"))
+        self.assertEqual(jav_fallback_title("laf41 some title.mp4", "LAF-041"), "some title")
+
+    def test_the_key_keeps_the_written_width(self):
+        self.assertEqual(normalise_code_key("mcdv-24"), "MCDV-24")
+        self.assertEqual(normalise_code_key("MCDV24"), "MCDV-24")
+        self.assertEqual(normalise_code_key("MCDV-024"), "MCDV-024")
+        self.assertEqual(release_code_from_filename("MCDV-24.mp4"), "MCDV-24")
+        self.assertEqual(release_code_from_filename("mcdv-024.mp4"), "MCDV-024")
+
+    def test_the_two_widths_are_two_releases(self):
+        self.assertFalse(same_release_code("MCDV-24", "MCDV-024"))
+        self.assertTrue(same_release_code("MCDV-24", "mcdv24"))
+
+    def test_padding_beyond_three_digits_is_still_one_release(self):
+        # DMM content_id 补到五位：`mcdv00024` 是有码那部，`ssis00001` 是 `SSIS-001`。
+        self.assertTrue(same_release_code("mcdv00024", "MCDV-024"))
+        self.assertFalse(same_release_code("mcdv00024", "MCDV-24"))
+        self.assertTrue(same_release_code("ssis00001", "SSIS-001"))
+        self.assertEqual(normalise_code_key("SSIS-0001"), "SSIS-001")
+
+    def test_filename_matching_follows_the_same_width(self):
+        self.assertEqual(jav_fallback_title("MCDV-24 first title.mp4", "MCDV-24"), "first title")
+        self.assertEqual(jav_fallback_title("mcdv-024 other title.mp4", "MCDV-24"), "mcdv-024 other title")
+        self.assertEqual(jav_fallback_title("MCDV0024 other title.mp4", "MCDV-024"), "other title")
+
+
 class TokyoHotShapeTests(unittest.TestCase):
     """Tokyo-Hot 的编号没有厂牌字母段，规范写法是小写。`k` 与 `red` 两支账本里一条
     没有，按同一发行体系一并认。
@@ -382,6 +420,20 @@ class TokyoHotShapeTests(unittest.TestCase):
                 'edition_badges': ['中字', '无码']})
         self.assertEqual(jav_fallback_title('MKD-S118.mp4', 'MKD-S118'), '')
 
+    def test_uncensored_only_labels_get_the_uncensored_badge(self):
+        for name, code in (('SMBD-120.mp4', 'SMBD-120'), ('SKYHD-050-C.mp4', 'SKYHD-050')):
+            with self.subTest(code=code):
+                self.assertIn('无码', jav_display_metadata(name, code)['edition_badges'])
+        self.assertEqual(jav_display_metadata('MCDV-024.mp4', 'MCDV-024')['edition_badges'], [])
+
+    def test_ltx_after_the_code_marks_a_cracked_edition(self):
+        self.assertEqual(jav_display_metadata('ABP-123-LTX.mp4', 'ABP-123'), {
+            'display_code': 'ABP-123', 'display_title': '', 'edition_badges': ['无码破解']})
+        self.assertEqual(jav_display_metadata('ABP-123-C-LTX.mp4', 'ABP-123')['edition_badges'],
+                         ['中字', '无码破解'])
+        # 字母段本身是 LTX 的番号不是破解标记。
+        self.assertEqual(jav_display_metadata('LTX-123.mp4', 'LTX-123')['edition_badges'], [])
+
     def test_a_bare_number_is_read_only_at_the_head_of_the_name(self):
         self.assertEqual(release_code_from_filename("n1032.mkv"), "n1032")
         self.assertEqual(release_code_from_filename("n0762.mkv"), "n0762")
@@ -432,6 +484,14 @@ class DeliveryFilenameTests(unittest.TestCase):
         self.assertEqual(release_code_from_filename("heyzo_hd_1031_full.mp4"), "HEYZO-1031")
         self.assertEqual(release_code_from_filename("heyzo_lt_1380_full-1.mp4"), "HEYZO-1380")
         self.assertEqual(release_code_from_filename("HEYZO-1380.mp4"), "HEYZO-1380")
+
+    def test_heyzo_keeps_four_digits_below_one_thousand(self):
+        """#354：HEYZO 官方编号定宽四位，前导零是编号的一部分，收成三位就查不到资料。"""
+        for name in ("HEYZO-0707.mp4", "heyzo_hd_0707_full.mp4", "HEYZO-707.mp4", "heyzo-00707.mp4"):
+            with self.subTest(name=name):
+                self.assertEqual(release_code_from_filename(name), "HEYZO-0707")
+        self.assertEqual(normalise_code_key("HEYZO-707"), "HEYZO-0707")
+        self.assertEqual(normalise_code_key("ABC-0123"), "ABC-123")
 
     def test_the_number_alone_is_not_a_heyzo_release(self):
         # 站名是这条规则的全部证据：少了它，创作者目录里按下划线分段、末尾带画质

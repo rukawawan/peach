@@ -27,7 +27,7 @@ import {
 
 /* 卡面与管理页同层；来源选择是卡内唯一带单选边框的表单。 */
 const CARD = cardClass({
-  variant: 'filled', padding: 'none', bordered: 'soft', className: 'flex flex-col overflow-hidden',
+  variant: 'filled', padding: 'none', className: 'flex flex-col overflow-hidden',
 });
 
 /* 卡头那一行的行高：字段名是一枚 caption Chip（12/16 加上下各 4），24px 由它定。标题、

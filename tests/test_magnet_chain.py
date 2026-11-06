@@ -88,6 +88,33 @@ class MagnetChainTests(unittest.TestCase):
             now[0] += 120
             self.assertEqual(lookup.query('ABC-123')['state'], 'error')
         self.assertEqual(len(calls), 2)
+    def test_javdb_step_reads_the_anonymous_api_and_keeps_comment_links(self):
+        from peach.magnet_chain import Fetcher
+        rows = [{'hash': HASH_A, 'name': 'ABC-123-C.torrent', 'size': 4219, 'cnsub': True, 'hd': True,
+                 'files_count': 3, 'created_at': '2026-10-08'}]
+        ed2k = 'ed2k://|file|ABC-123.mp4|1234|' + 'b' * 32 + '|/'
+        fetcher = Fetcher(Path('.'), transport=object())
+        with patch('peach.magnet_chain.PUBLIC_API.movie', return_value={'id': 'Exact'}) as movie, \
+                patch('peach.magnet_chain.PUBLIC_API.magnets', return_value=rows) as magnets, \
+                patch('peach.magnet_chain.PUBLIC_API.reviews', return_value=[{'id': 7, 'content': ed2k}]):
+            found = fetcher.javdb('ABC-123')
+        movie.assert_called_once_with('ABC-123', refresh=True)
+        magnets.assert_called_once_with('ABC-123', refresh=True, movie={'id': 'Exact'})
+        self.assertEqual(len(found), 1)
+        self.assertEqual((found[0]['size'], found[0]['size_text']), (int(4.12 * 1024 ** 3), '4.12GB'))
+        self.assertEqual((found[0]['chinese'], found[0]['file_count']), (True, 3))
+        self.assertEqual(found[0]['source_url'], 'https://javdb.com/v/Exact')
+        self.assertEqual([row['protocol'] for row in fetcher.resource_result['items']], ['magnet', 'ed2k'])
+
+    def test_javdb_identity_ambiguity_is_reported_with_source_ids(self):
+        from peach.javdb_public import PublicIdentityAmbiguous
+        from peach.magnet_chain import Fetcher, search
+        ambiguous = PublicIdentityAmbiguous('同番号对应多个作品，请核对来源身份：Aa1、Bb2')
+        with patch.object(Fetcher, 'manko', return_value=[]), patch.object(Fetcher, 'sukebei', return_value=[]), \
+                patch('peach.magnet_chain.PUBLIC_API.movie', side_effect=ambiguous):
+            result = search(Path('.'), 'ABC-123', transport=object(), stop_on_preferred=False)
+        self.assertEqual(result['warnings'], ['JavDB：同番号对应多个作品，请核对来源身份：Aa1、Bb2'])
+
     def test_base91_decodes_the_api_envelope_payload(self):
         # basE91 官方示例：编码后的这一段解回 ASCII "test"。
         self.assertEqual(decode_base91("fPNKd"), b"test")

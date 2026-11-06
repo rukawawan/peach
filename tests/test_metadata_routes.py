@@ -6,7 +6,7 @@ from peach.metadata_routes import (AMANE_OFFICIAL_STAGE, AMANE_STAGE, COMMUNITY_
                                    LIST_FIELD_DEPTH, MAKER_EVIDENCE, OFFICIAL_STAGE, ROUTES, classify,
                                    community_route, maker_sites, official_route, parse_route_overrides,
                                    required_scalars, route, route_for_code, settles, stage_members,
-                                   stages_for_code)
+                                   stages_for_code, WIKI_STAGE)
 
 
 def amane_sites(code, *hints, overrides=None):
@@ -24,8 +24,10 @@ class ClassifyTests(unittest.TestCase):
                 ('SIRO-3508', 'amateur'), ('STP-26232', 'amateur'),
                 ('092415_001', 'uncensored'), ('040221-001', 'uncensored'),
                 ('HEYZO-1380', 'uncensored'), ('n0780', 'uncensored'),
+                ('SMBD-120', 'uncensored'), ('SKYHD-050', 'uncensored'), ('CWPBD-79', 'uncensored'),
+                ('S2MBD-023', 'uncensored'), ('BT-123', 'censored'), ('MCDV-024', 'censored'),
                 ('FC2-PPV-1812235', 'fc2'), ('fc2-ppv-1233719', 'fc2'),
-                ('YUJ-103', 'kmib'), ('NOAH-101', 'kmib'),
+                ('AIN-203', 'kmib'), ('NOAH-101', 'kmib'),
                 ('', 'unknown'), (None, 'unknown')):
             with self.subTest(code=code):
                 self.assertEqual(classify(code), expected)
@@ -90,12 +92,31 @@ class RouteTableTests(unittest.TestCase):
     def test_amateur_asks_mgstage_first_and_never_the_makers_nor_dmm(self):
         """MGS 素人系由 MGS 自己发行；片商官网对素人号一个请求都不发，DMM 的目录上也没有它们。
 
-        r18.dev 在本机来源快照里一份素人号都没给过，垫在最后，不让每部片先白等它一次。
+        MGS 只给素人名义，紧接着问两个认人 Wiki（ADR-0145）；r18.dev 在本机来源快照里一份素人号
+        都没给过，垫在最后，不让每部片先白等它一次。
         """
         for code in ('300MIUM-1239', '259LUXU-1475', 'SIRO-4630'):
             with self.subTest(code=code):
                 self.assertEqual(route_for_code(code),
-                                 ('mgstage', 'avbase', 'javbus', 'javdb', 'r18dev'))
+                                 ('mgstage', 'sougouwiki', 'av_neme', 'avbase', 'javbus', 'javdb', 'r18dev'))
+        self.assertEqual(stages_for_code('259LUXU-1475'),
+                         ('amane_official', 'sougouwiki', 'av_neme', 'community', 'r18dev'))
+
+    def test_the_name_wikis_are_only_on_the_amateur_chain(self):
+        """认人 Wiki 只认素人与素人名义；av_name 不在任何默认链上，只能点名。"""
+        for content, chain in ROUTES.items():
+            with self.subTest(content=content):
+                self.assertEqual(any(name in WIKI_STAGE for name in chain), content == 'amateur')
+                self.assertNotIn('av_name', chain)
+
+    def test_a_missing_cast_keeps_asking_the_wikis_after_mgstage(self):
+        """素人缺演员时 MGStage 给了素人名义也不停，下一档是认人 Wiki 就接着问；有 Wiki 给过就照常停。"""
+        given = ('title', 'performers', 'studio', 'release_date')
+        self.assertTrue(settles(given, given, then='sougouwiki'))
+        self.assertFalse(settles(given, given, wants_cast=True, then='sougouwiki'))
+        self.assertFalse(settles(given, given, wants_cast=True, then='av_neme'))
+        # 下一档已是综合索引：Wiki 都没给出演员也停，javdb 不为认人多问。
+        self.assertTrue(settles(given, given, wants_cast=True, then='community'))
 
     def test_dmm_is_only_on_the_censored_chain(self):
         """DMM 是有码链上 r18.dev 之后的兜底；无码与 FC2 的番号不在它的目录上。"""
@@ -195,7 +216,7 @@ class MakerEvidenceTests(unittest.TestCase):
         self.assertEqual(route_for_code('ABW-032', overrides=overrides), ('prestige', 'r18dev'))
 
     def test_korean_mib_and_a_missing_code_ask_nobody(self):
-        self.assertEqual(route_for_code('YUJ-103'), ())
+        self.assertEqual(route_for_code('AIN-203'), ())
         self.assertEqual(route_for_code(''), ())
 
     def test_official_and_community_stages_do_not_overlap(self):
@@ -214,10 +235,11 @@ class StageTests(unittest.TestCase):
     def test_stages_keep_the_official_sources_apart_and_fold_the_indexes(self):
         """官方那几家逐个成档才短路得了；综合索引那一档整档一起问，经桥的几站也合成一档。"""
         self.assertEqual(stages_for_code('ABW-220'), ('amane_official', 'r18dev', 'dmm', 'community'))
-        self.assertEqual(stages_for_code('300MIUM-1239'), ('amane_official', 'community', 'r18dev'))
+        self.assertEqual(stages_for_code('300MIUM-1239'),
+                         ('amane_official', 'sougouwiki', 'av_neme', 'community', 'r18dev'))
         self.assertEqual(stages_for_code('040221-001'), ('community', 'amane'))
         self.assertEqual(stages_for_code('FC2-PPV-1812235'), ('fc2', 'community'))
-        self.assertEqual(stages_for_code('YUJ-103'), ())
+        self.assertEqual(stages_for_code('AIN-203'), ())
 
     def test_stage_members_name_the_sources_the_evidence_files_use(self):
         chain = route_for_code('FC2-PPV-1812235')

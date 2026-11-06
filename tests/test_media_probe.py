@@ -77,6 +77,21 @@ class ProbeUnmeasuredTests(unittest.TestCase):
         self.assertEqual(self.row(fresh), (1800.0, 1920, 1080, "2K"))
         self.assertEqual(self.row(measured)[0], 10.0)
 
+    def test_selected_probe_query_fits_the_connection_parameter_limit(self):
+        selected = self.add(ROOT + r'\selected.mp4')
+        self.add(ROOT + r'\unselected.mp4')
+        connect = sqlite3.connect
+        def limited_connection(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 5)
+            return connection
+        with mock.patch.object(media_probe.sqlite3, 'connect', side_effect=limited_connection), \
+                mock.patch.object(media_probe, '_record', return_value=1) as record:
+            count = media_probe.probe_unmeasured(
+                self.db, 'ffprobe', 'local', ROOT, asset_ids=[selected] * 10)
+        self.assertEqual(count, 1)
+        self.assertEqual([row[0] for row in record.call_args.args[2]], [selected])
+
     def test_a_metered_source_is_left_for_the_explicit_batch(self):
         pending = self.add(r"A:\创作者\a.mp4", location="pikpak")
         self.assertEqual(self.probe("pikpak", "A:\\"), 0)

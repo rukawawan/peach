@@ -162,22 +162,24 @@ def poll(tray, root: Path) -> None:
         return
 
     def reload_services():
+        # 先释放托盘动作锁再写终态，读到终态的一方据此可以立即发起下一次托盘动作。
+        outcome = {'state': 'ready', 'message': '服务已重载，正在刷新…'}
         try:
             from .config import DATABASE_PATH
             from .runtime_prepare import task_gate
             gate = task_gate(DATABASE_PATH, host=socket.gethostname(), alive=process_alive)
             if gate.refused:
                 raise ValueError(gate.refusal())
-            if not tray.manager.restart():
+            if not tray.manager.restart(reason="源码改字构建完成，重载服务"):
                 raise ValueError('服务尚未恢复，请查看托盘日志')
             readiness = tray._readiness()
             if readiness.problem:
                 raise ValueError(readiness.message)
-            _write(root, {**job, 'state': 'ready', 'message': '服务已重载，正在刷新…'})
         except Exception as exc:
-            _write(root, {**job, 'state': 'error', 'message': str(exc)})
+            outcome = {'state': 'error', 'message': str(exc)}
         finally:
             tray._action_lock.release()
+        _write(root, {**job, **outcome})
     try:
         threading.Thread(target=reload_services, daemon=True, name='PeachCopyReload').start()
     except RuntimeError as exc:

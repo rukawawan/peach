@@ -83,8 +83,8 @@ export function DiagnosticsPage(props: DiagnosticsProps) {
   const attention = Object.entries(data.checks).filter(([, check]) => ['warning', 'failed', 'unknown'].includes(check.status));
   const other = Object.entries(data.checks).filter(([, check]) => !['warning', 'failed', 'unknown'].includes(check.status));
   return <div className="flex min-w-0 flex-col gap-6">
-    <div data-guide-target="report" className="flex flex-wrap justify-end gap-2"><DownloadReport />
-      <Button variant="secondary" onClick={refresh} {...busyProps(action.busy === 'refresh')}>重新检查</Button></div>
+    <div data-guide-target="report"><DiagnosticExportAction kind="support">
+      <Button variant="secondary" onClick={refresh} {...busyProps(action.busy === 'refresh')}>重新检查</Button></DiagnosticExportAction></div>
     {refreshError ? <Note tone="error">{refreshError}</Note> : null}
     {attention.length ? <Section guide="attention" title={`需要关注 · ${attention.length} 项`}>
       {attention.map(([key, check]) => <Check key={key} name={key} check={check} />)}

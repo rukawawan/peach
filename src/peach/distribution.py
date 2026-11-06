@@ -1,6 +1,7 @@
-"""独立测试包的资源标记与用户数据目录。"""
+"""分发形态（独立测试包、Docker 镜像）的判定与用户数据目录。"""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,11 @@ from pathlib import Path
 def standalone() -> bool:
     return bool(getattr(sys, "frozen", False) and
                 (Path(getattr(sys, "_MEIPASS", "")) / "standalone.txt").is_file())
+
+
+def docker() -> bool:
+    """官方镜像在 Dockerfile 里设了 `PEACH_DISTRIBUTION=docker`。"""
+    return os.environ.get("PEACH_DISTRIBUTION") == "docker"
 
 
 def in_app_update() -> bool:

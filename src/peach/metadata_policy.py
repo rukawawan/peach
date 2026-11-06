@@ -123,8 +123,13 @@ CHAIN_COMMUNITY, CHAIN_FALLBACK, CHAIN_UNKNOWN = 3, 4, 5
 #: javdb 写 `Chisa`、fc2cmadb 写 `大村阿美香`；`FC2-PPV-2629971` javdb 写中文 `安娜`、
 #: fc2cmadb 写日文原名 `あんな`。FC2PPV-DB 的女优栏同样按片中人整理、写日文原名
 #: （2026-09-24 `FC2-PPV-4898837` 写 `川北すずね`），排在 fc2cmadb 之后、javdb 之前。
+#:
+#: 演员栏的两个认人 Wiki（ADR-0145）：只有素人番号会问到它们。MGStage 与 r18.dev 是官方档，
+#: 素人片上写的却是片中称呼：本机账本 `348NTR-076` 记着 mgstage 的 `アミ`、`857OMG-048` 记着
+#: `七○舞`、`230ORETD-615` 记着 r18dev 的 `早見さん`；2026-11-05 素人系総合 Wiki 给
+#: `348NTR-076` 的是 `稲森あみ`。
 FIELD_SOURCE_PRIORITY: dict[str, tuple[str, ...]] = {
-    "performers": ("fc2cmadb", "fc2ppvdb"),
+    "performers": ("fc2cmadb", "fc2ppvdb", "sougouwiki", "av_neme"),
 }
 
 #: 字段级黑名单（对应 amane 的 `field_blacklist`），优先于一切：列进来的来源在这个

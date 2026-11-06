@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, Mapping, Sequence
 
-from .catalog_rules import is_amateur_code, is_korean_mib_code, is_uncensored_code
+from .catalog_rules import is_amateur_code, is_korean_mib_code, is_uncensored_code, is_uncensored_label_code
 from .metadata_policy import SOURCE_SPECS
 
 
@@ -76,7 +76,9 @@ ROUTES: dict[str, tuple[str, ...]] = {
     # 最后一处可能有官方值的地方。
     # dmm 不进：2026-09-24 实测 DMM 的搜索对 `MIUM 1239`、`LUXU 1475` 零结果，MGS 素人号
     # 不在它的目录上，多问一家只多两次白请求。
-    "amateur": ("mgstage", "avbase", "javbus", "javdb", "r18dev"),
+    # MGStage 之后是两个认人 Wiki（`WIKI_STAGE`，ADR-0145）：MGS 只给素人名义（`まいな`、`七○舞`），
+    # Wiki 给出背后的艺名。排在综合索引前面，是因为它们与 javdb 不共一条 3 秒的队。
+    "amateur": ("mgstage", "sougouwiki", "av_neme", "avbase", "javbus", "javdb", "r18dev"),
     # 无码：发行方自己那份作品 JSON 先问，但只在本机证据指着一本道时才问
     # （见 `route_for_code`）——日期式番号不带片商，カリビアンコム 与一本道同形，
     # 问错一家答回来的是同一天发行的另一部片。
@@ -146,6 +148,11 @@ COMMUNITY_STAGE = ("avbase", "javbus", "javdb")
 #: 的 `LIST_FIELD_DEPTH` 名额——那三家的互证样本不该被转载站挤掉。链上放在综合索引之前
 #: 还是之后由各类型的链自己定：默认链上只有无码的 avsox，垫在最后；其余三站只由整条覆盖点名。
 AMANE_STAGE = ("fc2club", "freejavbt", "airav", "avsox")
+#: 素人链上的两个认人 Wiki（`sources.seesaa`，ADR-0145），各自一档、先后问。2026-11-05 对 29 个
+#: 不同厂牌的素人番号实测：素人系総合 Wiki 13 部、av_neme 16 部给出演员，与账本已确认的演员一致，
+#: 不一致的几条是账本记着素人名义、Wiki 给出艺名。av_name 只给 12 部，唯一一条与账本对不上的
+#: 也出自它，且它的厂牌页只挂最新约 1100 件，不进链，仍可由 `scrape_codes --sources` 点名。
+WIKI_STAGE = ("sougouwiki", "av_neme")
 
 #: 必填标量字段。一档把这几项（在这一行还缺的范围内）都给全了就不问下一档。
 SCALAR_FIELDS = ("title", "performers", "studio", "release_date")
@@ -184,7 +191,7 @@ def classify(code: str | None, *hints: str | None) -> str:
     # `FC2-PPV-…`；没归一的短写法按 `_FC2_SHORT` 认。
     if value.upper().startswith("FC2") or _FC2_SHORT.match(value):
         return "fc2"
-    if is_uncensored_code(value):
+    if is_uncensored_code(value) or is_uncensored_label_code(value):
         return "uncensored"
     if is_amateur_code(value) or _MGS_AMATEUR.match(value.upper()):
         return "amateur"
@@ -355,7 +362,7 @@ def required_scalars(missing: Iterable[str]):
 
 
 def settles(required: Sequence[str], provided: Iterable[str], *,
-            wants_tags: bool = False, then: str = "") -> bool:
+            wants_tags: bool = False, wants_cast: bool = False, then: str = "") -> bool:
     """这一档给的字段够不够停手。
 
     `required` 空时任何一档只要给出资料就停——这一行要的本来就不是标量字段，
@@ -365,9 +372,14 @@ def settles(required: Sequence[str], provided: Iterable[str], *,
     作品资料没有类别，标量给全了也一个标签都没有；下一档仍是官方档（有码链上片商官网之后
     的 r18.dev）时再问它一次换一批标签。下一档是综合索引或转载站就照样停：javdb 按出口 IP
     计配额，不为标签多问。
+
+    `wants_cast` 是这一行缺演员、还没有 Wiki 给过（ADR-0145）：MGStage 给的演员是素人名义，
+    给了也不停，下一档是认人 Wiki 时接着问它。
     """
     given = set(str(field) for field in provided)
     if wants_tags and "tags" not in given and then in OFFICIAL_STAGE_NAMES:
+        return False
+    if wants_cast and then in WIKI_STAGE:
         return False
     if not required:
         return True

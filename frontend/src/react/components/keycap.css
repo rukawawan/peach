@@ -1,0 +1,42 @@
+/* 拟物键帽：顶面渐变、上缘高光与底边厚度；按住时下沉，厚度收薄。颜色全取主题变量：
+   底边厚度把三级底与 neutral-950 混出来，深浅两套主题都比顶面暗。
+
+   厚度画在边框以内（底部内阴影），不画在边框外：画在外面时，状态描边与光环只包得住顶面，
+   底下那条厚度露在描边外，像没包住。按住时厚度从 3px 收到 1px、整枚下沉 2px，总高不变。 */
+.peach-react [data-keycap] {
+  --keycap-face: var(--color-background-tertiary-default);
+  --keycap-edge: color-mix(in oklab, var(--keycap-face) 55%, var(--color-neutral-950));
+  --keycap-depth: 3px;
+  --keycap-highlight: inset 0 1px 0 color-mix(in oklab, var(--color-text-primary) 12%, transparent);
+  box-sizing: border-box; min-width: 34px; height: 36px; padding: 0 9px var(--keycap-depth);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; border: 1px solid var(--color-border-button-default);
+  font: 600 13px/1 var(--font-sans, system-ui, sans-serif); color: var(--color-text-primary);
+  background: linear-gradient(color-mix(in oklab, var(--keycap-face), var(--color-text-primary) 8%), var(--keycap-face));
+  box-shadow: var(--keycap-highlight), inset 0 calc(-1 * var(--keycap-depth)) 0 var(--keycap-edge);
+  transform: translateY(0);
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out, border-color 120ms ease-out, padding 80ms ease-out;
+}
+.peach-react [data-keycap][data-state="down"] {
+  --keycap-ring: var(--color-border-focus-ring);
+  --keycap-depth: 1px;
+  --keycap-highlight: inset 0 1px 2px color-mix(in oklab, var(--color-neutral-950) 45%, transparent);
+  transform: translateY(2px);
+}
+.peach-react [data-keycap]:is([data-state="down"], [data-state="invalid"], [data-state="done"]) {
+  border-color: var(--keycap-ring);
+  box-shadow: var(--keycap-highlight), inset 0 calc(-1 * var(--keycap-depth)) 0 var(--keycap-edge),
+    0 0 0 3px color-mix(in oklab, var(--keycap-ring) 28%, transparent);
+}
+.peach-react [data-keycap][data-state="invalid"] { --keycap-ring: var(--color-border-error-default); }
+.peach-react [data-keycap][data-state="done"] { --keycap-ring: var(--color-notification-success-foreground); }
+.peach-react [data-keycap][data-state="slot"] {
+  background: transparent; border-style: dashed; box-shadow: none; color: var(--color-text-secondary);
+  font-weight: 500; font-size: 12px; padding-bottom: 0;
+}
+.peach-react [data-keycaps] { display: flex; align-items: center; gap: 6px; }
+.peach-react [data-keycaps] > [data-keycap-plus] { color: var(--color-text-secondary); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .peach-react [data-keycap] { transition: none; }
+  .peach-react [data-keycap][data-state="down"] { transform: none; }
+}

@@ -57,6 +57,10 @@ it('填充卡之上另加的那条描边不换底', () => {
   expect(fieldset).toContain('bg-background-secondary-default');
   expect(fieldset).toContain('border-border-button-default');
   expect(classes({ bordered: 'soft' })).toContain('border-separator-border');
+  // 失败卡的框线要有宽度才画得出来，且画成不占盒子的 outline，不把内容挤进 1px。
+  const failed = [...classes({ bordered: 'error' })];
+  expect(failed.filter((name) => name.startsWith('border'))).toEqual([]);
+  expect(failed).toEqual(expect.arrayContaining(['outline-1', '-outline-offset-1', 'outline-border-error-default']));
 });
 
 /* 环画在 `::after` 覆盖层上：inset 的 box-shadow 画在子元素底下，脚注带一铺底色就盖掉环的下半截。 */

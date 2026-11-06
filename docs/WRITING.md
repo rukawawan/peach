@@ -64,6 +64,8 @@ uv run --locked --extra dev seiso policy
 
 最终状态检查共用 `scripts/copy-rules.json`。明确叙述实现变更、测试名称描述变更过程时拒绝通过；可能属于条件说明的词语只提示人工核对。合法条件说明不需要添加豁免标记。明确需要保留的事故原文仍用 `copy-lint-disable-line` 逐行说明例外。
 
+Markdown 里的「兜底」「落盘」「闭环」「链路」意思含糊，检查拒绝通过，改写成具体机制，如后备来源、写入磁盘、下载流程；「链路本地」是网络地址类别，保留。`对齐`、`复盘` 是项目术语与技能触发词，`DOM/CSS/JS` 是证据三元组的固定写法，均保留。 <!-- copy-lint-disable-line -->
+
 Python 检查读取 AST 字符串、f-string 静态片段及注释；HTML 读取正文、注释和可见属性。JS/TS 由 `frontend/scripts/copy-check.mjs` 使用 Oxc 解析注释、字符串、模板及 JSX，忽略变量名、静态属性键和模块路径。前端文案检查随正式入口的前端 lint 用例执行，CI 由 `web-bundle` 执行；纯 Python 文档检查不要求安装 Node。
 
 提交模板不是成稿；`docs/reference-snapshots/upstream/` 保存第三方原文，相对链接属于上游仓库。这两类在配置中排除。Peach 自己撰写的取证摘要、ADR、技能和依赖来源说明仍接受检查；构建目录、依赖安装目录不属于项目文档。

@@ -413,6 +413,43 @@ class RecordTests(_StoreCase):
         with self.assertRaises(FollowSourceError):
             self.store.set_status(self.store.items()[0].id, "nonsense")
 
+    def test_a_tag_the_site_later_marks_as_a_character_follows_on_older_items(self):
+        """站方事后把标签改成角色：新条目记上之后，同站旧条目里的同名标签跟着改。
+
+        跨作者也改；别的站不动；只往 character 改，新条目记成 general 不降级旧行。
+        """
+        def typed(external_id, kind, **kwargs):
+            return _candidate(external_id, external_id, extra={"tag_types": {
+                "d.mon (overwatch)": kind, "sex": "general"}}, **kwargs)
+
+        old = self._source(ref="vileclipse")
+        other_site = self._source(provider="rule34xxx", ref="vileclipse")
+        self.store.record(old, _fetch([typed("1", "general")], ref="vileclipse"),
+                          moment=MOMENT)
+        self.store.record(other_site, _fetch([typed("9", "general", provider="rule34xxx")],
+                                             provider="rule34xxx", ref="vileclipse"),
+                          moment=MOMENT)
+        newer = self._source(ref="someone-else")
+        # 探详情失败的候选是 partial，它带的类型不作数。
+        self.store.record(newer, _fetch([typed("2", "character", partial=True)],
+                                        ref="someone-else"), moment=MOMENT)
+
+        def kinds():
+            return {item.external_id: item.metadata["tag_types"]["d.mon (overwatch)"]
+                    for item in self.store.items()}
+
+        self.assertEqual(kinds()["1"], "general")
+        self.store.record(newer, _fetch([typed("3", "character")], ref="someone-else"),
+                          moment=MOMENT)
+        self.assertEqual(kinds(), {"1": "character", "2": "character", "3": "character",
+                                   "9": "general"})
+        old_item = next(item for item in self.store.items() if item.external_id == "1")
+        self.assertEqual(old_item.metadata["tag_types"]["sex"], "general")
+
+        self.store.record(old, _fetch([typed("4", "general")], ref="vileclipse"),
+                          moment=MOMENT)
+        self.assertEqual(kinds()["1"], "character")
+
 
 class GroupingTests(_StoreCase):
     def test_repeated_collection_of_the_main_upload_preserves_its_variants(self):

@@ -56,13 +56,13 @@ it('空检查报告不保留分隔区，只有错误时直接显示原因', asyn
   const form = section(host, '云下载')!;
   await click(buttonNamed('检查连接', host));
   await settle();
-  expect([...form.querySelectorAll('dl')].filter(node => !node.closest('[data-guide-help]'))).toEqual([]);
+  expect(form.querySelectorAll('dl')).toHaveLength(0);
   expect(form.querySelectorAll('.border-t')).toHaveLength(1);
   fetcher.mockImplementation(async () => ({ ok: true, status: 200, json: async () => report({ problems: ['无法连接 CloudDrive2'] }) }));
   await click(buttonNamed('检查连接', host));
   await settle();
   expect(form.querySelector('[role="alert"]')?.textContent).toBe('无法连接 CloudDrive2');
-  expect([...form.querySelectorAll('dl')].filter(node => !node.closest('[data-guide-help]'))).toEqual([]);
+  expect(form.querySelectorAll('dl')).toHaveLength(0);
 });
 
 it('未添加 PikPak 时隐藏账号和专属字段，并保留已有配置', async () => {

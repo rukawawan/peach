@@ -23,7 +23,7 @@ const HELP: Partial<Record<AccessState['mode'], string>> = {
   password: '已设置密码。新设备需要登录，登录时勾选「保持登录」可保持 30 天。',
 };
 
-export function AccessSettings({ initial, receipt }: AccessSettingsProps) {
+export function AccessSettings({ initial, receipt, devices, after }: AccessSettingsProps) {
   const [state, setState] = useState(initial);
   const [current, setCurrent] = useState('');
   const [password, setPassword] = useState('');
@@ -61,7 +61,7 @@ export function AccessSettings({ initial, receipt }: AccessSettingsProps) {
 
   const help = HELP[state.mode];
   const editable = state.mode !== 'locked';
-  return (
+  return (<>
     <Section guide="access" title="访问密码" onSubmit={submit}>
       <div ref={body}>
         <Stack>
@@ -91,5 +91,7 @@ export function AccessSettings({ initial, receipt }: AccessSettingsProps) {
         ? <Footer><Button type="submit" {...busyProps(action.busy === 'save')}>保存配置</Button></Footer>
         : null}
     </Section>
-  );
+    {devices && (state.mode === 'password' || state.mode === 'legacy') ? devices(state) : null}
+    {after ? after(state) : null}
+  </>);
 }

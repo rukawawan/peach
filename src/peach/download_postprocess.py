@@ -12,6 +12,7 @@ from .downloads import (INGESTED, POSTPROCESS_COMPLETE, POSTPROCESS_FAILED,
                         DownloadStore, iso)
 from .field_owners import SCAN_FILENAME, write_owned_fields
 from .followups import FollowupType, register
+from .ingest_notices import NOTICES
 from .jobs import JobDeferred
 from .library_processing import COLLECT_STAGE, _ffprobe_path, process_library
 from .media_probe import probe_unmeasured
@@ -117,7 +118,12 @@ def _collect(contract, main: int, handle) -> dict:
             current=int(state.get("checked") or 0), total=int(state.get("total") or 0),
             label=str(state.get("stage") or TASK_LABEL)))
     if state.get("status") == "failed":
-        raise RuntimeError(str(state.get("error") or "资料采集失败"))
+        # 问题全是来源限流或拒绝访问时，其余资料已经落库，等的是那一站放开；文件照常整理，
+        # 不为一项暂缺的资料把整条下载卡在云下载目录里。
+        issues, paused = int(state.get("issue_count") or 0), int(state.get("paused_count") or 0)
+        if not issues or paused < issues:
+            raise RuntimeError(str(state.get("error") or "资料采集失败"))
+        state = {**state, "paused_pending": [str(row.get("message") or "") for row in state.get("issue_preview") or ()]}
     return state
 
 
@@ -193,11 +199,14 @@ def run(contract, key: str, handle) -> dict:
         store.postprocess(task_id, POSTPROCESS_FAILED,
                           detail=f"{type(error).__name__}: {error}")
         raise
-    store.postprocess(task_id, POSTPROCESS_COMPLETE,
-                      detail=(f"正片已绑定，资料已采集；整理跳过：{organized['skipped']}"
-                              if organized.get('skipped') else "正片已绑定，资料已采集并完成整理"),
-                      finished=iso(time.time()))
+    detail = (f"正片已绑定，资料已采集；整理跳过：{organized['skipped']}"
+              if organized.get('skipped') else "正片已绑定，资料已采集并完成整理")
+    pending = metadata.get('paused_pending')
+    if pending:
+        detail += "；部分资料等来源恢复后重新采集：" + "；".join(filter(None, pending))[:300]
+    store.postprocess(task_id, POSTPROCESS_COMPLETE, detail=detail, finished=iso(time.time()))
     contract.cache_bust()
+    NOTICES.add("download", int(main), task.code or task.display_name)
     return {"task_id": task_id, "asset_id": main, "ads_isolated": isolated, 'probed': probed,
             "metadata_candidates": int(metadata.get("candidates") or 0),
             "moved": int(organized.get("moved") or 0),

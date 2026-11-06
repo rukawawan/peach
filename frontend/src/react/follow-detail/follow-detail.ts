@@ -121,6 +121,8 @@ export interface FollowDetailActions {
   /** 操作回执；给了 `undo` 就带一颗撤销键。失败走 `failure`。 */
   toast(message: string, options?: { undo?: () => Promise<void> }): void;
   failure(action: string, error: unknown): void;
+  /** 接着看里的一叠能不能悬停翻卡：和关注列表同一个判据（多选、遮挡、减少动效、滚动中都回 false）。 */
+  canFlip(): boolean;
 }
 
 export interface FollowDetailProps {

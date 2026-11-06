@@ -318,6 +318,81 @@ class RecordRehomeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "已消失"):
                 record_rehome.move(connection, 9, 7, source=record_rehome.MANUAL_SOURCE, rule="manual")
 
+    # 以下：旧行还在库、文件已不在盘上，新文件同番号，登记前把旧行改指过去（ADR-0131）。
+    OLD = "R:\\media\\演员\\FNS-257\\FNS-257.mp4"
+
+    def add_old(self, asset_id=7, path=OLD):
+        """一条在库旧行，盘上没有它的文件；带刮削标签、探测结果与一次播放。"""
+        self.add_live(asset_id, path, code="FNS-257", duration=7208.23)
+        with closing(sqlite3.connect(self.db)) as connection:
+            connection.execute("UPDATE asset SET width=1920,height=1080,play_count=1 WHERE id=?", (asset_id,))
+            connection.execute("INSERT INTO asset_tag(asset_id,tag,source) VALUES(?,'刮削标签','javdb')", (asset_id,))
+            connection.commit()
+
+    def scan_new(self):
+        with redirect_stdout(io.StringIO()):
+            return scan.scan_location(self.db, "local", "R:\\media", declared_roots=DECLARED,
+                                      mounts=self.mounts, windows=False, new_only=True)
+
+    def test_a_renamed_and_reencoded_folder_keeps_its_row(self):
+        """#312：目录改名又换了编码，增量扫描不新建行，标签与播放留在原行，探测列等重探。"""
+        self.add_old()
+        new_path = self.put("演员/FNS-257 新后缀/FNS-257.mp4")
+        result = self.scan_new()
+        self.assertEqual((result.new_ids, result.relocated_ids), ((), (7,)))
+        self.assertEqual(self.query("SELECT id,path,code,duration,width,height,play_count FROM asset"),
+                         [(7, new_path, "FNS-257", None, None, None, 1)])
+        self.assertEqual(self.owner("asset_tag"), [7])
+        self.assertEqual(self.query("SELECT count(*) FROM record_rehome"), [(0,)])
+
+    def test_push_discovery_keeps_the_row_too(self):
+        self.add_old()
+        new_path = self.put("演员/FNS-257 新后缀/FNS-257.mp4")
+        result = self.ingest(new_path)
+        self.assertEqual((result.asset_id, result.new, result.relocated), (7, False, 7))
+        self.assertEqual(self.query("SELECT id,path FROM asset"), [(7, new_path)])
+
+    def test_an_old_file_still_on_disk_is_a_second_copy(self):
+        old_path = self.put("演员/FNS-257/FNS-257.mp4")
+        self.scan_all()
+        new_path = self.put("演员/FNS-257 新后缀/FNS-257.mp4")
+        result = self.scan_new()
+        self.assertEqual(result.relocated_ids, ())
+        self.assertEqual(sorted(row[0] for row in self.query("SELECT path FROM asset")), sorted([old_path, new_path]))
+
+    def test_two_old_rows_with_the_code_are_left_alone(self):
+        self.add_old(7)
+        self.add_old(8, "R:\\media\\演员\\FNS-257 4K\\FNS-257.mp4")
+        new_path = self.put("演员/FNS-257 新后缀/FNS-257.mp4")
+        result = self.scan_new()
+        self.assertEqual(result.relocated_ids, ())
+        self.assertEqual(self.query("SELECT path FROM asset WHERE id IN (7,8) ORDER BY id"),
+                         [(self.OLD,), ("R:\\media\\演员\\FNS-257 4K\\FNS-257.mp4",)])
+        self.assertEqual(len(result.new_ids), 1)
+        self.assertEqual(self.query("SELECT path FROM asset WHERE id=?", (result.new_ids[0],)), [(new_path,)])
+
+    def test_two_new_videos_with_the_code_in_one_folder_are_left_alone(self):
+        self.add_old()
+        self.put("演员/FNS-257 新后缀/FNS-257.mp4")
+        self.put("演员/FNS-257 新后缀/FNS-257.mkv")
+        result = self.scan_new()
+        self.assertEqual((result.relocated_ids, len(result.new_ids)), ((), 2))
+        self.assertEqual(self.query("SELECT path FROM asset WHERE id=7"), [(self.OLD,)])
+
+    def test_an_old_row_under_another_media_folder_is_left_alone(self):
+        """另一个媒体目录可能只是没挂上：它下面的行答「不在」不能作数。"""
+        other = self.root / "other"
+        other.mkdir()
+        self.mounts["local"] = (str(self.media), str(other))
+        self.add_old(path="R:\\other\\FNS-257\\FNS-257.mp4")
+        self.put("演员/FNS-257 新后缀/FNS-257.mp4")
+        declared = {"local": ("R:\\media", "R:\\other")}
+        with redirect_stdout(io.StringIO()):
+            result = scan.scan_location(self.db, "local", "R:\\media", declared_roots=declared,
+                                        mounts=self.mounts, windows=False, new_only=True)
+        self.assertEqual((result.relocated_ids, len(result.new_ids)), ((), 1))
+        self.assertEqual(self.query("SELECT path FROM asset WHERE id=7"), [("R:\\other\\FNS-257\\FNS-257.mp4",)])
+
 
 if __name__ == "__main__":
     unittest.main()

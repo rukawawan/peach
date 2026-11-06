@@ -36,6 +36,9 @@ from smbprotocol.tree import TreeConnect
 for _namespace in ("smbprotocol", "smbclient"):
     logging.getLogger(_namespace).setLevel(logging.WARNING)
 
+#: 只关乎单个路径的错误，连接仍可继续使用；其余错误视为连接已不可用。
+PATH_ERRNOS = frozenset({errno.ENOENT, errno.EACCES, errno.EPERM, errno.EISDIR, errno.ENOTDIR})
+
 
 @dataclass(frozen=True)
 class SmbConnection:
@@ -263,7 +266,7 @@ class SmbTransport:
             if fd.connected:
                 self._close_fd(fd)
             error = _error(exc)
-            if error.errno not in (errno.ENOENT, errno.EACCES, errno.EPERM, errno.EISDIR, errno.ENOTDIR):
+            if error.errno not in PATH_ERRNOS:
                 self.close()
             raise error from None
 

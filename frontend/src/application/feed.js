@@ -1,12 +1,13 @@
 /* feed 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { coverImage, remoteCoverUrl } from './../card-art/markup';
 import { feedIdentity } from './../card-art/feed-identity';
+import { coverStateHtml } from './../card-art/cover-state';
 import { $, api, esc, foldName, icon, isCatalogPath } from '../core';
 import { javTitleHtml } from '../core/jav-title';
 import { COVER_FRONT_RATIO } from './../appearance/layout';
 import { catalogState } from './catalog.js';
 import { managedTaken, openManagedRoute, updateManagedRoute } from './../history/managed';
-import { loadingDotsHtml, noteHtml, stopAutoScroll, wireAutoScroll } from '../ui-kit';
+import { noteHtml, stopAutoScroll, wireAutoScroll } from '../ui-kit';
 import { preferencesState, wireDrag } from './preferences.js';
 import { pushEntityPage } from './entity.js';
 import { applicationEffects } from './effects';
@@ -14,9 +15,8 @@ export const feedState = { FEED_SKELETON_CARDS: undefined, feedNewSkeletonHtml: 
 
 export function feedNewCoverHtml(item){
   if(item.has_cover)return coverImage(item,'big');
-  if(!item.cover_url||!item.code)return item.cover_fetching
-    ?`<span class="nopic" data-feed-cover-state="fetching">${loadingDotsHtml('抓取中')}</span>`
-    :'<span class="nopic" data-feed-cover-state="missing">无封面</span>';
+  // 还没有封面：说清在等什么、为什么没有，排队的可以当场先取（后台那条队可能被存量补修占着几个小时）。
+  if(!item.cover_url||!item.code)return coverStateHtml(item);
   // 官方图经 Peach 代理取，断网或上游失败时换成「封面未取得」占位。
   return coverImage(item,'big').replace(/ src="[^"]*"/,
     ` src="${esc(remoteCoverUrl(item))}" data-panel-prior="1"`)
@@ -97,10 +97,13 @@ export function feedNetworkNote(unreachable,items){
     {variant:'warning',className:'feednetwork',actionLabel:'配置连接方式',actionHref:'/sources'});
 }
 
-export function feedRowHtml(data){
+/* `allHref` 给了就在行尾多一张「查看全部新作」卡，跳到 JAV 页的新作分区；首页那一行给，资料页那一行不给。 */
+export function feedRowHtml(data,allHref=''){
   const items=data&&!data.error?(data.items||[]):[];
+  const all=allHref&&items.length
+    ?`<a class="feednewall" href="${esc(allHref)}" style="--card-ratio:${COVER_FRONT_RATIO}"><span>查看全部新作</span>${icon('chevron-right')}</a>`:'';
   return feedNetworkNote(data?.cover_network,items)
-    +`<div class="feednewrow srow">${items.map(feedNewCardHtml).join('')}</div>`;
+    +`<div class="feednewrow srow">${items.map(feedNewCardHtml).join('')}${all}</div>`;
 }
 
 export function wireFeedNewRow(row){

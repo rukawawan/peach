@@ -34,7 +34,7 @@ Peach 通过 Prowlarr 或 Jackett 提供的 Torznab 接口查询资源。先在�
 2. 检查候选的番号、体积、做种与质量信息。
 3. 选中所需候选后提交下载。
 
-有候选表示搜索链路可用；提交下载还需要独立配置 115 或 PikPak。CloudDrive2 的设置见 [完整配置与调优说明](CLOUDDRIVE.md)。
+有候选表示搜索功能可用；提交下载还需要独立配置 115 或 PikPak。CloudDrive2 的设置见 [完整配置与调优说明](CLOUDDRIVE.md)。
 
 ## 常见问题
 

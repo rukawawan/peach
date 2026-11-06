@@ -24,6 +24,7 @@ import json
 import sqlite3
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import studio_icons, studio_sites
@@ -31,7 +32,7 @@ from .followups import Attempts, Followup, FollowupType, attempts_root, register
 
 #: 这类后继在任务中心的身份，也是活动页上那一行的名字来源。
 TASK_KEY = "studio-mark"
-TASK_LABEL = "补厂牌官网与标识"
+TASK_LABEL = "厂牌官网与标识补全"
 
 #: 这条后继写下的一切都带这个归属串，撤回按它认。
 SOURCE = "auto:studio-mark"
@@ -47,6 +48,31 @@ ICON_INTERVAL, ICON_TIMEOUT = 1.5, 20.0
 #: 「补满」的话，没头像的女优一轮就把余下的名额用完：本机 2026-09-25 实测补厂牌一条都没
 #: 派出去过，`変態紳士倶楽部` 官网 09-23 登记后一直没图。没图的厂牌只有二三十家，几轮就轮遍。
 STOCK_SHARE = 8
+
+#: 候选官网全都连不上时，过多久存量补派再派这一家。与补女优资料「未取得」的那一档同为一天。
+RETRY_UNREACHED = 24 * 3600
+
+
+def release_unbounded_misses(root, clock=time.time) -> int:
+    """给没有重试期限的「官网未取得」记录补一个已过期的期限，存量补派各再派一次。
+
+    带期限之前写下的这类记录分不清当时是断网还是这家确实没有官网，不补就要等作品数或
+    链接数变化才会再试。重试一次之后照现在的规则重记：连不上的带一天期限，回了状态的不带。
+    只动 `studio-mark` 的记录；返回改了几条。
+    """
+    changed = 0
+    for path in sorted(Path(root).glob(f"{TASK_KEY}-*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (not isinstance(record, dict) or record.get("outcome") != "官网未取得"
+                or record.get("retry_until") is not None):
+            continue
+        record["retry_until"] = clock()
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        changed += 1
+    return changed
 
 
 def followup_key(entity_id: int) -> str:
@@ -131,14 +157,17 @@ def run(contract, key: str, handle) -> dict:
 
     人像闸取不到模型的那一次不记：结论取决于那天有没有网，记下来就要等到这家多一部
     作品或多一条链接才会再试，活动中心「立即重试」取回模型之后也补不回来。
+    候选官网一个都连不上的那次照记，但只保 `RETRY_UNREACHED`：同样是那天有没有网的事。
     """
     summary = _run(contract, key, handle)
     if summary.get("face_match_unavailable"):
         return summary
     with contract.database.read_connection() as connection:
         current = fingerprint(connection, parse_key(key))
+    site = summary.get("site") or {}
     Attempts(attempts_root(contract.candidate_root)).record(
-        key, current, str(summary.get("outcome", "")))
+        key, current, str(summary.get("outcome", "")),
+        retry_after=RETRY_UNREACHED if site.get("unreached") else None)
     return summary
 
 
@@ -180,8 +209,12 @@ def _land_site(contract, entity_id: int, name: str, aliases, batch: str) -> dict
     verdict = str(row["verdict"])
     if verdict != "ok":
         # `weak` 与 `未取得` 都不写：前者要人看，后者是没有证据。
-        return {"outcome": "待人确认" if verdict == "weak" else "未取得",
-                "verdict": verdict, "note": str(row["note"])[:200]}
+        result = {"outcome": "待人确认" if verdict == "weak" else "未取得",
+                  "verdict": verdict, "note": str(row["note"])[:200]}
+        # 试过候选却没有一个回了 HTTP 状态：全是传输层失败，多半是断网，不是这家没有官网。
+        if row.get("candidate_url") and not row.get("status"):
+            result["unreached"] = True
+        return result
     url = str(row["final_url"] or row["candidate_url"])
     now = datetime.now(timezone.utc).isoformat()
     metadata = {"source": SOURCE, "batch": batch, "verdict": verdict, "installed_at": now,

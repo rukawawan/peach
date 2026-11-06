@@ -88,9 +88,13 @@ class FollowUpdateScheduler:
     def __init__(self, state_root: Path, run_check: Callable[[], dict], *, available: bool,
                  job_id: str = JOB_ID, filename: str = "follow-schedule.json",
                  default: FollowScheduleConfig | None = None,
+                 tick_minutes: int | None = None,
                  unavailable_message: str =
                  "automatic follow updates are available only on the ledger writer"):
         self.job_id = job_id
+        #: 多久跑一次。不给就等于设置里的间隔；订阅源给的是 `feeds.TICK_MINUTES`：
+        #: 那边设置里的间隔是每个源的周期，到期由源自己判（ADR-0134）。
+        self.tick_minutes = tick_minutes
         self.unavailable_message = unavailable_message
         self.store = FollowScheduleStore(state_root, filename, default)
         self.run_check = run_check
@@ -156,12 +160,17 @@ class FollowUpdateScheduler:
             raise ValueError("自动运行没有开启") from None
         return self.status()
 
+    @property
+    def tick(self) -> int:
+        """调度任务的实际间隔（分钟）。"""
+        return self.tick_minutes or self.config.interval_minutes
+
     def _apply_job(self) -> None:
         if not self.config.enabled:
             if self.scheduler.get_job(self.job_id) is not None:
                 self.scheduler.remove_job(self.job_id)
             return
-        interval = self.config.interval_minutes
+        interval = self.tick
         self.scheduler.add_job(
             self._run,
             "interval",
@@ -181,13 +190,14 @@ class FollowUpdateScheduler:
         到 `MAX_BACKOFF_FACTOR` 倍为止，且不超过允许的最大间隔。
         """
         if failures <= 1:
-            return self.config.interval_minutes
+            return self.tick
         factor = min(2 ** (failures - 1), MAX_BACKOFF_FACTOR)
-        return min(self.config.interval_minutes * factor, MAX_INTERVAL_MINUTES)
+        return min(self.tick * factor, MAX_INTERVAL_MINUTES)
 
     def _run(self) -> None:
         with self._state_lock:
             started_before = self._last_started_at
+            error_before = self._last_error
             self._running = True
             self._last_started_at = _stamp()
             self._last_error = None
@@ -211,6 +221,15 @@ class FollowUpdateScheduler:
                 with self._state_lock:
                     self._last_skipped_at = _stamp()
                     self._last_started_at = started_before
+                return
+            if result.get("idle"):
+                # 这一跳没有到期的来源（订阅源每半小时一跳，ADR-0134）：什么也没做，
+                # 上一轮的结论原样留着。按成功结算的话，一次真实失败半小时后就从界面上消失，
+                # 而失败的那几个源还要等到下一次到期才重拉。
+                skipped = True
+                with self._state_lock:
+                    self._last_started_at = started_before
+                    self._last_error = error_before
                 return
             rows = result.get("results") or []
             failures = [row for row in rows if not row.get("ok")]
@@ -248,7 +267,7 @@ class FollowUpdateScheduler:
         if not failed or not self._started:
             return
         delay = self.backoff_minutes(failures)
-        if delay <= self.config.interval_minutes:
+        if delay <= self.tick:
             return
         try:
             self.scheduler.modify_job(

@@ -60,8 +60,8 @@ VERIFIED_RENAME_LOCATIONS = frozenset({"pikpak"})
 _verified_renames: dict[str, Callable[[str, str], None]] = {}
 
 
-class OrganizeError(RuntimeError):
-    """整理本身拒绝执行。消息直接给用户看。"""
+class OrganizeError(ValueError):
+    """整理本身拒绝执行。消息直接给用户看；接口按参数错误回 400。"""
 
 
 class UnverifiedRename(OSError):

@@ -96,6 +96,7 @@ for tool in ffmpeg untrunc; do
 done
 "$python" scripts/fetch_cloudflared_macos.py --arch "$architecture" \
     --destination "$root/build/media-macos/$architecture/cloudflared"
+"$python" scripts/fetch_sparkle_macos.py --destination "$root/build/media-macos/$architecture/sparkle"
 "$python" scripts/build_macos_standalone.py --target-arch "$architecture" --destination "$output" --require-reporting
 "$python" -c 'import json,subprocess,sys; from pathlib import Path; info=json.loads(Path("build/macos-standalone",sys.argv[1],"build-info.json").read_text()); head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(); assert info["commit"]==head and not info["dirty"], info' "$architecture"
 cp "build/macos-standalone/$architecture/build-info.json" "$output/build-info.json"

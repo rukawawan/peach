@@ -1,4 +1,5 @@
 """独立包更新使用临时目录验证路径、进度、重启确认及回滚。"""
+import base64
 import json
 import hashlib
 import os
@@ -11,9 +12,11 @@ import unittest
 from unittest.mock import Mock, patch
 import zipfile
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 import httpx
 
-from peach import settings_file, standalone_update as update
+from peach import release_signing, settings_file, standalone_update as update
 from peach import update_packages
 from scripts.package_windows_release import package as package_release
 from scripts.smoke_split_update import verify as verify_split
@@ -62,6 +65,99 @@ class ReleaseDownloadFailoverTests(unittest.TestCase):
                 update.download('https://github.com/peach-mitao/peach/releases/download/v1.0.0/Peach-1.0.0-windows-x64.zip',
                                 Path(folder).resolve() / 'package.zip', 3, hashlib.sha256(b'yes').hexdigest(), lambda _count: None)
         self.assertEqual(len(calls), 2)
+
+    def test_a_lagging_mirror_does_not_hide_why_the_primary_source_failed(self):
+        github = 'https://github.com/peach-mitao/peach/releases/download/v1.0.0/Peach-1.0.0-windows-x64.zip'
+
+        def client(primary, **_kwargs):
+            return httpx.Client(transport=httpx.MockTransport(
+                lambda request: primary if str(request.url) == github else httpx.Response(404)))
+
+        for primary, expected in ((httpx.Response(200, content=b'bad'), '校验失败'),
+                                  (httpx.Response(503), '503')):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as folder, \
+                    patch('peach.peach_proxy.http_client', side_effect=lambda primary=primary, **kw: client(primary, **kw)):
+                with self.assertRaisesRegex((ValueError, httpx.HTTPError), expected):
+                    update.download(github, Path(folder).resolve() / 'package.zip', 3,
+                                    hashlib.sha256(b'yes').hexdigest(), lambda _count: None)
+
+
+class MediaToolInstallTests(unittest.TestCase):
+    """源码运行在配置页安装 FFmpeg、untrunc：发布工具包装进数据目录的 `tools/`。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.tools = self.root / 'data' / 'tools'
+        self.package = self.root / 'release' / 'Peach-1.0.0-windows-x64-tools-untrunc.zip'
+        self.package.parent.mkdir()
+        files = {name: f'{name} 内容'.encode() for name in ('untrunc.exe', 'LICENSE.txt', 'NOTICE.md', 'buildconf.txt')}
+        manifest = {'version': 'abc1234', 'files': {name: hashlib.sha256(body).hexdigest() for name, body in files.items()}}
+        with zipfile.ZipFile(self.package, 'w') as bundle:
+            for name, body in {**files, 'manifest.json': json.dumps(manifest).encode()}.items():
+                bundle.writestr(f'Peach/tools/untrunc/{name}', body)
+        self.downloads = []
+        supported = patch('peach.media_tools.supported', return_value=True)
+        supported.start()
+        self.addCleanup(supported.stop)
+
+    def locate(self, _tool, digest=None):
+        return {'url': 'https://github.com/peach-mitao/peach/releases/download/v1.0.0/' + self.package.name,
+                'size': self.package.stat().st_size, 'version': '1.0.0',
+                'digest': 'sha256:' + (digest or update_packages.digest(self.package))}
+
+    def fetch(self, url, archive, size, digest, progress):
+        """离线的 `standalone_update.download`：同样按发布记录核对体积与摘要。"""
+        self.downloads.append(url)
+        shutil.copy2(self.package, archive)
+        if archive.stat().st_size != size or update_packages.digest(archive) != digest:
+            raise ValueError('更新包校验失败，请重新下载')
+
+    def entries(self):
+        """`tools` 下除安装锁以外的条目。filelock 释放时只在 Windows 上删锁文件，macOS、Linux 上会留着。"""
+        return sorted(path.name for path in self.tools.iterdir() if not path.name.endswith('.lock'))
+
+    def install(self, **kwargs):
+        from peach import media_tools
+        return media_tools.install(self.tools, 'untrunc', locate=kwargs.pop('locate', self.locate), fetch=self.fetch)
+
+    def test_installs_the_verified_package_into_the_data_directory_and_reports_its_version(self):
+        from peach import media_tools
+        self.assertEqual(self.install(), '已安装 untrunc（abc1234）')
+        self.assertEqual((self.tools / 'untrunc' / 'untrunc.exe').read_bytes(), 'untrunc.exe 内容'.encode())
+        self.assertEqual(media_tools.installed_version(self.tools, 'untrunc'), 'abc1234')
+        self.assertEqual(self.entries(), ['untrunc'])
+
+    def test_a_package_that_does_not_match_the_release_digest_changes_nothing(self):
+        (self.tools / 'untrunc').mkdir(parents=True)
+        (self.tools / 'untrunc' / 'untrunc.exe').write_bytes(b'user copy')
+        with self.assertRaisesRegex(ValueError, '与发布摘要不符'):
+            self.install(locate=lambda tool: self.locate(tool, digest='0' * 64))
+        self.assertEqual((self.tools / 'untrunc' / 'untrunc.exe').read_bytes(), b'user copy')
+        self.assertEqual(self.entries(), ['untrunc'])
+
+    def test_installing_again_skips_the_download_until_a_file_stops_matching(self):
+        self.install()
+        self.assertEqual(self.install(), 'untrunc 已安装（abc1234），无需重新下载')
+        self.assertEqual(len(self.downloads), 1)
+        (self.tools / 'untrunc' / 'NOTICE.md').write_text('改坏了', encoding='utf-8')
+        self.assertEqual(self.install(), '已安装 untrunc（abc1234）')
+        self.assertEqual(len(self.downloads), 2)
+
+    def test_an_interrupted_install_is_cleared_by_the_next_one(self):
+        leftover = self.tools / '.install-untrunc-0123456789ab'
+        leftover.mkdir(parents=True)
+        (leftover / 'package.zip').write_bytes(b'half')
+        self.install()
+        self.assertEqual(self.entries(), ['untrunc'])
+
+    def test_files_outside_the_package_manifest_are_refused(self):
+        with zipfile.ZipFile(self.package, 'a') as bundle:
+            bundle.writestr('Peach/tools/untrunc/extra.dll', b'x')
+        with self.assertRaisesRegex(ValueError, '清单外'):
+            self.install()
+        self.assertFalse((self.tools / 'untrunc').exists())
 
 
 class StandaloneUpdateTests(unittest.TestCase):
@@ -303,6 +399,8 @@ class StandaloneUpdateTests(unittest.TestCase):
         def response(request):
             name = request.url.path.rsplit("/", 1)[1]
             requests.append(name)
+            if not (output / name).is_file():
+                return httpx.Response(404)
             content = (output / name).read_bytes()
             return httpx.Response(200, content=b"corrupt" if name == corrupt else content)
         client_type = update.httpx.Client
@@ -538,6 +636,53 @@ class StandaloneUpdateTests(unittest.TestCase):
             self.assertTrue(update_packages.matches(Path(state["stage"]), bundle["files"]))
         self.assertEqual(state["downloaded"], state["total"])
         self.assertEqual((target / "Peach.exe").read_bytes(), b"old application")
+
+    def sign_output(self, output):
+        """像发布作业那样给发布目录写 `sha256sum` 摘要与签名；返回受信任公钥。"""
+        private = base64.b64encode(Ed25519PrivateKey.generate().private_bytes(
+            Encoding.Raw, PrivateFormat.Raw, NoEncryption())).decode("ascii")
+        sums = "".join(f"{update_packages.digest(path)}  ./{path.name}\n" for path in sorted(output.glob("*.zip")))
+        (output / release_signing.SUMS).write_bytes(sums.encode())
+        (output / release_signing.SIGNATURE).write_bytes(release_signing.sign(sums.encode(), private).encode())
+        return release_signing.public_key(private)
+
+    def test_signed_release_installs_after_the_sums_signature_verifies(self):
+        source, output, manifest, target, archive, release = self.release_fixture()
+        public = self.sign_output(output)
+        with patch.object(update.release_signing, "PUBLIC_KEYS", (public,)):
+            state, requests = self.prepare_fixture(target, output, release)
+        self.assertEqual(state["state"], "ready", state)
+        self.assertEqual(requests[:3], [release_signing.SUMS, release_signing.SIGNATURE, archive.name])
+
+    def test_a_package_swapped_together_with_its_listed_digest_is_refused(self):
+        source, output, manifest, target, archive, release = self.release_fixture()
+        public = self.sign_output(output)
+        # 渠道被篡改：发布记录里的摘要与大小跟着替换后的包一起改了，只有签过名的摘要还是原来的。
+        release.update(asset_size=len(b"corrupt"), asset_digest="sha256:" + hashlib.sha256(b"corrupt").hexdigest())
+        with patch.object(update.release_signing, "PUBLIC_KEYS", (public,)):
+            state, requests = self.prepare_fixture(target, output, release, corrupt=archive.name)
+        self.assertEqual(state["state"], "error", state)
+        self.assertIn("校验失败", state["message"])
+        self.assertEqual((target / "Peach.exe").read_bytes(), b"old application")
+
+    def test_missing_or_untrusted_signature_stops_before_any_download(self):
+        for case in ("missing", "untrusted"):
+            with self.subTest(case=case):
+                source, output, manifest, target, archive, release = self.release_fixture()
+                public = self.sign_output(output)
+                if case == "missing":
+                    (output / release_signing.SIGNATURE).unlink()
+                else:
+                    self.sign_output(output)  # 换一把客户端不认得的私钥重签
+                with patch.object(update.release_signing, "PUBLIC_KEYS", (public,)):
+                    state, requests = self.prepare_fixture(target, output, release)
+                self.assertEqual(state["state"], "error", state)
+                self.assertIn("发布签名校验未通过", state["message"])
+                self.assertNotIn(archive.name, requests)
+                self.assertEqual(list(target.parent.glob(f".{target.name}-update-*")), [])
+                self.assertEqual((target / "Peach.exe").read_bytes(), b"old application")
+                for folder in (self.root / "dist", output, target):
+                    shutil.rmtree(folder)
 
     def test_supported_older_clients_can_install_this_release(self):
         """旧版本标签里的更新代码原样读这一版的发布条目与更新包（ADR-0120）。"""

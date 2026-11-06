@@ -13,11 +13,13 @@ const segments = (label: string, value: string, options: readonly SegmentOption[
   `<span data-entity-layout="" class="${SEGMENTED_GLASS_TRACK}" role="radiogroup" aria-label="${esc(label)}">${options.map(([key, text, glyph]) =>
     `<span class="${SEGMENT_GLASS}" role="radio" aria-label="${esc(text)}" aria-checked="${key === value}" data-glass-segment=""${key === value ? ' data-selected=""' : ''} ${FILTER_WAITING}>${icon(glyph)}</span>`).join('')}</span>`;
 
-/** 已知的控件保留文字、字形与按下态；等待接线时不能执行动作。 */
-export function filterControlsSkeletonHtml(sorts: readonly EntitySortKey[], layout: Layout | null): string {
+/** 已知的控件保留文字、字形与按下态；等待接线时不能执行动作。`folders` 为假时不画文件夹开关
+ *  （JAV 新作分区没有文件夹浏览，其余换一批、卡片版式、卡片／列表与排序键照画）。 */
+export function filterControlsSkeletonHtml(sorts: readonly EntitySortKey[], layout: Layout | null, { folders = true } = {}): string {
   const view = catalogView();
-  const folders = new URLSearchParams(location.search);
+  const params = new URLSearchParams(location.search);
   const sizes = layout && view === 'cards' ? segments(layout.label, layout.value, layout.options) : '';
-  return `<span data-entity-sorts=""><button type="button" data-entity-batch="" data-filter-action="" aria-label="换一批" ${FILTER_WAITING}>${icon('shuffle')}</button>${sizes}${segments('馆藏显示方式', view, [['cards','卡片','ri-layout-grid-line'],['list','列表','ri-list-unordered']])}<button type="button" data-folder-mode-toggle="" aria-label="文件夹模式" aria-pressed="${folders.get('browse') === 'folders' || !!folders.get('folder')}" ${FILTER_WAITING}>${icon('ri-folder-3-line')}</button>${sorts.map(sort =>
+  const folder = folders ? `<button type="button" data-folder-mode-toggle="" aria-label="文件夹模式" aria-pressed="${params.get('browse') === 'folders' || !!params.get('folder')}" ${FILTER_WAITING}>${icon('ri-folder-3-line')}</button>` : '';
+  return `<span data-entity-sorts=""><button type="button" data-entity-batch="" data-filter-action="" aria-label="换一批" ${FILTER_WAITING}>${icon('shuffle')}</button>${sizes}${segments('馆藏显示方式', view, [['cards','卡片','ri-layout-grid-line'],['list','列表','ri-list-unordered']])}${folder}${sorts.map(sort =>
     `<button type="button" data-entity-sort="${esc(sort.key)}" aria-pressed="${sort.pressed}" ${FILTER_WAITING}>${esc(sort.label)}${sort.dir ? icon(sort.dir === 'asc' ? 'arrow-up' : 'arrow-down') : ''}</button>`).join('')}</span>`;
 }

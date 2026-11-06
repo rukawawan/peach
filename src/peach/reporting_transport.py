@@ -19,7 +19,13 @@ def transport_class(gate, callback):
             super().__init__(options)
 
         def _context(self, envelope):
-            event = next((item.get_event() for item in envelope.items if item.get_event() is not None), {})
+            event = next((item.get_event() for item in envelope.items if item.get_event() is not None), None)
+            if event is None:
+                # 日志与会话汇总的同意凭据和回执编号在信封头；闸门移除前先取出。
+                permit = envelope.headers.get("peach_permit", {})
+                self._delivery_context.permit = permit
+                self._delivery_context.event_id = permit.get("receipt") if isinstance(permit, dict) else None
+                return
             self._delivery_context.permit = event.get("extra", {})
             self._delivery_context.event_id = event.get("event_id")
 

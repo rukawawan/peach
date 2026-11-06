@@ -28,7 +28,9 @@ from peach.field_owners import (
     EXPECTED_REVISION_FIELD,
     USER_MANUAL,
     RevisionConflict,
+    auto_owner,
     owner_of,
+    review_owner,
     write_owned_fields,
 )
 
@@ -226,6 +228,22 @@ class ReviewQueueTests(unittest.TestCase):
         con.execute("INSERT INTO asset(id,location,path,name,medium,code) "
                     "VALUES(?,'local',?,?,'video',?)", (aid, f"{folder}/{name}", name, code))
         con.commit(); con.close()
+
+    def _owned(self, aid, code, owner, value="官方厂牌", field="studio", name=None):
+        self._asset(aid, code, name or f"{code}.mp4")
+        con = sqlite3.connect(self.db_path)
+        with con:
+            write_owned_fields(con, [aid], {field: value}, owner)
+        con.close()
+
+    def _challenge(self, code, field="studio", current="官方厂牌", candidates=None):
+        key = f"{code}:{field}"
+        self.write_metadata_rows([{
+            "item_key": key, "code": code, "field": field, "current": current,
+            "candidates": candidates or [
+                {"source": "javdb", "value": "社区写法", "requires_review": True}],
+        }])
+        return key
 
     def _auto(self):
         return auto_apply_metadata(self.contract.database, self.candidates)
@@ -992,6 +1010,55 @@ class ReviewQueueTests(unittest.TestCase):
         finally:
             con.close()
         self.assertEqual(note["rule"], "adr-0038-chain-mgstage")
+
+    def _landed_cast(self, asset_id, item_key):
+        con = sqlite3.connect(self.db_path)
+        try:
+            landed = [row[0] for row in con.execute(
+                "SELECT e.canonical_name FROM entity e JOIN asset_entity ae ON ae.entity_id=e.id "
+                "WHERE ae.asset_id=? AND ae.role='performer'", (asset_id,))]
+            row = con.execute("SELECT note FROM review_decision WHERE item_key=?", (item_key,)).fetchone()
+        finally:
+            con.close()
+        return landed, json.loads(row[0]) if row else None
+
+    def test_the_name_wiki_names_the_amateur_cast_over_the_store_nickname(self):
+        """素人片 MGStage 写片中称呼、认人 Wiki 写艺名：落艺名，称呼记进被压下的取值（ADR-0145）。"""
+        self._asset(130, "300NTK-619", "300NTK-619.mp4")
+        self.write_metadata_rows([
+            {"item_key": "NTK", "field": "performers", "current": "", "code": "300NTK-619",
+             "candidates": [{"source": "mgstage", "value": [{"name": "まいな"}], "display": "まいな"},
+                            {"source": "sougouwiki", "value": [{"name": "優梨まいな"}], "display": "優梨まいな"}]},
+        ])
+        self.assertEqual(self._auto()["applied"], 1)
+        landed, note = self._landed_cast(130, "NTK")
+        self.assertEqual(landed, ["優梨まいな"])
+        self.assertEqual(note["rule"], "adr-0038-chain-sougouwiki")
+        self.assertEqual(note["overruled"], [{"source": "mgstage", "value": "まいな"}])
+
+    def test_the_name_wiki_names_the_cast_over_an_honorific_from_r18dev(self):
+        """r18.dev 写 `早見さん` 这种带称谓的片中称呼时，同样落 Wiki 给的艺名（ADR-0145）。"""
+        self._asset(131, "230ORETD-615", "230ORETD-615.mp4")
+        self.write_metadata_rows([
+            {"item_key": "ORETD", "field": "performers", "current": "", "code": "230ORETD-615",
+             "candidates": [{"source": "r18dev", "value": [{"name": "早見さん"}], "display": "早見さん"},
+                            {"source": "av_neme", "value": [{"name": "早美れむ"}], "display": "早美れむ"}]},
+        ])
+        self._auto()
+        landed, note = self._landed_cast(131, "ORETD")
+        self.assertEqual(landed, ["早美れむ"])
+        self.assertEqual(note["source"], "av_neme")
+        self.assertEqual(note["descriptive_dropped"], [{"source": "r18dev", "value": "早見さん"}])
+
+    def test_a_store_nickname_without_a_wiki_name_still_goes_to_review(self):
+        """没有别家给艺名时，片中称呼照旧交人工，不替人认（ADR-0145 只在有艺名时剔掉称呼）。"""
+        self._asset(132, "230ORETD-615", "230ORETD-615.mp4")
+        self.write_metadata_rows([
+            {"item_key": "ORETD", "field": "performers", "current": "", "code": "230ORETD-615",
+             "candidates": [{"source": "r18dev", "value": [{"name": "早見さん"}], "display": "早見さん"}]},
+        ])
+        self.assertEqual(self._auto()["applied"], 0)
+        self.assertEqual(self.queue_keys("metadata_fields"), ["ORETD"])
 
     def test_a_fallback_source_does_not_challenge_a_value_the_ledger_has(self):
         """兜底来源改不动账本已有的值，也不必让人看一眼（ADR-0038）。
@@ -2194,6 +2261,82 @@ class ReviewQueueTests(unittest.TestCase):
         ])
         self.assertEqual(self.queue_keys("metadata_fields"), ["GGG"])
 
+    def test_javdb_only_challenge_to_official_auto_value_is_dismissed(self):
+        """现值归 official 源自动写入时，社区源异议不进队列，也不写决定。"""
+        self._owned(500, "OFF-001", auto_owner("r18dev"))
+        self._challenge("OFF-001")
+        self.assertEqual(self.queue_keys("metadata_fields"), [])
+        con = sqlite3.connect(self.db_path)
+        try:
+            self.assertEqual(con.execute("SELECT count(*) FROM review_decision").fetchone()[0], 0)
+        finally:
+            con.close()
+
+    def test_release_date_from_makers_is_dismissed_too(self):
+        self._owned(501, "OFF-002", auto_owner("makers"), value="2024-01-02", field="release_date")
+        self._challenge("OFF-002", field="release_date", current="2024-01-02", candidates=[
+            {"source": "javdb", "value": "2024-01-05", "requires_review": True}])
+        self.assertEqual(self.queue_keys("metadata_fields"), [])
+
+    def test_community_verification_dissent_leaves_every_owner_alone_and_off_the_queue(self):
+        """核查带回的社区异议只补空不挑战（ADR-0033、ADR-0139），现值归谁都不进队列、不写。"""
+        cases = (("OWN-001", USER_MANUAL), ("OWN-002", review_owner("javdb")),
+                 ("OWN-003", auto_owner("avbase")))
+        keys = []
+        for index, (code, owner) in enumerate(cases):
+            self._owned(510 + index, code, owner)
+            keys.append(f"{code}:studio")
+        self._asset(513, "OWN-004", "OWN-004.mp4")
+        con = sqlite3.connect(self.db_path)
+        with con:
+            con.execute("UPDATE asset SET studio='官方厂牌' WHERE id=513")
+        con.close()
+        keys.append("OWN-004:studio")
+        self.write_metadata_rows([{
+            "item_key": key, "code": key.split(":")[0], "field": "studio", "current": "官方厂牌",
+            "candidates": [{"source": "javdb", "value": "社区写法", "requires_review": True}],
+        } for key in keys])
+        self.assertEqual(self.queue_keys("metadata_fields"), [])
+        self._auto()
+        con = sqlite3.connect(self.db_path)
+        try:
+            self.assertEqual({row[0] for row in con.execute("SELECT studio FROM asset WHERE id>=510")},
+                             {"官方厂牌"})
+            self.assertEqual(con.execute("SELECT count(*) FROM review_decision").fetchone()[0], 0)
+        finally:
+            con.close()
+
+    def test_official_candidate_in_the_row_keeps_it_for_review(self):
+        self._owned(520, "OFF-003", auto_owner("r18dev"))
+        key = self._challenge("OFF-003", candidates=[
+            {"source": "javdb", "value": "社区写法", "requires_review": True},
+            {"source": "dmm", "value": "另一官方写法", "requires_review": True}])
+        self.assertEqual(self.queue_keys("metadata_fields"), [key])
+
+    def test_fields_without_owner_tracking_are_untouched(self):
+        self._asset(530, "OFF-004", "OFF-004.mp4")
+        key = self._challenge("OFF-004", field="performers", current="某人", candidates=[
+            {"source": "javdb", "value": "别人", "requires_review": True}])
+        self.assertIn(key, self.queue_keys("metadata_fields"))
+
+    def test_library_rows_check_the_owner_of_their_own_asset(self):
+        self._owned(540, "LIB-001", auto_owner("r18dev"), name="LIB-001 A.mp4")
+        self._owned(541, "LIB-001", USER_MANUAL, name="LIB-001 B.mp4")
+        rows = []
+        for aid in (540, 541):
+            key = f"asset:{aid}:studio"
+            rows.append({"item_key": key, "code": "LIB-001", "query": "LIB-001",
+                         "asset_id": str(aid), "asset_path": f"/x/{aid}.mp4", "field": "studio",
+                         "field_label": "studio", "current_value": "官方厂牌",
+                         "candidates_json": json.dumps([self._candidate(
+                             {"item_key": key, "code": "LIB-001"}, 0, "javdb",
+                             {"source": "javdb", "value": "社区写法"})],
+                             ensure_ascii=False),
+                         "source_count": "1", "source_profile": "library", "status": "candidate",
+                         "size_gb": "", "videos": "1", "fetched_at": ""})
+        self.write_metadata_candidates(rows)
+        self.assertEqual(self.queue_keys("metadata_fields"), ["asset:541:studio"])
+
     def test_metadata_candidates_that_repeat_the_current_value_never_queue(self):
         """复核的成本是注意力：和现值一模一样的行会把真正要判的淹掉。
 
@@ -2240,13 +2383,13 @@ class ReviewQueueTests(unittest.TestCase):
 
         三字母前缀同属这套命名，`MIN-102`、`SUY-101` 和两字母的一样不能问 JAV 来源。
         """
-        for index, code in enumerate(("AR-101", "MIN-102", "SUY-101", "YUJ-103")):
+        for index, code in enumerate(("AR-101", "MIN-102", "SUY-101", "AIN-203")):
             self._asset(140 + index, code, f"{code} MIB.mp4")
         self._asset(150, "ARM-123", "ARM-123.mp4")
         self.write_metadata_rows([
             {"item_key": f"{code}:studio", "field": "studio", "current": "",
              "candidates": ["某厂牌"], "code": code}
-            for code in ("AR-101", "MIN-102", "SUY-101", "YUJ-103")
+            for code in ("AR-101", "MIN-102", "SUY-101", "AIN-203")
         ] + [{"item_key": "ARM-123:studio", "field": "studio", "current": "",
               "candidates": ["Faleno"], "code": "ARM-123"}])
         self.assertEqual(self._auto()["applied"], 1)
@@ -2271,10 +2414,10 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(self.queue_keys("metadata_fields"), ["AR-101:title:kmib"])
 
     def test_mib_official_candidates_fill_empty_fields_automatically(self):
-        self._asset(160, "YUJ-103", "YUJ-103 Ain Do you wanna be my slave.mp4")
+        self._asset(160, "AIN-203", "AIN-203 Ain Training medical college girl.mp4")
         self.write_metadata_rows([
-            {"item_key": "YUJ-103:release_date:kmib", "field": "release_date",
-             "current": "", "candidates": ["2024-11-20"], "code": "YUJ-103",
+            {"item_key": "AIN-203:release_date:kmib", "field": "release_date",
+             "current": "", "candidates": ["2024-11-20"], "code": "AIN-203",
              "source": "kmib"}])
         self.assertEqual(self._auto()["applied"], 1)
         con = sqlite3.connect(self.db_path)

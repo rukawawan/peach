@@ -230,6 +230,22 @@ class TaskResourceTests(unittest.TestCase):
         self.assertEqual(network['state'], 'unavailable')
         self.assertIsNone(network['bytes_per_second'])
         self.assertEqual(network['reason'], '挂载盘传输无法准确归属')
+        self.assertNotIn('via', network)
+
+    def test_network_read_through_a_cloud_mount_says_so_while_staying_unmeasured(self):
+        run = self.new_run('cloud')
+        usage = self.usage(run, threads=(11,))
+        monitor = self.monitor()
+        monitor.for_run(run)
+        token = task_control.CURRENT.set(SimpleNamespace(usage=usage))
+        try:
+            task_resources.unobserved_network('网盘挂载的缓存与预读无法按任务取得实际网速', via='cloud')
+        finally:
+            task_control.CURRENT.reset(token)
+        self.clock.advance()
+        network = monitor.for_run(run)['network']
+        self.assertEqual((network['state'], network['via']), ('unavailable', 'cloud'))
+        self.assertIsNone(network['bytes_per_second'])
 
     def test_parent_aggregation_deduplicates_cpu_parts_shared_with_a_child_run(self):
         parent = self.new_run('parent')

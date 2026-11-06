@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -11,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach import feeds  # noqa: E402
 from peach.migrations import upgrade  # noqa: E402
 from peach.repository import LedgerDatabase  # noqa: E402
+from peach.sources.dmm import ActressWorks, ListedWork  # noqa: E402
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
@@ -162,6 +164,35 @@ class CompilationTest(unittest.TestCase):
         self.assertIsNone(feeds.compilation_kind("愛する妻が…", "篠田ゆう", "マドンナ"))
 
 
+class FeedPhaseTest(unittest.TestCase):
+    """下次拉取按源的相位排（ADR-0134）：同时加的源错开，跳与跳之间的延迟不累积。"""
+
+    MOMENT = datetime(2026, 11, 3, 3, 28, 57, tzinfo=timezone.utc)
+    PERIOD = timedelta(minutes=feeds.DEFAULT_INTERVAL_MINUTES)
+
+    def test_sources_fetched_together_spread_over_the_window(self):
+        upcoming = sorted(feeds.next_fetch(source_id, self.MOMENT, feeds.DEFAULT_INTERVAL_MINUTES)
+                          for source_id in range(1, 12))
+        for moment in upcoming:
+            self.assertGreaterEqual(moment, self.MOMENT + self.PERIOD / 2)
+            self.assertLessEqual(moment, self.MOMENT + self.PERIOD * 1.5)
+        slots = {int((moment.timestamp() % self.PERIOD.total_seconds())
+                     // timedelta(minutes=feeds.TICK_MINUTES).total_seconds()) for moment in upcoming}
+        # 11 个源落进 12 个半小时档里的至少 9 个：一跳最多拉两三个，而不是 11 个一起。
+        self.assertGreaterEqual(len(slots), 9)
+
+    def test_tick_lag_does_not_drift_the_schedule(self):
+        """到期之后要等到下一跳才拉，拉完排的下次仍回到同一个相位，周期保持一个间隔。"""
+        moment = self.MOMENT
+        due = feeds.next_fetch(7, moment, feeds.DEFAULT_INTERVAL_MINUTES)
+        for lag in (timedelta(minutes=29), timedelta(minutes=3), timedelta(minutes=17)):
+            fetched = due + lag
+            following = feeds.next_fetch(7, fetched, feeds.DEFAULT_INTERVAL_MINUTES)
+            self.assertAlmostEqual((following - due).total_seconds(),
+                                   self.PERIOD.total_seconds(), places=2)
+            due = following
+
+
 class FeedStoreTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -278,6 +309,27 @@ class FeedStoreTest(unittest.TestCase):
         with self.database.read_connection() as connection:
             self.assertEqual(feeds.due_sources(connection), [])
 
+    def test_the_longest_waiting_source_is_due_first(self):
+        first = self._source(url="https://javdb.com/actors/a1")
+        second = self._source(url="https://javdb.com/actors/a2")
+        fresh = self._source(url="https://javdb.com/actors/a3")
+        with self.database.write_transaction() as connection:
+            feeds.defer(connection, first, datetime(2026, 11, 3, 2, tzinfo=timezone.utc))
+            feeds.defer(connection, second, datetime(2026, 11, 3, 1, tzinfo=timezone.utc))
+        with self.database.read_connection() as connection:
+            due = [int(row["id"]) for row in feeds.due_sources(connection, "2026-11-03T03:00:00Z")]
+        self.assertEqual(due, [fresh, second, first])
+
+    def test_settle_after_a_cooldown_retries_at_its_end(self):
+        source_id = self._source()
+        until = datetime(2026, 11, 3, 3, 15, tzinfo=timezone.utc)
+        with self.database.write_transaction() as connection:
+            feeds.settle(connection, source_id, error="来源拒绝访问", interval_minutes=360,
+                         now=datetime(2026, 11, 3, 3, tzinfo=timezone.utc), retry_at=until)
+            row = connection.execute("SELECT next_fetch_at FROM feed_source WHERE id=?",
+                                     (source_id,)).fetchone()
+        self.assertEqual(row[0], feeds.stamp(until))
+
     def test_performer_names_match_existing_entities_only(self):
         with self.database.write_transaction() as connection:
             connection.execute(
@@ -287,6 +339,129 @@ class FeedStoreTest(unittest.TestCase):
         with self.database.read_connection() as connection:
             found = feeds.match_performers(connection, ["深田えいみ", "查无此人"])
         self.assertEqual(len(found), 1)
+
+
+def dmm_works(*rows) -> ActressWorks:
+    """DMM 片单：每行（cid, 官方番号, 发售日, 预购, 出演）。"""
+    return ActressWorks(name="森日向子", total=len(rows), works=tuple(
+        ListedWork(cid=cid, title="作品タイトル", maker_code=code, release_date=date,
+                   pre_order=pre_order, performers=tuple(cast), studio="ムーディーズ")
+        for cid, code, date, pre_order, cast in rows))
+
+
+#: 2026-11-04 实测片单里的几种：预购的单体作品、和 JavDB 同一部、分卷、几十人的合集。
+DMM_WORKS = dmm_works(
+    ("mikr00133", "MIKR-133", "2026-11-13", True, ["森日向子"]),
+    ("pbd00528", "PBD-528", "2026-10-20", False, ["森日向子", "共演者"]),
+    ("h_068mxdlp00343", "MXDLP-0343", "2026-10-01", False, ["森日向子"]),
+    ("h_1454jksr74802", "JKSR-748-02", "2026-09-01", False, ["森日向子"]),
+    ("mizd00570", "MIZD-570", "2026-11-27", True, [f"女優{index}" for index in range(37)]),
+)
+
+
+class DmmActressFeedTest(unittest.TestCase):
+    """DMM 按女优编号的片单当第二个发现源：番号写法、跨源去重、合集与补订（ADR-0135）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.database = _database(Path(self._tmp.name))
+        with self.database.write_transaction() as connection:
+            self.performer = self._performer(connection, "森日向子", [("r18dev", "1061586")])
+
+    @staticmethod
+    def _performer(connection, name, refs) -> int:
+        entity_id = int(connection.execute(
+            "INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at)"
+            " VALUES('performer',?,peach_normalize(?),?,?)",
+            (name, name, feeds.stamp(), feeds.stamp())).lastrowid)
+        for provider, external_id in refs:
+            connection.execute(
+                "INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id)"
+                " VALUES(?,?,'performer',?)", (entity_id, provider, external_id))
+        return entity_id
+
+    def _poll(self, source_id, parsed, hidden=feeds.DEFAULT_HIDDEN_COMPILATIONS) -> dict:
+        with self.database.write_transaction() as connection:
+            source = connection.execute("SELECT * FROM feed_source WHERE id=?", (source_id,)).fetchone()
+            return feeds.poll(connection, source, parsed, hidden)
+
+    def _add(self, url) -> int:
+        with self.database.write_transaction() as connection:
+            return feeds.add_source(connection, url=url, entity_id=self.performer)
+
+    def test_entries_carry_the_official_code_in_the_same_spelling_as_javdb(self):
+        parsed = feeds.parse_dmm_actress(DMM_WORKS)
+        self.assertEqual(parsed.title, "森日向子")
+        self.assertEqual([entry.code for entry in parsed.entries],
+                         ["MIKR-133", "PBD-528", "MXDLP-343", None, "MIZD-570"])
+        head = parsed.entries[0]
+        self.assertEqual((head.item_key, head.link, head.published_at[:10], head.title),
+                         ("mikr00133", "https://video.dmm.co.jp/av/content/?id=mikr00133",
+                          "2026-11-13", "MIKR-133 作品タイトル"))
+        # 官方番号没问到时不回头从标题里找。
+        blank = feeds.parse_dmm_actress(dmm_works(("x1", "", "", False, [])))
+        self.assertIsNone(blank.entries[0].code)
+
+    def test_dmm_and_javdb_reporting_one_work_share_a_single_shell(self):
+        javdb = self._add("https://javdb.com/actors/pRMq")
+        self._poll(javdb, feeds.parse_javdb_actor(JAVDB_ACTOR, "https://javdb.com/actors/pRMq"))
+        dmm = self._add(feeds.dmm_actress_url("1061586"))
+        outcome = self._poll(dmm, feeds.parse_dmm_actress(DMM_WORKS))
+        # 预购的 MIKR-133 与 MXDLP-343 建壳；PBD-528 已有 JavDB 的壳；分卷认不出番号；合集收起。
+        self.assertEqual([code for _id, code in outcome["created"]], ["MIKR-133", "MXDLP-343"])
+        self.assertEqual((outcome["fresh"], outcome["without_code"], outcome["compilations"]), (5, 1, 1))
+        with self.database.read_connection() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT count(*) FROM feed_discovery WHERE code='PBD-528'").fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                "SELECT count(*) FROM feed_item WHERE code='PBD-528'").fetchone()[0], 2)
+            shell = connection.execute(
+                "SELECT release_date,performers,studio FROM feed_discovery WHERE code='MIKR-133'").fetchone()
+        self.assertEqual(tuple(shell), ("2026-11-13", "森日向子", "ムーディーズ"))
+        # 合集开关打开时那一部照常建壳。
+        other = self._add(feeds.dmm_actress_url("1047128"))
+        shown = self._poll(other, feeds.parse_dmm_actress(DMM_WORKS), hidden=frozenset())
+        self.assertEqual([code for _id, code in shown["created"]], ["MIZD-570"])
+
+    def test_actress_ids_come_from_dmm_and_r18dev_evidence(self):
+        with self.database.write_transaction() as connection:
+            for provider, value in (("dmm", "1061586"), ("dmm", "1047128"), ("javdb", "bkxd"),
+                                    ("avwikidb", "5555"), ("dmm", "not-a-number")):
+                connection.execute(
+                    "INSERT OR IGNORE INTO entity_external_ref(entity_id,provider,external_kind,external_id)"
+                    " VALUES(?,?,'performer',?)", (self.performer, provider, value))
+            ids = feeds.dmm_actress_ids(connection, self.performer)
+        self.assertEqual(ids, ["1047128", "1061586"])
+        self.assertEqual(feeds.dmm_actress_id(feeds.dmm_actress_url("1061586")), "1061586")
+        self.assertEqual(feeds.dmm_actress_id("https://javdb.com/actors/pRMq"), "")
+        self.assertEqual(feeds.kind_of(feeds.dmm_actress_url("1061586")), feeds.KIND_DMM_ACTRESS)
+        with self.assertRaises(ValueError):
+            feeds.dmm_actress_url("1061586&x=1")
+
+    def test_sync_adds_dmm_sources_only_for_followed_people_with_an_id(self):
+        with self.database.write_transaction() as connection:
+            nameless = self._performer(connection, "編号なし", [("javdb", "Zz9")])
+            # 有 DMM 编号但没订阅的人不补。
+            self._performer(connection, "未订阅", [("r18dev", "1000001")])
+            for entity_id, page in ((self.performer, "pRMq"), (nameless, "Zz9")):
+                feeds.add_source(connection, url=f"https://javdb.com/actors/{page}", entity_id=entity_id)
+            created = feeds.sync_dmm_sources(connection)
+            rows = connection.execute(
+                "SELECT kind,url,entity_id FROM feed_source WHERE id IN (%s)" % ",".join("?" * len(created)),
+                created).fetchall()
+        self.assertEqual([tuple(row) for row in rows],
+                         [(feeds.KIND_DMM_ACTRESS, "https://video.dmm.co.jp/av/list/?actress=1061586",
+                           self.performer)])
+        # 用户单独停掉的 DMM 那一条不会被重新打开，也不另建一条。
+        with self.database.write_transaction() as connection:
+            feeds.set_enabled(connection, created[0], False)
+            self.assertEqual(feeds.sync_dmm_sources(connection), [])
+            self.assertTrue(feeds.entity_following(connection, self.performer))
+            feeds.unfollow_entity(connection, self.performer)
+            self.assertFalse(feeds.entity_following(connection, self.performer))
+            self.assertEqual(connection.execute(
+                "SELECT count(*) FROM feed_source WHERE enabled=1").fetchone()[0], 1)
 
 
 class ShellBoundaryTest(unittest.TestCase):

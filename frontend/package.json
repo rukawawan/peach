@@ -23,14 +23,14 @@
   },
   "dependencies": {
     "@remixicon/react": "4.9.0",
-    "@tanstack/query-core": "5.105.1",
-    "@tanstack/react-query": "5.105.1",
+    "@tanstack/query-core": "5.105.3",
+    "@tanstack/react-query": "5.105.3",
     "@tanstack/react-table": "9.3.1",
     "clsx": "2.1.1",
     "d3-sankey": "0.12.3",
     "diff": "9.0.0",
     "driver.js": "1.10.2",
-    "motion": "14.9.0",
+    "motion": "14.9.1",
     "react": "19.3.1",
     "react-aria": "3.53.1",
     "react-aria-components": "1.22.1",
@@ -43,19 +43,24 @@
   "devDependencies": {
     "@sentry/cli": "3.8.2",
     "@sentry/vite-plugin": "11.10.0",
-    "@shadcn/lint": "0.2.3",
-    "@tailwindcss/vite": "4.3.3",
+    "@shadcn/lint": "0.2.5",
+    "@tailwindcss/vite": "4.3.4",
     "@types/d3-sankey": "0.12.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "agentation": "3.1.2",
     "happy-dom": "21.0.4",
-    "oxc-parser": "0.156.0",
-    "oxlint": "1.90.0",
+    "oxc-parser": "0.157.0",
+    "oxlint": "1.91.0",
     "playwright-core": "1.64.1",
-    "tailwindcss": "4.3.3",
+    "tailwindcss": "4.3.4",
     "typescript": "7.0.2",
     "vite": "8.3.5",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
+  },
+  "overrides": {
+    "@sentry/bundler-plugins": {
+      "glob": "14.0.3"
+    }
   }
 }

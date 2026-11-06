@@ -647,6 +647,27 @@ describe('手势', () => {
     expect(video.currentTime).toBe(40);
     expect(bar.hasAttribute('data-scrubbing')).toBe(false);
   });
+
+  it('进度条上方的画面预览：鼠标悬停显示，横划拖动显示，离开或抬手收起', async () => {
+    await open();
+    const bar = q('[data-immerse-bar]')!;
+    bar.getBoundingClientRect = () => ({ left: 0, width: 1000, top: 0, height: 20, right: 1000, bottom: 20, x: 0, y: 0, toJSON() {} });
+    const preview = () => q('[data-immerse-bar] [data-player-seek-preview]')!;
+    expect(preview().hidden).toBe(true);
+    await act(async () => { bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 300, pointerType: 'mouse' })) });
+    expect(preview().hidden).toBe(false);
+    expect(preview().querySelector('span')!.textContent).toBe('0:30');
+    // React 的 onPointerLeave 由 pointerout 合成。
+    await act(async () => {
+      bar.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, clientX: 300, pointerType: 'mouse', relatedTarget: document.body }));
+    });
+    expect(preview().hidden).toBe(true);
+    await swipe(['touchstart', 500, 400], ['touchmove', 520, 402], ['touchmove', 600, 405]);
+    expect(preview().hidden).toBe(false);
+    expect(preview().querySelector('span')!.textContent).toBe('0:10');
+    await swipe(['touchend', 600, 405]);
+    expect(preview().hidden).toBe(true);
+  });
 });
 
 describe('播放键', () => {

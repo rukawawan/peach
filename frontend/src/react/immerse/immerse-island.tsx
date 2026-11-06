@@ -27,7 +27,8 @@ import { spinnerHtml } from '@peach/legacy/ui';
 
 import { apiSend } from '../../api';
 import {
-  cancelStreamSession, fmtSpeed, mountPlayer, newStreamSession, seekVideoBy, streamSpeedBits, toggleVideoPlayback,
+  cancelStreamSession, createSeekPreview, fmtSpeed, mountPlayer, newStreamSession, seekVideoBy, streamSpeedBits,
+  toggleVideoPlayback, type SeekPreview,
 } from '../../player';
 import { replaceCatalogItem } from '../catalog-grid/catalog-grid';
 import {
@@ -96,6 +97,8 @@ let ticker = 0;
 /** 进度条拖动作用在哪一格上；第一条出画前与关掉之后没有。 */
 let scrubTarget: { video: HTMLVideoElement; duration: () => number } | null = null;
 let scrubbing = false;
+/** 进度条上方的画面预览，跟着当前格换：与详情播放器同一份取图与夹边。 */
+let seekPreview: SeekPreview | null = null;
 
 function immerseHost(): ImmerseHost {
   if (!host) throw new Error('沉浸模式还没有接上宿主（configureImmerse）');
@@ -247,6 +250,16 @@ function wireProgress(video: HTMLVideoElement, item: ImmerseItem): void {
     if (total && dom) dom.progress.style.width = `${(video.currentTime / total * 100).toFixed(2)}%`;
   });
   scrubTarget = { video, duration };
+  seekPreview?.dispose();
+  // 进度条横贯视口，预览两端各让出 12px，与关闭键离边的距离同级。
+  seekPreview = dom ? createSeekPreview(dom.bar, item, { inset: 12 }) : null;
+}
+
+function showSeekPreview(ratio: number): void {
+  const total = scrubTarget?.duration();
+  if (!seekPreview || !total) return;
+  seekPreview.prime();
+  seekPreview.show(ratio, total);
 }
 
 async function show(direction = 0): Promise<void> {
@@ -364,6 +377,8 @@ function teardown(): void {
   touch = null;
   scrubTarget = null;
   scrubbing = false;
+  seekPreview?.dispose();
+  seekPreview = null;
   [...slides].forEach(disposeSlide);
   switching = false;
 }
@@ -448,6 +463,7 @@ function onTouchMove(event: TouchEvent): void {
   event.preventDefault(); // 横划归进度，不交给页面滚动
   touch.to = Math.min(total, Math.max(0, touch.from + dx / window.innerWidth * total));
   paintProgress(touch.to / total);
+  showSeekPreview(touch.to / total);
 }
 
 function onTouchEnd(event: TouchEvent): void {
@@ -456,6 +472,7 @@ function onTouchEnd(event: TouchEvent): void {
   touch = null;
   ignoreClickUntil = Date.now() + SYNTHETIC_CLICK_MS;
   setBarScrubbing(false);
+  seekPreview?.hide();
   if (gesture.axis === 'x') {
     const video = current?.video;
     if (video && gesture.to != null) video.currentTime = gesture.to;
@@ -472,6 +489,7 @@ function onTouchEnd(event: TouchEvent): void {
 function onTouchCancel(): void {
   touch = null;
   setBarScrubbing(false);
+  seekPreview?.hide();
 }
 
 function onWheel(event: WheelEvent): void {
@@ -495,14 +513,18 @@ function scrubStart(event: PointerEvent<HTMLDivElement>): void {
   setBarScrubbing(true);
   event.currentTarget.setPointerCapture(event.pointerId);
   paintProgress(barRatio(event));
+  showSeekPreview(barRatio(event));
   event.preventDefault();
 }
 
+/* 预览不等按下：鼠标悬停就显示，触控只在按住拖动时才有 pointermove。 */
 function scrubMove(event: PointerEvent): void {
   if (scrubbing) paintProgress(barRatio(event));
+  showSeekPreview(barRatio(event));
 }
 
 function scrubEnd(event: PointerEvent): void {
+  if (event.pointerType !== 'mouse') seekPreview?.hide();
   if (!scrubbing) return;
   scrubbing = false;
   setBarScrubbing(false);
@@ -513,6 +535,11 @@ function scrubEnd(event: PointerEvent): void {
 function scrubCancel(): void {
   scrubbing = false;
   setBarScrubbing(false);
+  seekPreview?.hide();
+}
+
+function scrubLeave(): void {
+  if (!scrubbing) seekPreview?.hide();
 }
 
 /* ── 动作键 ── */
@@ -674,7 +701,7 @@ function ImmerseView({ view: at }: { view: View }) {
         <svg viewBox="0 0 24 24"><use href="#i-x" /></svg>
       </button>
       <div ref={bar} data-immerse-bar="" onPointerDown={scrubStart} onPointerMove={scrubMove}
-        onPointerUp={scrubEnd} onPointerCancel={scrubCancel}>
+        onPointerUp={scrubEnd} onPointerCancel={scrubCancel} onPointerLeave={scrubLeave}>
         <i ref={progress} />
       </div>
       <Caption shown={at.shown} />

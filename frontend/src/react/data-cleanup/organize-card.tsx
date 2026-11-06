@@ -14,6 +14,7 @@ import { Input } from '@/components/base/input/input';
 import { Select, SelectItem } from '../components/select';
 
 import { errorMessage } from '../../api';
+import { ORGANIZE_PARAMETER_HINT, ORGANIZE_SCOPE_HINT, ORGANIZE_TEXT } from '../../cleanup-tool-skeletons';
 import { useBackgroundJob } from '../background-job';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
@@ -211,7 +212,7 @@ export function OrganizeCard(
       }>
       <FieldsetTitle id="cleanup-organize-title" gap="medium">整理</FieldsetTitle>
       <p className="text-body-regular text-text-secondary">
-        清理文件名中的特殊符号与乱码，也可按模板改名并归入目录。先预览，确认后执行；执行过的一批可以整批退回。
+        {ORGANIZE_TEXT}
       </p>
       {organize.isError
         ? <div className="mt-3"><Note tone="error" title="整理配置读取失败">{errorMessage(organize.error)}</Note></div>
@@ -241,7 +242,7 @@ export function OrganizeCard(
               onClick={() => picker.mutate({ initial: path || locations.find((row) => row.location === location)?.roots[0] || '', location, path })} />
           </div>
         </div>
-        <p className="text-caption-1-regular text-text-secondary">指定路径时包含子目录，目录模板以该路径为起点。模板均留空时只清理文件名。</p>
+        <p className="text-caption-1-regular text-text-secondary">{ORGANIZE_SCOPE_HINT}</p>
         {picker.isError ? <Note tone="error" title="目录选择失败">{errorMessage(picker.error)}；也可直接输入路径。</Note> : null}
         <Input label="文件名模板" placeholder="{code}[ {title}]" value={fields.file} ref={fileInput}
           spellCheck="false" isInvalid={invalid === 'file'}
@@ -284,7 +285,7 @@ export function OrganizeCard(
           </div>
         </div> : null}
         <p className="text-caption-1-regular leading-4.5 text-text-secondary">
-          点击参数插入光标处，选中文字可替换。方括号里的内容在字段为空时整段省略。
+          {ORGANIZE_PARAMETER_HINT}
         </p>
       </div>
       <div aria-live="polite" className="mt-3 flex flex-col gap-2 empty:hidden">{state}</div>

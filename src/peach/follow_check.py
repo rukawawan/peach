@@ -56,16 +56,26 @@ class CheckResult:
 
 def plan_check(store, credentials, *, source_id: int | None = None,
                older: bool = False,
-               backfill_providers: frozenset[str] = frozenset()) -> list[dict]:
+               backfill_providers: frozenset[str] = frozenset(),
+               scheduled: timedelta | None = None,
+               moment: datetime | None = None) -> list[dict]:
     """要检查哪些来源，以及每条要不要绕过条件请求游标。只读，不联网。
 
     `force_media_reparse` 单独在这里算好：凭据已经存在、但旧候选还标着
     `media_needs_credential` 时，条件请求的 304 会让旧解析结果永久不变——显式检查
     得无条件重取一次，凭据才真正生效。往回翻页时不算这个，那一页本来就没游标。
+
+    `scheduled` 是定时检查的基础间隔：给了就只留这一跳到期的来源（`due_for_check`），
+    久没更新的按档放慢。手动检查不给，照旧全查。
     """
     rows = [dict(row) for row in store.sources(enabled_only=True)
             if (source_id is None or row["id"] == source_id)
             and (not older or row["provider"] in backfill_providers)]
+    if scheduled is not None:
+        moment = moment or datetime.now(timezone.utc)
+        latest = {int(source): _instant(value) for source, value in store.latest_item_stamps()}
+        rows = [row for row in rows
+                if due_for_check(row, latest.get(int(row["id"])), scheduled, moment)]
     for row in rows:
         row["force_media_reparse"] = (
             not older and credentials.load(row["provider"]) is not None
@@ -78,6 +88,43 @@ def plan_check(store, credentials, *, source_id: int | None = None,
             frozenset() if row["force_media_reparse"] or not mark
             else store.enriched_external_ids(row["id"], mark))
     return rows
+
+
+#: 定时检查按来源活跃度放慢（ADR-0134）：最近一条距今不到这么久，就按基础间隔的这个倍数查。
+#: 基础间隔是设置里的「自动检查间隔」。越过最后一档的、一条都没有的，一天查一次。
+ACTIVITY_TIERS = ((timedelta(days=7), 1), (timedelta(days=30), 3), (timedelta(days=90), 12))
+DORMANT_INTERVAL = timedelta(days=1)
+
+
+def check_interval(base: timedelta, latest: datetime | None, moment: datetime) -> timedelta:
+    """最近一条条目是 `latest` 的来源，定时检查隔多久查一次。不会比基础间隔更密。"""
+    if latest is not None:
+        for within, factor in ACTIVITY_TIERS:
+            if moment - latest < within:
+                return max(base, min(base * factor, DORMANT_INTERVAL))
+    return max(base, DORMANT_INTERVAL)
+
+
+def due_for_check(row: Mapping, latest: datetime | None, base: timedelta,
+                  moment: datetime) -> bool:
+    """定时检查这一跳要不要查这条来源。没查过的总要查。
+
+    判据放宽半个基础间隔：调度每隔一个基础间隔跳一次，上次检查总比这一跳晚一点，
+    卡死在「满一个间隔」上的话每档都会多等一跳。
+    """
+    checked = _instant(row["last_checked_at"])
+    if checked is None:
+        return True
+    return checked + check_interval(base, latest, moment) - base / 2 <= moment
+
+
+def _instant(value) -> datetime | None:
+    """账本里的 ISO 时间；认不出就当没有。"""
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def build_connector_for(provider: str, credentials, connector_factory, *,
@@ -120,8 +167,9 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
             "label": str(row["label"] or ""), "page": page, "older": older}
     remaining = cooldown.cooling(provider) if cooldown is not None else 0
     if remaining:
-        return CheckResult(**base, ok=False, status="error",
-                           error=f"{provider} 限流冷却中，{int(remaining) + 1} 秒后再试，本次跳过")
+        # 没问就不算这条来源失败：上次的结论与检查时间都不动，冷却一过下一跳照常到期。
+        return CheckResult(**base, status="skipped",
+                           message=f"{provider} 限流冷却中，{int(remaining) + 1} 秒后再试，本次跳过")
     force = bool(row.get("force_media_reparse")) or replay_first
     cutoff, floor = _history_limits(row, metadata, writer, moment,
                                     older=older, initial_days=initial_days)

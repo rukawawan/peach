@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -44,8 +45,10 @@ from .media import normalized_path
 # `previews` 是取图那一侧，不是 web 域处理器：依赖方向仍然只有一个走法。落盘名的
 # 规则必须和 `/logo` 用的是同一个函数，否则可用性判定迟早和取图对不上。
 from .previews import ENTITY_IMAGE_KINDS, LOGO_VARIANTS, entity_image_key, logo_key
-from .repository import LedgerDatabase
+from .repository import LedgerDatabase, writing_in_background
 from .task_runs import TaskRunStore
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AvatarRootIndex(NamedTuple):
@@ -179,6 +182,16 @@ class WebContract:
         self.cache_generation = 0
         self.revision_cache_keys: set[str] = set()
         self.aggregate_locks: dict[str, threading.RLock] = {}
+        #: 每个缓存键那一份结果出发时的 `cache_generation`；判它有没有包含最近一次前台写入。
+        self.cache_started: dict[str, int] = {}
+        #: 最近一次前台提交（不是 `repository.in_background` 包过的线程）之后的 `cache_generation`。
+        self.foreground_generation = 0
+        #: 最近一次后台提交之后的 `cache_generation`。进程外的写不经提交通知，两个数都不动。
+        self.background_generation = 0
+        #: 后台重算写回新值的次数，随结果版本下发，页面据此再取一次（ADR-0146）。
+        self.cache_landed = 0
+        self.stale_refreshing: set[str] = set()
+        self._stale_refresher = None
         self.follow_check_lock = threading.Lock()
         #: 任务中心。每个后台任务的开始、进度与结束都写这一张表，`/tasks` 只读它。
         #: 只读端由 `api` 关掉写入：那边的账本是复制来的，写一行就是一处合不回去的分叉。
@@ -188,15 +201,15 @@ class WebContract:
         #: 后继调度（ADR-0040）。导入 `avatar_followup` 就是它的登记动作：调度器本身
         #: 不认识任何一种后继，登记表在 `followups.REGISTRY` 里。
         from . import avatar_followup  # noqa: F401  登记补头像后继
-        from . import creator_identity_followup  # noqa: F401  登记查创作者身份后继
+        from . import creator_identity_followup  # noqa: F401  登记创作者身份查找后继
         from . import download_postprocess  # noqa: F401  登记云下载后处理
-        from . import feed_followup  # noqa: F401  登记取新作资料后继
+        from . import feed_followup  # noqa: F401  登记新作资料采集后继
         from . import follow_creators  # noqa: F401  登记关注作者建档后继
         from . import performer_alias_followup  # noqa: F401  登记补女优别名后继
         from . import performer_profile_followup  # noqa: F401  登记补女优资料后继
-        from . import sample_followup  # noqa: F401  登记补番号样张后继
+        from . import sample_followup  # noqa: F401  登记番号样张采集后继
         from . import seed_followup  # noqa: F401  登记导入实体种子后继
-        from . import studio_followup  # noqa: F401  登记补厂牌官网与标识后继
+        from . import studio_followup  # noqa: F401  登记厂牌官网与标识补全后继
         from .followups import FollowupRunner
         self.followups = FollowupRunner(self)
         self.follow_job = self._job("PeachFollowCheckJob", "follow-check")
@@ -207,6 +220,7 @@ class WebContract:
         self.link_prune_job = self._job("PeachLinkPruneJob", "link-prune")
         self.scraping_cover_job = self._job("PeachScrapingCoverJob", "scraping-cover")
         self.amane_bridge_job = self._job("PeachAmaneBridgeJob", "amane-bridge")
+        self.source_check_job = self._job("PeachSourceCheckJob", "source-check")
         self.face_models_job = self._job("PeachFaceModelsJob", "face-models")
         self.library_processing_job = self._job(
             "PeachLibraryProcessingJob", "library-processing")
@@ -223,6 +237,9 @@ class WebContract:
         #: 订阅源的定时拉取（ADR-0042）。与追更共用 `follow_scheduler` 那一个实现，
         #: 只是各占一个 job id 与一份状态文件；由 `api` 在装配时接上。
         self.feed_scheduler = None
+        #: 定时拉取上一次派存量后继的时刻（`time.monotonic()`）；None 是本进程还没派过
+        #: （`web_feeds.STOCK_INTERVAL`）。
+        self.feed_stock_planned_at = None
         #: 云下载（`downloads.DownloadService`），由 `api` 在装配时接上；没接上时
         #: `/api/downloads` 回「云下载没有启用」。
         self.downloads = None
@@ -273,15 +290,26 @@ class WebContract:
                 # 时间戳沿用进入时的 now：算得比 TTL 还久的结果直接算过期，
                 # 宁可下次重算，也不要把一份已经旧了的数据当新的用。
                 self.cache[key] = (now, version, value)
+                self.cache_started[key] = generation
                 self.cache.move_to_end(key)
                 while len(self.cache) > CACHE_KEYS:
                     evicted, _ = self.cache.popitem(last=False)
+                    self.cache_started.pop(evicted, None)
                     # 键空间不封闭的聚合（按作者、按筛选口径）的锁和登记跟着结果一起走，
                     # 否则这两份只增不减。正被别的线程拿着的锁摘掉也无妨，持有者手里还有它；
                     # 同键再来时 `cached_until_changed` 会重新登记。
                     self.revision_cache_keys.discard(evicted)
                     self.aggregate_locks.pop(evicted, None)
         return value
+
+    def cached_for(self, key, fn, *, ttl: float):
+        """只按时间过期、不随提交通知清掉的缓存，给允许旧上几分钟的结果用（搜索推荐池）。
+
+        `cached` 的键每次提交都被 `cache_bust` 清掉；后台任务每几秒提交一次时，这类结果等于没有缓存。
+        """
+        with self.cache_lock:
+            self.revision_cache_keys.add(key)
+        return self.cached(key, fn, ttl=ttl)
 
     def cached_lru(self, key, fn, *, maxsize: int = 192, ttl: float = CACHE_TTL):
         """带 TTL 的 LRU 读缓存，给键空间不封闭的场景用（`/api/related` 按资产取键）。
@@ -321,6 +349,16 @@ class WebContract:
             return None
         return int(row[0])
 
+    def ledger_tables_except(self, excluded) -> tuple[str, ...]:
+        """登记了版本的账本表，去掉 `excluded`：聚合读的表太多、列不全时，按「除这几张以外」声明依赖。
+        读不到版本表时为空，`cached_until_changed` 随之退回整本账本的版本。"""
+        try:
+            with self.read_connection() as connection:
+                tables = [row[0] for row in connection.execute("SELECT tbl FROM ledger_revision ORDER BY tbl")]
+        except sqlite3.Error:
+            return ()
+        return tuple(table for table in tables if table not in excluded)
+
     def cached_until_changed(self, key: str, fn, *inputs, tables=()):
         """只读账本聚合的缓存：账本版本号与 `inputs` 都没变就一直命中，不按时间过期。
 
@@ -330,11 +368,60 @@ class WebContract:
         退回 `CACHE_TTL`。
         `tables` 声明聚合依赖的表；这类缓存经过提交通知后仍按声明的版本核验，
         同键的并发请求共用一次计算。
+
+        带 `tables` 的键在版本变了、手上那份之后只有本进程的后台提交时，先回那一份，另起
+        后台重算（ADR-0146）：后台任务写的东西晚几秒无妨；前台写入与进程外的写之后照旧
+        当场重算。不带 `tables` 的键每次提交都被清掉，没有旧值可回。
         """
         if not tables:
             revision = self.ledger_revision()
             return self.cached(key, fn, ttl=CACHE_TTL if revision is None else math.inf,
                                version=(revision, *inputs))
+        revision = self.ledger_revision(tables)
+        if revision is not None:
+            version = (tuple(tables), revision, *inputs)
+            schedule = False
+            with self.cache_lock:
+                hit = self.cache.get(key)
+                started = self.cache_started.get(key, -1)
+                # 手上那份之后只有后台提交：没有前台写入，也有一次本进程的后台提交说明版本为什么变了。
+                # 进程外的写（命令行、账本同步）不经提交通知，照旧当场重算。
+                stale = (hit is not None and hit[1] != version and started >= self.foreground_generation
+                         and self.background_generation > started)
+                if stale:
+                    self.cache.move_to_end(key)
+                    schedule = key not in self.stale_refreshing
+                    self.stale_refreshing.add(key)
+            if stale:
+                if schedule:
+                    self._refresh_later(key, fn, inputs, tables)
+                return hit[2]
+        return self._cached_by_tables(key, fn, inputs, tables)
+
+    def _refresh_later(self, key, fn, inputs, tables) -> None:
+        """一条后台线程依次重算过期的键，同一个键在途时不重复排。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def work():
+            try:
+                self._cached_by_tables(key, fn, inputs, tables)
+                with self.cache_lock:
+                    self.cache_landed += 1
+            except Exception:  # noqa: BLE001 - 后台重算失败时下一次读照旧当场重算，原因记日志
+                LOGGER.exception("后台重算缓存 %s 失败", key)
+                with self.cache_lock:
+                    self.cache.pop(key, None)
+            finally:
+                with self.cache_lock:
+                    self.stale_refreshing.discard(key)
+
+        with self.cache_lock:
+            if self._stale_refresher is None:
+                self._stale_refresher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="PeachCacheRefresh")
+            refresher = self._stale_refresher
+        refresher.submit(work)
+
+    def _cached_by_tables(self, key: str, fn, inputs, tables):
         # 指定依赖表的聚合共用一次计算；提交后仍按这些表的代次核验。
         with self.cache_lock:
             lock = self.aggregate_locks.setdefault(key, threading.RLock())
@@ -368,12 +455,15 @@ class WebContract:
         self.organize_job.stop()
         self.media_repair_job.stop()
         self.amane_bridge_job.stop()
+        self.source_check_job.stop()
         self.face_models_job.stop()
         if hasattr(self, 'task_resource_monitor'):
             self.task_resource_monitor.close()
         if hasattr(self, "jav_discovery_metadata"):
             self.jav_discovery_metadata.stop()
         self.followups.stop()
+        if self._stale_refresher is not None:
+            self._stale_refresher.shutdown(wait=False, cancel_futures=True)
 
     def cache_bust(self):
         with self.cache_lock:
@@ -382,6 +472,11 @@ class WebContract:
             self.keyed_cache.clear()
             # 在途计算靠这个数认出「我出发之后缓存失效过」，从而放弃写回。
             self.cache_generation += 1
+            # 前台写入之后，出发更早的那份缓存不许再先回旧值：写的人要立刻看到自己写的。
+            if writing_in_background():
+                self.background_generation = self.cache_generation
+            else:
+                self.foreground_generation = self.cache_generation
 
     def read_connection(self):
         return self.database.read_connection()

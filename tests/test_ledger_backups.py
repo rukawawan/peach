@@ -3,14 +3,18 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from peach import ledger_backups, web_organize
+from peach import ledger_backups, migrations, settings_file, update_tasks, web_organize
+from peach.task_runs import TaskRunStore
+from support.ledger import MIGRATIONS_DIR, fresh_ledger
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -331,6 +335,302 @@ class OrganizeBackupRetentionTests(unittest.TestCase):
             self.assertEqual(report["remove"], [path.name for path in backups[:2]])
             for path in (*backups, beside):
                 self.assertTrue(path.exists(), "缺省是 dry-run")
+
+
+def note(db: Path, value: str) -> None:
+    """往账本里记一笔可辨认的内容，用来分辨恢复后是哪一份。"""
+    with contextlib.closing(sqlite3.connect(db)) as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS probe(v TEXT)")
+        connection.execute("INSERT INTO probe VALUES (?)", (value,))
+        connection.commit()
+
+
+def notes(db: Path) -> list[str]:
+    with contextlib.closing(sqlite3.connect(db)) as connection:
+        return [row[0] for row in connection.execute("SELECT v FROM probe ORDER BY rowid")]
+
+
+def task_row(db: Path, task_key: str, status: str = "succeeded") -> int:
+    with contextlib.closing(sqlite3.connect(db)) as connection:
+        finished = None if status in ("pending", "running") else "2026-11-04T00:00:00+00:00"
+        cursor = connection.execute(
+            "INSERT INTO task_run(task_key, trigger, status, finished_at) VALUES (?, 'manual', ?, ?)",
+            (task_key, status, finished))
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+class LedgerRestoreTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.database = self.root / "database"
+        self.database.mkdir()
+        self.live = fresh_ledger(self.database)
+        note(self.live, "before")
+
+    def restore(self, backup: Path, **kwargs):
+        return ledger_backups.restore(self.live, backup, migrations_dir=MIGRATIONS_DIR, **kwargs)
+
+    def test_manual_backup_is_checked_before_it_gets_a_backup_name(self):
+        seen = []
+        backup = ledger_backups.create(self.live, progress=lambda **values: seen.append(values))
+
+        self.assertRegex(backup.name, r"^ledger\.pre-manual-\d{8}-\d{6}\.db$")
+        self.assertTrue(ledger_backups.BACKUP_PATTERN.match(backup.name), "和自动备份同一套清退规则")
+        self.assertEqual(notes(backup), ["before"])
+        self.assertEqual(seen[-1], {"stage": "检查备份完整性"})
+        copied = [values for values in seen if values.get("stage") == "复制账本"]
+        self.assertTrue(copied and copied[-1]["done"] == copied[-1]["total"] > 0)
+        self.assertEqual([path.name for path in self.database.iterdir() if path.name.endswith(".part")], [])
+
+    def test_backup_failing_integrity_check_is_discarded(self):
+        original = ledger_backups.integrity
+        with patch.object(ledger_backups, "integrity",
+                          side_effect=lambda db: "page 3 is never used" if db.name.endswith(".part") else original(db)):
+            with self.assertRaisesRegex(ledger_backups.BackupRejected, "完整性"):
+                ledger_backups.create(self.live)
+
+        self.assertEqual(sorted(path.name for path in self.database.iterdir()), ["ledger.db"])
+
+    def test_catalog_tells_manual_from_automatic_and_resolve_only_takes_listed_names(self):
+        organize = self.root / "generated" / "organize-backups"
+        organize.mkdir(parents=True)
+        auto = self.database / "ledger.pre-migrate-20261101-000000.db"
+        shutil.copyfile(self.live, auto)
+        stamp(auto, datetime.now() - timedelta(days=2))
+        manual = ledger_backups.create(self.live)
+        organized = organize / "ledger.pre-organize-20261102-000000-1.db"
+        shutil.copyfile(self.live, organized)
+        stamp(organized, datetime.now() - timedelta(days=1))
+
+        listed = ledger_backups.catalog(self.live, organize)
+
+        self.assertEqual([(entry["id"], entry["source"], entry["purpose"]) for entry in listed], [
+            (f"database/{manual.name}", "manual", "手动备份"),
+            ("organize/ledger.pre-organize-20261102-000000-1.db", "auto", "整理前"),
+            ("database/ledger.pre-migrate-20261101-000000.db", "auto", "迁移前"),
+        ])
+        self.assertEqual(ledger_backups.resolve(self.live, organize, listed[1]["id"]), organized)
+        for wrong in ("database/ledger.db", "database/../ledger.pre-x.db", "elsewhere/" + manual.name,
+                      "organize/" + manual.name, None):
+            with self.assertRaises(ledger_backups.BackupRejected, msg=wrong):
+                ledger_backups.resolve(self.live, organize, wrong)
+
+    def test_restore_saves_the_current_ledger_first_and_keeps_task_history(self):
+        backup = ledger_backups.create(self.live)
+        note(self.live, "after")
+        running = task_row(self.live, "ledger-restore", "running")
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("UPDATE ledger_revision SET n = 50 WHERE tbl = 'asset'")
+            connection.commit()
+
+        outcome = self.restore(backup)
+
+        self.assertEqual(notes(self.live), ["before"])
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone(), ("wal",), "账本保留自己的日志模式")
+        self.assertEqual(sorted(path.name for path in self.database.glob(outcome.saved.name + "*")),
+                         [outcome.saved.name], "另存的备份是单个文件，旁边没有 -wal／-shm")
+        self.assertEqual(outcome.saved.parent, self.database)
+        self.assertRegex(outcome.saved.name, r"^ledger\.pre-restore-")
+        self.assertEqual(notes(outcome.saved), ["before", "after"], "恢复前的账本完整另存")
+        self.assertEqual(outcome.migrated, ())
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM task_run WHERE id = ?", (running,)).fetchone(),
+                             ("running",), "这次恢复自己那一行还在，结算才有地方写")
+            self.assertEqual(connection.execute("SELECT n FROM ledger_revision WHERE tbl = 'asset'").fetchone(),
+                             (51,), "版本号只增不减，聚合缓存不会撞上旧值")
+        self.assertFalse((self.database / ledger_backups.MARKER_NAME).exists())
+        self.assertFalse((self.database / ledger_backups.STAGING_NAME).exists())
+        self.assertEqual(ledger_backups.integrity(self.live), "ok")
+
+    def test_restore_refuses_a_damaged_backup_without_touching_the_ledger(self):
+        damaged = self.database / "ledger.pre-manual-20261101-000000.db"
+        damaged.write_bytes(b"SQLite format 3\x00" + b"\x00" * 200)
+
+        with self.assertRaisesRegex(ledger_backups.BackupRejected, "完整性"):
+            self.restore(damaged)
+
+        self.assertEqual(notes(self.live), ["before"])
+        self.assertEqual(sorted(path.name for path in self.database.iterdir()), sorted(["ledger.db", damaged.name]),
+                         "没有另存、没有标记、没有暂存")
+
+    def test_restore_migrates_an_older_backup_before_it_reaches_the_ledger(self):
+        older = self.root / "older-migrations"
+        older.mkdir()
+        files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+        for path in files[:-1]:
+            shutil.copyfile(path, older / path.name)
+        backup = self.database / "ledger.pre-migrate-20261101-000000.db"
+        migrations.upgrade(backup, older)
+        note(backup, "older")
+
+        outcome = self.restore(backup)
+
+        self.assertEqual(outcome.migrated, (files[-1].name[:4],))
+        self.assertEqual(notes(self.live), ["older"])
+        _, pending = migrations.plan(self.live, MIGRATIONS_DIR)
+        self.assertEqual(pending, [])
+
+    def test_restore_refuses_a_backup_from_a_newer_program(self):
+        backup = ledger_backups.create(self.live)
+        with contextlib.closing(sqlite3.connect(backup)) as connection:
+            connection.execute("INSERT INTO schema_migration(version, name, checksum, applied_at) VALUES ('9999', 'future', 'x', '')")
+            connection.commit()
+        note(self.live, "after")
+
+        with self.assertRaisesRegex(ledger_backups.BackupRejected, "结构"):
+            self.restore(backup)
+
+        self.assertEqual(notes(self.live), ["before", "after"])
+        self.assertEqual(len(list(self.database.glob("ledger.pre-restore-*"))), 0)
+
+    def test_failure_while_writing_leaves_the_ledger_as_it_was(self):
+        backup = ledger_backups.create(self.live)
+        note(self.live, "after")
+
+        with patch.object(ledger_backups, "_copy_into", side_effect=sqlite3.OperationalError("database is locked")):
+            with self.assertRaisesRegex(ledger_backups.BackupRejected, "保持不变"):
+                self.restore(backup)
+
+        self.assertEqual(notes(self.live), ["before", "after"])
+        self.assertFalse((self.database / ledger_backups.MARKER_NAME).exists())
+        self.assertEqual(ledger_backups.read_result(self.live)["state"], "failed")
+
+    def interrupted(self, *, saved: Path | None, staging: bool) -> None:
+        if staging:
+            shutil.copyfile(self.live, self.database / ledger_backups.STAGING_NAME)
+            note(self.database / ledger_backups.STAGING_NAME, "staged")
+        (self.database / ledger_backups.MARKER_NAME).write_text(json.dumps({
+            "state": "replacing", "backup": str(self.database / "ledger.pre-manual-1.db"),
+            "saved": str(saved) if saved else ""}), encoding="utf-8")
+
+    def test_startup_keeps_an_intact_ledger_after_an_interrupted_restore(self):
+        self.assertIsNone(ledger_backups.recover(self.live), "没有标记什么都不做")
+        self.interrupted(saved=None, staging=True)
+
+        result = ledger_backups.recover(self.live)
+
+        self.assertEqual((result["state"], result["outcome"]), ("interrupted", "kept"))
+        self.assertEqual(notes(self.live), ["before"])
+        self.assertFalse((self.database / ledger_backups.MARKER_NAME).exists())
+        self.assertFalse((self.database / ledger_backups.STAGING_NAME).exists())
+        self.assertEqual(ledger_backups.read_result(self.live)["outcome"], "kept")
+
+    def test_startup_never_leaves_the_ledger_missing_after_an_interrupted_restore(self):
+        saved = self.database / "ledger.pre-restore-20261104-000000.db"
+        shutil.copyfile(self.live, saved)
+        self.interrupted(saved=saved, staging=True)
+        self.live.unlink()
+
+        self.assertEqual(ledger_backups.recover(self.live)["outcome"], "completed")
+        self.assertEqual(notes(self.live), ["before", "staged"], "迁好的暂存补完这次恢复")
+
+        self.interrupted(saved=saved, staging=False)
+        self.live.unlink()
+        self.assertEqual(ledger_backups.recover(self.live)["outcome"], "rolled-back")
+        self.assertEqual(notes(self.live), ["before"], "没有暂存就退回恢复前另存的那份")
+
+    def test_migrate_upgrade_settles_the_marker_before_creating_anything(self):
+        saved = self.database / "ledger.pre-restore-20261104-000000.db"
+        shutil.copyfile(self.live, saved)
+        self.interrupted(saved=saved, staging=False)
+        self.live.unlink()
+        from peach import cli
+        with patch.object(cli, "_require_readable_settings"), contextlib.redirect_stdout(io.StringIO()):
+            cli._migrate(SimpleNamespace(action="upgrade", db=self.live, yes=True))
+
+        self.assertEqual(notes(self.live), ["before"])
+
+
+class LedgerBackupManagerTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        (self.root / "config.toml").write_text("", encoding="utf-8")
+        (self.root / "database").mkdir()
+        self.live = fresh_ledger(self.root / "database")
+        note(self.live, "before")
+        self.config = settings_file.load_config(environ={settings_file.DATA_ROOT_ENV: str(self.root)})
+        self.runs = TaskRunStore(self.live)
+        self.busted = []
+        self.manager = ledger_backups.LedgerBackups(self.config, runs=self.runs, migrations_dir=MIGRATIONS_DIR,
+                                                    after_restore=lambda: self.busted.append(True))
+
+    def finish(self, job) -> dict:
+        job.thread.join(30)
+        self.assertFalse(job.thread.is_alive())
+        return job.snapshot()
+
+    def finished_runs(self, task_key: str) -> list[str]:
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            return [row[0] for row in connection.execute(
+                "SELECT status FROM task_run WHERE task_key = ? ORDER BY id", (task_key,))]
+
+    def test_backup_and_restore_run_as_background_tasks_in_the_task_center(self):
+        self.manager.start_backup()
+        state = self.finish(self.manager.backup_job)
+        self.assertEqual(state["status"], "complete", state)
+        listed = self.manager.snapshot()["backups"]
+        self.assertEqual([entry["name"] for entry in listed], [state["name"]])
+        note(self.live, "after")
+
+        self.manager.start_restore(listed[0]["id"])
+        state = self.finish(self.manager.restore_job)
+
+        self.assertEqual(state["status"], "complete", state)
+        self.assertEqual(notes(self.live), ["before"])
+        self.assertEqual(self.finished_runs("ledger-backup"), ["succeeded"])
+        self.assertEqual(self.finished_runs("ledger-restore"), ["succeeded"],
+                         "自己那一行接回恢复后的账本并正常结算；查忙时没把自己算进去")
+        self.assertEqual(self.busted, [True])
+        self.assertFalse(update_tasks.is_pausing(self.live), "挡新任务的闸门已放开")
+        self.assertEqual(notes(self.root / "database" / state["saved"]), ["before", "after"])
+
+    def test_restore_is_refused_while_other_tasks_run(self):
+        backup = ledger_backups.create(self.live)
+        with patch.object(update_tasks, "running", return_value=["扫描与采集"]):
+            with self.assertRaisesRegex(ledger_backups.BackupRejected, "扫描与采集"):
+                self.manager.start_restore(f"database/{backup.name}")
+        self.assertEqual(self.manager.snapshot()["restore"], {"status": "idle"})
+
+    def test_restore_is_refused_on_a_reading_device(self):
+        backup = ledger_backups.create(self.live)
+        with patch("peach.runtime_prepare.configured_ledger_writer", return_value=(False, "这台电脑是只读端")):
+            with self.assertRaisesRegex(ledger_backups.BackupRejected, "写入端"):
+                self.manager.start_restore(f"database/{backup.name}")
+
+    def test_new_tasks_are_held_off_while_restoring(self):
+        token = update_tasks.reserve(self.live, busy="正在从备份恢复账本，暂时不能启动新任务。")
+        self.addCleanup(update_tasks.release, self.live, token)
+        with self.assertRaisesRegex(update_tasks.UpdateBusy, "正在从备份恢复账本"):
+            with update_tasks.admission(self.live):
+                pass
+
+    def test_routes_require_confirmation_and_report_refusals(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from peach import routes_configuration
+        from peach.routes_auth import require_auth
+        app = FastAPI()
+        app.include_router(routes_configuration.router)
+        app.dependency_overrides[require_auth] = lambda: None
+        app.state.ledger_backups = self.manager
+        with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 123)) as client, \
+                patch.object(settings_file, "load_config", return_value=self.config):
+            self.assertEqual(client.get("/api/configuration/ledger-backups").json()["backups"], [])
+            unconfirmed = client.post("/api/configuration/ledger-backups/restore", json={"id": "database/x"})
+            self.assertEqual(unconfirmed.status_code, 400)
+            missing = client.post("/api/configuration/ledger-backups/restore",
+                                  json={"id": "database/ledger.pre-manual-1.db", "confirm": True})
+            self.assertEqual(missing.status_code, 409)
+            self.assertIn("已经不在", missing.json()["detail"])
+            self.assertEqual(client.post("/api/configuration/ledger-backups/backup",
+                                         headers={"origin": "https://other.invalid"}).status_code, 403)
 
 
 if __name__ == "__main__":

@@ -349,6 +349,54 @@ class TasksEndpointTests(unittest.TestCase):
         (self.contract.candidate_root / 'sample.csv').write_text('item_key\nasset:1:title\n', encoding='utf-8')
         self.assertNotEqual(web_tasks.q_tasks(self.contract, {})['result_versions']['review'], committed['review'])
 
+    def test_the_page_wide_poll_carries_versions_and_notices_without_the_task_list(self):
+        """每个页面常驻的那份轮询只带结果版本、入库通知和忙不忙，和任务中心那份版本一致。"""
+        from pathlib import Path
+        self.contract.candidate_root = Path(self.tmp.name) / 'candidates'
+        self.contract.candidate_root.mkdir()
+        idle = web_tasks.q_result_updates(self.contract, {})
+        self.assertEqual(set(idle), {'ok', 'result_versions', 'ingest_notices', 'busy'})
+        self.assertFalse(idle['busy'])
+        self.assertEqual(idle['result_versions'], web_tasks.q_tasks(self.contract, {})['result_versions'])
+        run = self.store.start('library-processing', trigger='manual')
+        self.assertTrue(web_tasks.q_result_updates(self.contract, {})['busy'])
+        self.store.finish(run.id, 'succeeded')
+        self.assertFalse(web_tasks.q_result_updates(self.contract, {})['busy'])
+
+    def test_finished_runs_are_listed_without_a_query_per_row(self):
+        """最近完成那一页两百来条大多早已结束：控制状态与资源占用只问还有活动的那几条，连接数不随页长增长。"""
+        from unittest import mock
+        for _ in range(30):
+            self.store.finish(self.store.start('library-processing', trigger='manual').id, 'succeeded')
+        parent = self.store.start('parent', trigger='manual')
+        self.store.enqueue_followups(parent.id, [('leaf:1', 'leaf', '还在排的后继')])
+        self.store.finish(parent.id, 'succeeded')
+        original = self.store.database.read_connection
+        opened = []
+
+        def counted():
+            opened.append(1)
+            return original()
+
+        with mock.patch.object(self.store.database, 'read_connection', side_effect=counted):
+            payload = web_tasks.q_tasks(self.contract, {'limit': '100'})
+        controlled = [row['id'] for row in (*payload['finished'], *payload['working_parents']) if 'control' in row]
+        self.assertEqual(controlled, [parent.id])
+        self.assertLess(len(opened), 20, f'连接数：{len(opened)}')
+
+    def test_ingest_notices_ride_along_with_the_task_list(self):
+        from unittest import mock
+
+        from peach.ingest_notices import IngestNotices
+        notices = IngestNotices()
+        notices.add('download', 7, 'SSIS-057')
+        notices.add('discovered', 0, '无效编号不记')
+        with mock.patch.object(web_tasks, 'NOTICES', notices):
+            payload = web_tasks.q_tasks(self.contract, {})['ingest_notices']
+        self.assertEqual(payload['epoch'], notices.epoch)
+        self.assertEqual([(item['id'], item['kind'], item['asset_id'], item['label']) for item in payload['items']],
+                         [(1, 'download', 7, 'SSIS-057')])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

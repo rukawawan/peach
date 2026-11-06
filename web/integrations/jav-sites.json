@@ -358,7 +358,7 @@
         "dt",
         "[data-video-code]"
       ],
-      "detail_pattern": "^/(?:av/content/?|(?:digital/(?:videoa|videoc)|mono/dvd)/-/detail/=/cid=([A-Za-z0-9_]+)/?)$"
+      "detail_pattern": "^/(?:(?:av|amateur)/content/?|(?:digital/(?:videoa|videoc)|mono/dvd)/-/detail/=/cid=([A-Za-z0-9_]+)/?)$"
     },
     {
       "id": "mgs",
@@ -419,7 +419,9 @@
       "domains": [
         "adult.contents.fc2.com"
       ],
-      "mode": "selection"
+      "mode": "automatic",
+      "identity": "peach",
+      "detail_pattern": "^/article/([0-9]{1,10})/?$"
     },
     {
       "id": "s1",

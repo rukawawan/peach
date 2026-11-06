@@ -80,8 +80,8 @@ HEALTH_FIELDS = [
 
 #: Seesaa 作品表那一档，`--profile seesaa` 只问它。
 WIKI_SOURCE = SEESAA.name
-#: Seesaa 上的几个 Wiki（`sources.seesaa.WIKI_SOURCES`）。它们不在任何内容类型的链上
-#: （`metadata_routes.ROUTES`），只由 `--profile seesaa` 或 `--sources` 点名，各自一档，经契约问。
+#: Seesaa 上的几个 Wiki（`sources.seesaa.WIKI_SOURCES`），各自一档，经契约问。素人系総合 Wiki 与
+#: av_neme 在素人链上（`metadata_routes.WIKI_STAGE`），av_name 只由 `--profile seesaa` 或 `--sources` 点名。
 WIKI_SOURCES = tuple(WIKI_SITES)
 #: `--sources` 能点名的来源：链上每一档的成员，加 Seesaa 的几个 Wiki。别的名字在 `SOURCE_SPECS` 里
 #: 只是历史来源身份（`metadata_policy.HISTORICAL_SOURCES`），当前没有解析器可问。
@@ -211,6 +211,9 @@ class ChainAdapter:
             elif stage in self.wikis:
                 wiki, session = self.wikis[stage]
                 pairs = [(stage, wiki.query(code, session=session).payload())]
+            elif stage in metadata_routes.WIKI_STAGE:
+                # 按链走到素人链上的认人 Wiki：没有点名就没有本批自己的 `WikiPages`，用正式链那一份。
+                pairs = self.inner.wiki(stage, code)
             else:
                 raise ValueError(f"链上没有这一档：{stage}")
         except Exception as error:  # noqa: BLE001 - 每种失败都翻成本脚本的分档
@@ -844,6 +847,8 @@ def _collect_code_fields(*, code, query, variants, chain, profile, sources, adap
                   if sources is None and not args.english_title_only else None)
     scalar_settled = False
     asked: set[str] = set()
+    # 素人链：MGStage 给的是素人名义，直到有一个认人 Wiki 给出演员才不再问它们（ADR-0145）。
+    wants_cast = any(name in metadata_routes.WIKI_STAGE for name in chain)
     for stage, then in zip(stages, (*stages[1:], "")):
         members = throttle.open_members(metadata_routes.stage_members(stage, chain))
         if scalar_settled:
@@ -876,11 +881,13 @@ def _collect_code_fields(*, code, query, variants, chain, profile, sources, adap
                 by_field.setdefault(field, []).append(candidate)
                 if candidate["value"]:
                     given.add(field)
+                    if field == "performers" and source in metadata_routes.WIKI_STAGE:
+                        wants_cast = False
         # 本地快照不消耗网络限流窗口。
         if args.delay > 0 and used_network:
             time.sleep(args.delay + random.uniform(0, min(0.4, args.delay / 3)))
         if sources is None and metadata_routes.settles(
-                metadata_routes.SCALAR_FIELDS, given, wants_tags=True, then=then):
+                metadata_routes.SCALAR_FIELDS, given, wants_tags=True, wants_cast=wants_cast, then=then):
             scalar_settled = True
             if tag_source not in chain or tag_source in asked:
                 break

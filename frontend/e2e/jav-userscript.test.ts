@@ -72,6 +72,11 @@ async function open(browser: Browser, options: {
           }) }), 0);
           return { abort: () => request.onabort?.() };
         }
+        // 共享进度的任务列表按不提供该接口的 Peach 应答，脚本退回逐页查询，不占用影片查询与提交的编号。
+        if (new URL(request.url).pathname === '/api/jav-browser/active') {
+          const timer = setTimeout(() => request.onload({ status: 404, responseText: '{}' }), 0);
+          return { abort: () => { clearTimeout(timer); request.onabort?.(); } };
+        }
         if (request.url.endsWith('/api/jav-browser/errors')) { mock.reports.push(request); return; }
         const call = { method: request.method, url: request.url, headers: request.headers,
           anonymous: request.anonymous, ...(request.data ? { data: request.data } : {}) };
@@ -170,6 +175,7 @@ async function selectCode(page: Page) {
 const AUTOMATIC: Record<string, { path: string; title: string; html: string; source?: string; code?: string }> = {
   dmm: { path: '/av/content/?id=ssis00519&private=secret#player', source: '/av/content/?id=ssis00519', code: 'SSIS-519', title: '作品详情', html: '<h1>作品详情</h1>' },
   mgs: { path: '/product/product_detail/300MIUM-1239/', code: '300MIUM-1239', title: '作品详情', html: '<h1>作品详情</h1>' },
+  'fc2-market': { path: '/article/4900901/', code: 'FC2-PPV-4900901', title: '作品详情', html: '<h1>作品详情</h1>' },
   missav: { path: '/en/ssis-057', title: 'SSIS-057', html: '<h1>SSIS-057 作品</h1>' },
   jable: { path: '/videos/ssis-057/', title: 'Jable', html: '<div class="video-info"><h4>SSIS-057 作品</h4></div>' },
   'jav-guru': { path: '/12345/ssis-057-detail/', title: 'JAV.guru', html: '<h1 class="entry-title">[SSIS-057] 作品</h1>' },

@@ -177,7 +177,7 @@ describe('设计决定：关注详情、作品详情、播放器与侧栏', () =
     }
   });
 
-  it('作品详情身份区：各组按内容宽并排换行，名字行框容得下下伸部；系列是整行宽的图标链接，不是标签胶囊', { timeout: 60_000 }, async () => {
+  it('作品详情身份区：各组按内容宽并排换行，名字在头像下居中、行框容得下下伸部；系列是整行宽的图标链接，不是标签胶囊', { timeout: 60_000 }, async () => {
     const opened = await openItemPage(browser, `/assets/${ITEM.plain}`, DESKTOP);
     try {
       const page = opened.page;
@@ -203,7 +203,7 @@ describe('设计决定：关注详情、作品详情、播放器与侧栏', () =
       assert.deepEqual(shown.primary, ['flex', 'wrap']);
       assert.equal(shown.narrower, true, '组按内容宽，共演作品不会一组占满一行');
       assert.ok(shown.name.ratio >= 1.5, `名字行高 ${shown.name.ratio} 倍字号，拉丁字母的下伸部会被省略号那层 overflow 裁掉`);
-      assert.deepEqual([shown.name.overflow, shown.name.align], ['ellipsis', 'left']);
+      assert.deepEqual([shown.name.overflow, shown.name.align], ['ellipsis', 'center']);
       assert.equal(shown.cursor, 'pointer');
       assert.notEqual(shown.face, 'rgba(0, 0, 0, 0)', '没图的头像画首字盘');
       assert.deepEqual(shown.series, { display: 'flex', wrap: 'anywhere', border: '0px', full: true });
@@ -284,6 +284,29 @@ describe('设计决定：关注详情、作品详情、播放器与侧栏', () =
       });
       assert.deepEqual(shown, { performer: ['SPAN', 'default'], studio: 'pointer', fit: 'cover', filled: true },
         '标识文件自带边距，页面再补 inset 或换成 contain 就多围出一圈框');
+      assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('作品详情标签多时先露 20 个，展开键报出剩下几个，展开后能收回', { timeout: 60_000 }, async () => {
+    const opened = await openItemPage(browser, `/assets/${ITEM.plain}`, DESKTOP);
+    try {
+      const page = opened.page;
+      const base = await page.evaluate(() => fetch('/api/item?id=14').then((response) => response.json()));
+      const tags = Array.from({ length: 30 }, (_, index) => ({ k: `折叠标签${String(index).padStart(2, '0')}`, cat: 'scene' }));
+      await page.route((url) => url.pathname === '/api/item', (route) => route.fulfill({ json: { ...base, tags } }));
+      await page.goto(new URL('/assets/14', page.url()).href, { waitUntil: 'load' });
+      const more = page.locator('#stage [data-tags-more]');
+      await more.waitFor({ timeout: 15_000 });
+      const chips = page.locator('#stage [data-detail-tags] [data-detail-tag]');
+      assert.deepEqual([await chips.count(), (await more.innerText()).trim()], [20, '还有 10 个']);
+      await more.click();
+      assert.deepEqual([await chips.count(), (await more.innerText()).trim()], [30, '收起']);
+      await more.click();
+      assert.equal(await chips.count(), 20);
+      assert.equal(await page.locator('#stage [data-detail-tags] [data-tag-plus]').isVisible(), true, '收起时加号照样在');
       assert.deepEqual(withoutPlayer(opened.problems), []);
     } finally {
       await opened.close();
@@ -815,10 +838,7 @@ describe('设计决定：关注详情、作品详情、播放器与侧栏', () =
     await opened.page.reload({ waitUntil: 'load' });
     await opened.page.locator('#drawer [data-sidebar-group="时长"]').waitFor({ state: 'attached', timeout: 15_000 });
     await settle(opened.page);
-    return { ...opened, close: async () => {
-      await opened.page.unrouteAll({ behavior: 'ignoreErrors' });
-      await opened.close();
-    } };
+    return opened;
   }
 
   it('侧栏当前项自己不铺底，由挂在抽屉上的那块玻璃标出；悬停时玻璃跟过去，离开这一列回到当前项', { timeout: 60_000 }, async () => {

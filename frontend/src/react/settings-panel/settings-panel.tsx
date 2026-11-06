@@ -33,9 +33,9 @@ import { NumberSetting } from './number-setting';
 import type { Choice, PanelSettings, SettingsPanelApi, SettingsPanelHost } from './settings-panel-api';
 import { fetchSettings, refreshPanelData, SETTINGS_KEY, useSaveSettings } from './settings-data';
 import { Note } from '../components/note';
+import { ShortcutSetting } from './shortcut-setting';
 import { SidebarOrder } from './sidebar-order';
 import { SettingsDialogClose } from '../components/settings-dialog-close';
-import { GuideHelp } from '../onboarding/guide-help';
 
 /* 左栏的分区，顺序即右边各组的顺序。字形按条目自己的名字取：整列取自 Remix，一家画的笔画
    才一样粗。 */
@@ -252,7 +252,6 @@ function Group({ index, tab, children, cards = false }: { index: number; tab: nu
     <section data-setting-group="" data-setting-layout={cards ? 'cards' : undefined}
       id={groupId(index)} role="tabpanel" aria-labelledby={tabId(index)} hidden={index !== tab}>
       <h3>{SECTIONS[index][0]}</h3>
-      <GuideHelp chapter={['appearance', 'playback', 'jav-settings', 'search-settings', 'content'][index]} />
       {children}
     </section>
   );
@@ -383,6 +382,7 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
             <ToggleRow id="censorSetting" title="SFW 模式" describedBy="sfwDescription" checked={current.censored()}
               description="隐藏敏感画面，停止悬停预览。"
               onToggle={(on) => current.setCensored(on)} />
+            <ShortcutSetting current={current.sfwShortcut()} onChange={current.setSfwShortcut} />
           </Group>
         </div>
       </div>

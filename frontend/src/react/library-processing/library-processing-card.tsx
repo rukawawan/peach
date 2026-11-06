@@ -6,7 +6,7 @@
  * 写操作是 `useMutation`：服务端回的就是这一趟的新快照，用 `setQueryData` 换进缓存，
  * 再让这个键立刻重读一次接上轮询的节律。首屏读到的旧终态不冒充新结果——任务关掉页面
  * 照样在跑，状态里常年躺着上一趟的回执，判据在 `use-library-processing.ts`。 */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { RiArrowRightLine } from '@remixicon/react';
 import { useMutation } from '@tanstack/react-query';
 
@@ -18,6 +18,7 @@ import { apiSend, errorMessage } from '../../api';
 import { SCAN_CARD_TEXT } from '../../management';
 import type { LibraryProcessingProps } from '../bundle';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
+import { IssueRow } from '../components/issue-row';
 import { Note } from '../components/note';
 import { StatusLabel } from '../components/status-label';
 import { useOverlayScrollbar } from '../components/overlay-scrollbar';
@@ -25,7 +26,7 @@ import { PathLine } from '../components/path-line';
 import { Disclosure } from '../settings/section';
 import { queryClient } from '../query';
 import {
-  ALL_CONTENT_URL, DISCONNECTED_TEXT, issueDetails, LIBRARY_PROCESSING_KEY, LIBRARY_PROCESSING_URL, PARTIAL_RESULT_TEXT,
+  ALL_CONTENT_URL, busyText, DISCONNECTED_TEXT, issueDetails, LIBRARY_PROCESSING_KEY, LIBRARY_PROCESSING_URL, PARTIAL_RESULT_TEXT,
   notesLine, processingActive, processingHasPartialResult, remainingTime, slowItem, type LibraryProcessingCommand, type LibraryProcessingData,
 } from './library-processing';
 import { SlowItemNote } from './slow-item';
@@ -73,15 +74,37 @@ function Outcome(
   const details = issueDetails(state);
   const exporter = useAction();
   const archive = useAction();
+  /* 「已归档」那句只给刚点了归档的人看，带着撤销；刷新后服务端只剩 `archived`，整块都不再出现。 */
+  const [archivedHere, setArchivedHere] = useState('');
+  const active = processingActive(state);
   const retryable = state.status === 'failed' && !!state.retryable_asset_ids?.length;
   const notes = notesLine(state.notes || {});
   const failed = !!problem || (!state.archived && state.status === 'failed');
   const partial = !problem && !state.archived && processingHasPartialResult(state);
-  /* 同一份日志只印一处：失败提示带着问题清单时归清单，跑完只剩「7 天内不再问」时归那条提示。 */
-  const logInList = failed && !!details?.log;
+  /* 这一趟的问题收在同一块里：结论、「7 天内不再问」、清单、日志。分成几块同色的提示，
+     读的人分不清哪句跟着哪个按钮。 */
+  const issues = failed || (!state.archived && !active && (!!notes || !!state.issue_count));
+  const archivable = !active && !!state.job_id && !state.archived;
+  const log = state.issues_log || '';
   const slow = slowItem(state);
   /* 清单是这一页唯一自己滚的块，原生滚动条在这儿就是一条系统灰柱子。 */
   const list = useOverlayScrollbar<HTMLUListElement>();
+  const setArchived = (archived: boolean) => void archive.run(archived ? 'archive' : 'unarchive',
+    signal => apiSend<LibraryProcessingData>(LIBRARY_PROCESSING_URL,
+      { action: archived ? 'archive' : 'unarchive', job_id: state.job_id }, 'POST', signal),
+    next => {
+      queryClient.setQueryData(LIBRARY_PROCESSING_KEY, next);
+      setArchivedHere(archived ? state.job_id! : '');
+    });
+  const exportButton = state.issue_count && !active
+    ? <Button variant="secondary" size="small" {...busyProps(!!exporter.busy)} onClick={() => void exporter.run('export',
+        signal => exportProcessingIssues(state, signal), contents => {
+          downloadIssueList(state.job_id!, contents); toast('已导出问题清单');
+        })}>导出完整问题清单</Button>
+    : null;
+  const body = failed
+    ? [problem || state.error || '处理未完成，请重试', partial ? PARTIAL_RESULT_TEXT : '', notes].filter(Boolean).join('\n')
+    : notes || `这一趟有 ${(state.issue_count || 0).toLocaleString()} 项问题。`;
   return (
     /* 空着时整块收起：`aria-live` 的容器留着一条空轨道，卡片底下就凭空多出一个间距。 */
     <div aria-live="polite" className="flex flex-col gap-4 empty:hidden">
@@ -90,83 +113,59 @@ function Outcome(
         : state.status === 'running' && state.stalled
         ? <Note tone="warning" title="处理较慢">{STALLED_TEXT}</Note>
         : null}
-      {failed
-        ? <Note tone={partial ? 'warning' : 'error'} className="gap-0 p-3"
-            title={partial ? '处理已结束，部分项目需处理' : '处理未完成'}
-            action={<div className="flex flex-wrap items-center gap-2">
-              {partial ? <LinkButton href={ALL_CONTENT_URL} size="small" trailingIcon={RiArrowRightLine}>查看全部内容</LinkButton> : null}
-              {retryable ? <Button variant="secondary" size="small" aria-label="立即重试未完成项" onClick={onRetry}>立即重试</Button> : null}
-            </div>}
-            extra={details
-              /* 三层东西叠在同一块提示里：一句结论、一份清单、一条日志地址。各自之间
-                 横一条自己颜色的发丝线，读的人才看得出哪一段结束了——只靠间距的话，
-                 几十条同样长短的明细会连成一片。 */
-              ? <div className="mt-3 border-t border-current/20 pt-3">
-                  <Disclosure summary={details.label} contentClassName="gap-0">
-                    {/* 轨道是滚动容器的兄弟，得有一层只裹着清单的定位祖先给它落脚。 */}
-                    <div className="relative">
-                      {/* 条间线画在每条自己身上，不用 `divide-y`：那一族的选择器裹在
-                          `:where()` 里没有特异性，压不过岛内 `@scope` 末尾那条把所有元素
-                          边框清零的 preflight，线会静默消失。 */}
-                      <ul ref={list} className="max-h-96 overflow-y-auto pr-3">
-                        {details.items.map((item) => (
-                          <li key={item.key}
-                            className="flex flex-col gap-1 border-b border-current/15 py-2 wrap-anywhere first:pt-0 last:border-b-0 last:pb-0">
-                            {item.href
-                              ? <a href={item.href} className="text-body-2-medium underline-offset-4 hover:underline">{item.label}</a>
-                              : <span className="text-body-2-medium">{item.label}</span>}
-                            <span className="text-caption-1-regular">{item.note}</span>
-                            {item.hint ? <code className="text-caption-1-regular break-all">{item.hint}</code> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    {details.log
-                      /* 日志地址与分隔线使用次级文字色。 */
-                      ? <div className="mt-3 border-t border-current/20 pt-3 text-text-secondary">
-                          <PathLine path={details.log} prefix="完整记录：" className="text-caption-1-regular"
-                            onRevealed={toast} />
-                        </div>
-                      : null}
-                  </Disclosure>
-                </div>
-              : null}>
-            {problem || state.error || '处理未完成，请重试'}
-            {partial ? `\n${PARTIAL_RESULT_TEXT}` : null}
-          </Note>
-        : null}
       {settled?.status === 'complete'
         ? <Note tone="success" title="处理完成">{receiptText(settled)}</Note>
         : null}
-      {settled?.status === 'cancelled' ? <Note tone="neutral" title="任务已停止">
-        已取得的资料和预览已保留，不会自动继续这趟任务。
+      {/* 取消不止是眼前点的那一下：命令行、任务中心取消的、重开页面才读到的，都留这一句。 */}
+      {(settled ?? state).status === 'cancelled' && !state.archived ? <Note tone="neutral" title="已取消上次任务">
+        已取得的资料和预览已保留，这一轮不会自动继续，需要时重新同步。
       </Note> : null}
-      {state.archived ? <Note tone="neutral">上一趟的问题提示已归档，历史记录仍保留。</Note> : null}
-      {!processingActive(state) && (state.issue_count || state.status === 'failed') ? <div className="flex flex-wrap items-center gap-2">
-        {state.issue_count ? <Button variant="secondary" size="small" {...busyProps(!!exporter.busy)} onClick={() => void exporter.run('export',
-          signal => exportProcessingIssues(state,signal), contents => {
-            downloadIssueList(state.job_id!,contents); toast('已导出问题清单');
-          })}>导出完整问题清单</Button> : null}
-        {!state.archived ? <Button variant="secondary" size="small" {...busyProps(!!archive.busy)}
-          onClick={() => void archive.run('archive',signal => apiSend<LibraryProcessingData>(LIBRARY_PROCESSING_URL,
-            {action:'archive',job_id:state.job_id},'POST',signal), next => {
-              queryClient.setQueryData(LIBRARY_PROCESSING_KEY,next); toast('已归档问题提示');
-            })}>归档提示</Button> : null}
-      </div> : null}
-      {exporter.error || archive.error ? <Note tone="warning">{exporter.error || archive.error}</Note> : null}
-      {!processingActive(state) && notes
-        /* 内边距与分隔节奏和上面的失败提示同一组：两块常常叠着出现，留白不一样一眼就看得出。 */
-        ? <Note tone="neutral" className="gap-0 p-3"
-            extra={state.issues_log && !logInList
-              /* 中性提示的分隔线跟随次级文字色。 */
-              ? <div className="mt-3 border-t border-current/20 pt-3 text-text-secondary">
-                  <PathLine path={state.issues_log} prefix="完整记录：" className="text-caption-1-regular"
-                    onRevealed={toast} />
+      {issues
+        ? <Note tone={!failed ? 'neutral' : partial ? 'warning' : 'error'} className="gap-0 p-3"
+            title={!failed ? undefined : partial ? '处理已结束，部分项目需处理' : '处理未完成'}
+            action={<div className="flex flex-wrap items-center gap-2">
+              {partial ? <LinkButton href={ALL_CONTENT_URL} size="small" trailingIcon={RiArrowRightLine}>查看全部内容</LinkButton> : null}
+              {retryable ? <Button variant="secondary" size="small" aria-label="立即重试未完成项" onClick={onRetry}>立即重试</Button> : null}
+              {archivable ? <Button variant="secondary" size="small" aria-label="归档提示" {...busyProps(!!archive.busy)}
+                onClick={() => setArchived(true)}>归档</Button> : null}
+            </div>}
+            extra={<>
+              {/* 三层东西叠在同一块提示里：一句结论、一份清单、一条日志地址。各自之间
+                  横一条自己颜色的发丝线，读的人才看得出哪一段结束了——只靠间距的话，
+                  几十条同样长短的明细会连成一片。 */}
+              {details ? <div className="-mx-3 mt-3 border-t border-current/20 px-3 pt-3">
+                  <Disclosure summary={details.label} contentClassName="gap-0">
+                    {/* 轨道是滚动容器的兄弟，得有一层只裹着清单的定位祖先给它落脚。 */}
+                    <div className="relative -mr-3">
+                      <ul ref={list} className="max-h-96 overflow-y-auto">
+                        {details.items.map((item) => (
+                          <IssueRow key={item.key} title={item.label} href={item.href}>
+                            <span className="text-caption-1-regular">{item.note}</span>
+                            {item.hint ? <code className="text-caption-1-regular break-all">{item.hint}</code> : null}
+                          </IssueRow>
+                        ))}
+                      </ul>
+                    </div>
+                  </Disclosure>
+                </div> : null}
+              {/* 日志地址与分隔线使用次级文字色；导出读的是同一份记录，排在打开位置旁边。 */}
+              {log ? <div className="-mx-3 mt-3 border-t border-current/20 px-3 pt-3 text-text-secondary">
+                  <PathLine path={log} prefix="完整记录：" className="text-caption-1-regular"
+                    action={exportButton} onRevealed={toast} />
                 </div>
-              : null}>
-            {notes}
+              : exportButton ? <div className="-mx-3 mt-3 flex justify-end border-t border-current/20 px-3 pt-3">{exportButton}</div>
+              : null}
+            </>}>
+            {body}
           </Note>
         : null}
+      {state.archived && archivedHere === state.job_id && !problem
+        ? <Note tone="neutral" action={<Button variant="secondary" size="small" {...busyProps(!!archive.busy)}
+              onClick={() => setArchived(false)}>撤销</Button>}>
+            已归档上一趟的问题提示，完整记录仍保留。
+          </Note>
+        : null}
+      {exporter.error || archive.error ? <Note tone="warning">{exporter.error || archive.error}</Note> : null}
     </div>
   );
 }
@@ -215,8 +214,8 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
             ? <LinkButton href="/review" size="small" trailingIcon={RiArrowRightLine}>复核资料</LinkButton>
             : null}
           {/* 日常同步保留独立入口，原任务的定向重试只处理该任务的失败项。 */}
-          <ProcessingActions scan busy={busy} metadataOnly={state?.metadata_only} speedMode={state.speed_mode}
-            pendingCount={state.new_asset_count} onRun={run} />
+          <ProcessingActions scan busy={start.isPending} occupied={processingActive(state)} metadataOnly={state?.metadata_only}
+            speedMode={state.speed_mode} pendingCount={state.new_asset_count} onRun={run} onOccupied={() => toast(busyText(state))} />
         </>
       }>
         <div className="flex flex-col gap-2">

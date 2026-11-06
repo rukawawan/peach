@@ -1,4 +1,5 @@
 """匿名协议、身份核对、图片包装与只读详情投影。"""
+import hashlib
 import io
 import json
 import tempfile
@@ -13,7 +14,8 @@ from PIL import Image
 
 from peach.http import HttpResponse
 from peach.javdb_public import PublicAPI, PublicSourceUnavailable, decode_image, preview_video_url, public_signature_parts
-from peach.javdb_public import PublicBudgetExceeded, PublicRequestBudget, actor_gender
+from peach.javdb_public import PublicBudgetExceeded, PublicNotFound, PublicRequestBudget, PublicSourcePaused, actor_gender
+from peach.javdb_public import API_HOSTS, APP_HEADERS, APP_QUERY, APP_SIGNATURE, WEB
 from peach.web_jav_detail import (JAV_ACTOR_IMAGE_MAX_AGE, JAV_IMAGE_MAX_AGE, jav_image, q_jav_detail,
                                   q_jav_reviews, q_jav_resources)
 from peach.web_state import WebContract
@@ -184,6 +186,18 @@ class PublicProtocolTests(unittest.TestCase):
             api._get('https://javdb.com/example')
             limiter.assert_called_once()
 
+    def test_api_requests_wait_half_a_second_apart(self):
+        now, slept = [100.0], []
+
+        def sleeper(seconds):
+            slept.append(round(seconds, 3))
+            now[0] += seconds
+
+        api = PublicAPI(lambda *_: HttpResponse(200, {}, b'{}'), clock=lambda: now[0], sleeper=sleeper)
+        api._get('https://jdforrepam.com/api/first')
+        api._get('https://jdforrepam.com/api/second')
+        self.assertEqual(slept, [0.5])
+
     def test_gender_uses_only_explicit_supported_source_values(self):
         for value, expected in ((0, "female"), (1, "male"), (None, "unknown"),
                                 (False, "unknown"), (2, "unknown"), ("male", "male"), ("0", "unknown")):
@@ -250,6 +264,25 @@ class PublicProtocolTests(unittest.TestCase):
         with self.assertRaises(PublicSourceUnavailable):
             self.api().movie('FC2-PPV-1627464')
 
+    def test_mgs_prefixed_code_searches_source_number_and_keeps_identity(self):
+        api = self.api(number='LUXU-891')
+        self.assertEqual(api.movie('259LUXU-891')['number'], 'LUXU-891')
+        search = next(request for request in self.requests if '/v2/search' in request.url)
+        self.assertEqual(parse_qs(urlsplit(search.url).query)['q'], ['LUXU-891'])
+        self.assertEqual(api.movie('259LUXU-891', source_id='Exact')['id'], 'Exact')
+        with self.assertRaisesRegex(PublicSourceUnavailable, '身份不匹配'):
+            self.api(number='LUXU-892').movie('259LUXU-891', source_id='Exact')
+
+    def test_missing_search_result_and_cooldown_have_their_own_kinds(self):
+        with self.assertRaises(PublicNotFound):
+            self.api().movie('EXM-999')
+        api = self.api(blocked=True)
+        with self.assertRaises(PublicSourceUnavailable) as first:
+            api.movie('EXM-001')
+        self.assertNotIsInstance(first.exception, PublicSourcePaused)
+        with self.assertRaises(PublicSourcePaused):
+            api.movie('EXM-002')
+
     def test_exact_work_is_cached_and_signed_without_credentials(self):
         api = self.api()
         self.assertEqual(api.movie('EXM001')['number'], 'EXM-001')
@@ -302,7 +335,73 @@ class PublicProtocolTests(unittest.TestCase):
             self.assertGreater(api.paused_until, api.clock())
             with self.assertRaises(PublicSourceUnavailable):
                 api.movie('EXM-001')
-            self.assertEqual(transport.call_count, 1)
+            self.assertEqual(transport.call_count, len(API_HOSTS))
+
+    def test_blocked_api_host_cools_alone_and_the_next_host_answers(self):
+        api = self.api()
+        answer = api.transport
+        def transport(request, *rest):
+            if request.url.startswith(API_HOSTS[0]):
+                self.requests.append(request)
+                return HttpResponse(429, {}, b'')
+            return answer(request, *rest)
+        api.transport = transport
+        self.assertEqual(api.movie('EXM-001')['id'], 'Exact')
+        self.assertEqual(api.paused_until, 0.0)
+        self.assertGreater(api.host_paused[API_HOSTS[0]], api.clock() + 800)
+        before = len(self.requests)
+        api.reviews('EXM-001', 1)
+        later = [request.url for request in self.requests[before:]]
+        self.assertTrue(later)
+        self.assertFalse(any(url.startswith(API_HOSTS[0]) for url in later))
+        self.assertTrue(all(url.startswith(API_HOSTS[1]) for url in later))
+
+    def test_html_answer_from_a_host_moves_to_the_next_host(self):
+        api = self.api()
+        answer = api.transport
+        def transport(request, *rest):
+            if request.url.startswith(API_HOSTS[0]):
+                self.requests.append(request)
+                return HttpResponse(200, {}, b'<html>blocked</html>')
+            return answer(request, *rest)
+        api.transport = transport
+        self.assertEqual(api.movie('EXM-001')['id'], 'Exact')
+        self.assertGreater(api.host_paused[API_HOSTS[0]], api.clock())
+        self.assertEqual(api.paused_until, 0.0)
+
+    def test_web_signature_failure_signs_with_the_app_shape(self):
+        api = self.api()
+        answer = api.transport
+        def transport(request, *rest):
+            if request.url.startswith(WEB):
+                self.requests.append(request)
+                return HttpResponse(503, {}, b'')
+            return answer(request, *rest)
+        api.transport = transport
+        self.assertEqual(api.movie('EXM-001')['id'], 'Exact')
+        self.assertEqual(api.paused_until, 0.0)
+        signed = [request for request in self.requests if '/api/' in request.url]
+        self.assertTrue(signed)
+        for request in signed:
+            stamp, middle, digest = request.headers['jdsignature'].split('.')
+            self.assertEqual(middle, APP_SIGNATURE[0])
+            self.assertEqual(digest, hashlib.md5((stamp + APP_SIGNATURE[1]).encode()).hexdigest())
+            self.assertEqual(request.headers['User-Agent'], APP_HEADERS['User-Agent'])
+            query = parse_qs(urlsplit(request.url).query)
+            self.assertEqual({key: values[0] for key, values in query.items() if key in APP_QUERY}, APP_QUERY)
+        web_requests = sum(request.url.startswith(WEB) for request in self.requests)
+        api.cache.clear()
+        api.movie('EXM-001', refresh=True)
+        self.assertEqual(sum(request.url.startswith(WEB) for request in self.requests), web_requests)
+
+    def test_unrecognized_web_script_also_falls_back_to_the_app_signature(self):
+        api = self.api()
+        answer = api.transport
+        api.transport = lambda request, *rest: (HttpResponse(200, {}, b'const changed=1;') if '/assets/' in request.url
+                                                else answer(request, *rest))
+        self.assertEqual(api.movie('EXM-001')['id'], 'Exact')
+        self.assertTrue(api.signature_app)
+        self.assertEqual(api.paused_until, 0.0)
 
     def test_reviews_request_page_and_enforce_budget(self):
         api = self.api()
@@ -636,6 +735,15 @@ class DetailProjectionTests(unittest.TestCase):
         self.assertTrue(result['items'][0]['uri'].startswith('magnet:?'))
         self.assertEqual(result['items'][0]['attributes'], ['中字', '高清'])
         self.assertEqual(result['source_url'], 'https://javdb.com/v/Exact')
+
+    def test_resource_sizes_are_mebibytes_written_with_units(self):
+        rows = [{'hash': 'a' * 40, 'size': 4219}, {'hash': 'b' * 40, 'size': 700},
+                {'hash': 'c' * 40, 'size': 0}, {'hash': 'd' * 40, 'size': '3 GB'}]
+        with patch('peach.web_jav_detail.PUBLIC_API.movie', return_value={'id': 'Exact'}), \
+                patch('peach.web_jav_detail.PUBLIC_API.magnets', return_value=rows), \
+                patch('peach.web_jav_detail.PUBLIC_API.reviews', return_value=[]):
+            result = q_jav_resources(self.contract, {'code': 'EXM-001'})
+        self.assertEqual([item['size'] for item in result['items']], ['4.12GB', '700MB', '', '3 GB'])
 
     def test_resources_include_comment_ed2k_magnets_and_urls_with_origins(self):
         digest = 'a' * 40

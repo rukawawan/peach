@@ -4,9 +4,9 @@ Feed 只回答一个问题——最近出了哪些番号。一次拉取的全部
 的记录和一条「这个番号还没入库」的记录；不下载种子、不下载 enclosure、不建目录、
 不碰任何媒体文件。
 
-订阅只有一类：JavDB 演员页当伪 Feed 抓，由人物页的「订阅新作」开关或订阅源页签按名字勾选的
-演员卡，按这位的 JavDB 身份现拼地址（ADR-0047、ADR-0083）。页面不送地址，所以这里没有
-「任意地址」这条入口。
+订阅有两类，都按人：JavDB 演员页当伪 Feed 抓，由人物页的「订阅新作」开关或订阅源页签按名字
+勾选的演员卡，按这位的 JavDB 身份现拼地址（ADR-0047、ADR-0083）；DMM 按女优编号列的片单，
+编号取账本里已刮到的 DMM 证据（ADR-0135）。页面不送地址，所以这里没有「任意地址」这条入口。
 
 **解析只吃已下载的字节**，地址由调用方自己取（`peach.http` 的 transport 加主机限流）。
 把地址交给一个会自己发 HTTP 的解析器，等于绕过项目的代理、限流、超时与预算闸门。
@@ -24,11 +24,29 @@ from .entities import normalize_entity_name
 
 #: JavDB 演员页当伪 Feed 抓。它按发行日排在前面，所以「还没发行的作品」会先出现。
 KIND_JAVDB_ACTOR = "javdb-actor"
+#: DMM 按女优编号列的片单（GraphQL）。预购排在最前，番号是官方 `makerContentId`。
+KIND_DMM_ACTRESS = "dmm-actress"
 
-KIND_LABELS = {KIND_JAVDB_ACTOR: "JAV 订阅"}
+KIND_LABELS = {KIND_JAVDB_ACTOR: "JAV 订阅", KIND_DMM_ACTRESS: "JAV 订阅 · DMM"}
+
+#: DMM 片单那一类的订阅地址：用户点得开的女优片单页，同时是 `feed_source.url` 的去重键。
+#: 拉取不 GET 它，而是按地址里的编号问 GraphQL。
+DMM_ACTRESS_PAGE = "https://video.dmm.co.jp/av/list/?actress={id}"
+#: 片单条目指向的商品页，与 `sources.dmm.CONTENT_PAGE` 同一个。
+DMM_CONTENT_PAGE = "https://video.dmm.co.jp/av/content/?id={cid}"
+#: 哪些外部编号是 DMM 的女优编号：DMM 自己的详情，和 r18.dev（DMM 目录的镜像，同一套 id）。
+DMM_ACTRESS_PROVIDERS = ("dmm", "r18dev")
+_DMM_ACTRESS_ID = re.compile(r"^\d{1,10}$")
 
 #: 拉取间隔。JavDB 按出口 IP 计配额，一张一天才更新几条的页面拉得再密也只是花配额。
 DEFAULT_INTERVAL_MINUTES = 360
+
+#: 定时拉取多久看一次有没有到期的源（ADR-0134）。每个源仍按自己的间隔拉，这一档只决定
+#: 到期之后最多再等多久；源在间隔窗口里各占一个相位，一跳只拉落在这半小时里的那几个。
+TICK_MINUTES = 30
+
+#: 相位散列用的黄金比例小数部分：连续的 id 落在窗口里也是均匀铺开的，几个源时也不扎堆。
+_GOLDEN = 0.6180339887498949
 
 #: 一次拉取最多解析多少条。源正常一页几十条，异常的那种（被替换成别的页面、
 #: 被镜像站塞进整站索引）会给出几千条，那不该变成几千个壳。
@@ -144,9 +162,17 @@ class FeedEntry:
     title: str
     link: str | None = None
     published_at: str | None = None
+    #: 来源明说的商品番号（DMM 的 `makerContentId`）。给了就只认它，空串表示来源没给出能认的番号，
+    #: 不再回头从标题里找；为 None 时才按标题找。
+    product_code: str | None = None
+    #: 来源列表里就带着的出演名单（`、` 分隔）与厂牌。为 None 表示这个来源列表里没有。
+    performers: str | None = None
+    studio: str | None = None
 
     @property
     def code(self) -> str | None:
+        if self.product_code is not None:
+            return scan_code(self.product_code, product=True) or None
         return scan_code(self.title) or None
 
 
@@ -202,6 +228,41 @@ def parse_javdb_actor(html: str, base_url: str) -> ParsedFeed | None:
     return ParsedFeed(name, tuple(rows))
 
 
+def parse_dmm_actress(works) -> ParsedFeed:
+    """DMM 片单（`sources.dmm.ActressWorks`）→ 条目。条目身份是 cid，番号只认官方 `makerContentId`。
+
+    `makerContentId` 先过 `catalog_rules.release_code_from_product`，和 JavDB 那一路落成同一种写法
+    （`MXDLP-0343` → `MXDLP-343`），壳上的唯一番号才会把两个来源报的同一部并成一个。分卷
+    `MCSR-640-02` 这种认不出番号的照样记一条、不建壳，和 JavDB 页上认不出的条目同一种待遇。
+    片单为空就是零条：编号是从 DMM 自己的详情里取的，这位在 DMM 上没有配信作品（Prestige 专属）
+    时接口如实答零。
+    """
+    rows: list[FeedEntry] = []
+    for work in list(works.works)[:MAX_ENTRIES]:
+        code = scan_code(work.maker_code, product=True) if work.maker_code else None
+        title = f"{code} {work.title}".strip() if code else work.title
+        rows.append(FeedEntry(
+            work.cid, title, DMM_CONTENT_PAGE.format(cid=work.cid),
+            _published(work.release_date) if work.release_date else None,
+            product_code=work.maker_code, performers="、".join(work.performers),
+            studio=work.studio or None))
+    return ParsedFeed(works.name or None, tuple(rows))
+
+
+def dmm_actress_url(actress_id: str) -> str:
+    if not _DMM_ACTRESS_ID.match(str(actress_id or "")):
+        raise ValueError("DMM 女优编号只认数字")
+    return DMM_ACTRESS_PAGE.format(id=actress_id)
+
+
+def dmm_actress_id(url: str) -> str:
+    """订阅地址里的女优编号；地址不是 DMM 片单那一种时交空串。"""
+    prefix = DMM_ACTRESS_PAGE.split("{id}")[0]
+    text = str(url or "")
+    found = text[len(prefix):] if text.startswith(prefix) else ""
+    return found if _DMM_ACTRESS_ID.match(found) else ""
+
+
 def solo_works_url(url: str) -> str:
     """演员页换到「單體作品」筛选：同一个人，合集少得多，能翻到更早的正片。"""
     parts = urlsplit(url)
@@ -230,22 +291,63 @@ def normalize_url(value: object) -> str:
     return url
 
 
+def kind_of(url: str) -> str:
+    """订阅地址是哪一类：DMM 片单页按地址认，其余都是 JavDB 演员页。"""
+    return KIND_DMM_ACTRESS if dmm_actress_id(url) else KIND_JAVDB_ACTOR
+
+
 def add_source(connection: sqlite3.Connection, *, url: str, name: str = "",
                entity_id: int | None = None) -> int:
-    """登记一条 JavDB 演员页订阅。地址重复直接拒绝——同一个源订两遍只会让同一条新作出现两次。"""
+    """登记一条订阅，类型按地址认。地址重复直接拒绝——同一个源订两遍只会让同一条新作出现两次。"""
     address = normalize_url(url)
     if connection.execute("SELECT 1 FROM feed_source WHERE url=?", (address,)).fetchone():
         raise ValueError("这个订阅地址已经在列表里了")
     cursor = connection.execute(
         "INSERT INTO feed_source(kind,name,url,entity_id,enabled,interval_minutes,"
         "created_at) VALUES(?,?,?,?,1,?,?)",
-        (KIND_JAVDB_ACTOR, str(name or "").strip(), address, entity_id,
+        (kind_of(address), str(name or "").strip(), address, entity_id,
          DEFAULT_INTERVAL_MINUTES, stamp()))
     return int(cursor.lastrowid)
 
 
+def dmm_actress_ids(connection: sqlite3.Connection, entity_id: int) -> list[str]:
+    """这位在 DMM 上的女优编号，取自已刮到的 DMM 与 r18.dev 证据（`entity_external_ref`）。
+
+    一个人可以有几个编号：DMM 给改名后的艺名另开一号（坂道みる 的 `1047128` 与 miru 的
+    `1069632`，2026-11-04 实测两号片单分别 167 与 269 部），和 JavDB 一人两页同理，每个号各订一条。
+    """
+    marks = ",".join("?" for _ in DMM_ACTRESS_PROVIDERS)
+    return [str(row[0]) for row in connection.execute(
+        "SELECT DISTINCT external_id FROM entity_external_ref WHERE entity_id=?"
+        f" AND external_kind='performer' AND provider IN ({marks}) ORDER BY external_id",
+        (int(entity_id), *DMM_ACTRESS_PROVIDERS)) if _DMM_ACTRESS_ID.match(str(row[0] or ""))]
+
+
+def dmm_actress_pages(connection: sqlite3.Connection, entity_id: int) -> list[str]:
+    return [dmm_actress_url(value) for value in dmm_actress_ids(connection, entity_id)]
+
+
+def sync_dmm_sources(connection: sqlite3.Connection) -> list[int]:
+    """给已在订阅的人补上 DMM 片单源，返回新建的源 id。
+
+    订阅是按人开的（人物页那枚开关），DMM 编号却常常是开关打开之后才由刮削写进账本的，所以每轮
+    拉取前对一遍。只补地址还没登记过的：用户在设置页单独停掉的那一条不会被重新打开，没有 DMM
+    编号的人一条也不建，也就不为她发请求。
+    """
+    created: list[int] = []
+    followed = [int(row[0]) for row in connection.execute(
+        "SELECT DISTINCT entity_id FROM feed_source WHERE enabled=1 AND entity_id IS NOT NULL"
+        " ORDER BY entity_id")]
+    for entity_id in followed:
+        for url in dmm_actress_pages(connection, entity_id):
+            if connection.execute("SELECT 1 FROM feed_source WHERE url=?", (url,)).fetchone():
+                continue
+            created.append(add_source(connection, url=url, entity_id=entity_id))
+    return created
+
+
 def follow_entity(connection: sqlite3.Connection, entity_id: int, urls) -> list[int]:
-    """人物页那枚开关打开：这位的每个 JavDB 演员页各一条源，全部启用。
+    """人物页那枚开关打开：这位的每个 JavDB 演员页与 DMM 片单各一条源，全部启用。
 
     地址已经登记过的（之前关掉过，或者登记时还没挂上人物）原地启用并补上人物，不另建一条：
     `feed_item` 的去重记忆挂在那条源上，重建一条等于让整页历史再被当成新作一遍。
@@ -267,15 +369,14 @@ def follow_entity(connection: sqlite3.Connection, entity_id: int, urls) -> list[
 
 
 def unfollow_entity(connection: sqlite3.Connection, entity_id: int) -> None:
-    """开关关掉：只停用不删除，再打开时这几条的去重记忆接着用。"""
-    connection.execute("UPDATE feed_source SET enabled=0 WHERE entity_id=? AND kind=?",
-                       (int(entity_id), KIND_JAVDB_ACTOR))
+    """开关关掉：两类源一起只停用不删除，再打开时这几条的去重记忆接着用。"""
+    connection.execute("UPDATE feed_source SET enabled=0 WHERE entity_id=?", (int(entity_id),))
 
 
 def entity_following(connection: sqlite3.Connection, entity_id: int) -> bool:
     return connection.execute(
-        "SELECT 1 FROM feed_source WHERE entity_id=? AND kind=? AND enabled=1",
-        (int(entity_id), KIND_JAVDB_ACTOR)).fetchone() is not None
+        "SELECT 1 FROM feed_source WHERE entity_id=? AND enabled=1",
+        (int(entity_id),)).fetchone() is not None
 
 
 def remove_source(connection: sqlite3.Connection, source_id: int) -> None:
@@ -301,12 +402,13 @@ def sources(connection: sqlite3.Connection) -> list[dict]:
 
     `page_name` 是上次拉取时这一页在站上挂的名字（`settle` 写进 `feed_source.name`）。
     同一个人的两页在表里名字一样，只有它说得出哪一行是旧艺名那页。排序按人物走，
-    同一个人的几页挨在一起，不被页名拆开。"""
+    同一个人的几页挨在一起，不被页名或类型拆开；同一个人里 JavDB 演员页在前、DMM 片单在后。"""
     rows = connection.execute(
         "SELECT s.*, e.canonical_name AS entity_name,"
         " (SELECT count(*) FROM feed_item i WHERE i.source_id=s.id) AS seen"
         " FROM feed_source s LEFT JOIN entity e ON e.id=s.entity_id"
-        " ORDER BY s.kind, coalesce(e.canonical_name, s.name), s.id").fetchall()
+        " ORDER BY coalesce(e.canonical_name, s.name), s.kind<>?, s.id",
+        (KIND_JAVDB_ACTOR,)).fetchall()
     return [{
         "id": int(row["id"]),
         "kind": row["kind"],
@@ -328,29 +430,54 @@ def sources(connection: sqlite3.Connection) -> list[dict]:
 
 
 def due_sources(connection: sqlite3.Connection, now: str | None = None) -> list[sqlite3.Row]:
-    """到期该拉的源。从没拉过的（`next_fetch_at` 为空）总是到期。"""
+    """到期该拉的源，等得最久的在前。从没拉过的（`next_fetch_at` 为空）总是到期，排最前。"""
     moment = now or stamp()
     return list(connection.execute(
         "SELECT * FROM feed_source WHERE enabled=1"
-        " AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY id", (moment,)))
+        " AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY next_fetch_at, id", (moment,)))
+
+
+def next_fetch(source_id: int, moment: datetime, interval_minutes: int) -> datetime:
+    """这个源下一次该拉的时刻：「现在 + 间隔」附近、落在它自己相位上的那一刻（ADR-0134）。
+
+    不直接取「现在 + 间隔」：调度每跳之间隔着 `TICK_MINUTES`，拉完那一刻总比到期晚一点，
+    按它往后排会一轮轮漂，同一时刻加的源也永远在同一跳一起到期。相位由 id 定，过渡那一轮
+    间隔落在半个到一个半间隔之间，之后每次都回到同一个相位。
+    """
+    period = max(1, int(interval_minutes)) * 60
+    phase = (int(source_id) * _GOLDEN) % 1 * period
+    base = moment + timedelta(seconds=period)
+    offset = (phase - base.timestamp()) % period
+    if offset > period / 2:
+        offset -= period
+    return base + timedelta(seconds=offset)
 
 
 def settle(connection: sqlite3.Connection, source_id: int, *, error: str | None = None,
            etag: str | None = None, last_modified: str | None = None,
            interval_minutes: int, seen: int = 0, new: int = 0,
-           page_name: str | None = None, now: datetime | None = None) -> None:
+           page_name: str | None = None, now: datetime | None = None,
+           retry_at: datetime | None = None) -> None:
     """结算一次拉取。`page_name` 是这一页在站上挂的名字，解不出时留着上次的。
 
     失败也按同一间隔排下一次，不做指数退避——退避要么在这里写第二套判据，要么让一个
     临时挡回来的源沉默半天。下次时间在所有返回路径上都写，任何一种结局都不会让源卡住。
+    `retry_at` 是来源冷却的结束时刻：被整站挡回来的不是这个源的错，冷却一过就该再拉。
     """
     moment = now or datetime.now(timezone.utc)
+    upcoming = retry_at or next_fetch(source_id, moment, interval_minutes)
     connection.execute(
         "UPDATE feed_source SET last_error=?,last_fetched_at=?,next_fetch_at=?,"
         "etag=COALESCE(?,etag),last_modified=COALESCE(?,last_modified),"
         "name=COALESCE(?,name),last_seen_count=?,last_new_count=? WHERE id=?",
-        (error, stamp(moment), stamp(moment + timedelta(minutes=interval_minutes)),
+        (error, stamp(moment), stamp(upcoming),
          etag, last_modified, page_name or None, int(seen), int(new), int(source_id)))
+
+
+def defer(connection: sqlite3.Connection, source_id: int, until: datetime) -> None:
+    """这一轮没轮到问就撞上了来源冷却：只把下次时间挪到冷却结束，上次的结论原样留着。"""
+    connection.execute("UPDATE feed_source SET next_fetch_at=? WHERE id=?",
+                       (stamp(until), int(source_id)))
 
 
 # -- 条目与壳 --------------------------------------------------------------
@@ -396,20 +523,23 @@ def record_entry(connection: sqlite3.Connection, source_id: int, entry: FeedEntr
 
 def create_shell(connection: sqlite3.Connection, code: str, *, source_id: int | None,
                  title: str | None = None, link: str | None = None,
-                 release_date: str | None = None,
+                 release_date: str | None = None, performers: str | None = None,
+                 studio: str | None = None,
                  entity_id: int | None = None, now: str | None = None) -> int | None:
     """给一个还没入库的番号建壳。已入库或已有壳时返回 None。
 
     两层去重里的第二层就在这三行：先查 `asset`，再靠 `code` 上的唯一约束兜住并发。
+    来源列表里就带着出演与厂牌的（DMM 片单）先写上，取资料之前合集判据就有名单可看。
     """
     if in_library(connection, code):
         return None
     moment = now or stamp()
     try:
         cursor = connection.execute(
-            "INSERT INTO feed_discovery(code,source_id,title,link,release_date,"
-            "discovered_at) VALUES(?,?,?,?,?,?)",
-            (code, source_id, title, link, release_date, moment))
+            "INSERT INTO feed_discovery(code,source_id,title,link,release_date,performers,"
+            "studio,discovered_at) VALUES(?,?,?,?,?,?,?,?)",
+            (code, source_id, title, link, release_date, performers or None, studio or None,
+             moment))
     except sqlite3.IntegrityError:
         return None
     discovery_id = int(cursor.lastrowid)
@@ -449,11 +579,15 @@ def match_performers(connection: sqlite3.Connection, names) -> list[int]:
 
 
 def poll(connection: sqlite3.Connection, source: sqlite3.Row,
-         parsed: ParsedFeed) -> dict:
+         parsed: ParsedFeed, hidden: frozenset[str] = frozenset()) -> dict:
     """把一次拉取的解析结果落库，返回这一轮的账。
 
     写入顺序是源给出的倒序：无日期的条目按旧→新拿到递增的 id，于是「没有发布时间」
     的那些在列表里也还排得出先后。建壳仍按源给出的顺序，最新的先排上刮削。
+
+    条目自带出演名单的（DMM 片单），按 `compilation_kind` 认出是设置里收起的那类合集就只记
+    条目、不建壳：DMM 片单头几页多是三五十人的合集（森日向子 第一页 100 部里排在最前的
+    预购就有 4 部），建了壳也不列，却会占掉这一轮 `MAX_NEW_PER_POLL` 的名额和取资料的配额。
     """
     source_id = int(source["id"])
     entity_id = source["entity_id"]
@@ -466,18 +600,23 @@ def poll(connection: sqlite3.Connection, source: sqlite3.Row,
         record_entry(connection, source_id, entry, code=code, now=moment)
         codes.append((entry, code))
     created: list[tuple[int, str]] = []
-    skipped = 0
+    skipped = compilations = 0
     for entry, code in reversed(codes):
         if code is None:
             skipped += 1
+            continue
+        if (entry.performers is not None
+                and compilation_kind(entry.title, entry.performers, entry.studio) in hidden):
+            compilations += 1
             continue
         if len(created) >= MAX_NEW_PER_POLL:
             break
         shell = create_shell(connection, code, source_id=source_id,
                              title=entry.title or None, link=entry.link,
                              release_date=(entry.published_at or "")[:10] or None,
+                             performers=entry.performers, studio=entry.studio,
                              entity_id=entity_id, now=moment)
         if shell is not None:
             created.append((shell, code))
     return {"seen": len(parsed.entries), "fresh": len(fresh),
-            "without_code": skipped, "created": created}
+            "without_code": skipped, "compilations": compilations, "created": created}

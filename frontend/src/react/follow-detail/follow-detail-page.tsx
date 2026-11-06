@@ -40,7 +40,7 @@ import {
   type DetailMedia, type FollowDetailActions, type FollowDetailData, type FollowDetailItem, type FollowDetailMedia,
   type FollowDetailProps,
 } from './follow-detail';
-import { fetchFollowRelated, followRelatedGroups, followRelatedKey } from './follow-related';
+import { fetchFollowRelated, followRelatedGroups, followRelatedKey, followRelatedReasons } from './follow-related';
 import { FollowTags } from './follow-tags';
 
 const realDuration = (value: unknown) => Number(value) > 0;
@@ -150,9 +150,10 @@ function Related({ data, media, limit, context, helpers, actions }: {
     queryFn: ({ signal }) => fetchFollowRelated(data, media, limit, signal) });
   const [skeleton] = useState(() => pageSkeletonHtml('正在读取推荐', { cards: true, className: 'related-skeleton' }));
   const cardActions = useMemo(() => ({
-    openDetail: actions.openItem, openAuthor: actions.openAuthor, canFlip: () => false,
+    openDetail: actions.openItem, openAuthor: actions.openAuthor, canFlip: actions.canFlip,
   }), [actions]);
   const groups = followRelatedGroups(result.data?.pages || [], data, media, limit);
+  const reason = followRelatedReasons(result.data?.pages || [], data, media);
   const sources = result.data?.pages.at(-1)?.sources || data.sources;
   const relatedContext = { ...context, sources, aliases: result.data?.pages.at(-1)?.author_aliases || context.aliases };
   return <RelatedSection online data-follow-related="" wireDrag={helpers.wireDrag} busy={result.isPending}
@@ -161,7 +162,7 @@ function Related({ data, media, limit, context, helpers, actions }: {
     onRetry={() => { void result.refetch() }}>
     {result.data ? groups.map(group => <FollowCard key={group.primary.id} variant="next" group={group} media={media}
       authorSources={authorSources(group.primary, sources)} context={relatedContext} selected={false} selectMode={false}
-      busy="" failure="" actions={cardActions} />)
+      busy="" failure="" actions={cardActions} reason={reason(group)} />)
       : <div className="contents" dangerouslySetInnerHTML={{ __html: skeleton }} />}
   </RelatedSection>;
 }

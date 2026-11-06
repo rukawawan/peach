@@ -3,8 +3,30 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from sqlite3 import Connection
+
+#: 只读请求里记住的名字解析结果，见 `memoized_resolution`。
+_RESOLVED: ContextVar[dict | None] = ContextVar("peach_resolved_entities", default=None)
+
+
+@contextmanager
+def memoized_resolution():
+    """一次只读请求里同一个名字只解析一次。
+
+    新作与发现把订阅里的每部片逐个解析演员与厂牌，同一批名字要解析上千次，每次两条扫表查询。
+    请求内不写账本，解析结果不会变；块外与写路径照旧每次现查。
+    """
+    if _RESOLVED.get() is not None:
+        yield
+        return
+    token = _RESOLVED.set({})
+    try:
+        yield
+    finally:
+        _RESOLVED.reset(token)
 
 
 def normalize_entity_name(name: str) -> str:
@@ -812,9 +834,23 @@ def resolve_entity(connection: Connection, kind: str, name: str):
     别名撞名返回 None 而不是随便挑一个：指错实体会把作品挂到另一个人名下，
     那是要人工复核才能发现的错误。
     """
+    memo = _RESOLVED.get()
+    if memo is None:
+        return _resolve_entity(connection, kind, name)
+    key = (id(connection), kind, name)
+    if key not in memo:
+        memo[key] = _resolve_entity(connection, kind, name)
+    return memo[key]
+
+
+def _resolve_entity(connection: Connection, kind: str, name: str):
+    # 仍按原文逐字比对；多带的归一列条件只为走 `(kind, normalized_name)` 与 `normalized_alias`
+    # 的索引。原文两列没有索引，每次解析都要扫整张表。归一列由写入方用 `normalize_entity_name`
+    # 算，实体表的唯一约束与入库去重本来就靠它。
+    key = normalize_entity_name(name or "")
     canonical = connection.execute(
-        "SELECT e.* FROM entity e WHERE e.kind=? AND e.canonical_name=? LIMIT 1",
-        (kind, name),
+        "SELECT e.* FROM entity e WHERE e.kind=? AND e.normalized_name=? AND e.canonical_name=? LIMIT 1",
+        (kind, key, name),
     ).fetchone()
     if canonical:
         return canonical
@@ -823,7 +859,7 @@ def resolve_entity(connection: Connection, kind: str, name: str):
         return connection.execute('SELECT * FROM entity WHERE id=?', (next(iter(ids)),)).fetchone() if len(ids) == 1 else None
     aliases = connection.execute(
         "SELECT DISTINCT e.* FROM entity e JOIN entity_alias a ON a.entity_id=e.id "
-        "WHERE e.kind=? AND a.alias=? ORDER BY e.id LIMIT 2",
-        (kind, name),
+        "WHERE e.kind=? AND a.normalized_alias=? AND a.alias=? ORDER BY e.id LIMIT 2",
+        (kind, key, name),
     ).fetchall()
     return aliases[0] if len(aliases) == 1 else None

@@ -1,6 +1,7 @@
 /* search 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { javImageKind } from './../jav-artwork';
-import { preferencesState } from './preferences.js';
+import { censorOn, preferencesState, setCensored, sfwShortcut } from './preferences.js';
+import { matchesShortcut } from '../keyboard-shortcut';
 import { coverImage } from './../card-art/markup';
 import { catalogState, goHome, homePath } from './catalog.js';
 import { disposeStage, mediaState, openItem } from './media.js';
@@ -8,11 +9,11 @@ import { followSelected, notifyShell, selectMode, selected, state } from './../s
 import { navigationState } from './navigation.js';
 import { openEntity } from './entity.js';
 import { catalogSuggestions } from './../catalog-onboarding';
-import { searchRecommendations } from '../react/search/recommendations';
+import { pendingRecommendations, searchRecommendations } from '../react/search/recommendations';
 import { feedNewCoverHtml } from './feed.js';
 import { followState, openFollowDetail } from './follow.js';
 import { $, api, esc } from '../core';
-import { dismissMenu, glideEase, presentMenu, wireHorizontalScroller } from '../ui-kit';
+import { dismissMenu, glideEase, presentMenu, rollPlaceholder, wireHorizontalScroller } from '../ui-kit';
 import { openManagedRoute } from './../history/managed';
 import { applicationEffects } from './effects';
 import { searchMorphFrames } from './search-morph.js';
@@ -86,6 +87,8 @@ searchState.searchActions = {
 searchState.searchHelpers = {
   pool:()=>catalogSuggestions(state,api),
   recommendations:()=>searchRecommendations(api),
+  pendingRecommendations,
+  rollPlaceholder:(input,next)=>rollPlaceholder(input,next),
   /* `.pic` 是卡片封面那一格（比例、底色、圆角与模糊垫底都认它），和里面那张图一起由壳给。 */
   coverHtml:card=>`<span class="pic">${card?.thumb_url
     ?`<img src="${esc(card.thumb_url)}" width="640" height="360" alt="" loading="lazy" referrerpolicy="no-referrer" data-drop="self">`
@@ -154,6 +157,9 @@ applicationEffects.listen(document, 'keydown', e=>{
   }
   // 输入态不抢键：搜索框、标签弹窗和任何可编辑区域里的按键归它们自己处理。
   if(isTypingTarget(e.target))return;
+  // SFW 开关键（默认 Shift+S，可在设置里改）：有人走近时不必先打开设置（同 javm 的老板键
+  // `2304ab2`）。绑定必带修饰键，所以要在下一行放过修饰键组合之前比对。
+  if(!e.defaultPrevented&&matchesShortcut(e,sfwShortcut())){e.preventDefault();setCensored(!censorOn());return}
   // Ctrl（macOS 为 Command）加左右方向键按长步长快进快退。
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){
     const longVideo=activeVideo();

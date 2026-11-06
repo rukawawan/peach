@@ -33,14 +33,14 @@ describe('设计决定：设置、口味、统计与筛选玻璃', () => {
       await page.reload({ waitUntil: 'load' });
       await page.getByRole('tab', { name: /使用空间/ }).click();
       const panel = page.locator('[role="tabpanel"]').first();
-      await panel.locator('[role="progressbar"]').first().waitFor({ state: 'visible', timeout: 15_000 });
+      await panel.locator('[role="meter"]').first().waitFor({ state: 'visible', timeout: 15_000 });
       await settle(page);
       const shown = await panel.evaluate((element) => {
         const card = element.firstElementChild!;
         const cardBox = card.getBoundingClientRect();
         const detail = card.lastElementChild!.getBoundingClientRect();
         return {
-          filled: [...element.querySelectorAll('[role="progressbar"]')].map((bar) =>
+          filled: [...element.querySelectorAll('[role="meter"]')].map((bar) =>
             Math.round(bar.querySelectorAll('rect')[1]!.getBoundingClientRect().width / bar.getBoundingClientRect().width * 100)),
           rows: [...element.querySelectorAll('article')].map((row) => getComputedStyle(row).borderBottomWidth),
           overflow: detail.right - (cardBox.right - parseFloat(getComputedStyle(card).paddingRight)),

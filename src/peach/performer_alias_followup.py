@@ -367,7 +367,8 @@ class MinnanoPages:
             self._hold(refused=True)
             raise Blocked("来源拒绝访问或要求机器人验证")
         if response.status != 200:
-            raise Unavailable(f"HTTP {response.status}")
+            # avbase 女优页按名字拼地址，站上没有这个名字回 404：那是「问过、没有」，不是没取到。
+            raise (Missing if response.status == 404 else Unavailable)(f"HTTP {response.status}")
         final_url = response.url or url
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"url": url, "final_url": final_url, "body": body},

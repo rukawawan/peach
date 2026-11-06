@@ -50,7 +50,6 @@
 @import "../ui-kit/overlay-scrollbar.css";
 @import "../ui-kit/modal.css";
 @import "../board-skeleton.css";
-@import "../management.css";
 @import "../ui-kit/skeleton.css";
 @import "../entity-skeleton.css";
 @import "../ui-kit/collapse.css";
@@ -142,7 +141,7 @@
   /* 统计与口味两页的折行断点，旧 `05-insights.css` 的媒体查询统一钉在 1000px，
    * 不落在 Tailwind 的 sm/md/lg 上。写成断点 token，`board:` 变体照常生成。 */
   --breakpoint-board: 1000px;
-  /* 数据管理那一排五张读数卡的两档折行，遗留骨架的 `.ui-cleanupstats`（`management.css`）同样钉在 1119px 与 559px。 */
+  /* 数据管理那一排五张读数卡的两档折行：两张一排、一张一排分别从 1119px 与 559px 起。 */
   --breakpoint-plain-stat-pair: 1120px;
   --breakpoint-plain-stat-single: 560px;
   /* 数据管理页的卡片间距与整理卡内边距在 760px 以下收一档，旧 `board.css` 那条窄屏媒体查询。 */

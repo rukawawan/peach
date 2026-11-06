@@ -50,6 +50,10 @@ export interface TunnelState {
 export interface AccessSettingsProps {
   initial: AccessState;
   receipt(message: string): void;
+  /** 需要登录时紧跟在密码分区下面的设备列表；改密码后拿到新 `revision` 重新画。 */
+  devices?(state: AccessState): import('react').ReactNode;
+  /** 不论访问方式都跟在后面的分区（访问口令）；确认文案随当前访问方式变。 */
+  after?(state: AccessState): import('react').ReactNode;
 }
 
 export interface StartupState {
@@ -233,7 +237,7 @@ export interface DownloadsSnapshot {
 
 export interface DownloadSubmitResult {
   ok: boolean;
-  outcome: 'submitted' | 'adopted' | 'adopted_remote' | 'refused' | 'failed';
+  outcome: 'submitted' | 'adopted' | 'adopted_remote' | 'deferred' | 'refused' | 'failed';
   task: DownloadTask;
 }
 
@@ -252,6 +256,10 @@ export interface ReleaseState {
   asset_size?: number;
   /** 能在页面里下载并重启安装；只有 Windows 独立包是 true。 */
   in_app_update?: boolean;
+  /** 容器换新版要在宿主机上做的几步；其他安装方式是空表。 */
+  steps?: { text: string; command: string }[];
+  /** Docker 镜像检查到新镜像时才有：能否经 Watchtower 一键更新（ADR-0140），不能时 `reason` 说明为什么。 */
+  one_click?: { available: boolean; reason: string };
 }
 
 export interface UpdateJob {
@@ -271,6 +279,8 @@ export interface ConfigurationFact {
   value: string;
   download_url?: string;
   download_label?: string;
+  /** 能由 Peach 装进数据目录的缺失工具（`ffmpeg`、`untrunc`），有它就不给下载外链。 */
+  install_tool?: string;
 }
 
 export interface ConfigurationData {
@@ -289,6 +299,9 @@ export interface ConfigurationData {
   update_job?: UpdateJob;
   automatic_updates?: AutomaticUpdateState;
   access?: AccessState;
+  api_token?: import('./settings/api-token-settings').ApiTokenState;
+  /** 没有 HTTPS 服务或没有本机 CA 时为 null，那一块整个不渲染。 */
+  certificate?: import('./settings/certificate-trust').CertificateState | null;
   tunnel?: TunnelState;
   editable: boolean;
   /** 不能编辑时给用户看的原因，可编辑时为空。 */

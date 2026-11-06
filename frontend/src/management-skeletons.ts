@@ -91,9 +91,9 @@ export function duplicatesSkeleton(): string {
 }
 
 /** 高清版首屏：摘要面与六张待升级的卡，类名同 `QualityGoalsPage` 落地那一版（卡面是
- *  `cardClass({ padding: 'none', bordered: 'soft' })`），接管那一拍间距、卡高与底色都不跳。 */
+ *  `cardClass({ padding: 'none' })`），接管那一拍间距、卡高与底色都不跳。 */
 export function qualityGoalsSkeleton(): string {
-  const card = `<li class="min-w-0 bg-background-secondary-default rounded-2xl shadow-card border border-separator-border flex flex-col gap-3 p-3">
+  const card = `<li class="min-w-0 bg-background-secondary-default rounded-2xl shadow-card flex flex-col gap-3 p-3">
     <div class="flex min-w-0 gap-4"><span class="${placeholder} inline-grid w-card-cover shrink-0 aspect-card-cover rounded-2lg"></span>
       <div class="flex min-w-0 flex-1 flex-col gap-1.5"><h3 class="text-headline-medium">${text('80%')}</h3><p class="text-body-2-regular">${text('60%')}</p></div>
     </div>

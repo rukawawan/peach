@@ -76,7 +76,8 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
   const blank = (path = ''): SetupFolder => ({ path, location: setup.media_source_default, root: '', ...firstLibrary.current,
     cost: setup.media_source_default === 'local' ? 'free' : '' });
   const folders = useFolderRows<SetupFolder>({
-    initial: () => [blank()], blank: () => blank(), pickFolder, describe: describeFailure,
+    // 第一行带上服务端给的默认目录：Docker 是 Compose 挂载媒体的 `/media`，桌面没有默认值。
+    initial: () => [blank(setup.docker ? media?.default ?? '' : '')], blank: () => blank(), pickFolder, describe: describeFailure,
     focusAfterPick: true,
   });
   firstLibrary.current = libraryFields(folders.rows[0]);
@@ -84,7 +85,8 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
     () => Object.fromEntries(fields.map((question) => [question.key, question.default])));
   const [pickingData, setPickingData] = useState(false);
   const [pickError, setPickError] = useState('');
-  const [accessOn, setAccessOn] = useState(setup.access_enabled);
+  const preset = Boolean(setup.access_preset);
+  const [accessOn, setAccessOn] = useState(setup.access_enabled && !preset);
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [scanNow, setScanNow] = useState(setup.scan_now);
@@ -226,10 +228,12 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
       <div data-setup-step-content="" style={{ '--setup-direction': `${direction * 20}px` } as CSSProperties}>
         <header data-setup-step-heading="" key={step}>
           <h1 id="auth-card-title" data-copy-key={`setup.title.${step}`} ref={stepTitle} tabIndex={-1} className="text-title-1-semibold text-text-primary">
-            {step === 0 ? '欢迎使用 Peach' : step === 1 ? '你的媒体，放在哪里？' : step === 2 ? '在哪里使用 Peach？' : '准备好开始了'}
+            {step === 0 ? '欢迎使用 Peach' : step === 1 ? '你的媒体，放在哪里？' : step === 2 ? (setup.docker ? '访问与网络' : '在哪里使用 Peach？') : '准备好开始了'}
           </h1>
           <p data-copy-key={`setup.description.${step}`} className="text-body-regular text-text-secondary">
-            {step === 0 ? '花一点时间，让 Peach 更适合你。' : step === 1 ? '连接已有文件夹，或先进入界面看看。' : step === 2 ? '选择访问范围，也可以为馆藏设置密码。' : '确认这些选择，剩下的交给 Peach。'}
+            {step === 0 ? '花一点时间，让 Peach 更适合你。' : step === 1 ? '连接已有文件夹，或先进入界面看看。'
+              : step === 2 ? (setup.docker ? '为馆藏设置访问密码，并选择资料采集的连接方式。' : '选择访问范围，也可以为馆藏设置密码。')
+              : '确认这些选择，剩下的交给 Peach。'}
           </p>
         </header>
       <div hidden={step !== 0}>
@@ -341,6 +345,10 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
       <div hidden={step !== 2}>
       <CardGroup first labelledBy="auth-card-title">
         {host ? field(host) : null}
+        {preset ? <>
+          <Label elementType="span">访问密码</Label>
+          <Note tone="info">已按 PEACH_ACCESS_PASSWORD 设置访问密码，可在配置页「网络与访问」修改。</Note>
+        </> : <>
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 flex-col gap-0.5">
             <Label id="setup-password-title" elementType="span">访问密码</Label>
@@ -349,8 +357,9 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
           <Switch aria-labelledby="setup-password-title" aria-describedby="setup-access-description"
             isSelected={accessOn} onChange={setAccessOn} />
         </div>
-        <Help>{lan ? '局域网访问推荐设置密码。未设置时，同一网络中能连接 Peach 的设备可直接进入。'
+        <Help>{lan || setup.docker ? '局域网访问推荐设置密码。未设置时，同一网络中能连接 Peach 的设备可直接进入。'
           : '只有这台电脑可以访问；设置密码后，打开 Peach 仍需登录。'}</Help>
+        </>}
         {accessOn
           ? <PasswordPair label="访问密码" password={password} confirmation={confirmation}
               onPassword={setPassword} onConfirmation={setConfirmation}
@@ -378,12 +387,13 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
           : null}
       </CardGroup>
 
-      <CardGroup>
+      {/* Docker 的端口与局域网名由 Compose 决定，不出题，也算不出外部访问地址。 */}
+      {setup.docker ? null : <CardGroup>
         <Disclosure key={advancedOpenings} summary="高级设置" defaultOpen={advancedOpenings > 0}>
           <div className="flex flex-col gap-4">{others.filter(visible).map(field)}</div>
         </Disclosure>
         <Help><span className="break-all">访问地址：{address}</span></Help>
-      </CardGroup>
+      </CardGroup>}
 
       </div>
       <div hidden={step !== 3}>
@@ -410,8 +420,9 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
         <GroupTitle id="setup-summary-title">确认设置</GroupTitle>
         <FactList>
           <Fact term="媒体目录">{skipMedia ? '稍后添加' : filled.length ? `${filled.length} 个文件夹 · ${libraries.length} 个媒体库` : '尚未填写'}</Fact>
-          <Fact term="数据目录"><span className="break-all">{dataRoot ? values[dataRoot.key] || '尚未填写' : '未取得'}</span></Fact>
-          <Fact term="访问范围">{lan ? '同一局域网的设备' : '只有这台电脑'} · {accessOn ? '使用访问密码' : '未设置访问密码'}</Fact>
+          <Fact term="数据目录"><span className="break-all">{dataRoot ? values[dataRoot.key] || '尚未填写' : setup.data_root || '未取得'}</span></Fact>
+          <Fact term="访问范围">{setup.docker ? '按 Compose 端口映射' : lan ? '同一局域网的设备' : '只有这台电脑'} · {
+            preset ? '已按 PEACH_ACCESS_PASSWORD 设置访问密码' : accessOn ? '使用访问密码' : '未设置访问密码'}</Fact>
           <Fact term="首次扫描">{!skipMedia && scanNow ? '完成设置后开始' : '稍后手动开始'}</Fact>
           {reporting ? <Fact term="诊断反馈">{reporting.usage || reporting.errors ? '已开启，可在上方调整' : '已关闭'}</Fact> : null}
           {!skipMedia ? libraries.map(row => <Fact key={row.library_id} term={row.library || '未命名媒体库'}>{processingSummary(row)}</Fact>) : null}
@@ -420,9 +431,9 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
       </div>
       </div>
       </div>
-      <footer data-setup-footer="" key={step} data-copy-interact>
+      <footer data-setup-footer="" data-setup-footer-end={step === 0 && !onRestore ? '' : undefined} key={step} data-copy-interact>
         {step > 0 ? <Button variant="ghost" onClick={() => { if (!busy) move(step - 1); }} aria-disabled={busy || undefined}>返回</Button>
-          : <Button variant="ghost" onClick={onRestore}>使用已有数据</Button>}
+          : onRestore ? <Button variant="ghost" onClick={onRestore}>使用已有数据</Button> : null}
         <Button type="submit" {...busyProps(busy)}>{step === 0 ? '开始设置' : step === 3 ? '完成设置' : '继续'}</Button>
       </footer>
     </form>

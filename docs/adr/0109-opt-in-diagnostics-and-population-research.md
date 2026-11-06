@@ -1,6 +1,6 @@
 # ADR-0109：明确同意的远程诊断与群体偏好研究
 
-- 状态：已采纳；技术诊断的选择与默认值见 [ADR-0110](0110-recommended-diagnostics-choice.md)，馆藏明细契约见 [ADR-0112](0112-complete-library-sharing.md)
+- 状态：已采纳；技术诊断的选择与默认值见 [ADR-0110](0110-recommended-diagnostics-choice.md)，馆藏明细契约见 [ADR-0112](0112-complete-library-sharing.md)，版本统计与故障计数的发送方式见 [ADR-0132](0132-diagnostics-counts-via-logs-and-sessions.md)
 - 日期：2026-10-18
 - 相关：ADR-0023、ADR-0092
 

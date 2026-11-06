@@ -352,22 +352,30 @@ def _cache_owners(
     contract: ResourceSyncContract, excluded_ids: Sequence[int] = (),
     retired_ids: Sequence[int] = (),
 ) -> tuple[set[int], set[str], set[Path]]:
-    """缓存还有主人的三把键：按 id 认的、按番号认的、快照路径。
+    """缓存还有主人的三把键：按 id 认的、按封面键认的、快照路径。
 
     `excluded_ids` 是这一轮要永久删除的行，它们的缓存全都不算有主。`retired_ids` 是这一轮
     要标「已消失」的行，已经标过的也一样：快照与封面留给孤儿记录列表认片（ADR-0087），
     按 id 生成的转码、分片、时间轴与海报帧对一个读不到的文件没有用处，照孤儿清掉。
+
+    封面键除了馆藏的番号，还有没有番号的作品的 `ASSET-ID-<id>`，以及关注里没忽略的新作、
+    想要清单里还没入库的番号：库外这两类的封面由补封面装进同一个目录，详情页和卡片照样读。
     """
+    from .western_artwork import artwork_key
     with contract.read_connection() as connection:
         rows = connection.execute(
             "SELECT id,code,snapshot_path,disposal FROM asset WHERE COALESCE(disposal,'')!='trash'",
         ).fetchall()
+        outside = connection.execute(
+            "SELECT code FROM feed_discovery WHERE ignored_at IS NULL"
+            " UNION ALL SELECT code_key FROM want_item WHERE state<>'acquired'").fetchall()
     excluded = {int(item) for item in excluded_ids}
     retired = {int(item) for item in retired_ids}
     rows = [row for row in rows if int(row["id"]) not in excluded]
     active_ids = {int(row["id"]) for row in rows
                   if row["disposal"] is None and int(row["id"]) not in retired}
-    active_codes = {normalise_code_key(row["code"]) for row in rows if row["code"]}
+    active_codes = {artwork_key(int(row["id"]), row["code"]) for row in rows}
+    active_codes.update(normalise_code_key(row[0]) for row in outside if row[0])
     active_codes.discard("")
     translate = contract.snapshot_root is not None
     active_snapshots = {normalized_path(row["snapshot_path"]) if translate else Path(row["snapshot_path"])

@@ -6,6 +6,7 @@ import { SetupPage } from '../../src/react/pages/setup/setup-page';
 import { SETUP_QUESTIONS_URL, SETUP_URL, type SetupDone, type SetupQuestions } from '../../src/react/pages/setup/setup-api';
 import { RESTART_REDIRECT_MS } from '../../src/react/restart-redirect';
 import { MEDIA_SOURCE_OPTIONS } from '../../src/core/media-sources';
+import { FIRST_ACCESS_DENIED } from '../../src/react/pages/first-access';
 import { buttonNamed, choose, click, mount, settle, switches, type } from './render';
 import '../../src/copy-editor-core.js';
 
@@ -502,6 +503,62 @@ describe('完成态', () => {
     await submitForm(host);
     await act(async () => { vi.advanceTimersByTime(RESTART_REDIRECT_MS * 2) });
     expect(assign).not.toHaveBeenCalled();
+  });
+});
+
+describe('Docker', () => {
+  const docker = (over: Partial<SetupQuestions> = {}) => ({
+    windows: false, docker: true, data_root: '/data', access_preset: false,
+    media_root: { label: '数据库中的路径前缀', placeholder: '自动配置' },
+    questions: [{ key: 'media_dir', label: '媒体目录', help: [], default: '/media', required: true, advanced: false,
+      input: 'folders' as const, prefix: '', suffix: '' }],
+    ...over,
+  });
+
+  it('不出数据目录、访问范围与高级设置，媒体目录预填 /media，也不提供接回已有数据', async () => {
+    const { host, sent } = await open(docker(), { [SETUP_URL]: { status: 200, body: done({ url: '/?onboarding=1' }) } });
+    expect(buttonNamed('使用已有数据', host)).toBeNull();
+    expect(host.querySelector('[aria-label^="首次设置"]')?.getAttribute('aria-label')).toBe('首次设置，第 1 步，共 4 步');
+    await click(buttonNamed('开始设置', host)); await settle();
+    expect(paths(host)[0]?.value).toBe('/media');
+    expect(host.querySelector('#f-data_root')).toBeNull();
+    await click(buttonNamed('继续', host)); await settle();
+    expect(host.querySelector('h1')?.textContent).toBe('访问与网络');
+    expect(radio(host, '只有这台电脑')).toBeUndefined();
+    expect(advanced(host)).toBeUndefined();
+    expect(host.textContent).not.toContain('访问地址：');
+    expect(host.querySelector('#access-password')).not.toBeNull();
+    await type(host.querySelector<HTMLInputElement>('#access-password'), 'correct-password');
+    await type(host.querySelector<HTMLInputElement>('#access-confirm'), 'correct-password');
+    await click(buttonNamed('继续', host)); await settle();
+    expect(host.textContent).toContain('/data');
+    expect(host.textContent).toContain('按 Compose 端口映射 · 使用访问密码');
+    await click(buttonNamed('完成设置', host)); await settle();
+    const body = sent(SETUP_URL);
+    expect(body.media_dir[0]).toMatchObject({ path: '/media' });
+    expect(body).toMatchObject({ access_enabled: true, access_password: 'correct-password' });
+    expect(['data_root', 'host', 'port', 'mdns_name'].filter((key) => key in body)).toEqual([]);
+  });
+
+  it('已按 PEACH_ACCESS_PASSWORD 设好访问密码时只标明已设置，提交不带密码', async () => {
+    const { host, sent } = await open(docker({ access_preset: true }), { [SETUP_URL]: { status: 200, body: done() } });
+    await click(buttonNamed('开始设置', host)); await settle();
+    await click(buttonNamed('继续', host)); await settle();
+    expect(switches(host)).toHaveLength(0);
+    expect(host.querySelector('#access-password')).toBeNull();
+    expect(host.textContent).toContain('已按 PEACH_ACCESS_PASSWORD 设置访问密码');
+    await submitForm(host);
+    const body = sent(SETUP_URL);
+    expect(body.access_enabled).toBe(false);
+    expect('access_password' in body).toBe(false);
+  });
+
+  it('来源不是部署机器或局域网时说清楚去哪里打开，或用 PEACH_ACCESS_PASSWORD', async () => {
+    server({ [SETUP_QUESTIONS_URL]: { status: 403, body: { error: FIRST_ACCESS_DENIED, docker: true } } });
+    const host = await mount(<SetupPage />);
+    await settle();
+    expect(host.querySelector('form')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(FIRST_ACCESS_DENIED);
   });
 });
 

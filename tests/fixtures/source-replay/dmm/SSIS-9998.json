@@ -1,0 +1,36 @@
+{
+ "format": 1,
+ "source": "dmm",
+ "code": "SSIS-9998",
+ "recorded": "2026-11-04",
+ "note": "站上没有的番号",
+ "outcome": "not_found",
+ "failure": {
+  "reason": "not_found",
+  "message": "DMM 没有这个番号"
+ },
+ "interactions": [
+  {
+   "method": "POST",
+   "url": "https://api.video.dmm.co.jp/graphql",
+   "body_sha256": "12e44f59e270890deafd237df88b7950f9befa75796c88b2026e39aee116c25a",
+   "response": {
+    "status": 200,
+    "url": "https://api.video.dmm.co.jp/graphql",
+    "content_type": "application/json",
+    "text": "{\"data\":{\"ppvContent\":null}}"
+   }
+  },
+  {
+   "method": "POST",
+   "url": "https://api.video.dmm.co.jp/graphql",
+   "body_sha256": "924982fbc7a43534c6beb034be4c08da460fbf38a72accc9e59a99e6d2f31732",
+   "response": {
+    "status": 200,
+    "url": "https://api.video.dmm.co.jp/graphql",
+    "content_type": "application/json",
+    "text": "{\"data\":{\"legacySearchPPV\":{\"result\":{\"contents\":[]}}}}"
+   }
+  }
+ ]
+}

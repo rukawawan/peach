@@ -1,5 +1,6 @@
-/* 管理区那张「一件要在这一页上做的事」的卡：填充底加一条描边、16px 圆角、一层接触阴影，
- * 卡里分成正文和一条放按钮的页脚。
+/* 管理区那张「一件要在这一页上做的事」的卡：填充底、16px 圆角、一层接触阴影，不描边，
+ * 卡里分成正文和一条放按钮的页脚。页面上的卡一律靠填充底和页面分开，深色下再加一圈描边
+ * 就成了同一页里一半卡有框、一半没有。
  *
  * 旧样式表里数据管理页的四块（`.cleanupfieldset`、`[data-cleanup-processing]`、
  * `.resourcesyncbox`）本来就是同一副卡面（`web/board.css` 把它们并进同一条规则），只在排法上
@@ -9,17 +10,17 @@
  * - `stack`：正文在上、页脚在下，正文 `20px 20px 16px`、最矮 120px；页脚是一条比卡面暗一点点
  *   的带子（`--board-card-foot`），上边一条线、`12px 20px`、最矮 56px。扫描与采集、整理和链接管理。
  *
- * 它和 `../settings/section.tsx` 的 `Section` 不是同一张：那一张是设置弹层的分组，无描边、
- * 标题在卡外；这一张有描边，标题是卡内的 Title 2。 */
+ * 它和 `../settings/section.tsx` 的 `Section` 不是同一张：那一张是设置弹层的分组，标题在卡外；
+ * 这一张的标题是卡内的 Title 2。 */
 import type { ReactNode } from 'react';
 
 import { cardClass } from './card';
 import { FIELDSET_BODY, FIELDSET_FOOT, fieldsetClass, type FieldsetLayout } from './fieldset-layout';
 
-/** 卡下面那块结果面板：同一副填充底，一条描边、14px 圆角、不浮起。
+/** 卡下面那块结果面板：同一副填充底、14px 圆角、不浮起。
  *  链接检查与资源同步把一趟后台任务的结论摆在这里，一段一段往下叠，段间一条发丝线。 */
 export const RESULT_PANEL = cardClass({
-  padding: 'none', radius: 'surface', bordered: 'line', className: 'overflow-hidden',
+  padding: 'none', radius: 'surface', className: 'overflow-hidden',
 });
 
 /** 结果面板里的一段：16px 内边距，除第一段外顶上一条线。 */

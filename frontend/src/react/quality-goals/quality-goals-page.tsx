@@ -31,7 +31,7 @@ function GoalCard({ item, openItem, searchResources, javTitleHtml, javDisplayNam
   const open = () => openItem(item.id);
   return (
     <li data-goal-id={item.id}
-      className={cardClass({ padding: 'none', bordered: 'soft', className: 'flex flex-col gap-3 p-3' })}>
+      className={cardClass({ padding: 'none', className: 'flex flex-col gap-3 p-3' })}>
       <div className="flex min-w-0 gap-4">
         {/* 居中那句占位文字用 `inline-grid`：旧样式表里 `.grid` 是海报墙那条带列宽和
             间距的规则，排在 `peach-app.css` 后面会赢。这颗按钮是 flex 子项，行内格

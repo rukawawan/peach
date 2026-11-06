@@ -117,7 +117,7 @@ describe('整页配置记下的结构', () => {
     expect([...fresh.querySelectorAll('span.text-body-medium')].map(node => node.textContent)).toEqual(['设置访问密码 *', '确认访问密码 *']);
     rememberShape('network', networkShape(data));
     const root = draw('网络与访问');
-    expect(sections(root)).toEqual(['访问密码', 'Cloudflare 公网入口', 'Peach 代理']);
+    expect(sections(root)).toEqual(['访问密码', '已登录的设备', 'Cloudflare 公网入口', 'Peach 代理']);
     expect([...card(root, '访问密码').querySelectorAll('span.text-body-medium')].map(node => node.textContent))
       .toEqual(['当前访问密码 *', '新访问密码 *', '确认新访问密码 *']);
   });

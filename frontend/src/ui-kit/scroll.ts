@@ -132,7 +132,7 @@ export function wireHorizontalScroller(el:any,{drag=false,fade=true,wheel=true,e
     moved=0;
     if(!options.drag||event.button!==0||el.scrollWidth-el.clientWidth<=1)return;
     if(options.dragIgnore&&(event.shiftKey||event.ctrlKey||event.metaKey||event.altKey||event.target.closest?.(options.dragIgnore)))return;
-    event.stopPropagation();stopGlide();start={x:event.pageX,left:el.scrollLeft};moved=0;el.style.cursor='grabbing';
+    event.stopPropagation();stopGlide();start={x:event.pageX,left:el.scrollLeft};moved=0;document.documentElement.dataset.dragScrolling='';
   });
   listen(window,'mousemove',event=>{
     if(!start)return;
@@ -141,7 +141,7 @@ export function wireHorizontalScroller(el:any,{drag=false,fade=true,wheel=true,e
     if(options.elastic)bounce.drag(want<0?want:want>max?want-max:0);
     event.preventDefault();
   });
-  const endDrag=()=>{if(start&&options.elastic)bounce.release();start=null;el.style.cursor=''};
+  const endDrag=()=>{if(start&&options.elastic)bounce.release();if(start)delete document.documentElement.dataset.dragScrolling;start=null};
   listen(window,'mouseup',endDrag);
   listen(window,'blur',endDrag);
   listen(el,'keydown',()=>{moved=0});
@@ -154,16 +154,16 @@ export function wireHorizontalScroller(el:any,{drag=false,fade=true,wheel=true,e
   const contents=new MutationObserver(()=>{resize.disconnect();observe();scheduleUpdate()});
   contents.observe(el,{childList:true,characterData:true,subtree:true});observe();
   // 外面手动叫的重算（换了版式、改了内容）连 `overflow-x` 一起重读。
-  const control={options,update(){overflowX='';update()},destroy(){abort.abort();stopGlide();cancelAnimationFrame(marking);marking=0;resize.disconnect();contents.disconnect();horizontalControls.delete(el);delete el.dataset.scrollGesture;el.style.cursor='';if(!horizontalControls.size){horizontalCleanup?.disconnect();horizontalCleanup=null}}};
+  const control={options,update(){overflowX='';update()},destroy(){abort.abort();stopGlide();cancelAnimationFrame(marking);marking=0;resize.disconnect();contents.disconnect();horizontalControls.delete(el);delete el.dataset.scrollGesture;if(start)delete document.documentElement.dataset.dragScrolling;if(!horizontalControls.size){horizontalCleanup?.disconnect();horizontalCleanup=null}}};
   horizontalControls.set(el,control);
   if(!horizontalCleanup){horizontalCleanup=new MutationObserver(()=>{for(const [node,item] of horizontalControls)if(!node.isConnected)item.destroy()});horizontalCleanup.observe(document.body,{childList:true,subtree:true})}
   return control;
 }
 
-/** 表格使用横向拖动；滚轮维持浏览器行为，控件与列宽手柄独立处理指针。 */
+/** 表格使用横向拖动；滚轮维持浏览器行为，控件、列宽手柄与整行表头独立处理指针（表头按偏了也不起拖）。 */
 export function wireTableScroller(el:HTMLElement|null):any{
   return wireHorizontalScroller(el,{drag:true,fade:false,wheel:false,elastic:false,
-    dragIgnore:'a,button,input,select,textarea,label,[role="button"],[role="checkbox"],[role="slider"],.react-aria-ColumnResizer'});
+    dragIgnore:'a,button,input,select,textarea,label,[role="button"],[role="checkbox"],[role="slider"],.react-aria-ColumnResizer,thead'});
 }
 
 /* 一排横卡自己缓缓往前走，走到头停一下再往回走。一秒 24px 是看得出在动、又不催人读的

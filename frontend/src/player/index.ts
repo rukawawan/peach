@@ -13,6 +13,8 @@ export {
 export { disposePlayer } from './dispose';
 export type { ImmersePlayerOptions } from './immerse-player';
 export { seekVideoBy, toggleVideoPlayback } from './playback';
+export type { SeekPreview } from './seek-preview';
+export { createSeekPreview } from './seek-preview';
 export { detailPlayer, resizeSoon, setDetailPlayer } from './registry';
 export { fmtSpeed, streamSpeedBits } from './stats';
 export {

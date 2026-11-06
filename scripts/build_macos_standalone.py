@@ -18,7 +18,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from peach import __version__
+from peach import __version__, sparkle_update
 
 
 def minimum_system_version(app: Path) -> str:
@@ -70,6 +70,12 @@ def package_dmg(app: Path, destination: Path) -> Path:
     return destination
 
 
+def install_sparkle(app: Path, source: Path) -> None:
+    """框架放在 `Contents/Frameworks`，即 PyInstaller 的 `_MEIPASS`；保留符号链接，签名由取件时完成。"""
+    shutil.copytree(source / "Sparkle.framework", app / "Contents/Frameworks/Sparkle.framework", symlinks=True)
+    shutil.copyfile(source / "LICENSE-Sparkle.txt", app / "Contents/Resources/LICENSE-Sparkle.txt")
+
+
 def build(destination: Path, *, dmg: bool = True, target_arch: str | None = None,
           require_reporting: bool = False) -> dict[str, str]:
     if sys.platform != "darwin":
@@ -85,6 +91,7 @@ def build(destination: Path, *, dmg: bool = True, target_arch: str | None = None
     from media_tool_bundle import validate
     from build_macos_media import audit_binary
     from fetch_cloudflared_macos import validate as validate_cloudflared
+    from fetch_sparkle_macos import validate as validate_sparkle
     from fetch_face_models import install as install_face_models
     from build_amane_runtime import build as build_amane_runtime, verify as verify_amane_runtime
 
@@ -97,6 +104,8 @@ def build(destination: Path, *, dmg: bool = True, target_arch: str | None = None
             audit_binary(media_root / tool / tool / name, architecture)
     cloudflared = media_root / "cloudflared"
     validate_cloudflared(cloudflared, architecture)
+    sparkle = media_root / "sparkle"
+    validate_sparkle(sparkle)
     work = ROOT / "build" / "macos-standalone" / architecture
     amane_runtime = work / "amane-runtime"
     build_amane_runtime(amane_runtime, work=work / "amane-build")
@@ -139,12 +148,14 @@ def build(destination: Path, *, dmg: bool = True, target_arch: str | None = None
     for name in ("LICENSE-cloudflared.txt", "NOTICE-cloudflared.md"):
         shutil.copyfile(cloudflared / name, app / "Contents/Resources" / name)
     shutil.copyfile(cloudflared / "manifest.json", app / "Contents/Resources/cloudflared-manifest.json")
+    install_sparkle(app, sparkle)
     for archive in sources:
         shutil.copyfile(archive, destination / archive.name)
     minimum = minimum_system_version(app)
     info_path = app / "Contents" / "Info.plist"
     info = plistlib.loads(info_path.read_bytes())
     info["LSMinimumSystemVersion"] = minimum
+    info.update(sparkle_update.info_plist_keys(architecture))
     info_path.write_bytes(plistlib.dumps(info))
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)

@@ -6,7 +6,8 @@ FRAME_MODULES = {"peach", "asyncio", "anyio", "starlette", "httpx", "sqlite3", "
 MEDIA_MARKERS = (("Your platform doesn't support hardware accelerated AV1 decoding", 'av1_decoder_unavailable'),
                  ('Unknown decoder', 'decoder_unavailable'), ('Invalid data found', 'invalid_media'),
                  ('Permission denied', 'permission_denied'), ('No space left', 'disk_full'),
-                 ('No such file or directory', 'missing_media'))
+                 ('No such file or directory', 'missing_media'), ('Invalid argument', 'invalid_media'),
+                 ('Input/output error', 'io_error'))
 
 
 def media_details(error, fields, codes):

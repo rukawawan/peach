@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
@@ -92,10 +92,16 @@ MISS_TTL_SECONDS = 7 * 24 * 3600
 #: 那条批量线仍按 5 秒跑。撞上 403 不再是盲等 24 小时——`scraping_access.FIRST_BLOCKED_PAUSE`
 #: 先停 15 分钟，连着再撞才翻倍，所以这一档收紧的代价是有限且可观测的（docs/SOURCING.md）。
 SOURCE_INTERVALS = {'javdb.com': 3.0, 'jdbstatic.com': 3.0}
-#: 按 `SOURCE_INTERVALS` 等的那一份间隔，整个进程共用。取想要的资料、取新作资料、资料处理
+#: 按 `SOURCE_INTERVALS` 等的那一份间隔，整个进程共用。想要作品资料采集、新作资料采集、资料处理
 #: 各起各的 provider，间隔若各算各的，几条同时跑时问同一主机的请求就叠在一起，配额照样按
 #: 出口 IP 一份算。
 SOURCE_LIMITER = HostLimiter(SOURCE_INTERVALS, default_interval=2.0)
+#: 认人 Wiki 的取页层自己不再等主机间隔：它的传输就是 provider 的 `transport`，那里已经按
+#: `SOURCE_LIMITER` 等过一次，再等一遍每页就要 4 秒。
+_NO_WAIT = HostLimiter({}, default_interval=0.0)
+#: 一个 provider 里每个认人 Wiki 的请求上限。一部片至多十几页，真正的闸门是动作预算与本趟预算；
+#: 这一条只挡住同一批里失控地翻页。
+WIKI_MAX_REQUESTS = 2000
 SOURCE_LABELS = {'r18dev': 'r18.dev', 'dmm': 'DMM / FANZA', 'avbase': 'AVBase', 'javbus': 'JavBus', 'javdb': 'javdb',
                  'fc2': 'FC2', 'fc2cmadb': 'FC2CMADB', 'fc2ppvdb': 'FC2PPV-DB', 'javten': 'JAVten',
                  'javarchive': 'JavArchive',
@@ -105,11 +111,12 @@ SOURCE_LABELS = {'r18dev': 'r18.dev', 'dmm': 'DMM / FANZA', 'avbase': 'AVBase', 
                  'dahlia': 'DAHLIA', 'mgstage': 'MGStage',
                  'fc2club': 'FC2Club', 'freejavbt': 'FreeJavBT',
                  'airav': 'AIRAV', 'avsox': 'AVSOX',
-                 # Seesaa 的几个 Wiki，只由 `scrape_codes` 点名（`sources.seesaa`）。
+                 # Seesaa 的几个 Wiki（`sources.seesaa`）。前两个在素人链上（`metadata_routes.WIKI_STAGE`），
+                 # av_name 只由 `scrape_codes` 点名。
                  'sougouwiki': '素人系総合 Wiki', 'av_neme': 'このAV女優の名前教えてwiki',
                  'av_name': 'AV女優の名前特定wiki'}
 PROVIDER_NAMES = {'local_nfo': 'local-nfo', 'r18dev': 'r18-json', 'dmm': 'dmm-graphql', 'avbase': 'avbase-search',
-                  'javbus': 'javbus-page', 'javdb': 'javdb-page', 'fc2': 'fc2-article',
+                  'javbus': 'javbus-page', 'javdb': 'javdb-api', 'fc2': 'fc2-article',
                   'fc2cmadb': 'fc2cmadb-article', 'fc2ppvdb': 'fc2ppvdb-page', 'javten': 'javten-page',
                   'javarchive': 'javarchive-page',
                   '1pondo': '1pondo-json',
@@ -256,6 +263,8 @@ MISS_MESSAGES = {'querying_metadata': '外部来源没有这部片的资料，7 
                  'fetching_cover': '外部来源没有这部片的封面，7 天内不再问'}
 #: 日志里的写法反查回上面的键，界面按键取自己的短标签。
 NOTE_KEYS = {message: key for key, message in MISS_MESSAGES.items()}
+#: 外网不通时要出网的那些行不去问，直接记这一句；联网之后可以重试（`network_reachability`）。
+OFFLINE_MESSAGE = '外部资料未取得：连不上外网'
 
 #: 状态文件与候选 CSV 的落盘节流。页面轮询读的是内存里的任务快照，文件只为进程没了
 #: 之后还能看到最后状态；候选 CSV 随处理进度越写越大，每条资产都重写一遍是平方级开销。
@@ -324,23 +333,52 @@ def _corrects_kept_cover(target, candidate, data, verified_by):
     return not same_picture(kept, fresh)
 
 
+class _BudgetedPages:
+    """认人 Wiki 的取页层套一层动作预算：每取一页前看一眼还剩多少。
+
+    `WikiPages` 把传输层抛的 `RuntimeError` 一律记成「网络未取得」，预算用尽的 `DeadlineExceeded`
+    也是 `RuntimeError`，所以要在它外面判，不能交给传输层。"""
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.deadline = None
+
+    def get(self, url):
+        from .jav_cover_fetch import DeadlineExceeded
+        # 用减法判：`processing_control.ActiveDeadline` 在减法里扣掉暂停的那段。
+        if self.deadline is not None and self.deadline - time.monotonic() <= 0:
+            raise DeadlineExceeded('外部资料在预算时间内未取得，可稍后重试')
+        return self.pages.get(url)
+
+
 class LibraryMetadataProvider:
     """来源链各档的入口：按来源配置的传输，站经 `sources.SITE_SOURCES` 问（`site`），封面走 `cover`。
 
     `secrets_root` 是凭据根本身（`peach-data/secrets`），不是它底下的 `follow`：
     `CredentialStore` 自己会拼上那一层。多给一层的表现不是报错，是每个来源都读成
     「没有凭据」——采集设置里贴好的 JavBus、javdb Cookie 一条都不会被带上。
+
+    `public_cache` 是匿名 JavDB 资料的快照目录（`<生成目录>/jav-public`），与新作页、发现共用；
+    不给就只在本进程内存里复用。
     """
-    def __init__(self, secrets_root, *, tools_root=None):
+    def __init__(self, secrets_root, *, tools_root=None, public_cache=None, wiki_root=None):
         from .scraping_access import SourceTransport
         from .jav_cover_fetch import HostLimitedTransport
         self.secrets_root = Path(secrets_root)
         #: amane 桥的 venv 所在的工具区（`<Peach 数据目录>/tools`）；不给就用配置里的默认位置。
         self.tools_root = Path(tools_root) if tools_root is not None else None
+        self.public_cache = Path(public_cache) if public_cache is not None else None
+        #: 认人 Wiki 的页缓存（`wiki`）。不给就放在凭据根旁边的 `sources/library-metadata/seesaa-pages`：
+        #: 凭据根是数据目录下的 `secrets`。
+        self.wiki_root = (Path(wiki_root) if wiki_root is not None
+                          else self.secrets_root.parent / 'sources' / 'library-metadata' / 'seesaa-pages')
         self.transport = HostLimitedTransport(
             SourceTransport(secrets_root, max_requests=MAX_SOURCE_REQUESTS,
                             max_bytes=MAX_SOURCE_BYTES, max_seconds=MAX_SOURCE_SECONDS),
             2.0, limiter=SOURCE_LIMITER)
+
+    #: 匿名 JavDB 资料的快照目录；没有时只在进程内存里复用。
+    public_cache = None
 
     #: 由本机浏览器过验证的来源累计等人点验证的秒数（`_excuse`）。调用方拿它前后相减，把这段时间
     #: 从单项动作预算里扣掉：一个站第一次弹验证窗口时，那一问要等 `min(40, timeout) + 120` 秒，
@@ -475,11 +513,17 @@ class LibraryMetadataProvider:
             raise _again(cache[code])
         return [*have.items(), *((source, payload) for source, payload in cache[code] if source not in have)]
 
+    def community_problems(self, code):
+        """`community` 问这个番号时没问成的几家 `[(原因, 是否冷却)]`，别的几家照常答上时也留着。
+
+        封面那一步据此不下「没有」的结论（#342）：JavBus 断线、javdb 答上时，只剩 javdb 带水印的那张，
+        印证不了也用不了，可 JavBus 那张下次可能就取到了。"""
+        return list(self.__dict__.get('_community_problems', {}).get(code, ()))
+
     def _ask_community(self, code, sources, deadline, received):
         """逐家问 `sources`，交出答上的 `[(来源, 资料)]`，或一个待缓存再抛的异常（见 `community`）。"""
-        from .jav_cover_fetch import Unavailable
-        from .scraping_access import SourcePaused
-        found, problems, said_no, held = [], [], [], 0
+        found, problems, said_no = [], [], []
+        self.__dict__.setdefault('_community_problems', {})[code] = problems
         for source in sources:
             try:
                 payload = self.site(source, code, deadline=deadline)
@@ -492,15 +536,15 @@ class LibraryMetadataProvider:
                 if is_missing(error):
                     said_no.append(source)
                     continue
-                held += source_paused(error)
                 text = describe_failure(error)
-                problems.append(text if text.startswith(SOURCE_LABELS[source]) else f'{SOURCE_LABELS[source]}：{text}')
+                problems.append((text if text.startswith(SOURCE_LABELS[source]) else f'{SOURCE_LABELS[source]}：{text}',
+                                 source_paused(error)))
                 continue
             found.append((source, payload))
             received([(source, payload)])
         if found or not problems:
             return found or _said_no('社区来源都没有这个番号', said_no)
-        return (SourcePaused if held == len(problems) else Unavailable)('；'.join(problems))
+        return _unreached(problems)
 
     def fc2(self, code, *, deadline=None, route=None, covers=False, required=(), known=(), received=lambda found: None):
         """FC2 自己那一页，下架了就依次问几个存档站；返回沿路答上的每一档 `[(来源, 资料)]`。
@@ -646,8 +690,42 @@ class LibraryMetadataProvider:
         没取到抛的是 `SourceFailure`：`not_found` 那一档由 `is_missing` 认，其余由 `describe_failure`
         写成一句。冷却、动作预算与连接失败由传输层抛出、原样放过。
         """
+        from .javdb_public import public_cache_scope
         from .sources import SITE_SOURCES, Session
-        return SITE_SOURCES[source]().query(code, session=Session(self.transport, deadline)).payload()
+        with public_cache_scope(self.public_cache) if self.public_cache is not None else nullcontext():
+            return SITE_SOURCES[source]().query(code, session=Session(self.transport, deadline)).payload()
+
+    def wiki(self, source, code, *, deadline=None):
+        """素人链上的认人 Wiki（`metadata_routes.WIKI_STAGE`，ADR-0145），返回 `[(来源, 资料)]`。
+
+        一个 provider 里每站只建一个 `SeesaaSource`：素人系総合 Wiki 一张厂牌表列着几十上百部，
+        读过的表记在实例里，同厂牌的下一部不再搜索。取页层是 `sources.seesaa.WikiPages`（落盘页缓存），
+        传输用这条链的 `transport`，所以照「Peach 代理」出网、按主机冷却、计进本趟预算，主机间隔与
+        别的站共用 `SOURCE_LIMITER`。一部片最多十几页，每取一页前看这部片的动作预算。
+
+        站内搜索范围里没找到（`incomplete_search`）按「没有」交出去，记进一周的「没有」记忆：Wiki
+        条目是社区陆续补的，一周后再问；别的失败（断线、撞墙、限额）照常是问题，不记「没有」。
+        """
+        from .jav_cover_fetch import Unavailable
+        from .metadata import MetadataProviderError
+        from .sources import Session
+        from .sources.seesaa import WIKI_SOURCES, WikiPages
+        sites = self.__dict__.setdefault('_wiki', {})
+        if source not in sites:
+            site = WIKI_SOURCES[source]()
+            pages = WikiPages(self.wiki_root, config=site.config, transport=self.transport,
+                              limiter=_NO_WAIT, max_requests=WIKI_MAX_REQUESTS)
+            sites[source] = (site, _BudgetedPages(pages))
+        site, pages = sites[source]
+        pages.deadline = deadline
+        try:
+            record = site.query(code, session=Session(pages, deadline))
+        except MetadataProviderError as error:
+            # 原因里不带站名：`_metadata` 记问题时会给单家来源补上。
+            if error.kind == 'incomplete_search':
+                raise NotFound(str(error)) from error
+            raise Unavailable(str(error)) from error
+        return [(source, record.payload())]
 
     def query(self, code, source='r18dev', *, deadline=None):
         """有码与素人链上逐个成档的官方来源：默认是 r18.dev（`sources/r18dev.py`），有码链上它之后是 DMM 的
@@ -694,6 +772,7 @@ class LibraryMetadataProvider:
                 answers = self.community(code, deadline=_extended(deadline, self.excused - mark), absent=absent,
                                          known=[(name, payload) for name, payload in snapshots
                                                 if name in metadata_routes.COMMUNITY_STAGE])
+                problems += self.community_problems(code)
                 *picked, verified_by = verified_cover(self.transport, code, answers,
                                                       reference=official, siblings=siblings if official else (),
                                                       deadline=_extended(deadline, self.excused - mark))
@@ -1130,6 +1209,26 @@ def _candidate_review_mode(groups, row, field, source, value, local_fields, veri
     return 'review' if verify_existing and baseline and (not local or current) else 'fill'
 
 
+def _previous_order(group, source, value):
+    """同一来源再给的出演者只换了次序时沿用上一份。
+
+    候选身份按取值算（`_candidate_identity`），次序一变身份就变，已批准的那一行会被当成来源
+    换了说法、重新摆回复核页。javdb 的详情页与匿名接口列女优的次序不同，人却是同一批。
+    """
+    try:
+        previous = next(entry['value'] for entry in json.loads(group['candidates_json'])
+                        if entry.get('source') == source)
+    except (StopIteration, KeyError, TypeError, ValueError):
+        return value
+    fresh = value['value']
+    if (not isinstance(previous, list) or not isinstance(fresh, list) or previous == fresh
+            or sorted(json.dumps(one, ensure_ascii=False, sort_keys=True) for one in previous)
+            != sorted(json.dumps(one, ensure_ascii=False, sort_keys=True) for one in fresh)):
+        return value
+    return {**value, 'value': previous,
+            'display_value': '、'.join(str(person.get('name') or '') for person in previous if isinstance(person, dict))}
+
+
 def _merge_candidates(groups, row, code, source, document, evidence_path, genre_decisions, local_fields=(),
                       *, verify_existing=False):
     """把 `document` 里认得出的字段并进 `groups`：同来源的旧候选换掉，别的来源保留。
@@ -1141,6 +1240,8 @@ def _merge_candidates(groups, row, code, source, document, evidence_path, genre_
     official = bool(spec and spec.official)
     for field, value in _fields(document, genre_decisions).items():
         key = f"asset:{row['id']}:{field}"
+        if field == 'performers':
+            value = _previous_order(groups.get(key), source, value)
         if not local and field == 'performers' and field in local_fields:
             _merge_local_performer_profiles(groups, key, value, source)
         mode = _candidate_review_mode(groups, row, field, source, value, local_fields, verify_existing)
@@ -1462,8 +1563,10 @@ class _RemoteSession:
     def provider(self):
         if self._provider is None:
             self._provider = (self._factory() if self._factory
-                              else LibraryMetadataProvider(self._config.directory('secrets'),
-                                                           tools_root=self._config.directory('tools')))
+                              else LibraryMetadataProvider(
+                                  self._config.directory('secrets'), tools_root=self._config.directory('tools'),
+                                  public_cache=self._config.directory('generated') / 'jav-public',
+                                  wiki_root=self._config.directory('sources') / 'library-metadata' / 'seesaa-pages'))
         return self._provider
 
     def reset(self):
@@ -1474,9 +1577,9 @@ class _RemoteSession:
         if self._provider is not None and hasattr(self._provider, 'close'):
             self._provider.close()
 
-    def prepare(self, prepared, stages_of, update, *, cover_root=None, groups=None):
-        """只为本趟实际需要的来源准备工具，不消费单片查询预算。"""
-        if self._factory:
+    def prepare(self, prepared, stages_of, update, *, cover_root=None, groups=None, offline=lambda: False):
+        """只为本趟实际需要的来源准备工具，不消费单片查询预算。断网时不准备：装 amane 本身要联网。"""
+        if self._factory or offline():
             return
         from . import metadata_amane
         from .scraping_access import paused_until
@@ -1524,10 +1627,7 @@ class _RemoteSession:
         if not _scrapes_as_jav(row, code):
             return entries, covers
         chain = self._chain(code, *_studio_evidence(row))
-        # 链上剩下的站都给过候选或说过没有、且至少有一家给过候选：这一行不是「没取到」，
-        # 只是没有新的可问，不进告知项。
-        if missing and chain and (self._askable(chain, code, answered)
-                                  or not set(answered).intersection(chain)):
+        if self._asks_metadata(chain, code, missing, answered):
             entries = self._metadata(row, code, missing, update=update, issue=issue, answered=answered,
                                      received=received)
         if fetch_cover and _asks_cover(code, *_studio_evidence(row)) and not cover_settled(cover_root / (code + '.jpg')):
@@ -1535,6 +1635,21 @@ class _RemoteSession:
             covers = self._cover(row, code, cover_root, update=update, issue=issue,
                                  snapshots=snapshots, absent=absent)
         return entries, covers
+
+    def asks(self, row, code, missing, cover_root, *, answered=(), fetch_cover=True):
+        """`collect` 这一行会不会去问外部来源，判据与它逐条相同。断网时只把要问的行记成未取得。"""
+        if not _scrapes_as_jav(row, code):
+            return False
+        chain = self._chain(code, *_studio_evidence(row))
+        return (self._asks_metadata(chain, code, missing, answered)
+                or bool(fetch_cover and _asks_cover(code, *_studio_evidence(row))
+                        and not cover_settled(cover_root / (code + '.jpg'))))
+
+    def _asks_metadata(self, chain, code, missing, answered):
+        # 链上剩下的站都给过候选或说过没有、且至少有一家给过候选：这一行不是「没取到」，
+        # 只是没有新的可问，不进告知项。
+        return bool(missing and chain and (self._askable(chain, code, answered)
+                                           or not set(answered).intersection(chain)))
 
     def _cover_inputs(self, code, chain, entries):
         """封面那一步不必再问的：手上已有的快照 `[(来源, 资料)]`，与说过没有或不在链上的站。
@@ -1644,6 +1759,8 @@ class _RemoteSession:
             return provider.one_pondo(code, deadline=deadline)
         if source in ('amane', 'amane_official'):
             return provider.amane(code, deadline=deadline, route=members)
+        if source in metadata_routes.WIKI_STAGE:
+            return provider.wiki(source, code, deadline=deadline)
         route = metadata_routes.community_route(code, *evidence, overrides=self._routes)
         return provider.community(code, deadline=deadline,
                                   route=tuple(name for name in route if name in members), received=received)
@@ -1660,11 +1777,13 @@ class _RemoteSession:
         短路判据是**这一行还缺的必填标量**（标题、演员、厂牌、发行日期），不是「有人答了
         就算」：r18.dev 少给演员时照旧往下问，否则那一行只能等人工去填。列表字段（标签、
         封面）不参与短路——多一家就多一批标签和一个图源，而免复核本来就要两家一致
-        （ADR-0030、ADR-0034）、封面互证要两个图源（ADR-0032）。唯一的例外是缺标签的行
-        在官方档之间多问一家（`metadata_routes.settles` 的 `wants_tags`）。
+        （ADR-0030、ADR-0034）、封面互证要两个图源（ADR-0032）。例外有两条：缺标签的行
+        在官方档之间多问一家（`metadata_routes.settles` 的 `wants_tags`）；素人缺演员的行，
+        MGStage 给了素人名义也接着问认人 Wiki，直到有一个 Wiki 给出演员（`wants_cast`，ADR-0145）；
+        两个 Wiki 都没给时，MGStage 给的字段够了就停，不落到综合索引。
 
         社区那一档的值照常进候选，只剩一家也补空，几家不一时按字段优先级链取：FC2 的演员栏
-        取 fc2cmadb，其余取 javdb（ADR-0034、ADR-0038）。
+        取 fc2cmadb，素人的演员栏取认人 Wiki，其余取 javdb（ADR-0034、ADR-0038、ADR-0145）。
         「没有」的记忆按站记：一档里说过没有的站一周内不再问，全档都说过就直接问下一档。
         """
         action = 'querying_metadata'
@@ -1677,6 +1796,8 @@ class _RemoteSession:
         chain = self._chain(code, *evidence)
         required = list(metadata_routes.required_scalars(missing))
         wants_tags = 'tags' in missing
+        # 素人缺演员：MGStage 给的是素人名义，直到有一个认人 Wiki 给出演员才算问到（ADR-0145）。
+        wants_cast = 'performers' in missing and any(name in metadata_routes.WIKI_STAGE for name in chain)
         results = _MetadataResults(self, code, received)
         problems, held, entries = [], [], results.entries
         failures = []
@@ -1690,8 +1811,10 @@ class _RemoteSession:
             cached = self._cached_evidence(members, code)
             if cached:
                 results.cached(cached)
+                if source in metadata_routes.WIKI_STAGE and any(entry[1].get('actresses') for entry in cached):
+                    wants_cast = False
                 if metadata_routes.settles(required, _given_fields(entries),
-                                           wants_tags=wants_tags, then=then):
+                                           wants_tags=wants_tags, wants_cast=wants_cast, then=then):
                     break
                 # FC2 那一档缓存里只有官方那页时，缺的演员还得去镜像站问（见 `fc2()`）。
                 if source != 'fc2':
@@ -1713,19 +1836,27 @@ class _RemoteSession:
                 if is_missing(error):
                     for name in getattr(error, 'sites', None) or members:
                         self._record_miss(name, code)
-                    continue
-                # 社区那一档的原因里已经写明是哪一家了（`community()` 逐家拼过），再套一层
-                # 就成了「社区来源：javdb：…」。单家来源的原因不带来源名，这里补上。
-                problems.append(describe_failure(error)
-                                if source in ('community', 'amane', 'amane_official')
-                                else f'{SOURCE_LABELS.get(source, source)}：{describe_failure(error)}')
-                failures.append(_source_failure_details(error, code, action, source=source))
-                held.append(source_paused(error))
+                else:
+                    # 社区那一档的原因里已经写明是哪一家了（`community()` 逐家拼过），再套一层
+                    # 就成了「社区来源：javdb：…」。单家来源的原因不带来源名，这里补上。
+                    problems.append(describe_failure(error)
+                                    if source in ('community', 'amane', 'amane_official')
+                                    else f'{SOURCE_LABELS.get(source, source)}：{describe_failure(error)}')
+                    failures.append(_source_failure_details(error, code, action, source=source))
+                    held.append(source_paused(error))
+                # 认人 Wiki 没给出演员时，MGStage 给的字段够停手就停，不为它落到综合索引那条 3 秒的队。
+                if source in metadata_routes.WIKI_STAGE and metadata_routes.settles(
+                        required, _given_fields(entries), wants_tags=wants_tags,
+                        wants_cast=wants_cast, then=then):
+                    break
                 continue
             update(stage='保存待确认资料')
             results.save(found)
+            # 来源快照的演员栏键名是 `actresses`（`SiteRecord.payload`）。
+            if source in metadata_routes.WIKI_STAGE and any(payload.get('actresses') for _, payload in found):
+                wants_cast = False
             if metadata_routes.settles(required, _given_fields(entries),
-                                       wants_tags=wants_tags, then=then):
+                                       wants_tags=wants_tags, wants_cast=wants_cast, then=then):
                 break
         tag_entries = self._preferred_tags(row, code, missing, chain, entries, attempted,
             update=update, issue=issue, deadline=_extended(deadline, _excused(self._provider) - mark))
@@ -1754,12 +1885,16 @@ class _RemoteSession:
             payload = self.provider().query(code, source, deadline=deadline)
         except Exception as error:
             _raise_task_failure(error)
+            # 链上官方来源这一趟已经给了标签时，JavDB 只是换一批更细的类别；取不到就先用官方标签，
+            # 和其他已有标签、不再问 JavDB 的作品一样，不算这部片的问题。
+            settled = 'tags' in _given_fields(entries)
             if isinstance(error, DeadlineExceeded):
                 self.reset()
-                issue(row, 'JavDB 标签在预算时间内未取得', action='querying_metadata', retryable=True)
+                if not settled:
+                    issue(row, 'JavDB 标签在预算时间内未取得', action='querying_metadata', retryable=True)
             elif is_missing(error):
                 self._record_miss(source, code)
-            else:
+            elif not settled:
                 issue(row, 'JavDB 标签未取得：' + describe_failure(error),
                       action='querying_metadata', retryable=True, paused=source_paused(error),
                       diagnostics=_source_failure_details(error, code, 'querying_metadata', source=source))
@@ -1942,11 +2077,10 @@ def _chosen_asset_paths(db_path, asset_ids):
     """
     if not asset_ids:
         return {}
-    placeholders = ','.join('?' * len(asset_ids))
     with closing(sqlite3.connect(db_path, timeout=30)) as connection:
         rows = connection.execute(
-            f"SELECT location,path FROM asset WHERE id IN ({placeholders}) "
-            "AND medium='video' AND disposal IS NULL", asset_ids).fetchall()
+            "SELECT location,path FROM asset WHERE id IN (SELECT value FROM json_each(?)) "
+            "AND medium='video' AND disposal IS NULL", (json.dumps(asset_ids),)).fetchall()
     chosen = {}
     for source, path in rows:
         chosen.setdefault(str(source), []).append(translate_ledger_path(path))
@@ -2034,7 +2168,8 @@ def _scan_sources(config, db_path, *, locations, asset_ids, stage, guard, update
                 if stage == SCAN_STAGE:
                     result.probed += probe_unmeasured(
                         db_path, ffprobe, source, root, config=config,
-                        on_junk=count_junk, asset_ids=list(registered.new_ids) if incremental else None,
+                        on_junk=count_junk,
+                        asset_ids=[*registered.new_ids, *registered.relocated_ids] if incremental else None,
                         report=lambda done, total: update(stage='读取时长与分辨率',
                             checked=result.probed + done, total=result.probed + total, probed=result.probed + done))
                 reattach_in(db_path, registered.new_ids)
@@ -2084,13 +2219,50 @@ def _people_allowed(config):
     return any('people' in stages for stages in media_identity.stages_by_root(config).values())
 
 
+class _NetworkGate:
+    """外部采集用的断网判定，`network` 是 `NetworkReachability`，不给就永远算联网。
+
+    只有两次探测都连不上（`offline`）才算断网；代理设置待选（`unknown`）照常采集，判不准的
+    结论不拦。`skipped` 是这一趟因断网跳过的行数，续跑时接着上次的数。
+    """
+
+    def __init__(self, network, skipped=0):
+        self.network, self.skipped = network, skipped
+
+    def probe(self, update):
+        """外部采集开始前当场探一次。快照可能是十分钟前的，断网时这一下最多等约 20 秒。
+
+        探测线程顺带拉起：断网首扫之后没人打开页面，联网恢复也要有人发现。"""
+        if self.network is None:
+            return
+        update(stage='检查外网连接', current_action='', current_started_at=None, current_deadline_at=None)
+        self.network.tick()
+        self.network.start()
+
+    def offline(self):
+        return self.network is not None and self.network.summary().get('state') == 'offline'
+
+    def skips(self, remote, row, code, missing, allowed, cover_root, *, answered, issue):
+        """断网时这一行要出网就不去问，记成可重试的未取得；不出网的行照常走完。"""
+        if not self.offline() or not remote.asks(row, code, missing if 'metadata' in allowed else [],
+                                                 cover_root, answered=answered,
+                                                 fetch_cover='cover' in allowed):
+            return False
+        issue(row, OFFLINE_MESSAGE, action='network_offline', retryable=True)
+        self.skipped += 1
+        return True
+
+
 def _collect_allowed(remote, traffic, row, code, missing, allowed, cover_root, covered, *,
-                     update, issue, answered, received, succeeded):
+                     update, issue, answered, received, succeeded, gate=_NetworkGate(None)):
     """按这一行所属媒体库的处理方式问外部来源（ADR-0116），返回 (证据条目, 新落盘的封面数)。
 
     关掉的联网步骤不问：不补资料时不带缺失字段，不补封面时不找封面，两样都关就整行不联网。
-    不补人物图片的媒体库，这一行换上的封面不记进 `covered`，不因此派补头像后继。"""
+    不补人物图片的媒体库，这一行换上的封面不记进 `covered`，不因此派补头像后继。
+    断网（`gate`）时要出网的行一家都不问，留一条问题项，不进断点。"""
     found, covers = [], 0
+    if gate.skips(remote, row, code, missing, allowed, cover_root, answered=answered, issue=issue):
+        return found, covers
     if allowed & {'metadata', 'cover'}:
         traffic.start_metadata(code)
         try:
@@ -2156,8 +2328,8 @@ def _collection_rows(db_path, *, locations, online_roots, asset_ids):
     query = f"SELECT asset.*, {multi} FROM asset WHERE medium='video' AND disposal IS NULL"
     parameters = []
     if asset_ids is not None:
-        query += ' AND id IN (' + ','.join('?' * len(asset_ids)) + ')'
-        parameters = asset_ids
+        query += ' AND id IN (SELECT value FROM json_each(?))'
+        parameters = [json.dumps(asset_ids)]
     query += ' ORDER BY id'
     library_roots = tuple(root for roots in locations.values() for root in roots)
     with closing(sqlite3.connect(db_path, timeout=30)) as connection:
@@ -2190,14 +2362,16 @@ def _candidate_scope(groups, asset_ids):
 
 
 def _finish_collection(config, database, candidate_root, cover_root, groups, remote, *,
-                       asset_ids, active, update, issue, watermark, covered, people=True):
+                       asset_ids, active, update, issue, watermark, covered, people=True, offline=False):
     """结算本趟候选并补人物资料，全库任务同时推进存量后继。
 
-    `people` 为假（没有哪个媒体库的处理方式联网补人物图片）时不补人物资料，也不派实体后继。"""
+    `people` 为假（没有哪个媒体库的处理方式联网补人物图片）时不补人物资料，也不派实体后继。
+    `offline` 为真时只跳过补人物资料：后继照派，这一趟登记的实体过了这一趟就不再算新登记，
+    恢复后的重试趟派不到它们。"""
     auto_apply = _apply_finished_candidates(database, candidate_root, active, asset_ids)
     profiles = (_enrich_finished_performers(
         database, _candidate_scope(groups, asset_ids), config, candidate_root, remote, active, update, issue)
-        if people else dict(aliases=0, avatars=0, conflicts=0, failed=0))
+        if people and not offline else dict(aliases=0, avatars=0, conflicts=0, failed=0))
     followups = [] if asset_ids is not None else sample_followup.plan(database, config, cover_root)
     if people:
         followups += _entity_followups(database, config, watermark, covered, include_stock=asset_ids is None)
@@ -2215,10 +2389,10 @@ def _asset_selection(db_path, asset_ids):
             type(value) is not int or value <= 0 for value in asset_ids):
         raise ValueError('请选择有效的视频项目')
     chosen = list(dict.fromkeys(asset_ids))
-    marks = ','.join('?' * len(chosen))
     with closing(sqlite3.connect(db_path, timeout=30)) as connection:
         found = {row[0] for row in connection.execute(
-            f"SELECT id FROM asset WHERE id IN ({marks}) AND medium='video' AND disposal IS NULL", chosen)}
+            "SELECT id FROM asset WHERE id IN (SELECT value FROM json_each(?)) "
+            "AND medium='video' AND disposal IS NULL", (json.dumps(chosen),))}
     if found != set(chosen):
         raise ValueError('所选视频已不存在或已移入回收站，请刷新后重试')
     return chosen
@@ -2250,6 +2424,41 @@ class _PreviewCaptureError(ValueError):
             'no_frame': '采样位置未取得画面，反馈问题请导出诊断报告',
         }.get(diagnostics.get('reason'), '视频抽帧未取得，反馈问题请导出诊断报告')
         super().__init__(message)
+
+
+def _earlier_timestamps(timestamp, duration):
+    """某格抽帧失败后依次改取的更早时间点，只留比上一次更早、仍在片长内的点。
+
+    转存 mp4、只有几帧的短 hevc、尾部损坏的手机视频，容器声明的时长比实际能解码的长，
+    靠后的格子落进坏区，硬解软解都取不到帧；前段的帧是好的（#392 实测）。"""
+    candidates = []
+    for value in (timestamp * 0.5, timestamp * 0.25, max(0.5, duration * 0.05)):
+        if 0 < value < duration and value < (candidates[-1] if candidates else timestamp):
+            candidates.append(value)
+    return candidates
+
+
+def _capture_preview_cell(capture, timestamp, duration, *, deadline, progress):
+    """抽九宫格的一格，返回（是否取到, 首抽诊断）；回退尝试记进诊断的 earlier_attempts。
+
+    超时多是挂载慢，换点位只会耗尽预算；FFmpeg 报错或没出帧才往前找好帧。"""
+    diagnostic = {}
+    if capture(timestamp, diagnostic):
+        return True, diagnostic
+    if diagnostic.get('reason') not in ('ffmpeg_error', 'no_frame'):
+        return False, diagnostic
+    earlier = diagnostic['earlier_attempts'] = []
+    for fallback in _earlier_timestamps(timestamp, duration):
+        if deadline <= time.monotonic():
+            break
+        progress()
+        detail = {}
+        captured = capture(fallback, detail)
+        earlier.append(dict(timestamp_seconds=fallback, reason=detail.get('reason'),
+                            returncode=detail.get('returncode')))
+        if captured:
+            return True, diagnostic
+    return False, diagnostic
 
 
 def _generate_preview(config, row, database, resolver, *, progress):
@@ -2303,10 +2512,12 @@ def _generate_preview(config, row, database, resolver, *, progress):
                     return False
                 progress()
                 timestamp = duration * (0.03 + 0.94 * (index + 0.5) / 9)
-                diagnostic = {}
-                if not frame_capture.capture_with_retry(
-                        str(choice.path), str(video), timestamp, frames / f's{index:02d}.jpg',
-                        diagnostics=diagnostic, timeout=remaining(45), decode_options=decode_options):
+                captured, diagnostic = _capture_preview_cell(
+                    lambda at, detail, destination=frames / f's{index:02d}.jpg': frame_capture.capture_with_retry(
+                        str(choice.path), str(video), at, destination,
+                        diagnostics=detail, timeout=remaining(45), decode_options=decode_options),
+                    timestamp, duration, deadline=deadline, progress=progress)
+                if not captured:
                     for attempt in diagnostic.get('attempts', []):
                         attempt['stderr'] = attempt.get('stderr', '').replace(str(video), '<media>')[-4096:]
                     diagnostic['stderr'] = diagnostic.get('stderr', '').replace(str(video), '<media>')[-4096:]
@@ -2576,7 +2787,8 @@ def _restore_processing_counts(state, previous):
     """同一处理任务沿用累计数、问题清单和已保存证据索引。"""
     previous = previous or {}
     for key in ('started_at', 'identified', 'covers', 'previews', 'probed', 'issue_count', 'paused_count',
-                'issue_preview', 'issues_truncated', 'notes', 'retryable_asset_ids', 'junk_isolated', 'junk_review'):
+                'issue_preview', 'issues_truncated', 'notes', 'retryable_asset_ids', 'junk_isolated', 'junk_review',
+                'offline_skipped'):
         if key in previous:
             state[key] = previous[key]
     for key in ('scan_checkpoints', 'local_metadata'):
@@ -2679,7 +2891,7 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
                     retry_ids=None, active=lambda: True, stage=ALL_STAGES,
                     database=None, route_overrides=None, state_file=None, asset_ids=None,
                     resume_state=None, speed_mode=None, protected_ids=(), recheck_existing=False,
-                    incremental=False):
+                    incremental=False, network=None):
     """登记文件与确定的番号，外部资料保留为可复核候选。
 
     `retry_ids` 为 `None` 时处理整个馆藏；给定时只处理这些项目（上一任务记录的
@@ -2696,6 +2908,9 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
     `route_overrides` 覆盖某几种内容类型的来源链，形状与判据见
     `metadata_routes.parse_route_overrides`；不给就用内建那张表。
     `state_file` 给后台定向任务保存独立进度，共享候选写入仍使用全库处理锁。
+    `network` 是 `NetworkReachability`：外部采集开始前当场探一次，判成断网时要出网的行记为
+    可重试的「外部资料未取得」、补人物资料整段跳过，本地那几步照常做完；之后每一行读它的快照。
+    不给就不判，命令行走这条。
     """
     selected_ids = _validate_processing_request(config, db_path, stage, asset_ids, retry_ids, database)
     from .repository import LedgerDatabase
@@ -2732,7 +2947,7 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
                      last_progress_at=time.time(), progress_seq=0,
                      current_asset_id=None, current_asset_name='', current_action='',
                      current_started_at=None, current_deadline_at=None,
-                     followups=[],
+                     followups=[], offline_skipped=0,
                      junk_isolated=0, junk_review=0,
                      started_at=time.time(), error='')
         state.update(initial_estimate(config, db_path, stage, initial_ids, speed_mode))
@@ -2923,9 +3138,12 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
             _check_processing_junk(judgement_database, locations, sources.online_roots,
                                    scope_ids, protected_ids, state, update)
             prepared = _active_prepared(judgement_database, prepared)
+            gate = _NetworkGate(network, state['offline_skipped'])
+            gate.probe(update)
             from .metadata_amane import PreparationError
             try:
-                remote.prepare(prepared, stages_of, update, cover_root=cover_root, groups=groups)
+                remote.prepare(prepared, stages_of, update, cover_root=cover_root, groups=groups,
+                               offline=gate.offline)
             except PreparationError as error:
                 message = f'采集工具准备失败：{error}'
                 issue(None, message, action='preparing_sources')
@@ -2949,7 +3167,8 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
                     answered=() if verify_existing else _answered_sources(groups, target_key, missing),
                     received=lambda entries, row=row, code=code, fields=local_fields, verify=verify_existing:
                         publish(row, code, fields, verify, entries),
-                    succeeded=lambda before=issues_before: state['issue_count'] == before)
+                    succeeded=lambda before=issues_before: state['issue_count'] == before, gate=gate)
+                state['offline_skipped'] = gate.skipped
                 state['covers'] += covers
                 update(stage='保存待确认资料', current_action='writing_candidates',
                        current_started_at=time.time(), current_deadline_at=None)
@@ -2965,7 +3184,7 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
             summary = _finish_collection(
                 config, database, candidate_root, cover_root, groups, remote, asset_ids=scope_ids,
                 active=active, update=update, issue=issue, watermark=entity_watermark, covered=covered,
-                people=_people_allowed(config))
+                people=_people_allowed(config), offline=gate.offline())
             finish_step('collect')
             _settle_collection_state(state, summary, rows, update)
         except Exception:

@@ -172,7 +172,11 @@ def main(argv=None):
         if not isinstance(error, ParseError):
             raise
         response = {'error': dict(kind='value', message=str(error))}
-    print(json.dumps(response, ensure_ascii=True))
+    try:
+        print(json.dumps(response, ensure_ascii=True), flush=True)
+    except OSError:
+        # 父进程已超时离开、管道关闭时，结果没有读取方，不算故障。
+        pass
     return 0
 
 

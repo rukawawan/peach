@@ -139,6 +139,17 @@ class MetadataPolicyTests(unittest.TestCase):
         self.assertLess(chain_rank("performers", "fc2cmadb"), chain_rank("performers", "javdb"))
         self.assertLess(chain_rank("title", "javdb"), chain_rank("title", "fc2cmadb"))
 
+    def test_the_name_wikis_name_the_amateur_cast_ahead_of_the_official_stores(self):
+        """素人片的演员栏以认人 Wiki 为准：`348NTR-076` mgstage 写 `アミ`，素人系総合 Wiki 写 `稲森あみ`。
+
+        提前只限演员栏，标题与日期仍听 MGStage。
+        """
+        for official in ("mgstage", "r18dev"):
+            self.assertLess(chain_rank("performers", "sougouwiki"), chain_rank("performers", official))
+            self.assertLess(chain_rank("performers", "av_neme"), chain_rank("performers", official))
+            self.assertLess(chain_rank("title", official), chain_rank("title", "sougouwiki"))
+        self.assertLess(chain_rank("performers", "sougouwiki"), chain_rank("performers", "av_neme"))
+
 
 if __name__ == "__main__":
     unittest.main()

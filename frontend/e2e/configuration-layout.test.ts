@@ -25,7 +25,7 @@ describe('配置表单与行间距', () => {
         const form = page.getByRole('form', { name: '云下载', exact: true });
         await form.getByRole('button', { name: '检查连接', exact: true }).click();
         await settle(page);
-        assert.equal(await form.locator('dl:not([data-guide-help] *)').count(), 0);
+        assert.equal(await form.locator('dl').count(), 0);
         assert.equal(await form.locator('.border-t').count(), 1);
         const empty = await form.locator('div').evaluateAll(nodes => nodes.filter(node =>
           !node.childNodes.length && node.getBoundingClientRect().height > 0).map(node => node.className));
@@ -177,7 +177,7 @@ describe('配置表单与行间距', () => {
         await page.reload();
         const form = page.getByRole('form', { name: 'PikPak 账号', exact: true });
         await form.getByLabel('账号', { exact: true }).waitFor();
-        assert.equal(await form.locator('details:not([data-guide-help] *)').count(), 0);
+        assert.equal(await form.locator('details').count(), 0);
         const password = await form.getByRole('button', { name: '登录', exact: true }).boundingBox();
         const browserLogin = await form.getByRole('button', { name: '用浏览器登录', exact: true }).boundingBox();
         assert.ok(password && browserLogin && Math.abs(password.y - browserLogin.y) <= 1);

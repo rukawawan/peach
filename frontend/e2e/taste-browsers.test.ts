@@ -53,7 +53,7 @@ describe('口味浏览器来源', () => {
       await sources.getByRole('button', { name: '启用 Aside', exact: true }).click();
       await sources.getByRole('button', { name: '停止读取 Aside', exact: true }).waitFor();
       await sources.getByRole('button', { name: '删除 Aside', exact: true }).click();
-      await page.getByRole('dialog', { name: '删除 Aside', exact: true }).getByRole('button', { name: '删除浏览器来源', exact: true }).click();
+      await page.getByRole('alertdialog', { name: '删除 Aside', exact: true }).getByRole('button', { name: '删除浏览器来源', exact: true }).click();
       await sources.getByRole('button', { name: '停止读取 Aside', exact: true }).waitFor({ state: 'hidden' });
       assert.equal(await sources.getByRole('button', { name: '停止读取 Aside', exact: true }).count(), 0);
       assert.deepEqual(requests, ['add', 'disable', 'enable', 'delete_browser']);

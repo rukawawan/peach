@@ -25,7 +25,9 @@ import { errorMessage } from '../../api';
 import { cardClass } from '../components/card';
 import { CodeBlock } from '../components/code-block';
 import { EmptyState } from '../components/empty-state';
+import { IssueRow } from '../components/issue-row';
 import { LoadingDots } from '../components/loading-dots';
+import { NameLink } from '../components/name-link';
 import { Note } from '../components/note';
 import { Page } from '../components/page';
 import { Progress } from '../components/progress';
@@ -35,17 +37,20 @@ import { BackgroundIssues } from './background-issues';
 import { DownloadsPanel } from './downloads-panel';
 import { ErrorDetails, ErrorExcerpt } from './error-excerpt';
 import { TaskControlFeedback, TaskControls } from './task-controls';
+import { TaskIcon } from './task-icon';
 import { TaskResources } from './task-resources';
 import {
   elapsedText, fetchEarlier, fetchTasks, foldByKind, foldRoutine, followupDetail, followupTally, groupFollowups, isActive,
   hasResultProblems, isRoutine, latestOfKind, mergeFinished, momentText, pollInterval, problemDestination, progressText,
-  statusLabel, summaryItems, taskIssues, TASKS_KEY, TRIGGER_LABELS, type FollowupCounts, type TaskControlState, type TaskRunPayload,
+  readableErrorHeadline, statusLabel, summaryItems, taskIssues, taskSubject, TASKS_KEY, TRIGGER_LABELS, type FollowupCounts, type TaskControlState, type TaskRunPayload,
 } from './tasks';
 
 /** 一张卡里最多列多少条后继。几批合成一张卡时会有上千条，全画出来一屏都是同一句。 */
 const FOLLOWUP_ROWS = 50;
 /** 自己只负责派发后继的任务：一轮只是「安排了几项」，要看的是那几项的结果。 */
 const DISPATCHERS = new Set(['upgrade-repairs']);
+/** 开跑时写进摘要、指明这一轮处理哪部作品的两项（`taskSubject`）。 */
+const SUBJECT_KEYS = new Set(['asset_id', 'name']);
 
 /* 完成绿、失败与已取消红、进行中蓝、意外中断黄，排队为中性。 */
 const BADGE_COLORS: Record<string, 'lime' | 'rose' | 'yellow' | 'blue' | 'neutral'> = {
@@ -78,14 +83,15 @@ function StatusBadge({ run }: { run: TaskRunPayload }) {
  * 条间线写在每个 li 自己身上，第一条那根同时充当与卡片正文的分隔。 */
 function FollowupList({ rows }: { rows: TaskRunPayload[] }) {
   return (
-    <ul className="flex min-w-0 flex-col">
+    <ul className="-mr-5 flex min-w-0 flex-col">
       {rows.map((row) => {
         const detail = followupDetail(row);
         return (
           <li key={row.id} data-status={row.status} data-followup-key={row.followup_key}
-            className="flex min-w-0 flex-col gap-1 border-t border-separator-border px-5 py-2.5">
+            className="flex min-w-0 flex-col gap-1 border-t border-separator-border py-2.5 pr-10 pl-5">
             <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <TaskIcon taskKey={row.task_key} className="size-4 shrink-0 text-text-secondary" />
                 <span className="min-w-0 break-words text-caption-1-regular text-text-primary">
                   {row.task_label}
                 </span>
@@ -116,9 +122,10 @@ function FollowupList({ rows }: { rows: TaskRunPayload[] }) {
 /** 一轮任务一张卡。失败时整张卡的框线换成 danger 色，不给结束原因那行字上色——
  *  一屏十几行里逐行读红字，比看一眼哪张卡的框是红的慢得多。 */
 function RunCard(
-  { run, meta, children, footer, followups, followupTotal = 0, badge, resourceActive }:
-  { run: TaskRunPayload; meta: string; children?: ReactNode; footer?: string;
-    followups?: TaskRunPayload[]; followupTotal?: number; badge?: ReactNode; resourceActive?: boolean },
+  { run, meta, children, error, issues, followups, followupTotal = 0, badge, resourceActive, controlled }:
+  { run: TaskRunPayload; meta: string; children?: ReactNode; error?: string; issues?: ReactNode;
+    followups?: TaskRunPayload[]; followupTotal?: number; badge?: ReactNode; resourceActive?: boolean;
+    controlled?: TaskRunPayload[] },
 ) {
   /* 一轮派出上千条后继时只下发最近几十条，合并的几批又可能各带几十条：标题写全数，
      列表先列在跑与排队的、再列最近结束的，最多 `FOLLOWUP_ROWS` 条，并说清只列了其中几条。 */
@@ -128,27 +135,44 @@ function RunCard(
     rank(b) - rank(a) || b.id - a.id).slice(0, FOLLOWUP_ROWS) : [];
   const shown = listed.length;
   const total = Math.max(followups?.length || 0, followupTotal);
+  const subject = taskSubject(run);
+  const errorFull = String(error || '').trim();
+  const errorHead = readableErrorHeadline(errorFull);
   return (
     // `id` 让「需要处理」那一行的「查看失败记录」能直接滚到这张卡。
     <li id={`run-${run.id}`} data-status={run.status} data-task-key={run.task_key} data-run-id={run.id}
       className={cardClass({
-        padding: 'none',
-        bordered: 'line',
-        className: run.status === 'failed' ? 'flex flex-col border-border-error-default' : 'flex flex-col',
+        padding: 'none', bordered: run.status === 'failed' ? 'error' : undefined, className: 'flex flex-col',
       })}>
       {/* 卡片标题比分段标题（「正在进行」）低一档，标题、时间与摘要之间同一个行距。 */}
       <div className="flex flex-col gap-2 px-5 py-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <TaskIcon taskKey={run.task_key} className="size-5 shrink-0 text-text-secondary" />
             <strong className="min-w-0 break-words text-title-3-medium text-text-primary">{run.task_label}</strong>
             {badge ?? <StatusBadge run={run} />}
           </div>
-          <TaskControls run={run} />
+          <TaskControls run={run} runs={controlled} />
         </div>
         <p className="text-caption-1-regular text-text-secondary">{meta}</p>
         <TaskResources run={run} active={resourceActive} />
+        {/* 文件名常有上百字：单行末尾省略，番号在开头，完整名称在悬停提示里。不用 data-middle-truncate：
+            它按 Canvas 量宽，不计中西文自动间距，中日文夹英文的名字会被裁掉末尾几个像素。 */}
+        {subject ? <NameLink href={subject.href} data-task-subject={run.id} title={subject.label}
+          className="min-w-0 max-w-full self-start truncate text-text-primary">
+          {subject.label}
+        </NameLink> : null}
+        {/* 结束原因是这一轮的结论，和摘要一样写在正文里；全文是明细，收进下面的「错误详情」。 */}
+        {errorHead ? <p data-task-error="" className="text-caption-1-regular text-text-secondary wrap-anywhere">{errorHead}</p> : null}
         {children}
       </div>
+      {/* 问题详情、错误详情、任务明细、技术详情都是可展开的明细，同样排成卡片底部带分隔线的一行，按这个顺序。 */}
+      {issues ? <div className="border-t border-separator-border px-5 py-2.5">{issues}</div> : null}
+      {errorHead && errorFull !== errorHead ? <div className="border-t border-separator-border px-5 py-2.5">
+        <Disclosure summary="错误详情" contentClassName="pb-2.5">
+          <ErrorDetails label={`${run.task_label}错误详情`}>{errorFull}</ErrorDetails>
+        </Disclosure>
+      </div> : null}
       {shown ? <div className="border-t border-separator-border px-5 py-2.5">
         <Disclosure summary={`任务明细 · ${total.toLocaleString()} 项`}
           contentClassName="pb-2.5"
@@ -159,17 +183,14 @@ function RunCard(
           <FollowupList rows={listed} />
         </Disclosure>
       </div> : null}
-      {Object.keys(run.result_summary || {}).length ? <div className="border-t border-separator-border px-5 py-2.5">
+      {/* 摘要里只有开跑时写下的作品时，它已经链接在卡片上，不再单列一块技术详情。 */}
+      {Object.keys(run.result_summary || {}).some((key) => !(subject && SUBJECT_KEYS.has(key)))
+        ? <div className="border-t border-separator-border px-5 py-2.5">
         <Disclosure summary="技术详情" contentClassName="pb-2.5">
           <CodeBlock code={JSON.stringify(run.result_summary, null, 2)} language="json"
             label={`${run.task_label}技术详情`} />
         </Disclosure>
       </div> : null}
-      {footer
-        ? <div className="flex min-h-14 flex-col justify-center rounded-b-2xl border-t border-separator-border bg-card-footer px-5 py-3">
-            <ErrorExcerpt text={footer} className="text-caption-1-regular text-text-secondary" />
-          </div>
-        : null}
     </li>
   );
 }
@@ -211,7 +232,10 @@ function SettledRun(
   const summary = batches
     ? [`共处理 ${followupTotal!.toLocaleString()} 项`, followupFailed ? `其中 ${followupFailed.toLocaleString()} 项失败` : '']
         .filter(Boolean)
-    : summaryItems(run.result_summary).filter((line) => line !== run.error);
+    // 作品链接已写出文件名，摘要不再列「名称」。
+    : summaryItems(taskSubject(run) ? { ...run.result_summary, name: '' } : run.result_summary)
+        // 结束原因由卡片单独写一行，摘要里同一句不再重复。
+        .filter((line) => line !== run.error && line !== readableErrorHeadline(run.error));
   const issues = taskIssues(run);
   const destination = problemDestination(run, latest);
   const elapsed = elapsedText(run.elapsed_seconds);
@@ -222,7 +246,22 @@ function SettledRun(
     : [TRIGGER_LABELS[run.trigger] || run.trigger, momentText(run.finished_at),
        elapsed && `用时 ${elapsed}`]).filter(Boolean).join(' · ');
   return (
-    <RunCard run={run} meta={meta} footer={run.error} followups={followups} followupTotal={followupTotal}
+    <RunCard run={run} meta={meta} error={run.error} followups={followups} followupTotal={followupTotal}
+      issues={issues.length ? <Disclosure summary={`问题详情 · ${issues.length} 项`} contentClassName="pb-2.5">
+        <ErrorDetails label="任务问题详情">
+        {/* 与数据管理的问题清单同一种分层：名字一层，来源与问题类别跟在名字后面用次级色，原因再低一档。 */}
+        <ul className="flex min-w-0 flex-col whitespace-normal" data-task-issues="">
+          {issues.map((issue, index) => <IssueRow key={`${issue.source}-${index}`} title={<>
+              {issue.label}
+              {issue.provider || issue.kind
+                ? <span className="text-body-2-regular text-text-secondary"> · {[issue.provider, issue.kind].filter(Boolean).join(' · ')}</span>
+                : null}
+            </>}>
+            <ErrorExcerpt text={issue.error} className="text-caption-1-regular text-text-secondary" />
+          </IssueRow>)}
+        </ul>
+        </ErrorDetails>
+      </Disclosure> : undefined}
       badge={followupCancelled && run.status === 'succeeded'
         ? <Chip color="rose"><span data-copy-key={`tasks.followups.cancelled.${followupCancelled === followupTotal ? 'all' : 'partial'}`}>
             {followupCancelled === followupTotal ? '后续任务已取消' : '部分后续任务已取消'}
@@ -237,16 +276,7 @@ function SettledRun(
         : summary.length ? <ul className="flex list-disc flex-col gap-1 pl-5 text-caption-1-regular text-text-secondary wrap-anywhere">
             {summary.map((line, index) => <li key={index}>{line}</li>)}
           </ul> : null}
-      {issues.length ? <Disclosure summary={`问题详情 · ${issues.length} 项`} contentClassName="pt-2">
-        <ErrorDetails label="任务问题详情">
-        <ul className="flex min-w-0 flex-col gap-3" data-task-issues="">
-          {issues.map((issue, index) => <li key={`${issue.source}-${index}`} className="flex min-w-0 flex-col gap-1 text-body-2-regular wrap-anywhere">
-            <p className="text-body-regular text-text-primary">{[issue.label, issue.provider, issue.kind].filter(Boolean).join(' · ')}</p>
-            <ErrorExcerpt text={issue.error} className="text-text-primary" />
-          </li>)}
-        </ul>
-        </ErrorDetails>
-      </Disclosure> : hasResultProblems(run) && ['follow-check', 'feed-check'].includes(run.task_key)
+      {!issues.length && hasResultProblems(run) && ['follow-check', 'feed-check'].includes(run.task_key)
         ? <p className="text-body-2-regular text-text-secondary">未取得本轮逐项详情，可到来源列表查看检查结果。</p> : null}
       {destination
         ? <LinkButton href={destination.href} size="small" trailingIcon={RiArrowRightLine}
@@ -276,7 +306,7 @@ function WorkingRun(
     runs.length > 1 ? `${runs.length} 批` : '',
     `${momentText(oldest.started_at || oldest.finished_at)} 开始`].filter(Boolean).join(' · ');
   return (
-    <RunCard run={run} meta={meta} followups={followups} followupTotal={total} resourceActive
+    <RunCard run={run} meta={meta} followups={followups} followupTotal={total} resourceActive controlled={runs}
       badge={run.control ? <StatusBadge run={run} /> : <Chip color="blue">进行中</Chip>}>
       <div className="flex flex-col gap-1.5">
         <Progress label={`${run.task_label}进度`} value={settled} max={total} />
@@ -372,11 +402,10 @@ export function ActivityPage() {
   };
   const folds = foldRoutine(finished, (run) => isRoutine(run)
     && (quietChildren(run) || DISPATCHERS.has(run.task_key)));
-  // 各父任务的控制范围独立：合成一张卡会让较早那批的后继没有对应操作入口。
-  const workingGroups = [
-    ...foldByKind(working.filter((run) => !run.control)),
-    ...working.filter((run) => run.control).map((run) => ({ run, runs: [run] })),
-  ].sort((left, right) => right.run.id - left.run.id);
+  // 控制状态相同的几批合成一张，卡上的暂停、继续、取消对其中每一批都发一次；
+  // 状态不同的（一批已暂停、一批在跑）分开摆，按钮才说得清作用在哪批上。
+  const workingGroups = foldByKind(working, (run) => run.control?.state || '')
+    .sort((left, right) => right.run.id - left.run.id);
   const newest = latestOfKind(allRuns);
   const quiet = !running.length && !working.length && !skipped.length && !finished.length;
   return (

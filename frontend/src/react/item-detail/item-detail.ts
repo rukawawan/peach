@@ -427,7 +427,7 @@ export function pickerSections(query: string, candidates: readonly TagCount[], r
 
 /** 版次徽章的配色跟卡片标题上的那套走。多一个 `有码`：卡片上正片不加角标是对的（没角标就是
  *  正片），但队列里两条并排时「什么都不写」等于让人自己猜哪条是哪条。 */
-export const EDITION_TONE: Record<string, string> = { 中字: 'subtitle', 无码: 'uncensored', 无码破解: 'cracked', AI去码: 'cracked', 有码: 'censored' };
+export const EDITION_TONE: Record<string, string> = { 中字: 'subtitle', 无码: 'uncensored', 无码流出: 'leaked', 无码破解: 'cracked', AI去码: 'cracked', 有码: 'censored' };
 
 const QUEUE_LABEL: Record<QueueKind, string> = { mix: 'Mix', parts: '分卷', editions: '版本', playlist: '播放列表' };
 

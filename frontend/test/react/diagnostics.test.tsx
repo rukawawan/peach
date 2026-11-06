@@ -34,6 +34,7 @@ it('刮削记录显示后台进度并支持取消', async () => {
   const host = await mount(<QueryClientProvider client={queryClient}><ScrapingExport /></QueryClientProvider>);
   await settle();
   expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('2');
+  expect(host.querySelector('[data-task-progress]')?.getAttribute('data-task-progress')).toBe('embedded');
   expect((buttonNamed('导出刮削记录', host) as HTMLButtonElement).disabled).toBe(true);
   await click(buttonNamed('取消导出', host));
   await settle();
@@ -118,6 +119,17 @@ it('恢复动作的名称与实际目标一致', async () => {
   expect(linkNamed('打开应用与维护', host)?.getAttribute('href')).toBe('/settings/maintenance');
   expect(linkNamed('查看任务', host)?.getAttribute('href')).toBe('/tasks');
   expect(linkNamed('打开来源和凭证', host)?.getAttribute('href')).toBe('/sources');
+});
+
+it('页头的诊断报告进度自己带框，和重新检查同排', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith('/api/diagnostics/exports')
+    ? { status: 'running', kind: 'support', job_id: 'report', stage: '收集日志', done: 1, total: 4 }
+    : data()))));
+  const { host } = await open();
+  await settle();
+  const report = host.querySelector('[data-guide-target="report"]')!;
+  expect(report.querySelector('[data-task-progress]')?.getAttribute('data-task-progress')).toBe('framed');
+  expect(buttonNamed('取消导出', report)?.parentElement).toBe(buttonNamed('重新检查', report)?.parentElement);
 });
 
 it('诊断报告启动时附浏览器环境，产物使用直接下载链接', async () => {

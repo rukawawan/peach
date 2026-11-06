@@ -31,6 +31,8 @@ export interface LibraryProcessingData {
   outcome?: 'complete' | 'partial' | 'interrupted' | 'cancelled';
   archived?: boolean;
   new_asset_count?: number;
+  /** 进行中这一轮在任务中心记的发起方式：`manual` | `scheduled` | `startup` | `cli`。 */
+  trigger?: string;
   speed_mode?: ProcessingSpeed;
   eta_seconds_min?: number | null;
   eta_seconds_max?: number | null;
@@ -127,7 +129,7 @@ export interface LibraryProcessingCommand {
   speed_mode?: ProcessingSpeed;
 }
 export type ProcessingControlCommand =
-  | { action: 'pause' | 'resume' | 'cancel' | 'archive'; job_id: string }
+  | { action: 'pause' | 'resume' | 'cancel' | 'archive' | 'unarchive'; job_id: string }
   | { action: 'set_speed'; speed_mode: ProcessingSpeed; job_id?: string }
   | { action: 'skip_current'; job_id: string; asset_id: number };
 
@@ -163,7 +165,7 @@ export const ALL_CONTENT_URL = '/?loc=&thumb=0';
 /** 时间向分钟取整；区间两端始终使用同一单位。 */
 export function remainingTime(state: LibraryProcessingData): string {
   if (!processingActive(state)) return '';
-  if (state.status === 'stopping') return '正在停止，等待当前步骤退出；已取得的结果会保留';
+  if (state.status === 'stopping') return '正在取消，等待当前步骤退出；已取得的结果会保留';
   if (state.status === 'paused') return '已暂停，继续后更新预估';
   if (state.status === 'pausing') return '正在暂停，当前步骤结束后暂停';
   if (state.stalled) return '等待当前文件响应，剩余时间待更新';
@@ -199,6 +201,27 @@ export const IDLE_POLL_MS = 10_000;
 
 /** 读失败时页面上留的那句话。上一份数据不撤，下一轮轮询自己会接上。 */
 export const DISCONNECTED_TEXT = '连接中断，正在重新读取处理进度';
+
+/** 任务的发起方式写进句子里用的说法；`TRIGGER_LABELS` 是任务中心列表的短标签，放进句子读不通。 */
+const TRIGGER_PHRASES: Record<string, string> = {
+  manual: '在网页发起', scheduled: '定时发起', startup: '服务启动时自动发起', cli: '由命令行或托盘发起',
+};
+
+/** 保存媒体库设置会重启 Peach：在跑的这一轮会怎样，按它跑在哪个进程、是否已暂停分开说。
+ * 命令行与托盘起的是独立的 `peach process` 进程，重载只停服务；服务内的任务由启动恢复接着跑，
+ * 用户暂停的那一轮恢复时跳过。勾了「保存后扫描」的那一趟要等全库处理锁，排在后面。 */
+export function restartEffectText(state: LibraryProcessingData, scanAfterSave: boolean): string {
+  const effect = state.trigger === 'cli' ? '这个任务由命令行或托盘发起，在独立进程里运行，不受重启影响。'
+    : state.status === 'paused' ? '已暂停的任务会保持暂停，重启后点继续即可接着处理。'
+    : '正在进行的任务会随重启中断，重启后从中断处继续。';
+  return `保存后 Peach 会重新启动。${effect}${scanAfterSave ? '勾选的「保存后扫描并补全资料」会排在当前任务之后。' : ''}`;
+}
+
+/** 已有任务在跑时点同步的回执，写明这一轮是怎么发起的。 */
+export function busyText(state: LibraryProcessingData): string {
+  const origin = TRIGGER_PHRASES[state.trigger || ''];
+  return `当前的扫描与采集任务${origin ? `（${origin}）` : ''}还没结束，等它完成或取消后再开始新的同步`;
+}
 
 export function pollInterval(
   data: LibraryProcessingData | undefined, watching: boolean,

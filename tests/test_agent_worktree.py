@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import Event
 from unittest import mock
 
-from scripts import agent_worktree, release_tag
+from scripts import agent_worktree, check_public_text, release_tag
 from scripts.agent_worktree import (
     WorkspaceError, _git, _lines, create, integrate, processes_under, prune, ready,
 )
@@ -85,7 +85,7 @@ class _WorktreeCase(unittest.TestCase):
         if self.mock_pull_request:
             pull_request = mock.patch.object(agent_worktree, "require_pull_request", side_effect=
                 lambda worker, branch, target, head: {"url": "https://github.com/example/peach/pull/1",
-                                                      "head": head, "base": target})
+                                                      "head": head, "base": target, "refs": []})
             pull_request.start()
             self.addCleanup(pull_request.stop)
         self.tmp = tempfile.TemporaryDirectory()
@@ -263,11 +263,46 @@ class PullRequestIntegrationTests(_WorktreeCase):
     def test_open_matching_pull_request_is_bound_to_the_merge(self):
         with self.github() as query:
             result = integrate(self.repo, self.branch)
-        self.assertEqual(result["pull_request"], {"url": self.pr["url"], "head": self.head, "base": "master"})
+        self.assertEqual(result["pull_request"],
+                         {"url": self.pr["url"], "head": self.head, "base": "master", "refs": [], "body": ""})
         self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
         command = query.call_args.args[0]
         self.assertEqual(command[:4], ["gh", "pr", "view", self.branch])
         self.assertEqual(query.call_args.kwargs["cwd"], self.worker)
+        self.assertEqual(_git(self.repo, "log", "-1", "--format=%B").stdout.strip(),
+                         f"Merge branch '{self.branch}' (#12)")
+
+    def test_issue_link_lines_in_the_body_follow_into_the_merge_commit(self):
+        body = ("排查记录里顺带提到 #3，不算关联。\n\nRefs #45\r\n"
+                "  Refs peach-mitao/peach-roadmap#7\n"
+                "Fixes https://github.com/example/peach/issues/8\n"
+                "Refs N01（Telegram 反馈）\n")
+        with self.github(json.dumps({**self.pr, "body": body})):
+            result = integrate(self.repo, self.branch)
+        refs = ["Refs #45", "Refs peach-mitao/peach-roadmap#7",
+                "Fixes https://github.com/example/peach/issues/8"]
+        self.assertEqual(result["pull_request"]["refs"], refs)
+        self.assertEqual(_git(self.repo, "log", "-1", "--format=%B").stdout.strip(),
+                         f"Merge branch '{self.branch}' (#12)\n\n" + "\n".join(refs))
+
+    def test_library_lists_in_the_body_or_a_commit_message_are_refused(self):
+        """PR 正文和提交说明公开在 GitHub 上，成串列出本机馆藏的不合入；问题需要的一两个例子照常合入。"""
+        library = check_public_text.Library(codes={"ZZQ-101", "ZZQ-102", "ZZQ-103"}, names={"测试女优甲", "测试女优乙"})
+        listed = "剩下要人判的：ZZQ-101、ZZQ-102、ZZQ-103。"
+        with mock.patch.object(check_public_text, "load_library", return_value=library):
+            with self.github(json.dumps({**self.pr, "body": listed})):
+                self.assert_refused("PR 正文（番号 3 个")
+            (self.worker / "worker.txt").write_text("worker again\n", encoding="utf-8")
+            commit(self.worker, "fix(tooling): 测试女优甲与测试女优乙的别名")
+            self.pr["headRefOid"] = _git(self.worker, "rev-parse", "HEAD").stdout.strip()
+            with self.github(json.dumps({**self.pr, "body": "只修 ZZQ-101 的前缀。"})):
+                self.assertRaisesRegex(WorkspaceError, "提交 [0-9a-f]+（人物 2 个", integrate, self.repo, self.branch)
+
+    def test_a_single_example_or_a_machine_without_a_ledger_still_integrates(self):
+        library = check_public_text.Library(codes={"ZZQ-101", "ZZQ-102", "ZZQ-103"})
+        for loaded, body in ((library, "只修 ZZQ-101 的前缀。"), (None, "ZZQ-101、ZZQ-102、ZZQ-103")):
+            with self.subTest(body=body), mock.patch.object(check_public_text, "load_library", return_value=loaded):
+                agent_worktree.require_public_text(self.repo, {"PR 正文": body})
 
     def test_an_older_remote_head_and_another_base_are_refused(self):
         for field, value, message in (("headRefOid", "0" * 40, "提交.*不一致"),
@@ -793,7 +828,7 @@ class IntegrationVersionTests(_WorktreeCase):
         self.assertEqual(report["version"], "0.7.14")
         self.assertEqual(read_version(self.repo), "0.7.14")
         self.assertEqual(_git(self.repo, "log", "-1", "--format=%s").stdout.strip(),
-                         f"Merge branch '{branch}'")
+                         f"Merge branch '{branch}' (#1)")
         touched = _lines(_git(self.repo, "show", "--name-only", "--format=", "HEAD"))
         self.assertNotIn("src/peach/__init__.py", touched)
 

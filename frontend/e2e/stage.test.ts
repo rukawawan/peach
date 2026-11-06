@@ -10,7 +10,7 @@ import { after, before, describe, it } from 'node:test';
 import type { Browser, Page } from 'playwright-core';
 
 import { DETAIL, openFollowFeed } from './follow-fixture.ts';
-import { layout, launch, VIEWPORTS } from './harness.ts';
+import { layout, launch, stubTimelineSheets, VIEWPORTS } from './harness.ts';
 import { ITEM, openItemPage } from './item-fixture.ts';
 
 const DESKTOP = VIEWPORTS.find((viewport) => !viewport.mobile)!;
@@ -226,6 +226,77 @@ describe('舞台岛', () => {
       assert.equal(await theater.getAttribute('title'), null, '原生 title 与自绘提示会叠在一起');
       assert.deepEqual(await tip.evaluate((node) => [node.querySelector('.vjs-peach-tooltip-text')?.textContent,
         node.querySelector('kbd')?.textContent]), ['影院模式', 'T']);
+      assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('进度条画面预览：按时刻取格、靠边整块留在进度条里、每页拼图只取一次；小窗与触屏拖动同一块', { timeout: 60_000 }, async () => {
+    let requested = new Map<number, number>();
+    const opened = await openItemPage(browser, `/assets/${ITEM.plain}`, DESKTOP);
+    try {
+      const page = opened.page;
+      // 桩条目 3600 秒，10 秒一帧共 360 帧、4 张拼图。挂上之后再进详情，播放器挂载时取索引。
+      requested = await stubTimelineSheets(page, { frames: 360, interval: 10 });
+      await page.reload({ waitUntil: 'load' });
+      await page.locator(PLAYER).waitFor({ state: 'attached' });
+      /* 桩片源放不出来，控件条不接指针：指针事件直接派到进度条上，量的是接线与几何。 */
+      const point = (scope: string, type: string, at: number, pointerType = 'mouse') => page.evaluate(
+        ([selector, kind, ratio, pointer]) => {
+          const bar = document.querySelector<HTMLElement>(selector)!, box = bar.getBoundingClientRect();
+          bar.dispatchEvent(new PointerEvent(kind, { bubbles: true, pointerType: pointer, clientX: box.left + box.width * ratio, clientY: box.top + 2 }));
+        }, [scope, type, at, pointerType] as const);
+      const measure = (scope: string) => page.evaluate((selector) => {
+        const bar = document.querySelector<HTMLElement>(selector)!, preview = bar.querySelector<HTMLElement>('[data-player-seek-preview]')!;
+        const image = preview.querySelector('img'), box = bar.getBoundingClientRect(), shown = preview.getBoundingClientRect();
+        const frame = preview.querySelector('.vjs-peach-seek-frame')?.getBoundingClientRect();
+        return { hidden: preview.hidden, left: shown.left - box.left, right: box.right - shown.right, width: shown.width,
+          time: preview.querySelector('span')!.textContent, src: image?.getAttribute('src') ?? '', offset: image?.style.top ?? '',
+          scale: image && frame?.width ? image.getBoundingClientRect().width / frame.width : 0,
+          transition: getComputedStyle(preview).transitionDuration };
+      }, scope);
+      const progress = '#stage .vjs-progress-control';
+      await point(progress, 'pointermove', .5);
+      await page.waitForFunction(() => document.querySelector<HTMLImageElement>('#stage [data-player-seek-preview] img')?.complete);
+      const middle = await measure(progress);
+      assert.equal(middle.hidden, false);
+      assert.equal(middle.time, '30:00');
+      assert.equal(middle.src, `/timeline?id=${ITEM.plain}&s=1&source=peach`, '30 分钟是第 180 帧，落在第 2 张拼图');
+      assert.equal(middle.offset, '-800%', '第 180 帧是第 2 张的第 80 格，第 9 行');
+      assert.ok(Math.abs(middle.scale - 10) < .3, `拼图要放大到取景框的 10 倍才能只露一格：${middle.scale}`);
+      assert.equal(middle.transition, '0s', '减少动态效果时预览不做位移动画');
+      for (const at of [0, .01, .99, 1]) {
+        await point(progress, 'pointermove', at);
+        const edge = await measure(progress);
+        assert.ok(edge.left >= -0.5 && edge.right >= -0.5, `靠边被裁：${JSON.stringify({ at, ...edge })}`);
+      }
+      for (let at = 0; at <= 1; at += .05) await point(progress, 'pointermove', at);
+      assert.deepEqual([...requested.entries()].sort(), [[0, 1], [1, 1], [2, 1], [3, 1]], '拼图预热一次后不该随指针重取');
+      await point(progress, 'pointerleave', 1);
+      assert.equal((await measure(progress)).hidden, true);
+
+      await toMiniplayer(page);
+      const mini = '#miniplayer .vjs-progress-control';
+      await point(mini, 'pointermove', .02);
+      const inMini = await page.evaluate(() => {
+        const frame = document.querySelector('[data-miniplayer-frame]')!.getBoundingClientRect();
+        const preview = document.querySelector<HTMLElement>('#miniplayer [data-player-seek-preview]')!;
+        const box = preview.getBoundingClientRect();
+        const clock = document.querySelector('#miniplayer [data-miniplayer-time]');
+        return { hidden: preview.hidden, display: getComputedStyle(preview).display,
+          inside: box.left >= frame.left - .5 && box.right <= frame.right + .5 && box.top >= frame.top - .5, width: box.width,
+          clock: clock ? getComputedStyle(clock).visibility : 'hidden' };
+      });
+      assert.deepEqual(inMini, { hidden: false, display: 'flex', inside: true, width: inMini.width, clock: 'hidden' }, JSON.stringify(inMini));
+      assert.ok(inMini.width <= 170, `小窗里的预览没收到窄档：${inMini.width}`);
+
+      await point(mini, 'pointerdown', .75, 'touch');
+      assert.equal((await measure(mini)).time, '45:00');
+      await point(mini, 'pointermove', .8, 'touch');
+      assert.equal((await measure(mini)).time, '48:00');
+      await point(mini, 'pointerup', .8, 'touch');
+      assert.equal((await measure(mini)).hidden, true, '触屏抬手预览没收起');
       assert.deepEqual(withoutPlayer(opened.problems), []);
     } finally {
       await opened.close();

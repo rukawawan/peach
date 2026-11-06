@@ -170,25 +170,31 @@ describe('顶栏搜索', () => {
       const opened = await openSearch(browser, { viewport, history: ['最近搜索'] });
       try {
         const { page } = opened;
-        await page.route(/\/api\/jav\/discoveries\?/, route => route.fulfill({ json: { items: [
-          { id: 11, asset_id: 11, code: 'ABW-101', title: 'JAV 作品', is_jav: true, has_cover: true,
-            performer_refs: [{ id: 90001, name: '七海ひな', has_image: true }] },
-        ] } }));
-        await page.route(/\/api\/follow\?/, route => route.fulfill({ json: {
-          sources: [{ id: 1, author_key: 'name:作者', label: '作者', ref: '作者', provider: 'pixiv', official_avatar_url: '/poster?id=11' }],
-          groups: [{ primary: { id: 901, source_id: 1, title: '关注作品', thumb_url: '/poster?id=11', media_kind: 'video', status: 'saved' },
-            variants: [{ id: 902, source_id: 1, title: '图片作品', thumb_url: '/poster?id=12', media_kind: 'image', status: 'seen',
-              media_items: [{ index: 2, media_kind: 'image', thumb_url: '/poster?id=13' }] }], duplicates: [] }],
-        } }));
-        await page.route(/\/api\/follow\/authors\?/, route => route.fulfill({ json: {
-          items: [{ k: '作者', key: 'name:作者', entity_id: 90002 }],
-        } }));
-        await page.route(/\/api\/feeds\/discoveries\?/, route => route.fulfill({ json: { items: [
-          { id: 91, code: 'ABW-102', title: '订阅新作', has_cover: true },
-        ] } }));
+        // 推荐栏一个请求取齐：作品那份用演示库的真结果，其余几份换成能覆盖每一组的夹具。
+        await page.route(/\/api\/search\/recommendations/, async route => {
+          const bundle = await (await route.fetch()).json();
+          await route.fulfill({ json: { ...bundle,
+            jav: { items: [{ id: 11, asset_id: 11, code: 'ABW-101', title: 'JAV 作品', is_jav: true, has_cover: true,
+              performer_refs: [{ id: 90001, name: '七海ひな', has_image: true }] }] },
+            follow: {
+              sources: [{ id: 1, author_key: 'name:作者', label: '作者', ref: '作者', provider: 'pixiv', official_avatar_url: '/poster?id=11' }],
+              groups: [{ primary: { id: 901, source_id: 1, title: '关注作品', thumb_url: '/poster?id=11', media_kind: 'video', status: 'saved' },
+                variants: [{ id: 902, source_id: 1, title: '图片作品', thumb_url: '/poster?id=12', media_kind: 'image', status: 'seen',
+                  media_items: [{ index: 2, media_kind: 'image', thumb_url: '/poster?id=13' }] }], duplicates: [] }],
+            },
+            // 作者头像读名册那一行自己的地址（官方优先、归档兜底）。
+            authors: { items: [{ k: '作者', key: 'name:作者', entity_id: 90002, avatar: '/poster?id=11', avatar_fallback: '' }] },
+            feeds: { items: [{ id: 91, code: 'ABW-102', title: '订阅新作', has_cover: true }] },
+          } });
+        });
+        // 推荐在页面空闲时就预取好了，那时夹具还没挂上；挂好之后重开一次页面，预取走夹具。
+        await page.reload({ waitUntil: 'load' });
+        await page.locator(`${MENU} > .peach-react`).waitFor({ state: 'attached', timeout: 15_000 });
         if (viewport.mobile) await page.locator('#searchBtn').click();
         await page.locator('#q').click();
         await page.locator(`${MENU} [data-search-recommendations]`).waitFor();
+        // 推荐没到之前栏里先是按最终版式摆的占位，等占位都换成真行再数。
+        await page.waitForFunction(() => !document.querySelector('#searchMenu [data-search-placeholder]'), undefined, { timeout: 10_000 });
         assert.equal(await page.locator(`${MENU} [data-kind="author"] [data-search-face] img`).count(), 1);
         for (const kind of ['asset', 'jav', 'post', 'photo', 'release']) {
           const cover = page.locator(`${MENU} [data-kind="${kind}"] [data-search-pic] img`).first();
@@ -203,7 +209,7 @@ describe('顶栏搜索', () => {
         assert.ok(overflow.scrollWidth <= overflow.width + 1);
         assert.ok(overflow.right <= overflow.viewport + 1);
         assert.equal(await page.locator(`${MENU} [data-kind="photo"] h3 a`).getAttribute('href'), '/follow?media=images');
-        assert.ok((await page.locator(`${MENU} [data-kind="photo"] img`).getAttribute('src'))?.includes('id=13'));
+        assert.ok((await page.locator(`${MENU} [data-kind="photo"] [data-search-pic] img`).getAttribute('src'))?.includes('id=13'));
         await page.screenshot({ path: `../build/agent-verification/browser/search-recommendations-${viewport.name}.png` });
         const subscription = page.locator(`${MENU} [data-kind="performer"] h3 a`);
         await subscription.focus();
@@ -298,6 +304,26 @@ describe('顶栏搜索', () => {
       assert.equal(await page.locator('#q').inputValue(), '七海の夏');
       assert.deepEqual(posts, [{ query: '七海の夏' }]);
       assert.notEqual(await page.evaluate(() => document.activeElement?.id), 'q', '提交之后焦点还留在输入框里');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('搜索结果页的标题写搜索词；点侧栏「首页」回到不带词的首页', { timeout: 60_000 }, async () => {
+    const opened = await openSearch(browser);
+    try {
+      const { page } = opened;
+      const title = page.locator('#catalogPageHeading [data-page-title]');
+      await typeQuery(opened);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => new URLSearchParams(location.search).has('q'), undefined, { timeout: 5_000 });
+      const searched = `搜索结果：「${query(page)!}」`;
+      await page.waitForFunction(text => document.querySelector('#catalogPageHeading [data-page-title]')?.textContent === text,
+        searched, { timeout: 5_000 });
+      await page.locator('[data-nav][aria-label="首页"]').first().click();
+      await page.waitForFunction(() => !new URLSearchParams(location.search).has('q'), undefined, { timeout: 5_000 });
+      assert.equal(await title.textContent(), '首页');
+      assert.equal(await page.locator('#q').inputValue(), '', '回到首页后搜索框里还留着词');
     } finally {
       await opened.close();
     }

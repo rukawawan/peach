@@ -88,6 +88,9 @@ class PeachSettings:
     #: 打包带走整个 `web/`，这份第三方工具不能跟着进独立包（docs/FRONTEND.md「界面标注」）。
     agentation_path: Path = PROJECT_ROOT / "build" / "agentation" / "peach-agentation.js"
     token: str = ""
+    #: 口令取自口令文件时是那份文件；被 `--token`、`PEACH_TOKEN` 覆盖或没有口令时是 None，
+    #: 配置页据此决定能不能在运行中换口令。
+    token_file: Path | None = None
     access_path: Path | None = None
     docs_enabled: bool = False
     mdns_enabled: bool = False

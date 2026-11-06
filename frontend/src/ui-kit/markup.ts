@@ -62,7 +62,10 @@ export function projectBannerHtml(message:unknown,{variant='gray',href,label,val
   return `<aside class="ui-project-banner ${PROJECT_BANNER_CLASSES[kind]}" role="${kind==='error'?'alert':'status'}"><div>${Number(max)>0?gaugeHtml('任务完成率',value,max):icon(kind==='error'||kind==='warning'?'alert':'info')}<p>${esc(message)}</p></div><a href="${esc(href)}">${esc(label)}</a></aside>`;
 }
 
-export function gaugeHtml(label:string,value:unknown,max:unknown=100,{usage=false,compact=false}={}):string{
+/** Geist Gauge。`indeterminate` 是 Geist 的不定档：一次请求这种说不出完成了几成的等待，画一段转动的弧，
+ *  不报 `aria-valuenow`；旁边要有一句说明在等什么（Geist：别让人把它读成 0）。 */
+export function gaugeHtml(label:string,value:unknown,max:unknown=100,{usage=false,compact=false,indeterminate=false}={}):string{
+  if(indeterminate)return `<span class="ui-geist-gauge" data-indeterminate role="progressbar" aria-label="${esc(label)}" aria-valuemin="0" aria-valuemax="100"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/><circle cx="16" cy="16" r="13" pathLength="100" stroke-dasharray="25 100"/></svg></span>`;
   const ceiling=Number(max), current=Number(value);
   if(!Number.isFinite(ceiling)||ceiling<=0||!Number.isFinite(current))return `<span>${esc(label)}：未取得</span>`;
   const percent=Math.max(0,Math.min(100,current/ceiling*100));

@@ -2,10 +2,27 @@
 .peach-react [data-catalog-table] .bui-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .peach-react [data-catalog-rating] { display: flex; flex-direction: column; align-items: stretch; gap: 8px; white-space: normal; }
 .peach-react [data-catalog-rating] [data-rating-stars] { align-self: flex-start; }
-/* 名称格：缩略图、头像、标题与署名横排；头像和署名与卡片同一套，点得开人物与厂牌页。 */
+/* 名称格：缩略图与标题横排。媒体库与艺人各占一列（`[data-list-library]`、`[data-list-people]`）。 */
 .peach-react [data-catalog-table] [data-list-identity] { position: relative; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 12px 0; }
 .peach-react [data-catalog-table] [data-list-open] { display: flex; flex: none; margin-right: 4px; padding: 0; border: 0; background: none; cursor: pointer; }
-.peach-react [data-catalog-table] [data-list-identity] > [data-media-avatar] { margin-top: 0; }
+/* 艺人列：头像在前、署名在后，与卡片同一套，点得开人物与厂牌页；头像已表明是人，署名前不再画人形图标。 */
+.peach-react [data-catalog-table] [data-list-people] { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink-2); font-size: var(--fs-sm); }
+.peach-react [data-catalog-table] [data-list-people] > [data-media-avatar] { flex: none; margin-top: 0; }
+/* 共演叠放与首页卡片同一套几何；卡片里上限按所在行宽的 30% 算，艺人列只有一百多像素，照算会把几张头像
+ * 压成完全重叠，这里直接用卡片满员时的上限。 */
+.peach-react [data-catalog-table] [data-list-people] > [data-media-avatars] { flex: none; max-width: 109px; }
+.peach-react [data-catalog-table] [data-list-people] > [data-media-who] { display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.peach-react [data-catalog-table] [data-list-people] > [data-media-who] > span { overflow: hidden; text-overflow: ellipsis; }
+.peach-react [data-catalog-table] [data-list-people] > [data-media-who] > svg { display: none; }
+.peach-react [data-catalog-table] [data-list-people] > [data-media-who-more] { flex: none; color: var(--muted); }
+/* 数据表给格子里的链接写了 `width: fit-content` 与 `align-self: flex-start`：头像是链接时（新作的来源人物）会被
+ * 压成 0 宽，署名是链接时贴在格子上沿、和头像与「等 N 人」对不齐。这里按头像尺寸钉回、署名居中。 */
+.peach-react [data-catalog-table] [data-list-people] a[data-media-avatar] { width: 38px; }
+.peach-react [data-catalog-table] [data-list-people] > a { align-self: center; }
+.peach-react [data-catalog-table] [data-list-people] > a[data-media-who] { text-decoration: none; }
+.peach-react [data-catalog-table] [data-list-people] > a[data-media-who]:hover { text-decoration: underline; }
+/* JAV 新作列表的厂牌格：16px 方形标识，没装标识时画首字，与媒体库格同一行距。 */
+.peach-react [data-catalog-table] [data-list-studio-mark] { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 16px; height: 16px; overflow: hidden; border-radius: 4px; background: var(--sunk); color: var(--muted); font-size: 10px; line-height: 1; object-fit: cover; }
 .peach-react [data-catalog-table] button[data-list-name] { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .peach-react [data-catalog-table] [data-list-picture] [data-media-group] { top: 4px; right: 4px; min-height: 0; padding: 1px 6px; border-radius: 6px; font-size: 11px; }
 .peach-react [data-catalog-table] [data-list-picture] { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 112px; height: 63px; overflow: hidden; border-radius: var(--control-radius); background: var(--sunk); color: var(--muted); font-size: var(--fs-sm); }
@@ -13,16 +30,14 @@
 .peach-react [data-catalog-table] [data-list-picture] :is(img,video) { width: 100%; height: 100%; }
 .peach-react [data-catalog-table] [data-list-picture] :is(img:not([data-jav-image]),video) { object-fit: cover; }
 .peach-react [data-catalog-table] [data-list-text] { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
-/* 标题最多两行再截断：行高按缩略图定，两行标题加一行署名放得下，作品列窄时少截一半。 */
+/* 标题最多两行再截断：行高按缩略图定，作品列窄时少截一半。 */
 .peach-react [data-catalog-table] [data-list-name] { display: -webkit-box; min-width: 0; overflow: hidden; white-space: normal; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.4; }
 .peach-react [data-catalog-table] [data-list-identity]:has([data-list-open]:hover, [data-list-name]:hover) [data-list-name] { text-decoration: underline; }
-.peach-react [data-catalog-table] [data-list-byline] { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; color: var(--muted); font-size: var(--fs-sm); }
-.peach-react [data-catalog-table] [data-list-byline] > * { flex: none; }
-.peach-react [data-catalog-table] [data-list-byline] > [data-media-who] { flex: 0 1 auto; min-width: 0; }
-.peach-react [data-catalog-table] [data-list-byline] [data-media-who] svg { flex: none; width: var(--icon-inline); height: var(--icon-inline); fill: none; stroke: currentColor; stroke-width: 2; }
-/* 列表行的来源：署名前是媒体库图标加名称；用户给这个媒体库选了来源色时整行铺淡色。
+/* 媒体库列：图标加名称；用户给这个媒体库选了来源色时整行铺淡色。
  * 个人状态图标缩小后贴在预览图左下角。 */
-.peach-react [data-catalog-table] [data-list-library] { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); }
+.peach-react [data-catalog-table] [data-list-library] { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; color: var(--ink-2); font-size: var(--fs-sm); }
+/* 名字是弹性容器里的一项，省略号要写在它自己身上才生效。 */
+.peach-react [data-catalog-table] [data-list-library] > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .peach-react [data-catalog-table] [data-catalog-row][data-library] > td { background: color-mix(in oklab, var(--library-color) 9%, transparent); }
 [data-theme="dark"] .peach-react [data-catalog-table] [data-catalog-row][data-library] > td { background: color-mix(in oklab, var(--library-color) 13%, transparent); }
 .peach-react [data-catalog-table] [data-list-picture] [data-media-status] { left: 4px; bottom: 4px; gap: 4px; }
@@ -32,7 +47,8 @@
  * 两行上限按这一档算，13px 是行间 5px 加上下各 4px 的焦点环余量。 */
 .peach-react [data-catalog-table] [data-list-tags] { height: auto; max-height: calc(var(--control-h-inline) * 2 + 13px); white-space: normal; }
 .peach-react [data-catalog-table] [data-list-tags] [data-media-tag] { box-sizing: border-box; height: var(--control-h-inline); padding-block: 0; line-height: calc(var(--control-h-inline) - 2px); }
-/* 列表骨架：壳的首屏与列表岛等数据时同一份格子，尺寸照真实行（缩略图 112×63、头像 38、标题署名两行）。 */
+/* 列表骨架：壳的首屏与列表岛等数据时同一份格子，尺寸照真实行（缩略图 112×63、标题两行；艺人列头像 38、
+ * 媒体库列图标 16，各带一条名字）。 */
 .peach-react [data-list-skeleton] { display: flex; flex-direction: column; gap: 16px; }
 .peach-react [data-list-skeleton-tools] { display: flex; justify-content: flex-end; }
 .peach-react [data-list-skeleton-tools] > i { display: block; width: 312px; max-width: 100%; height: 36px; border-radius: var(--control-radius); }
@@ -40,7 +56,10 @@
 .peach-react [data-completion-skeleton] { display: block; height: calc(var(--control-h) + 16px); border-radius: var(--radius-2lg, 10px); }
 .peach-react [data-list-skeleton-name] { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
 .peach-react [data-list-skeleton-name] > i { flex: none; width: 112px; height: 63px; margin-right: 4px; border-radius: var(--control-radius); }
-.peach-react [data-list-skeleton-name] > b { flex: none; width: 38px; height: 38px; border-radius: 50%; }
+.peach-react [data-list-skeleton-mark] { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.peach-react [data-list-skeleton-mark] > b { flex: none; width: 16px; height: 16px; border-radius: 4px; }
+.peach-react [data-list-skeleton-mark="people"] > b { width: 38px; height: 38px; border-radius: 50%; }
+.peach-react [data-list-skeleton-mark] > i { display: block; flex: 1; max-width: 96px; height: 14px; border-radius: 6px; }
 .peach-react [data-list-skeleton-name] > span { display: flex; flex: 1; flex-direction: column; gap: 8px; min-width: 0; }
 .peach-react [data-list-skeleton-name] > span > i { display: block; width: 72%; height: 14px; border-radius: 6px; }
 .peach-react [data-list-skeleton-name] > span > i + i { width: 44%; height: 12px; }

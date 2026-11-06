@@ -18,6 +18,9 @@ it('危险操作聚焦取消，取消不写入，关闭归还焦点', async () =
   const pending = confirmModal({title:'清理记录',body:'清理 2 项',confirmLabel:'清理记录',danger:true,onConfirm:write});
   const cancel = document.querySelector<HTMLButtonElement>('[data-modal-cancel]')!;
   expect(document.activeElement).toBe(cancel);
+  const dialog = document.querySelector('dialog')!;
+  expect(dialog.getAttribute('role')).toBe('alertdialog');
+  expect(document.getElementById(dialog.getAttribute('aria-describedby')!)?.textContent).toBe('清理 2 项');
   cancel.click();
   expect((await pending).confirmed).toBe(false);
   expect(write).not.toHaveBeenCalled(); expect(document.activeElement).toBe(trigger);

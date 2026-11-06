@@ -139,6 +139,11 @@ class RebuildTests(unittest.TestCase):
                 failed = metadata_amane.rebuild(tools, runner=lambda *a, **k: completed("", 2, "boom"))
                 self.assertFalse(failed["ok"])
                 self.assertIn("boom", failed["error"])
+                # 长输出保留首行，末尾从整行截起，摘要不会从半个词开始。
+                stderr = "× Failed to fetch amane\n" + "".join(f"  line {index:03d} detail detail\n" for index in range(80))
+                long = metadata_amane.rebuild(tools, runner=lambda *a, **k: completed("", 1, stderr))["error"]
+                self.assertTrue(long.startswith("uv sync 失败（exit 1）：× Failed to fetch amane\n…\n  line "), long[:80])
+                self.assertTrue(long.endswith("line 079 detail detail"))
                 python = metadata_amane.bridge_python(tools)
 
                 def build(*args, **kwargs):

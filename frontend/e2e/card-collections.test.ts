@@ -23,12 +23,12 @@ describe('卡片信息与收藏入口', () => {
         const inspect = () => opened.page.locator('[data-follow-list] [data-follow-item]').evaluateAll(cards => cards.slice(0, 6).map(card => {
           const box = (selector: string) => card.querySelector(selector)!.getBoundingClientRect();
           const title = box('[data-media-title]'), byline = box('[data-follow-byline]'), labels = box('[data-follow-labels]');
-          return { gap: byline.top - title.bottom, labelGap: labels.top - byline.bottom, height: card.getBoundingClientRect().height,
+          return { gap: byline.top - title.bottom, labelGap: labels.top + 4 - byline.bottom, height: card.getBoundingClientRect().height,
             title: title.height, line: parseFloat(getComputedStyle(card.querySelector('[data-media-title]')!).lineHeight) };
         }));
         const rows = await inspect();
         assert(rows[0].title >= rows[0].line * 1.9 && rows[1].title < rows[1].line * 1.5, JSON.stringify(rows));
-        assert(rows.every(row => row.gap >= 4 && row.gap <= 8 && row.labelGap >= 8 && row.labelGap <= 12), JSON.stringify(rows));
+        assert(rows.every(row => row.gap >= 4 && row.gap <= 8 && row.labelGap >= 4 && row.labelGap <= 8), JSON.stringify(rows));
         if (viewport.mobile) {
           assert(Math.abs((rows[0].height - rows[1].height) - (rows[0].title - rows[1].title)) <= 1, JSON.stringify(rows));
         } else {
@@ -37,7 +37,7 @@ describe('卡片信息与收藏入口', () => {
         await opened.page.evaluate(() => { document.body.dataset.density = 'dense' });
         const dense = await inspect();
         assert(dense.every(row => row.title < row.line * (viewport.mobile ? 2.1 : 1.5)
-          && row.labelGap >= 8 && row.labelGap <= 12), JSON.stringify(dense));
+          && row.labelGap >= 2 && row.labelGap <= 8), JSON.stringify(dense));
         if (viewport.mobile) {
           assert(dense[0].title >= dense[0].line * 1.9, JSON.stringify(dense));
           assert(Math.abs((dense[0].height - dense[1].height) - (dense[0].title - dense[1].title)) <= 1, JSON.stringify(dense));

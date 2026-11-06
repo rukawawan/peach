@@ -56,3 +56,5 @@
    溶解的那一层（`.cleardissolve`）在 `frontend/src/ui-kit/motion.css`；这里只在溶解期间收起
    搜索框自己的占位字，免得旧字往上飘的同时占位字在原处闪出来。 */
 .search input.dissolving::placeholder{opacity:0}
+/* 占位字换一句时也一样：换的那一层在 `frontend/src/ui-kit/motion.css`。 */
+.search input.placeholderrolling::placeholder{opacity:0}

@@ -5,12 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from peach import fc2_sellers
+from peach import auto_landing_revert, fc2_sellers
 from peach.entities import upsert_asset_entity
 from peach.entity_classification import write_claim
 from peach.web_entity import q_entity, q_index
 from peach.web_state import WebContract
-from scripts import revert_auto_landing
 from tests.support.ledger import fresh_ledger
 
 
@@ -46,9 +45,9 @@ class Fc2SellerTests(unittest.TestCase):
 
     def undo(self):
         with self.connection:
-            aliases = revert_auto_landing.planned_aliases(self.connection,fc2_sellers.SOURCE,self.batch)
-            refs = revert_auto_landing.planned_refs(self.connection,fc2_sellers.SOURCE,self.batch)
-            links = revert_auto_landing.planned_links(self.connection,fc2_sellers.SOURCE,self.batch)
+            aliases = auto_landing_revert.planned_aliases(self.connection,fc2_sellers.SOURCE,self.batch)
+            refs = auto_landing_revert.planned_refs(self.connection,fc2_sellers.SOURCE,self.batch)
+            links = auto_landing_revert.planned_links(self.connection,fc2_sellers.SOURCE,self.batch)
             sellers = fc2_sellers.planned_revert(self.connection,fc2_sellers.SOURCE,self.batch)
             for row in aliases:
                 self.connection.execute('DELETE FROM entity_alias WHERE entity_id=? AND source=?',(row['entity_id'],row['source']))

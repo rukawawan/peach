@@ -448,6 +448,8 @@ class HeaderRepairStoreTests(unittest.TestCase):
                 self.assertTrue(entered.wait(5))
                 run = store.query(task_key='mp4-header-repair')[0]
                 self.assertEqual(run.status, 'running')
+                # 任务卡在跑的时候就要能链接到正在修的那部作品。
+                self.assertEqual(run.result_summary, {'asset_id': 6297, 'name': 'movie.mp4'})
                 task_control.request(store, run.id, 'cancel')
                 release.set()
                 worker = next(iter(repairs._jobs.values())).thread

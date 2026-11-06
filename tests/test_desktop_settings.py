@@ -180,6 +180,14 @@ class DesktopSettingsTests(unittest.TestCase):
             remove.assert_not_called()
             self.assertEqual(client.post('/api/configuration/uninstall',json={'delete_data':False,'confirmation':'卸载 Peach'}).status_code,200)
             remove.assert_called_once_with(self.config,False)
+            from peach.jobs import BackgroundJob
+            follow = BackgroundJob('PeachFollowCheckJob', task_key='follow-check')
+            follow.state = {'job_id': 'running-follow', 'status': 'running'}
+            app.state.web_contract = SimpleNamespace(follow_job=follow)
+            busy = client.post('/api/configuration/uninstall',json={'delete_data':False,'confirmation':'卸载 Peach'})
+            self.assertEqual(busy.status_code,409)
+            self.assertEqual(busy.json()['detail'],'追更检查正在运行，请在任务中心等它完成或取消后再卸载')
+            remove.assert_called_once()
             self.assertEqual(client.post('/api/configuration/startup',json={'enabled':'false','silent':True}).status_code,400)
             self.assertEqual(client.post('/api/configuration/peach-proxy',json={'mode':'proxy','proxy':'invalid'}).status_code,400)
             # 外部入口：域名不成形时整批不写，落下去的会是一排点过去必然落空的入口。

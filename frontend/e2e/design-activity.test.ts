@@ -69,6 +69,64 @@ describe('任务页云下载布局', () => {
       assert.deepEqual(opened.problems, []);
     } finally { await opened.close() }
   });
+  for (const viewport of VIEWPORTS) it(`${viewport.name} 零读数标为未使用，单部作品的任务链接到作品详情`, async () => {
+    const name = '[Studio]Very_Long_Unbroken_File_Name_That_Should_Wrap_Inside_The_Card_2026-11-03_1080p.mp4';
+    const opened = await visit(browser, '/tasks', viewport, async page => {
+      await page.route('**/api/downloads?*', route => route.fulfill({ json: { available: false, tasks: [], providers: [] } }));
+      await page.route('**/api/tasks*', route => route.fulfill({ json: {
+        available: true, skipped: [], finished: [{
+          id: 8, task_key: 'amane-bridge', task_label: 'amane 桥重建', trigger: 'manual', status: 'failed',
+          host: 'desk', started_at: '2026-11-03T07:00:00Z', finished_at: '2026-11-03T07:00:01Z', elapsed_seconds: 1,
+          progress_current: 0, progress_total: null, progress_label: '', result_summary: { ok: false },
+          error: 'uv sync 失败（exit 1）：× Failed to fetch amane\n…\n  fatal: missing object', parent_run_id: null, followup_key: '',
+        }], running: [{
+          id: 7, task_key: 'mp4-header-repair', task_label: '播放文件头修复', trigger: 'manual', status: 'running',
+          host: 'desk', started_at: '2026-11-03T08:00:00Z', finished_at: null, elapsed_seconds: 140,
+          progress_current: 0, progress_total: null, progress_label: '读取帧时间戳',
+          result_summary: { asset_id: 6297, name }, error: '', parent_run_id: null, followup_key: '',
+          control: { state: 'running', actions: ['pause', 'cancel'] },
+          resources: {
+            cpu: { state: 'ready', percent: 61.6, high: true },
+            gpu: { state: 'ready', percent: 0, high: false },
+            network: { state: 'unavailable', bytes_per_second: null, high: false, via: 'cloud',
+              reason: '网盘挂载的缓存与预读无法按任务取得实际网速' },
+            sampled_at: '2026-11-03T08:02:20Z',
+          },
+        }],
+      } }));
+    });
+    try {
+      const page = opened.page;
+      const chips = page.locator('[data-task-resources="7"]');
+      await chips.waitFor();
+      const idle = await chips.locator('[data-task-resource]').evaluateAll(nodes =>
+        Object.fromEntries(nodes.map(node => [(node as HTMLElement).dataset.taskResource, 'resourceIdle' in (node as HTMLElement).dataset])));
+      assert.deepEqual(idle, { cpu: false, gpu: true, network: false });
+      assert.equal(await chips.locator('[data-task-resource="network"]').getAttribute('data-resource-via'), 'cloud');
+      const link = page.locator('[data-task-subject="7"]');
+      assert.equal(await link.getAttribute('href'), '/assets/6297');
+      assert.equal(await link.getAttribute('title'), name);
+      assert.equal(await page.locator('#run-7 details').count(), 0);
+      const geometry = await page.locator('#run-7').evaluate(card => {
+        const box = card.getBoundingClientRect();
+        const link = card.querySelector('[data-task-subject]')!.getBoundingClientRect();
+        return { fits: document.documentElement.scrollWidth <= innerWidth, inside: link.right <= box.right };
+      });
+      assert.deepEqual(geometry, { fits: true, inside: true });
+      // 失败卡：框线是 danger 色且有宽度，画成不占盒子的 outline；结束原因在正文，全文收在底部那一行可展开的明细里。
+      const failed = page.locator('#run-8');
+      const frame = await failed.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor, border: style.borderTopWidth };
+      });
+      assert.deepEqual(frame, { style: 'solid', width: '1px',
+        color: await tokenColor(page, '#run-8', '--color-border-error-default'), border: '0px' });
+      assert.equal(await failed.locator('[data-task-error]').count(), 1);
+      assert.equal(await failed.locator('details [data-error-details]').count(), 1);
+      assert.equal(await failed.locator('[data-error-excerpt]').count(), 0);
+      assert.deepEqual(opened.problems, []);
+    } finally { await opened.close() }
+  });
   for (const viewport of VIEWPORTS) it(`${viewport.name} 追更问题展示来源原因和管理入口`, async () => {
     const opened = await visit(browser, '/tasks', viewport, async page => {
       await page.route('**/api/tasks*', route => route.fulfill({ json: {
@@ -87,6 +145,13 @@ describe('任务页云下载布局', () => {
       const disclosure = card.locator('summary').filter({ hasText: '问题详情 · 51 项' });
       assert.equal(await disclosure.getAttribute('aria-expanded'), 'false');
       assert.equal(await card.locator('[data-task-issues]').isVisible(), false);
+      // 问题详情与技术详情同为卡片底部的一行：同一层级、同一左边，问题详情在前。
+      const rows = await card.locator('details').evaluateAll((nodes) => nodes.map((node) => ({
+        footer: node.parentElement!.parentElement === node.closest('li'), left: Math.round(node.getBoundingClientRect().left),
+        issues: Boolean(node.querySelector('[data-task-issues]')) })));
+      assert.equal(rows.length, 2);
+      assert.deepEqual(rows.map((row) => [row.footer, row.issues]), [[true, true], [true, false]]);
+      assert.equal(rows[0].left, rows[1].left);
       await disclosure.click();
       const errors = card.getByRole('region', { name: '任务问题详情' });
       await errors.waitFor();
@@ -100,8 +165,17 @@ describe('任务页云下载布局', () => {
       assert.equal(await errors.evaluate((node) => getComputedStyle(node.parentElement!).backgroundColor), background);
       assert.match(await card.locator('[data-task-issues]').innerText(), /示例作者.*示例站点.*检查失败/s);
       assert.match(await card.locator('[data-task-issues]').innerText(), /HTTP 403：站点拒绝访问/);
-      assert.equal(await card.getByText('示例作者 1 · 示例站点 · 检查失败', { exact: true })
-        .evaluate((node) => getComputedStyle(node).fontWeight), '400');
+      // 分层：名字是中等字重，来源与类别次级色，原因比名字小一档且用次级色。
+      const layers = await card.locator('[data-task-issues] > li').first().evaluate((item) => {
+        const name = item.firstElementChild!, meta = name.querySelector('span')!, reason = item.querySelector('[data-error-excerpt]')!;
+        const style = (node: Element) => getComputedStyle(node);
+        return { name: style(name).fontWeight, metaColor: style(meta).color, nameColor: style(name).color,
+          reasonColor: style(reason).color, smaller: parseFloat(style(reason).fontSize) < parseFloat(style(name).fontSize) };
+      });
+      assert.equal(layers.name, '500');
+      assert.equal(layers.smaller, true);
+      assert.notEqual(layers.metaColor, layers.nameColor);
+      assert.equal(layers.reasonColor, layers.metaColor);
       const link = card.getByRole('link', { name: '查看关注来源', exact: true });
       assert.equal(await link.getAttribute('href'), '/subscriptions');
       await link.click();

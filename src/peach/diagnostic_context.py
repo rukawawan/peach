@@ -123,6 +123,7 @@ def runtime(config):
                          'tunnel_mode': config.tunnel.mode},
               'proxy_environment': {name.lower(): bool(os.environ.get(name) or os.environ.get(name.lower()))
                                     for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')},
+              'windows_browsing': windows_browsing(),
               'media_preferences': {'metadata_only': media_processing_policy.metadata_only(config.directory('state')),
                   'preview_acceleration': media_processing_policy.acceleration(config.directory('state'), purpose='preview'),
                   'playback_acceleration': media_processing_policy.acceleration(config.directory('state'))},
@@ -145,9 +146,51 @@ def runtime(config):
     return result
 
 
+def _registry_values(path, names):
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+        values = {}
+        for name in names:
+            try:
+                values[name] = winreg.QueryValueEx(key, name)[0]
+            except FileNotFoundError:
+                values[name] = None
+        return values
+
+
+def windows_browsing():
+    """Windows 的系统代理与默认浏览器：只记开关和程序标识，不记代理地址。"""
+    if os.name != 'nt':
+        return {'status': 'unavailable', 'reason': 'not-windows'}
+    result = {'status': 'available'}
+    try:
+        proxy = _registry_values(r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+                                 ('ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL', 'AutoDetect'))
+        bypass = [item.strip().lower() for item in str(proxy['ProxyOverride'] or '').split(';')]
+        result['system_proxy'] = {
+            'enabled': bool(proxy['ProxyEnable']), 'server_configured': bool(proxy['ProxyServer']),
+            'auto_config': bool(proxy['AutoConfigURL']), 'auto_detect': bool(proxy['AutoDetect']),
+            'bypass_local': '<local>' in bypass,
+            'bypass_loopback': any(item in ('127.0.0.1', 'localhost', '127.*', '<-loopback>') for item in bypass)}
+    except OSError as error:
+        result['system_proxy'] = {'status': 'unavailable', 'reason': type(error).__name__}
+    try:
+        choice = _registry_values(
+            r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice', ('ProgId',))['ProgId']
+        result['default_browser'] = choice if isinstance(choice, str) and re.fullmatch(r'[A-Za-z0-9._-]{1,64}', choice) \
+            else 'unrecognized' if choice else None
+    except OSError as error:
+        result['default_browser'] = {'status': 'unavailable', 'reason': type(error).__name__}
+    return result
+
+
+ORIGIN_FIELDS = ('guard', 'accepted', 'origin_class', 'origin', 'server', 'scheme_match', 'host_match', 'port_match',
+                 'fetch_site', 'fetch_mode', 'fetch_dest', 'scope_scheme', 'forwarded', 'user_agent')
+
+
 def archived_context(archive):
-    """从本次已脱敏、有界日志中提取近期上下文，托盘导出也保留浏览器证据。"""
-    browsers, media = [], []
+    """从本次已脱敏、有界日志中提取近期上下文，托盘导出也保留浏览器与来源检查证据。"""
+    browsers, media, origins = [], [], []
     for name in archive.namelist():
         if '/errors-' not in name:
             continue
@@ -166,5 +209,8 @@ def archived_context(archive):
                     media.append({'at': row.get('at'), 'stage': 'browser', **playback(row['playback'])})
             if row.get('stage') in ('playback-request', 'playback-plan', 'playback-source'):
                 media.append(row)
+            if row.get('stage') == 'origin-mismatch':
+                origins.append({'at': row.get('at'), **{key: row[key] for key in ORIGIN_FIELDS if key in row}})
     return {'recent_browsers': sorted(browsers, key=lambda row: str(row.get('at') or ''))[-8:],
-            'recent_playback': sorted(media, key=lambda row: str(row.get('at') or ''))[-20:]}
+            'recent_playback': sorted(media, key=lambda row: str(row.get('at') or ''))[-20:],
+            'recent_origin_mismatches': sorted(origins, key=lambda row: str(row.get('at') or ''))[-8:]}

@@ -113,4 +113,39 @@ describe('首页新作那一行', () => {
       await opened.close();
     }
   });
+
+  it('封面格说清在等什么；「优先处理」只当场取这一部、不跳详情，没取到换成这一次的原因；没认出的头像也能悬停抬起', { timeout: 60_000 }, async () => {
+    const opened = await openHome(browser);
+    const { page } = opened;
+    const covers: unknown[] = [];
+    try {
+      // 后挂的桩先接：把这一行换成两档状态，再重载从第一趟取数起接住。
+      await page.route(/\/api\/feeds\/discoveries\?/, (route) => route.fulfill({ json: { ok: true, more: false, items: [
+        { ...item(1), cover_state: 'queued', cover_reason: '排在新作资料采集后面，资料取完就取封面', performers: '未登记、已登记',
+          performer_refs: [{ id: null, name: '未登记', has_image: false }, { id: 42, name: '已登记', has_image: false }] },
+        { ...item(2), cover_state: 'missing', cover_reason: '上次没取到：官方图片主机都连不上' }] } }));
+      await page.route((url) => url.pathname === '/api/jav/cover', (route) => {
+        covers.push(JSON.parse(route.request().postData() || '{}'));
+        return route.fulfill({ json: { ok: true, has_cover: false, cover_version: '', message: '官方封面地址都没有取到图片' } });
+      });
+      await page.reload({ waitUntil: 'load' });
+      const first = page.locator('#feedNew [data-feed-id="1"]');
+      await first.locator('[data-feed-cover-state="queued"]').waitFor({ timeout: 5_000 });
+      await settle(page);
+      assert.equal(await page.locator('#feedNew [data-feed-id="2"] [data-feed-cover-state="missing"] .feedcoverreason').textContent(),
+        '上次没取到：官方图片主机都连不上');
+      const unknown = first.locator('.mavstack span.mav');
+      await unknown.hover();
+      assert.equal(await unknown.evaluate((node) => node.matches(':hover')), true, '没认出的头像接不住指针，叠放头像抬不起来');
+      await first.locator('[data-feed-action="prioritise"]').click();
+      await first.locator('[data-feed-cover-state="missing"]').waitFor({ timeout: 5_000 });
+      assert.equal(await first.locator('.feedcoverreason').textContent(), '官方封面地址都没有取到图片');
+      assert.equal(await first.locator('[data-feed-action="prioritise"]').textContent(), '立即重试');
+      assert.deepEqual(covers, [{ code: 'EXM-001' }]);
+      assert.equal(new URL(page.url()).pathname, '/', '按键不该跟着跳进详情');
+      assert.deepEqual(opened.problems, []);
+    } finally {
+      await opened.close();
+    }
+  });
 });

@@ -31,7 +31,7 @@ from .followups import Attempts, Followup, FollowupType, attempts_root, register
 
 #: 这类后继在任务中心的身份，也是活动页上那一行的名字来源。
 TASK_KEY = "creator-identity"
-TASK_LABEL = "查创作者身份"
+TASK_LABEL = "创作者身份查找"
 
 #: 这条后继写下的断言来源都以它开头，后面接 `@<任务行 id>`；撤回按它认。
 SOURCE = "script:creator-identity-wiki"
@@ -52,7 +52,7 @@ def parse_key(key: str) -> int:
     """把后继 key 拆回创作者 id。形状不对就抛——那说明排队的行不是这个版本写的。"""
     prefix, _, raw = str(key).partition(":")
     if prefix != TASK_KEY or not raw.isdigit():
-        raise ValueError(f"认不出这条查创作者身份后继：{key}")
+        raise ValueError(f"认不出这条创作者身份查找后继：{key}")
     return int(raw)
 
 
@@ -116,7 +116,7 @@ def open_sites(contract) -> dict:
 
 
 def run(contract, key: str, handle) -> dict:
-    """跑一条查创作者身份后继，再把它当时的指纹记进 `Attempts`，存量补派按它判。"""
+    """跑一条创作者身份查找后继，再把它当时的指纹记进 `Attempts`，存量补派按它判。"""
     summary = _run(contract, key, handle)
     with contract.database.read_connection() as connection:
         current = fingerprint(connection, parse_key(key))

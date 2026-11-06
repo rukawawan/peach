@@ -34,6 +34,7 @@ import {
   type CredentialData, type FollowData, type ResolveCandidate, type ResolveJob, type ResolveRow,
 } from './follow-manage';
 import { SourceIcon } from './source-view';
+import { composingKey } from '../components/ime';
 
 const MENU_ROW = cx(MENU_ITEM, MENU_ITEM_INTERACTIVE, 'text-body-2-medium');
 const PLACEHOLDER = '粘贴来源链接，或输入创作者名、id…';
@@ -259,7 +260,7 @@ export function AddSource({ data, credentials, readOnly, toast }: AddSourceProps
   const closeMenu = () => { setActive(-1); setClosedAt(line) };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (composing || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    if (composing || composingKey(event.nativeEvent)) return;
     if (event.key === 'Escape' && menuOpen) { closeMenu(); return }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       if (!options.length) return;

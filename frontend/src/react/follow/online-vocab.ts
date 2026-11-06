@@ -23,6 +23,8 @@ export interface OnlineAuthor {
   /** 归档站的头像，主页那张失败时换它。 */
   avatar_fallback: string;
   providers: string[];
+  /** 最近一条的发布时间，来源没给就是入库时间。 */
+  latest?: string;
 }
 
 export interface OnlineAuthorsPage {

@@ -1,7 +1,7 @@
 /* composition 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { loadingState, renderInitialSurfaceLoading } from './loading.js';
 import { clearHomeFeed, installEntityShapeBootstrap, isFeedNewPath, loadEntityShapes, prepareHomeFeed } from './feed.js';
-import { buildManageBar, closeStats, enterManagementSurface, loadSyncedSettings, mountManageHeader, mountSidebar, openManage, openSettings, paintListTitle, scheduleStickySurfaces, showHomeSurfaces, showManagementBody, syncHeaderActions } from './layout.js';
+import { buildManageBar, closeStats, enterManagementSurface, loadSyncedSettings, mountManageHeader, mountSidebar, openManage, openSettings, paintCatalogPageTitle, paintListTitle, scheduleStickySurfaces, showHomeSurfaces, showManagementBody, syncHeaderActions } from './layout.js';
 import { disposeStage, mediaState, openItem, openJavMovie, openPlaylist, openQueue, openTok } from './media.js';
 import { currentBarsContext, entityState, openEntity, revealForIsland, routeEntityPage, showEntityMissing } from './entity.js';
 import { applyFilterStateInPlace, buildBars, catalogState, clearCatalogGrid, gridTaken, loadCatalog, onlineDefaultLoc, paintCatalogGrid, refreshFacetCounts, syncCatalogFilterScreen, toggleTag } from './catalog.js';
@@ -41,7 +41,9 @@ renderInitialSurfaceLoading();
 /* 首页标题随首屏骨架一起出现：等路由打开目录后再显示，会把骨架整页往下推一跳。其余状态页的标题仍由 `paintListTitle` 定。 */
 if(location.pathname==='/'){
   const query=new URLSearchParams(location.search);
-  if(!query.has('state')&&query.get('jav')!=='1')$('#catalogPageHeading').hidden=false;
+  if(!query.has('state')&&query.get('jav')!=='1'){
+    $('#catalogPageHeading').hidden=false;paintCatalogPageTitle($('#catalogPageHeading'),query.get('q'));
+  }
 }
 /* 新作那一行按本机记着的结论随首屏一起铺骨架，卡片与列表两种显示方式都一样。 */
 if(isFeedNewPath(decodeURIComponent(location.pathname)))prepareHomeFeed($('#feedNew'));
@@ -199,7 +201,11 @@ loadRouter(compositionState.shellActions).catch(error=>console.error('客户端�
 mountManageHeader();
 mountBatchDock();
 buildManageBar();
-Promise.all([loadSourceStatus(),loadSyncedSettings(),loadingState.entityShapesReady])
+/* 形状名单只在一处挡开页：目录页还不知道有没有新作那一行（本机没记过结论），目录骨架的比例要等它定。
+   其余页面不等：名单在后台任务频繁写账本时要算好几秒，资料页自己按 `waitEntityShapes` 封顶等待。 */
+const shapesGate=isFeedNewPath(decodeURIComponent(location.pathname))&&catalogState.homeHasFeed==null
+  ?loadingState.entityShapesReady:null;
+Promise.all([loadSourceStatus(),loadSyncedSettings(),shapesGate])
   .then(()=>{
     if(!effects.isActive)return;
     /* 顶部两排与筛选栏的两个聚合自带骨架、取回后自己落位，页面打开不等它们：作品列表与它们同时去取。 */

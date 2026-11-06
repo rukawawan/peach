@@ -1,4 +1,4 @@
-.peach-guide-center, .peach-guide-popover, .peach-guide-invitation {
+.peach-guide-center, .peach-guide-popover {
   --gradient-button-primary-default: linear-gradient(var(--ink), var(--ink));
   --gradient-button-primary-hover: linear-gradient(color-mix(in srgb, var(--ink) 88%, var(--ground)), color-mix(in srgb, var(--ink) 88%, var(--ground)));
   --gradient-button-primary-active: var(--gradient-button-primary-hover);
@@ -9,7 +9,7 @@
   --color-button-ghost-hover: color-mix(in srgb, var(--ink) 8%, var(--ground));
   --color-button-ghost-active: var(--color-button-ghost-hover);
 }
-:is(.peach-guide-center, .peach-guide-popover, .peach-guide-invitation) .bg-button-primary:not(:disabled):not([aria-disabled="true"]) { color: var(--ground); }
+:is(.peach-guide-center, .peach-guide-popover) .bg-button-primary:not(:disabled):not([aria-disabled="true"]) { color: var(--ground); }
 .peach-guide-center {
   width: min(680px, calc(100vw - 32px));
   height: min(740px, calc(100dvh - 32px));
@@ -39,7 +39,6 @@
 .peach-guide-routes strong { font-size: var(--fs-md); line-height: 1.5; font-weight: 500; }
 .peach-guide-routes p { margin-top: 4px; font-size: var(--fs-sm); line-height: 1.5; color: var(--muted); }
 .peach-guide-routes button { flex: none; }
-.peach-guide-invitation { position: fixed; right: 20px; bottom: 20px; z-index: var(--layer-popover); width: min(360px, calc(100vw - 40px)); padding: 20px; border: 1px solid var(--line); border-radius: var(--floating-radius); background: var(--ground); box-shadow: var(--elevation-dropdown); }
 #tutorialBtn[hidden] { display: none; }
 .driver-popover.peach-guide-popover { width: min(360px, calc(100vw - 24px)); max-width: calc(100vw - 24px); min-width: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--floating-radius); background: var(--ground); color: var(--ink); box-shadow: var(--elevation-dropdown); font-family: var(--font-sans); }
 .peach-guide-popover-content { display: flex; flex-direction: column; max-height: calc(100dvh - 24px); overflow: hidden; border-radius: inherit; }

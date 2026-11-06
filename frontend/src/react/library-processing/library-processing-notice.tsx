@@ -35,6 +35,13 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
   state?: LibraryProcessingData; problem?: string; measure?: boolean; onHide?(): void;
 }) {
   const [expanded, setExpanded] = useState(() => expandedFor(state?.job_id));
+  /* 通知栈里展开的卡连同底下的小窗、多选条和上面的回执装不进视口时，先收起明细；不记进会话，
+     腾出空间后按原来的开合显示。这时用户再点展开就照办，直到装不下的情形过去又重来。 */
+  const [crowded, setCrowded] = useState(false);
+  const override = useRef(false);
+  const fullHeight = useRef(0);
+  const open = expanded && !crowded;
+  const openRef = useRef(open); openRef.current = open;
   const bodyId = useId();
   const [trafficExpanded, setTrafficExpanded] = useState(false);
   const panel = useRef<HTMLElement>(null);
@@ -43,6 +50,8 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
   const active = processingActive(state);
   useEffect(() => { setExpanded(expandedFor(state?.job_id)); setTrafficExpanded(false) }, [state?.job_id]);
   const toggle = () => {
+    // 腾空间时暂收的卡，用户点展开就照办；自己收起过的卡展开时同样越过这次暂收。
+    if (crowded) { override.current = true; setCrowded(false); if (expanded) return }
     try {
       if (expanded && state?.job_id) sessionStorage.setItem(COLLAPSE_KEY, state.job_id);
       else sessionStorage.removeItem(COLLAPSE_KEY);
@@ -53,15 +62,39 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
   useEffect(() => {
     if (!measure || !panel.current) return;
     const node = panel.current;
+    const root = document.documentElement;
     let disposed = false;
+    const px = (name: string) => parseFloat(getComputedStyle(root).getPropertyValue(name)) || 0;
     const update = () => {
-      if (!disposed && node.isConnected)
-        document.documentElement.style.setProperty('--processing-toast-space', `${node.getBoundingClientRect().height + 12}px`);
+      if (disposed || !node.isConnected) return;
+      const height = node.getBoundingClientRect().height;
+      const space = `${height + 12}px`;
+      if (root.style.getPropertyValue('--processing-toast-space') !== space) root.style.setProperty('--processing-toast-space', space);
+      /* 展开时的高度按上次展开时量到的实高算：收起后折叠区是 0，量不到。 */
+      if (openRef.current) fullHeight.current = height;
+      const full = Math.max(height, fullHeight.current);
+      // 与 `../toaster.tsx` 的底边同一算法：默认边距、多选条、下角小窗取最高的那个。
+      const floor = Math.max(innerWidth <= 600 ? 16 : 24, px('--selection-dock-space'), px('--miniplayer-space'));
+      const receipts = Math.max(0, ...[...document.querySelectorAll('#toasts [data-sonner-toast]:not(.processing-task-toast)')]
+        .map(toast => toast.getBoundingClientRect().height));
+      const tight = floor + full + 12 + (receipts ? receipts + 8 : 0) > innerHeight - (px('--topH') || 56);
+      if (!tight) override.current = false;
+      setCrowded(tight && !override.current);
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(node);
-    return () => { disposed = true; observer.disconnect(); document.documentElement.style.removeProperty('--processing-toast-space') };
+    /* 小窗、多选条与任务卡自己都把占位写在根节点的 style 上；回执进出看通知栈的子节点。 */
+    const changes = new MutationObserver(update);
+    changes.observe(root, { attributes: true, attributeFilter: ['style'] });
+    const toasts = document.getElementById('toasts');
+    if (toasts) changes.observe(toasts, { childList: true, subtree: true });
+    window.addEventListener('resize', update);
+    return () => {
+      disposed = true; observer.disconnect(); changes.disconnect();
+      window.removeEventListener('resize', update);
+      root.style.removeProperty('--processing-toast-space');
+    };
   }, [measure]);
   if (state?.archived && !problem) return null;
   if (!problem && !active && !failed && !partial) return null;
@@ -84,15 +117,16 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
         {active ? <p data-processing-eta="" className="text-caption-1-regular text-text-secondary tabular-nums wrap-anywhere">{remainingTime(state!)}</p> : null}
       </div>
       <Button size="small" variant="secondary" iconOnly leadingIcon={CollapseChevron} data-processing-toggle="" data-collapse-upward=""
-        aria-label={expanded ? '收起任务详情' : '展开任务详情'} aria-expanded={expanded} aria-controls={bodyId} onClick={toggle} />
+        aria-label={open ? '收起任务详情' : '展开任务详情'} aria-expanded={open} aria-controls={bodyId} onClick={toggle} />
       {onHide ? <Button size="small" variant="secondary" iconOnly leadingIcon={RiCloseLine}
         aria-label="隐藏任务提示" onClick={onHide} /> : null}
     </div>
-    <TrafficProgress traffic={state?.traffic} detailsOpen={trafficExpanded} onDetailsChange={setTrafficExpanded} />
+    {/* 收起时只留标题与文件计数；预估、步骤、原因与入口都在折叠区里。 */}
+    <TrafficProgress traffic={state?.traffic} compact={!open} detailsOpen={trafficExpanded} onDetailsChange={setTrafficExpanded} />
     {/* 收起时也露在外面：要人当场拿主意的事不能藏进折叠区。 */}
     {slow ? <SlowItemInline state={state!} slow={slow} /> : null}
     </div>
-    <CollapseRegion id={bodyId} open={expanded} data-processing-body=""><div className="pt-3"><div className={cx('flex min-w-0 flex-col gap-2 border-t pt-3',
+    <CollapseRegion id={bodyId} open={open} data-processing-body=""><div className="pt-3"><div className={cx('flex min-w-0 flex-col gap-2 border-t pt-3',
       failed ? 'border-border-error-default/20' : warning ? 'border-current/20' : 'border-separator-border')}>
       {state?.steps?.length ? <ol aria-label="处理步骤" className="flex min-w-0 flex-col gap-1.5">
         {state.steps.map(step => <li key={step.id} data-processing-step={step.status}
@@ -109,14 +143,14 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
       {partial ? <p className="text-body-2-regular wrap-anywhere">{PARTIAL_RESULT_TEXT}</p> : null}
       {active && state?.stage && !state.steps?.length ? <p className="text-caption-1-regular text-text-tertiary">当前阶段 · {state.stage}</p> : null}
       {state?.stalled && !problem && !slow ? <p className="text-caption-1-regular">当前步骤耗时较长，正在等待进展</p> : null}
-    </div></div></CollapseRegion>
+    </div>
     <div className="flex flex-wrap items-center justify-between gap-2 pt-3">
       <LinkButton href="/data-cleanup#libraryProcessing" variant="secondary" size="small" trailingIcon={RiArrowRightLine}>
         {problem || failed || partial ? '打开扫描与采集' : '任务详情'}
       </LinkButton>
       {partial ? <LinkButton href={ALL_CONTENT_URL} size="small" trailingIcon={RiArrowRightLine}>查看全部内容</LinkButton> : null}
       {active ? <ProcessingControls state={state!} disabled={!!problem} /> : null}
-    </div>
+    </div></div></CollapseRegion>
   </aside>;
 }
 

@@ -59,11 +59,129 @@ def _manual_name(connection, entity_id: int) -> bool:
                            (entity_id,)).fetchone())
 
 
+#: 旧版从文件名误认的番号只清一次；清掉的行与原值记进同一条回执，可以按它整批撤回。
+STALE_CODES_KEY = 'stale-filename-codes-1'
+
+
+def stale_filename_codes(connection) -> list[dict]:
+    """旧版从文件名误认、现行规则已经不认的番号。
+
+    实例是手机录像的时间戳（`VID_20220818_125735_816` 记成 `125735-816`）和被截断的「名字_日期」
+    （个人投稿者的 `KUZU_250103` 记成 `KUZU-25010`）。这类行有了番号就被当成 JAV，日期式番号还会拿到
+    「无码」徽章。只看无主或由文件名扫描写入的番号，且文件名与所在文件夹按现行规则都认不出番号；
+    再满足下面一条才清：番号本身已不合现行形状；或番号没有完整出现在文件名与文件夹里，这一行也没有
+    任何目录资料（标题、片商、发行日）。带资料的那类是刮削按另一份身份改过的（`1pon-092415-001-fhd2`
+    实为 `092415_159`），不碰。
+    """
+    import re
+    from pathlib import PureWindowsPath
+    from .catalog_rules import compile_code_patterns, is_jav_code, normalise_code_key, release_code_from_filename
+    from .profiles import read_settings
+    patterns = compile_code_patterns(read_settings(connection).get('codePatterns'))
+    rows = []
+    for row in connection.execute(
+            "SELECT id,name,path,code,field_owners,catalog_title,studio,release_date FROM asset "
+            "WHERE medium='video' AND code IS NOT NULL AND code<>''"):
+        owner = owner_of(row['field_owners'], 'code')
+        if owner not in ('', SCAN_FILENAME):
+            continue
+        texts = (str(row['name'] or ''), PureWindowsPath(str(row['path'] or '')).parent.name)
+        if any(release_code_from_filename(text, patterns=patterns) for text in texts):
+            continue
+        body = re.escape(normalise_code_key(row['code'])).replace(r'\-', '[-_ ]?')
+        whole = any(re.search(rf'(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])', text, re.I) for text in texts)
+        described = row['catalog_title'] or row['studio'] or row['release_date']
+        if not is_jav_code(row['code']) or (not whole and not described):
+            rows.append({'id': row['id'], 'code': row['code']})
+    return rows
+
+
+#: 撤过旧番号证据的影片按现番号重采时，补全任务键上的规则段。上一轮改回番号时已按
+#: `processing-v2` 派过同一部片，键相同就会被当成派过而跳掉。
+CODE_EVIDENCE_RULE = 'code-evidence-1'
+CANDIDATE_FILE = 'library-metadata-field-candidates.csv'
+
+
+def _split_by_code(row: dict, old: str, current: str) -> tuple[list[dict], dict | None]:
+    """一行候选按旧、现番号拆开：撤下的候选，与改按现番号核身份的那一行（摘空了是 None）。"""
+    from .metadata_auto_apply import _candidate_identifies_code
+    try:
+        choices = [choice for choice in json.loads(row.get('candidates_json') or '[]') if isinstance(choice, dict)]
+    except ValueError:
+        return [], row
+    stale = [choice for choice in choices
+             if _candidate_identifies_code(old, choice) and not _candidate_identifies_code(current, choice)]
+    remaining = [choice for choice in choices if choice not in stale]
+    if not remaining:
+        return stale, None
+    # 留下的候选按现番号核身份；`refresh_current_values` 也按这一栏找影片。
+    return stale, {**row, 'code': current, 'query': current, 'source_count': len(remaining),
+                   'candidates_json': json.dumps(remaining, ensure_ascii=False)}
+
+
+def _orphan_snapshots(sources: Path, withdrawn: list[dict], codes) -> list[str]:
+    """撤下的候选出自哪几份旧番号快照；库里还有影片是那部片的不算。"""
+    from .catalog_rules import same_release_code
+    snapshots = []
+    pairs = {(row['code'], str(choice.get('source') or '')) for row in withdrawn for choice in row['candidates']}
+    for old, source in sorted(pairs):
+        path = sources / f'{old}-{source}.json'
+        if (source and path.is_file() and not path.is_symlink()
+                and not any(same_release_code(old, code) for code in codes)):
+            snapshots.append(str(path))
+    return snapshots
+
+
+def stale_code_evidence(connection, candidates: Path, sources: Path) -> dict:
+    """番号改过之后，旧番号下取到的资料候选和来源快照（#296）。
+
+    `MCDV-24` 曾被补零成 `MCDV-024`，按它从 r18.dev 取回的是 2004 年的另一部片；番号改回之后，
+    候选表那一行的 `code` 还写着旧番号，复核页按它核身份，那组资料就一直摆着。
+
+    判据是候选级的：这一行记的番号与影片现番号不是同一部片（`same_release_code`），且这条
+    候选认得旧番号、不认现番号。同一部片只是写法变了（`HEYZO-707` 改成 `HEYZO-0707`）的整行
+    放过；两个番号都不认的候选身份不明，也放过。用户批准过的行候选与账本值都不动，那是人的
+    结论，只把这一行的番号改成现番号：复核页按它核身份，按现番号重采回来的资料与批准值不同时，
+    这一行会以差异重新摆出。旧番号的快照只在库里已没有任何影片还是那部片时失效：真有 2004 年
+    那部 `MCDV-024` 的，快照是对的。
+    """
+    from .catalog_rules import same_release_code
+    from .review_csv import read_rows
+    rows = read_rows(candidates, missing_ok=True)
+    codes = {row[0]: row[1] for row in connection.execute(
+        "SELECT id,code FROM asset WHERE medium='video' AND disposal IS NULL AND code IS NOT NULL AND code<>''")}
+    approved = {row[0] for row in connection.execute(
+        "SELECT item_key FROM review_decision WHERE category='metadata_fields' AND status='approved'")}
+    kept, withdrawn, held, changed = [], [], [], False
+    for row in rows:
+        old = str(row.get('code') or '').strip()
+        asset_id = int(row['asset_id']) if str(row.get('asset_id') or '').isdigit() else 0
+        current = codes.get(asset_id)
+        if not old or not current or same_release_code(old, current):
+            kept.append(row)
+            continue
+        changed = True
+        if row['item_key'] in approved:
+            held.append(row['item_key'])
+            kept.append({**row, 'code': current, 'query': current})
+            continue
+        stale, rest = _split_by_code(row, old, current)
+        if stale:
+            withdrawn.append({'item_key': row['item_key'], 'asset_id': asset_id, 'code': old, 'target': current,
+                              'candidates': stale})
+        if rest is not None:
+            kept.append(rest)
+    return {'rows': kept if changed else None, 'withdrawn': withdrawn,
+            'snapshots': _orphan_snapshots(sources, withdrawn, codes.values()),
+            'approved_kept': held, 'asset_ids': sorted({row['asset_id'] for row in withdrawn})}
+
+
 def _catalog_plan(connection, sources: Path, *, catalog: bool = True) -> dict:
     text = metadata_text_repair.collect(connection, sources / 'library-metadata')
     if not catalog:
         return {'codes':[], 'fields':[], 'names':[], 'aliases':[], 'text':text, 'catalog':False}
-    from .catalog_rules import compile_code_patterns, release_code_from_filename, same_release_code
+    from .catalog_rules import (compile_code_patterns, normalise_code_key, release_code_from_filename,
+                                same_release_code)
     from .profiles import read_settings
     patterns = compile_code_patterns(read_settings(connection).get('codePatterns'))
     codes = []
@@ -71,7 +189,9 @@ def _catalog_plan(connection, sources: Path, *, catalog: bool = True) -> dict:
         if owner_of(row['field_owners'], 'code') != SCAN_FILENAME:
             continue
         expected = release_code_from_filename(row['name'] or '', patterns=patterns)
-        if expected and row['code'] and not same_release_code(expected, row['code']):
+        # 同一部片、规范写法变了的也改：HEYZO 定宽四位后，旧的 `HEYZO-707` 规范化就是 `HEYZO-0707`（#354）。
+        rewritten = row['code'] != expected == normalise_code_key(row['code'])
+        if expected and row['code'] and (rewritten or not same_release_code(expected, row['code'])):
             codes.append({'id': row['id'], 'current': row['code'], 'target': expected})
     fields = r18_legacy_repair.collect(connection, sources / 'library-metadata')
     names = r18_legacy_repair.collect_entities(connection, sources / 'library-metadata',
@@ -114,9 +234,15 @@ def _catalog_apply(connection, plan: dict) -> dict:
 
 
 def _stale_previews(contract, row):
-    """本地配套海报和九宫格分别按所属规则校验。"""
+    """本地配套海报和九宫格分别按所属规则校验。
+
+    只看本机影片：影片补全只给本机影片重抽九宫格、重读配套海报。网盘影片的九宫格是
+    `scripts/sheets.py` 抽的，没有规则签名，算它过期就每次换版都把整个网盘库派一遍，派完照旧过期。
+    """
     from .media_processing_policy import metadata_only
     from .platform import translate_ledger_path
+    if row['location'] != 'local':
+        return False
     poster = Path(getattr(contract, 'poster_root', Path(contract.candidate_root) / 'posters')) / f'{row["id"]}_4.jpg'
     if poster.is_file() and not (artifact_rules.current(poster, source_required=True) or artifact_rules.current(
             poster, upgrade_rules.LOCAL_POSTERS, source_required=True)):
@@ -188,6 +314,7 @@ class UpgradeRepairs:
                     (CATALOG_REVISION, CATALOG_REVISION + ':text-*')).fetchone()
             if applied is not None:
                 self._restore_receipt(json.loads(applied[0]))
+                self._withdraw_stale_code_evidence()
                 return
             self._restore_receipt(None)
             sources = Path(contract.follow_sources_root)
@@ -221,12 +348,122 @@ class UpgradeRepairs:
                                                    + plan['text']['asset_ids'])),
                            'queued': dict(previous.get('queued', {})),
                            'deferred': list(previous.get('deferred', [])),
+                           'code_media_ids': list(previous.get('code_media_ids', [])),
                            'dispatch_complete': bool(previous.get('dispatch_complete')) and not plan['text']['asset_ids'],
                            'text_only': prior is not None,
                            'prior_revision': prior[1] if prior else None}
                 connection.execute('INSERT INTO ledger_upgrade_repair(id,applied_at,result_json) VALUES(?,?,?)',
                                    (REVISION, str(time.time()), json.dumps(receipt, ensure_ascii=False)))
             atomic_write_text(self.receipt, json.dumps(receipt, ensure_ascii=False))
+            self._withdraw_stale_code_evidence()
+
+    def _withdraw_stale_code_evidence(self) -> None:
+        """撤掉旧番号下取到的候选与快照（`stale_code_evidence`），被撤的影片按现番号重采。
+
+        每份回执做一次，在 `prepare` 里、处理任务恢复之前做：那时没有采集任务拿着候选表。
+        撤下的候选原样记进回执的 `code_evidence`，快照只加失效标记、正文不动，都能按它整批还原。
+        """
+        from .library_processing import FIELDS
+        from .review_csv import write_rows
+        output = Path(self.contract.candidate_root) / CANDIDATE_FILE
+        sources = Path(self.contract.follow_sources_root) / 'library-metadata'
+        with self.contract.database.write_transaction() as connection:
+            stored = connection.execute('SELECT result_json FROM ledger_upgrade_repair WHERE id=?',
+                                        (REVISION,)).fetchone()
+            receipt = json.loads(stored[0]) if stored else None
+            if receipt is None or 'code_evidence' in receipt:
+                return
+            plan = stale_code_evidence(connection, output, sources)
+            if plan['rows'] is not None:
+                write_rows(output, FIELDS, plan['rows'], atomic=True)
+            for path in plan['snapshots']:
+                artifact_rules.remember(Path(path), f'invalid:{CODE_EVIDENCE_RULE}')
+            receipt['code_evidence'] = {'withdrawn': plan['withdrawn'], 'snapshots': plan['snapshots'],
+                                        'approved_kept': plan['approved_kept']}
+            if plan['asset_ids']:
+                receipt['code_media_ids'] = sorted(set(receipt.get('code_media_ids', [])) | set(plan['asset_ids']))
+                receipt['media_ids'] = sorted(set(receipt.get('media_ids', [])) | set(plan['asset_ids']))
+                receipt['dispatch_complete'] = False
+            connection.execute('UPDATE ledger_upgrade_repair SET result_json=? WHERE id=?',
+                               (json.dumps(receipt, ensure_ascii=False), REVISION))
+        atomic_write_text(self.receipt, json.dumps(receipt, ensure_ascii=False))
+        if plan['withdrawn']:
+            LOGGER.info('旧番号下的资料候选：撤下 %s 行，快照失效 %s 份',
+                        len(plan['withdrawn']), len(plan['snapshots']))
+
+    def _clear_stale_codes(self) -> None:
+        """清掉旧版从文件名误认的番号（`stale_filename_codes`），只做一次。"""
+        with self.contract.database.write_transaction() as connection:
+            if connection.execute('SELECT 1 FROM ledger_upgrade_repair WHERE id=?', (STALE_CODES_KEY,)).fetchone():
+                return
+            rows = stale_filename_codes(connection)
+            if rows:
+                write_owned_fields(connection, [row['id'] for row in rows], {'code': None}, SCAN_FILENAME)
+            connection.execute('INSERT INTO ledger_upgrade_repair(id,applied_at,result_json) VALUES(?,?,?)',
+                               (STALE_CODES_KEY, str(time.time()), json.dumps({'cleared': rows})))
+        LOGGER.info('旧版误认的番号：清掉 %s 条', len(rows))
+
+    def _release_studio_misses(self) -> None:
+        """旧版断网时记下的「官网未取得」各放一次重试（`studio_followup.release_unbounded_misses`）。
+
+        只改候选缓存里的记号文件，不写账本行；做过的记进 `ledger_upgrade_repair`，只做一次。
+        """
+        from .studio_followup import release_unbounded_misses
+        key = 'studio-unbounded-misses-1'
+        try:
+            with self.contract.database.read_connection() as connection:
+                if connection.execute('SELECT 1 FROM ledger_upgrade_repair WHERE id=?', (key,)).fetchone():
+                    return
+            changed = release_unbounded_misses(attempts_root(self.contract.candidate_root))
+            with self.contract.database.write_transaction() as connection:
+                connection.execute('INSERT OR IGNORE INTO ledger_upgrade_repair(id,applied_at,result_json) '
+                                   'VALUES(?,?,?)', (key, str(time.time()), json.dumps({'released': changed})))
+            LOGGER.info('旧的「官网未取得」放行重试：%s 条', changed)
+        except Exception:
+            LOGGER.exception('放行旧的「官网未取得」重试失败')
+
+    def _settle_verification(self) -> None:
+        """核查差异的结算规则（ADR-0139）对存量候选跑一遍，规则版本变了才再跑。
+
+        只喂带核查标记的那些行：其余候选的判据没变，这一步不替它们重判。有要处理的行才
+        先备份；结果连同规则版本记进 `ledger_upgrade_repair`，账本恢复到之前的备份时会重跑。
+        几千行要跑一两分钟，所以不在 `prepare` 里挡着服务启动，由 `start` 交给后台调度跑；
+        自动落库按批提交，页面上的写入照常穿插进来。
+        """
+        try:
+            self._settle_verification_once()
+        except Exception as exc:
+            self.error = str(exc)
+            LOGGER.exception('核查差异存量结算失败')
+
+    def _settle_verification_once(self) -> None:
+        from .metadata_auto_apply import _parsed_candidates, auto_apply_metadata
+        from .review_csv import read_candidates
+        key = f'verification-settlement-{upgrade_rules.VERIFICATION_SETTLEMENT}'
+        contract = self.contract
+        with contract.database.read_connection() as connection:
+            if connection.execute('SELECT 1 FROM ledger_upgrade_repair WHERE id=?', (key,)).fetchone():
+                return
+        rows, _source, _skipped = read_candidates('metadata_fields', Path(contract.candidate_root))
+        rows = [row for row in rows
+                if any(candidate.get('requires_review') for candidate in _parsed_candidates(row))]
+        result = {'rows': len(rows)}
+        if rows:
+            backup = contract.db_path.with_name(f'ledger.pre-upgrade-{time.time_ns()}.db')
+            sqlite_backup(contract.db_path, backup)
+            summary = auto_apply_metadata(
+                contract.database, Path(contract.candidate_root), candidate_rows=rows,
+                snapshot_root=Path(contract.follow_sources_root) / 'library-metadata',
+                active=lambda: not self.stopping.is_set())
+            if self.stopping.is_set():
+                return
+            result.update({name: summary[name] for name in
+                           ('applied', 'kept', 'refreshed', 'auto_rejected', 'left_to_review')},
+                          backup=str(backup))
+        with contract.database.write_transaction() as connection:
+            connection.execute('INSERT OR IGNORE INTO ledger_upgrade_repair(id,applied_at,result_json) '
+                               'VALUES(?,?,?)', (key, str(time.time()), json.dumps(result, ensure_ascii=False)))
+        LOGGER.info('核查差异存量结算：%s', result)
 
     def _restore_receipt(self, authoritative):
         try:
@@ -246,7 +483,14 @@ class UpgradeRepairs:
                                (encoded, REVISION, encoded))
         atomic_write_text(self.receipt, encoded)
 
-    def _plan(self, receipt: dict):
+    def _media_backlog(self) -> int:
+        """已经派出、还没轮到的影片补全条数。"""
+        with self.contract.database.read_connection() as connection:
+            return connection.execute("SELECT count(*) FROM task_run WHERE task_key=? AND status='pending'",
+                                      (MEDIA_TASK,)).fetchone()[0]
+
+    def _plan(self, receipt: dict, *, media: bool = True):
+        """`media` 为假时只排资料与人物后继，影片补全等前面那批跑下去再派。"""
         from . import (avatar_followup, creator_identity_followup, performer_alias_followup,
                        performer_profile_followup, seed_followup, studio_followup)
         from .library_processing import _people_allowed
@@ -278,6 +522,8 @@ class UpgradeRepairs:
                     args.append(self.contract.avatar_root)
                 args.append(attempts)
                 planned.extend(planner.stock(*args, limit=min(16, remaining), skip=seen))
+            if not media:
+                return planned[:MAX_FOLLOWUPS]
             rows = connection.execute("SELECT id,code,name,path,location,snapshot_path FROM asset WHERE medium='video' "
                                       "AND disposal IS NULL ORDER BY id").fetchall()
         from .followups import Followup
@@ -291,6 +537,8 @@ class UpgradeRepairs:
             rule = upgrade_rules.PROCESSING
             if row['id'] in receipt.get('text_media_ids', []):
                 rule += f':text-{upgrade_rules.PROVIDER_TEXT}'
+            if row['id'] in receipt.get('code_media_ids', []):
+                rule += f':{CODE_EVIDENCE_RULE}'
             key = f'{MEDIA_TASK}:{rule}:{row["id"]}'
             if key in seen:
                 continue
@@ -317,7 +565,12 @@ class UpgradeRepairs:
                     if not receipt.get('deferred') and not any(row.key not in receipt.get('queued', {}) for row in seed):
                         return
                     receipt['dispatch_complete'] = False
-                planned = self._plan(receipt)
+                # 影片补全只有一条通道、一次一部；不等前面那批跑下去就每分钟再派一批，
+                # 整个库会在一两个小时里全堆进队列，任务中心满屏都是「已处理 0 / 64」。
+                media = self._media_backlog() < MAX_FOLLOWUPS
+                planned = self._plan(receipt, media=media)
+                if not planned and not media:
+                    return
                 if not planned:
                     receipt['dispatch_complete'] = True
                 else:
@@ -379,6 +632,9 @@ class UpgradeRepairs:
         if self.available and not self.scheduler.running:
             self.tick()
             self.scheduler.add_job(self.tick, 'interval', seconds=60, max_instances=1, coalesce=True)
+            self.scheduler.add_job(self._settle_verification, max_instances=1)
+            self.scheduler.add_job(self._release_studio_misses, max_instances=1)
+            self.scheduler.add_job(self._clear_stale_codes, max_instances=1)
             self.scheduler.start()
 
     def stop(self) -> None:
@@ -420,7 +676,11 @@ def _media_run(contract, key: str, handle) -> dict:
         if not active():
             raise JobPaused('服务重启后继续') from None
         raise
-    if result.get('status') not in ('complete', 'succeeded') or result.get('issue_count'):
+    # 走完全程只剩这部片自己的问题（坏文件探不出时长、抽不出帧）算完成；有来源冷却暂缓的
+    # 还要等来源放开再补，留成失败交给后继重试。
+    finished = result.get('status') in ('complete', 'succeeded') or (
+        result.get('outcome') == 'partial' and not result.get('paused_count'))
+    if not finished:
         raise RuntimeError(result.get('error') or '影片升级补全未完成，请在任务中心查看后重试')
     return {'outcome': '影片升级补全完成', 'name': title, 'asset_id': asset_id}
 

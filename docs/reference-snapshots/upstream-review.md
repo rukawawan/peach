@@ -4,6 +4,12 @@
 
 ## amane 桥
 
+### 稳定版 v0.25.0 暂不采用
+
+2026-11-04 复核官方 [v0.25.0](https://github.com/sqzw-x/amane/releases/tag/v0.25.0)，提交 `f6c1cc9f54bca0fa5381a26d4b2e259df7f58a0a`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...f6c1cc9f54bca0fa5381a26d4b2e259df7f58a0a)含 51 个提交。桥消费的站点类中，`airav` 比对番号前先剥除 caribbeancom、1pondo 等来源名前缀；`avsox` 与 faleno、dahlia 共用的 `wp_works` 改用容忍 null 字段的 `ResponseModel`；makers（`official`）、prestige、mgstage、fc2club、freejavbt 没有提交。`amane.net` 新增出站通道与浏览器后端，桥不使用。运行依赖仍强制安装 numpy、onnxruntime（macOS 以外）、tokenizers 与 macOS CoreML，watchdog 限制为 `<7`，zhconv 改为随包字典。
+
+继续固定 v0.22.1；语义检索依赖改为可选，或桥接站点出现必须的修复后再升级。本次在约束内把 pydantic-ai-slim、pydantic-graph 更新到 2.65.0，anthropic 到 2.4.0，openai 到 3.43.0，桥不调用它们的模型服务；watchdog 与上游一致保持 6.0.0。清空 PATH 后离线自检载入全部 20 个站点类通过。
+
 ### 稳定版 v0.24.1 暂不采用
 
 2026-11-02 复核官方 [v0.24.1](https://github.com/sqzw-x/amane/releases/tag/v0.24.1)，提交 `7d037a44b17a147df1db20989ab96047f0935933`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...7d037a44b17a147df1db20989ab96047f0935933)含 31 个提交。桥消费的站点类中只有 `avsox` 改动，响应模型改为容忍 null 字段；`amane.net` 新增 BrowserSkill 浏览器后端，桥不使用。0.24 新增 numpy、onnxruntime、tokenizers 与 macOS CoreML 的语义检索运行依赖，会显著增大随包 amane 环境，上游同时把 watchdog 限制为 `<7`。继续固定 v0.22.1；桥接站点出现必须的修复，或语义检索依赖改为可选后再升级。本次在约束内更新传递依赖，watchdog 与上游一致保持 6.0.0；python-dateutil 升至 4.0.0 只经 croniter 进入调度器，桥消费的站点与网络模块不引用。清空 PATH 后离线自检载入全部站点类通过。
@@ -61,6 +67,43 @@ PR #41、#43、#44、#45、#46、#47、#48 在隔离工作树按项目接管入�
 Motion 14.0.0 的大版本删除内部兼容 API。Peach 只通过 `motion` 公共入口使用，没有直接引用 `framer-motion`、`motion-dom`、`motion-utils` 或被移除的 timeline 内部 API；版本由其内部精确依赖保持一致，类型检查、组件与浏览器回归由项目完整测试入口核验。
 
 轮播箭头几何用例在图片就绪后等待渲染阶段，再读位置；`ResizeObserver` 的异步测量不能由图片 `complete` 代替。位置、尺寸、黑边中心和桌面／手机断言保持完整。
+
+## 依赖与参考来源判断（2026-11-05）
+
+0.55.0 发版前审阅覆盖 weekly、monthly、quarterly。依赖按约束内最新稳定版更新：Python 侧 filelock 4.2.8（含 GitLab CI 三处 `--with`），锁内 soupsieve 4.0.1、typing-inspection 0.4.5 跟随；amane 桥锁内 pydantic-ai-slim、pydantic-graph 2.66.0，openai 3.45.0，SQLAlchemy 2.1.8，离线自检载入全部 20 个站点类；前端 Video.js 10.3.0（等待自动播放显示为正在起播、可配置倍速档位、嵌入适配器补缓冲条，Peach 不用嵌入适配器），Lucide 1.68.0（所用图形字节不变），Motion 14.9.1。amane 继续固定 v0.22.1，理由同上文 v0.25.0。
+
+Dependabot #400（Docker 镜像内 uv 0.13.7）与 #401（watchdog 7.0.0）按接管入口各一提交。watchdog 7 的不兼容项不影响推送发现：本地通道不用模式匹配，只收 `created`、`modified`、`moved`、`closed`，新增的 `attrib` 事件被忽略。Windows 本地目录实测：7.0.0 送达事件比 6.0.0 晚约 1 秒，观察器停止前尚未送达的事件会丢；推送发现只缩短发现时间，定期全量扫描兜底，停止只发生在退出与改设置时，这个延迟可以接受。
+
+| 来源 | 实测变化 | Peach 判断 |
+| --- | --- | --- |
+| Javinizer-Go README | `actress` 子命令新增 list、search 与 credit add | 同类产品信息，接受原文 |
+| Atlas README | 原 `v3` 分支已删，改跟默认分支 `main`；版本号由 v4.x 重排为 v1.x，能力描述不变；`jav-utils.ts` 移到 `backend/src/services/` | 更新登记的分支与文件路径后接受原文 |
+| JAVM README | 仓库 `ddmoyu/javm` 整个返回 404（删除或转为私有） | 保留 2026-11-04 的最后快照，档位改为 `manual`，只在点名时检查 |
+
+OpenAver 从 `118f19330c49414a6b9dfa94581e3f731e4f8e5f` 前移到 `67c410ca4465d4d107f940d9f0a9ece8395f0ad8`，32 个提交；相关推荐的变化只在 `core/ai_services/` 的向量索引与设置页，Peach 没有向量路，本批不改代码。PixivUtil2 停在上次复核的 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
+
+## 参考来源判断（2026-11-04）
+
+0.54.0 发版前审阅覆盖 weekly、monthly、quarterly，17 个来源报告漂移，另有 amane 运行依赖前移（见上文 v0.25.0）。15 份原文按完整 SHA-256 与 Git revision 接受；FANBOX、OpenAver 两份人工笔记不执行 `accept`。仅 revision 前移、内容相同的来源不重新登记。
+
+| 来源 | 实测变化 | Peach 判断 |
+| --- | --- | --- |
+| Fluid tabs | 由带轨道的分段控件改为横向页签导航：改用索引 API，移除 surface 上下文，增加 `activeLabel`；选中面仍为 `spring.moderate`，悬停面仍为 `spring.fast` | 接受原文。Peach 只采用独立选中面与弹簧参数，两者未变；`segmented.tsx` 不跟随改成页签导航 |
+| BoardUI input | 增加 `errorMessage`（React Aria `FieldError`）、`trailingAddon`，样式类抽成 `inputFieldClassName`、`hintTextClassName`；类名与状态配色不变 | 接受原文，Peach 消费的输入框配色与状态未变 |
+| evilcharts registry | 新增 ECharts、Recharts 两套日历热力图组件与示例 | 接受原文；Peach 现有图表不使用热力图，留作候选 |
+| amane 内容路由 | JavDB 无码条目与演员档案要求登录；jav321 改为 POST 检索并核对品番；AIRAV 收进 FC2 链尾并剥除来源名前缀；MGStage 竖版海报由封面地址推导；giga 同时只允许一个请求 | 接受原文。Peach 自有 JavDB 来源已识别登录页并上报 `auth_required`；桥仍固定 v0.22.1，不随文档切换路由 |
+| amane README | 改为元数据服务定位，列出 25 个站点、Docker 与 Android | 同类产品信息，接受原文 |
+| SakuraMediaBE README | 改为英文，新增 PolyForm Noncommercial 1.0.0 许可声明 | 接受原文。Peach 只引用行为证据，不复制其源码 |
+| SakuraMedia README | 改为英文 | 同类产品信息，接受原文 |
+| Javdex README | 许可证由 MIT 改为 GPL-3.0-or-later；新增 NAS 常驻、libmpv 播放与本地字幕生成说明 | 无直接消费者，接受原文 |
+| JAVM README | 桌面宿主由 Tauri 改为 Neutralinojs，界面改为 React + Mantine，补充安装与迁移说明 | 同类产品信息，接受原文 |
+| OpenAver README | 新增 AI 可写的自定义 YAML 来源与 NAS 片库连接，测试数改写为 3,300+ | 同类产品信息，接受原文 |
+| Javinizer-Go README | `--force` 刷新保留人工选择，新增 `JAVINIZER_HOME` 与目标冲突文档 | 同类产品信息，接受原文 |
+| JavBoss、AMMDS DOC、Immich、javranking-extension README | 下载版本号、文档目录、语言链接与仓库地址更新 | 接受原文，无运行影响 |
+
+PixivUtil2 自上次复核的 `22b5fdc9fc83a976d8f4f6f6acbb4d2d3d542f21` 前移到 `46bb910cd60c213c9199d939859670a044450239`，五个提交为依赖更新与动态 GIF 头像，`PixivBrowserFactory.py` 没有变化；FANBOX 传输边界不变。
+
+OpenAver 从 `502278a3e09c7520838ffb00b2ff080323a4cdcb` 前移到 `118f19330c49414a6b9dfa94581e3f731e4f8e5f`。相关推荐源码有变化：`3230465ce1` 在开关开启且有向量时，用 RRF 融合规则前 100 与向量前 30 后再做 MMR；`0347ac95e0`、`20f148dafe` 让 IDF 与倒排索引计入用户标签，并跳过非字符串标签。Peach 的 `related.py` 按账本中作品的标签实体计算 IDF，不区分来源标签与用户标签，也没有向量路；向量融合是否值得引入留作后续单独评估，本批不改代码。
 
 ## 参考来源判断
 

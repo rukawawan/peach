@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-r"""给已入库的 rule34.xxx 追更条目补上只有帖子页和原文件才有的细节。
+r"""给已入库的 rule34.xxx 追更条目补上列表请求之外的细节。
 
-posts DAPI 只回扁平标签和最后修改时间，三样东西要另外问：
+posts DAPI 的默认 JSON 只回扁平标签和最后修改时间，三样东西要另外问：
 
-- 标签类型（general／artist／character／copyright／metadata）在帖子页 `#tag-sidebar`。
-- 上传时间在帖子页 `#stats` 的 Posted。DAPI 的 `change` 是最后一次修改：17361475
+- 标签类型（general／artist／character／copyright／metadata）：JSON 带
+  `fields=tag_info`。帖子页 `#tag-sidebar` 自 2026-10-20 起被 Cloudflare 验证挡住，
+  不再是来源。
+- 上传时间：XML 的 `created_at`。DAPI 的 `change` 是最后一次修改：17361475
   五月上传、九月被改过标签，入库时记成了九月，卡片就排到了新内容里。
-- 视频时长只在原文件头的 `mvhd` 里，接口和帖子页都不给。
+- 视频时长只在原文件头的 `mvhd` 里，接口都不给。
 
 常规「检查更新」只看第一页，而且已经补齐过类型的条目不再进第二阶段，存量行靠
 它永远改不过来，所以要这一趟。判据不重写，直接复用连接器的 `_detail` 与
@@ -16,8 +18,11 @@ posts DAPI 只回扁平标签和最后修改时间，三样东西要另外问：
 默认 dry-run，只写复核 CSV。`--apply` 必须同时给 `--backup`，与本仓库其它真实写入
 脚本一致。`--resume` 跳过同一份 CSV 里已经写入的条目，中断后用原命令加它接着跑。
 
-`--duration-only` 只补 mp4 缺的时长：只挑 `duration` 为空的 mp4 条目，不问帖子页，
-只读原文件头，也只写 `duration`。时长在视频 CDN 上，不受帖子页每秒一次的限流牵连，
+`--missing-types` 只挑账本里还没有标签类型的条目。帖子页被挡住的那段时间入库的行
+正是这一批，它们的上传时间也还是 `change` 占位，一趟一起改正。
+
+`--duration-only` 只补 mp4 缺的时长：只挑 `duration` 为空的 mp4 条目，不问 dapi，
+只读原文件头，也只写 `duration`。时长在视频 CDN 上，不受 dapi 每秒一次的限流牵连，
 授权只覆盖时长时用它，别的列一格不动。
 """
 from __future__ import annotations
@@ -34,7 +39,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from peach.config import GENERATED_DIR
+from peach.config import GENERATED_DIR, SECRETS_DIR, SHARED_CREDENTIAL_ROOT
+from peach.follow_secrets import CredentialError, credential_store_for
 from peach.follow_sources import FollowSourceError, build_connector
 from peach.review_csv import read_rows, write_rows
 from peach.scripting import (
@@ -44,12 +50,11 @@ from peach.scripting import (
 FIELDS = ("item_id", "external_id", "result", "published_before", "published_after",
           "duration", "tag_types_added", "written", "note")
 
-#: 帖子页的最小请求间隔。rule34.xxx 自己公布的口径是每 60 秒 60 次，也就是
-#: 每次至少 1 秒；留一点余量。首轮按 0.35 秒跑过一次：400 条里 372 条「帖子页
-#: 没有解析出类型」——不是这些帖子没有类型，是被限流挡了，`_detail`
-#: 把非 200 吞成了空字典。速度换来的全是白跑的请求。视频文件头在另一个主机上，
-#: 在这段间隔里发，不另占时间。
-DEFAULT_DELAY = 1.1
+#: 每条之间的最小间隔。rule34.xxx 自己公布的口径是每 60 秒 60 次，`_detail` 每条
+#: 问两次 dapi（JSON 的分类、XML 的上传时间），所以每条至少 2 秒；留一点余量。
+#: 首轮按 0.35 秒跑过一次：400 条里 372 条被限流挡了，被读成「没有类型」——速度
+#: 换来的全是白跑的请求。视频文件头在另一个主机上，在这段间隔里发，不另占时间。
+DEFAULT_DELAY = 2.2
 #: 连续这么多条取不到就认定是被限流，而不是这一段恰好都取不到。
 MISS_STREAK_LIMIT = 8
 #: 限流后的静默时长，按站方公布的窗口取满一格。
@@ -69,7 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true",
                         help="跳过 --out 里已经写入的条目，接着上一趟跑")
     parser.add_argument("--duration-only", action="store_true",
-                        help="只补 mp4 缺的时长：不问帖子页，只读原文件头，只写 duration")
+                        help="只补 mp4 缺的时长：不问 dapi，只读原文件头，只写 duration")
+    parser.add_argument("--missing-types", action="store_true",
+                        help="只挑还没有标签类型的条目")
     return parser
 
 
@@ -80,12 +87,14 @@ def written_ids(path: Path) -> set[int]:
 
 
 def pending_rows(connection: sqlite3.Connection, limit: int,
-                 done: set[int] = frozenset(), *, duration_only: bool = False) -> list[dict]:
+                 done: set[int] = frozenset(), *, duration_only: bool = False,
+                 missing_types: bool = False) -> list[dict]:
     """待补条目：rule34xxx 来源的全部条目，扣掉上一趟已经写入的。
 
-    上传时间错没错，不问帖子页就看不出来——被改过的帖子 `change` 晚于上传，没改过的
+    上传时间错没错，不问 dapi 就看不出来——被改过的帖子 `change` 晚于上传，没改过的
     两者逐秒相同，账本里长得一样。所以每条都要问一遍，续跑靠 CSV 而不是账本里的值。
-    只补时长时缺不缺看账本就知道，只挑 `duration` 为空的 mp4。
+    只补时长时缺不缺看账本就知道，只挑 `duration` 为空的 mp4；只补类型时同理，只挑
+    metadata 里没有 `tag_types` 的。
     """
     rows = []
     query = (
@@ -102,6 +111,9 @@ def pending_rows(connection: sqlite3.Connection, limit: int,
             metadata = json.loads(row["metadata_json"] or "{}")
         except ValueError:
             metadata = {}
+        # 空表与缺键同样算缺：`plan_update` 也只在没有非空类型时才补。
+        if missing_types and isinstance(metadata, dict) and metadata.get("tag_types"):
+            continue
         rows.append({"id": row["id"], "external_id": str(row["external_id"] or ""),
                      "media_url": row["media_url"], "published_at": row["published_at"],
                      "duration": row["duration"],
@@ -114,7 +126,7 @@ def pending_rows(connection: sqlite3.Connection, limit: int,
 def plan_update(row: dict, detail: dict, duration: float | None) -> dict | None:
     """这一条要改哪几列。没有可写的就是 None。
 
-    只补不抹：帖子页没给上传时间就不动 `published_at`；已有时长不覆盖；已有非空
+    只补不抹：dapi 没给上传时间就不动 `published_at`；已有时长不覆盖；已有非空
     类型不覆盖。取不到的留待下一趟，不写空值冒充已补。
     """
     update: dict = {}
@@ -131,10 +143,10 @@ def plan_update(row: dict, detail: dict, duration: float | None) -> dict | None:
 
 
 def inspect_row(connector, row: dict) -> tuple[dict, dict | None]:
-    """问一条：帖子页，缺时长的视频再问一次文件头。返回 CSV 行和要写的列。
+    """问一条：dapi 的分类与上传时间，缺时长的视频再问一次文件头。返回 CSV 行和要写的列。
 
-    帖子页没解析出来时 `result` 是「未取得」：限流时整页都是空的，不能当成「这条
-    没有」写进去，留给下一趟再问。
+    分类没取到时 `result` 是「未取得」：被限流挡回来与帖子已删都是这样，不能当成
+    「这条没有」写进去，留给下一趟再问。
     """
     post_id = row["external_id"]
     entry = {"item_id": row["id"], "external_id": post_id, "result": "",
@@ -149,7 +161,7 @@ def inspect_row(connector, row: dict) -> tuple[dict, dict | None]:
     except (FollowSourceError, OSError) as error:
         detail, entry["note"] = {}, f"{type(error).__name__}: {error}"[:120]
     if not detail.get("tag_types"):
-        entry.update(result="未取得", note=entry["note"] or "帖子页没有解析出细节")
+        entry.update(result="未取得", note=entry["note"] or "dapi 没有给出标签分类")
         return entry, None
     duration = (connector._video_seconds(row["media_url"])
                 if row["duration"] is None else None)
@@ -159,7 +171,7 @@ def inspect_row(connector, row: dict) -> tuple[dict, dict | None]:
                  duration=update.get("duration", entry["duration"]),
                  tag_types_added="是" if "metadata_json" in update else "")
     if not detail.get("published_at"):
-        entry["note"] = "帖子页没有 Posted"
+        entry["note"] = "dapi 没有给出 created_at"
     elif _is_mp4(row["media_url"]) and row["duration"] is None and not duration:
         entry["note"] = "时长未取得"
     return entry, update or None
@@ -208,13 +220,27 @@ def run(args: argparse.Namespace) -> int:
     previous = [row for row in read_rows(args.out, missing_ok=True)
                 if row.get("written") == "是"] if args.resume else []
     with open_readonly(args.db) as reader:
-        rows = pending_rows(reader, args.limit, done, duration_only=args.duration_only)
+        rows = pending_rows(reader, args.limit, done, duration_only=args.duration_only,
+                            missing_types=args.missing_types)
         total = reader.execute(
             "SELECT COUNT(*) FROM follow_item i JOIN follow_source s ON s.id=i.source_id"
             " WHERE s.provider='rule34xxx'").fetchone()[0]
     print(f"rule34xxx 共 {total} 条，已写入 {len(done)} 条，本趟待问 {len(rows)} 条", flush=True)
     if not rows:
         return 0
+    # dapi 要账号自己的 user_id + api_key；只读文件头不需要。缺凭据在备份与写入之前就停。
+    credential = None
+    if not args.duration_only:
+        try:
+            credential = credential_store_for(
+                SECRETS_DIR, shared_root=SHARED_CREDENTIAL_ROOT).load("rule34xxx")
+        except CredentialError as error:
+            print(f"rule34xxx 凭据不可用：{error}", file=sys.stderr)
+            return 2
+        if credential is None:
+            print("rule34xxx 需要 user_id 与 api_key；请把它们写进 "
+                  "peach-data/secrets/follow/rule34xxx.json", file=sys.stderr)
+            return 2
 
     writer: sqlite3.Connection | None = None
     before = 0
@@ -226,7 +252,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"备份：{args.backup}", flush=True)
         before = writer.execute("SELECT COUNT(*) FROM follow_item").fetchone()[0]
 
-    connector = build_connector("rule34xxx")
+    connector = build_connector("rule34xxx", credential=credential)
     log: list[dict] = []
     staged: list[tuple[int, dict]] = []
     staged_logs: list[dict] = []
@@ -245,7 +271,7 @@ def run(args: argparse.Namespace) -> int:
         write_rows(args.out, FIELDS, previous + log, atomic=True)
 
     for index, row in enumerate(rows, 1):
-        # 间隔按帖子页请求的起点算：文件头在另一个主机上，问它的时间落在这段间隔里。
+        # 间隔按 dapi 请求的起点算：文件头在另一个主机上，问它的时间落在这段间隔里。
         time.sleep(max(0.0, next_detail - time.monotonic()))
         next_detail = time.monotonic() + args.delay
         entry, update = (inspect_duration if args.duration_only else inspect_row)(connector, row)

@@ -74,8 +74,8 @@ def admission(db: Path):
     """持锁完成任务登记；安装取得预约后不接受新任务。"""
     root = state_for(db)
     with _mutex(root):
-        if _maintenance(root):
-            raise UpdateBusy("正在准备安装更新，暂时不能启动新任务。请等待安装完成。")
+        if data := _maintenance(root):
+            raise UpdateBusy(data.get("busy") or "正在准备安装更新，暂时不能启动新任务。请等待安装完成。")
         yield
 
 
@@ -99,15 +99,19 @@ def activity(db: Path, label: str):
             path.unlink(missing_ok=True)
 
 
-def reserve(db: Path, *, owner: int | None = None) -> str:
-    """接受安装预约并通知所有服务保存进度、暂停任务。"""
+def reserve(db: Path, *, owner: int | None = None, busy: str | None = None) -> str:
+    """接受安装预约并通知所有服务保存进度、暂停任务。
+
+    `busy` 是预约期间拒绝新任务时给人看的那句话；账本恢复也借这把闸门挡新任务。
+    """
     root = state_for(db)
     with _mutex(root):
-        if _maintenance(root):
-            raise UpdateBusy("已有更新安装正在进行，请等待完成。")
+        if data := _maintenance(root):
+            raise UpdateBusy(data.get("busy") or "已有更新安装正在进行，请等待完成。")
         token = uuid.uuid4().hex
         atomic_write_text(root / "install.json", json.dumps({
-            "pid": owner if owner is not None else os.getpid(), "token": token}))
+            "pid": owner if owner is not None else os.getpid(), "token": token,
+            **({"busy": busy} if busy else {})}, ensure_ascii=False))
         from .job_recovery import request_pause
         request_pause(db)
         return token
@@ -125,23 +129,37 @@ def check_pause(db: Path | None) -> None:
         raise JobPaused('任务已暂停，安装完成后自动继续。')
 
 
-def _running(db: Path) -> list[str]:
+def running(db: Path, *, own_files=(), own_runs=(), task_rows: bool = True) -> list[str]:
+    """数据目录里还在跑的任务，给人看的名字。
+
+    `own_files`／`own_runs` 是调用方自己那一轮的登记文件与 `task_run` 行，不算在内。
+    `task_rows` 为假时不读 `task_run`：账本坏了读不出来，那时只看登记文件与锁。
+    """
+    return _running(db, own_files=own_files, own_runs=own_runs, task_rows=task_rows)
+
+
+def _running(db: Path, *, own_files=(), own_runs=(), task_rows: bool = True) -> list[str]:
     from .jobs import process_alive
     from .runtime_prepare import task_gate
     root = state_for(db)
+    own = {Path(path).name for path in own_files}
     with _mutex(root):
         labels = []
         for path in (root / "active").glob("*.json"):
+            if path.name in own:
+                continue
             data = _read(path)
             if _alive(data):
                 labels.append(str(data.get("label") or "后台任务"))
             else:
                 path.unlink(missing_ok=True)
-        gate = task_gate(db, host=socket.gethostname(), alive=process_alive)
-        if gate.error:
-            labels.append('任务状态未取得')
-        labels.extend(run.describe() for run in (*gate.blocking, *gate.resumable)
-                      if run.status == "running" and (run.pid is None or process_alive(run.pid)))
+        if task_rows:
+            gate = task_gate(db, host=socket.gethostname(), alive=process_alive)
+            if gate.error:
+                labels.append('任务状态未取得')
+            labels.extend(run.describe() for run in (*gate.blocking, *gate.resumable)
+                          if run.status == "running" and run.id not in own_runs
+                          and (run.pid is None or process_alive(run.pid)))
         # 旧版 CLI 已有 PID 锁，预检同时兼容这些仍在运行的批次。
         legacy = [root.parent / name for name in ('.probe.lock', '.sheets.lock', '.creator-boards.lock')]
         for path in legacy:

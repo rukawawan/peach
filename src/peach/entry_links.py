@@ -22,13 +22,17 @@
 
 - 日文艺名可含假名或纯汉字。汉字现名采用同名字形或已有成对译名的来源证据；
   对应的中文名必须仍是当前规范名，不同姓氏与可信假名艺名的冲突保留给复核。
+  r18 的名字映射或目录站、avwikidb 资料把这个纯汉字现名记成她的名字时（`森日向子`），
+  它就是当前日文艺名，采用资料里的写法，不再从别名里改挑旧艺名（#271）。
 - 别名里的纯平假名读音不作为入口。`r18:performer` 每位都带一条（`しゃくありす`），
   选择艺名时需要区分它与人物的正式写法（`釈アリス`）。可信艺名来源标明的纯平假名正式艺名照用。
 - 同样形态的有多条时，优先 `avdb-actor-mapping`、`javdb`、`wiki` 这几类艺名来源。
 - 一条都挑不出时才用规范名：拼错的地址和没有地址相比，前者更难发现。
 
 **同一个站点可以有多枚入口。** 一位女优在 javdb 常有两个演员页，两边挂的作品不同，
-所以每个 id 各出一枚，第二枚起在标签后缀一个序号。
+所以每个 id 各出一枚，第二枚起在标签后缀一个序号。采集作品时在作品页上署过名的 id
+（资料带 `provider_id`）排在前面，按名字回填的排在后面：旧艺名那页常年是空的
+（`/actors/MmbDR` 白石アイリ「0 部影片」），排第一会让人以为链接错了（#271）。
 
 **两种位置。** minnano-av 是一份资料页，和事务所官网、社媒是同一类东西，所以它排进上面
 那排链接里。JavDB 与 MISSAV 是「去看片」的入口，另起一行，用两站自己的标识。
@@ -216,18 +220,56 @@ def save(root: Path, body: dict) -> dict:
     return snapshot(root)
 
 
+def _ref_metadata(ref) -> dict:
+    """引用行的资料；没带资料列或坏 JSON 都按空的算。"""
+    raw = ref.get("metadata_json")
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def provider_ids(refs) -> dict[str, list[str]]:
-    """`entity_external_ref` 的行 → 这个站点上的 id 们。只认人物那一档。"""
-    found: dict[str, list[str]] = {}
+    """`entity_external_ref` 的行 → 这个站点上的 id 们。只认人物那一档。
+
+    作品页上署过名的 id 排前面，同一档内保持原顺序；判据见模块开头。
+    """
+    found: dict[str, list[tuple[bool, str]]] = {}
     for ref in refs or ():
         if str(ref.get("external_kind") or "") != EXTERNAL_KIND:
             continue
         external_id = str(ref.get("external_id") or "").strip()
         provider = str(ref.get("provider") or "")
         ids = found.setdefault(provider, [])
-        if external_id and external_id not in ids:
-            ids.append(external_id)
-    return found
+        if external_id and all(value != external_id for _, value in ids):
+            ids.append((not _ref_metadata(ref).get("provider_id"), external_id))
+    return {provider: [value for _, value in sorted(ids, key=lambda item: item[0])]
+            for provider, ids in found.items()}
+
+
+#: 记下她现名的外部资料：目录站与 avwikidb 资料里的 `name`；r18 的名字映射另算。
+_NAME_RECORDS = JAV_DIRECTORIES | {"avwikidb"}
+
+
+def recorded_name(name: str, refs) -> str:
+    """外部资料把这个纯汉字现名记成她的名字时，返回资料里的写法；没有就是空串。"""
+    if not _han_name(name):
+        return ""
+    for ref in refs or ():
+        provider = str(ref.get("provider") or "")
+        if provider == "r18" and ref.get("external_kind") == "performer_name":
+            written = ref.get("external_id")
+        elif provider in _NAME_RECORDS:
+            written = _ref_metadata(ref).get("name")
+        else:
+            continue
+        written = str(written or "").strip()
+        if written and _han_name(written) and _glyph_key(written) == _glyph_key(name):
+            return written
+    return ""
 
 
 def _has_kana(written: str) -> bool:
@@ -303,9 +345,12 @@ def _localized_han_name(name: str, aliases, localization) -> str:
     return jp
 
 
-def japanese_name(canonical_name: str, aliases, localization=None) -> str:
+def japanese_name(canonical_name: str, aliases, localization=None, refs=()) -> str:
     """这位的日文艺名。挑不出来时退回规范名，判据见模块开头。"""
     name = str(canonical_name or "").strip()
+    recorded = recorded_name(name, refs)
+    if recorded:
+        return recorded
     localized = _localized_han_name(name, aliases, localization)
     current = localized or name
     equivalents = _glyph_equivalents(current, aliases)
@@ -441,8 +486,13 @@ def build(settings: dict, canonical_name: str, refs, aliases=(), localization=No
     """这条人物实体能直达的地址，按 SITES 的先后排好。缺 id 的站点不出现在结果里。"""
     ids = provider_ids(refs)
     jav = is_jav_performer(refs)
-    written = japanese_name(canonical_name, aliases, localization)
+    written = japanese_name(canonical_name, aliases, localization, refs)
     missav_path = directory.path(written, canonical_name) if directory else None
+    if missav_path == "":
+        # 资料记下的现名在名录里没有页（她已改用别名里的新艺名）时，按别名挑出的那个再找一次。
+        fallback = japanese_name(canonical_name, aliases, localization)
+        if fallback != written and directory.path(fallback, canonical_name):
+            written, missav_path = fallback, directory.path(fallback, canonical_name)
     out: list[dict] = []
     for site in SITES:
         row = settings.get(site.key) or {}

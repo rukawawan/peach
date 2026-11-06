@@ -34,7 +34,7 @@ export function ChapterIcon({ chapter, className = 'size-5' }: { chapter: string
 export function GuideBanner({ icon: Icon, title, description, children, completed = false }: {
   icon: Glyph; title: string; description: string; children: ReactNode; completed?: boolean;
 }) {
-  return <section data-guide-banner="" data-guide-completed={completed || undefined} className={cardClass({ radius: 'plain', bordered: 'soft', className: 'flex flex-col gap-4' })} aria-label={title}>
+  return <section data-guide-banner="" data-guide-completed={completed || undefined} className={cardClass({ radius: 'plain', className: 'flex flex-col gap-4' })} aria-label={title}>
     <div className="flex items-start gap-3"><span className="peach-guide-topic-icon"><Icon aria-hidden className="size-5" /></span><div className="flex min-w-0 flex-col gap-1"><h3 className="text-title-2-medium text-text-primary">{title}</h3><p className="text-body-2-regular text-text-secondary">{description}</p></div></div>
     <div className="flex flex-wrap items-center justify-between gap-3">{children}</div>
   </section>;

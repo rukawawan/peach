@@ -47,6 +47,14 @@ class EntryLinkAddressTests(unittest.TestCase):
                          ["https://javdb.com/actors/d45k9",
                           "https://javdb.com/actors/ZX5z7"])
 
+    def test_the_page_credited_on_her_works_comes_before_a_name_backfilled_one(self):
+        """#271：旧艺名那页（白石アイリ）常年是空的，排第一会让人以为链接错了。"""
+        backfilled = ref("javdb", "MmbDR") | {"metadata_json": json.dumps({"source": "backfill_performer_entry_ids"})}
+        credited = ref("javdb", "bkxd") | {"metadata_json": json.dumps({"source": "javdb", "provider_id": "NNPJ-466"})}
+        rows = entry_links.build(entry_links.defaults(), "森日向子", [backfilled, credited])
+        self.assertEqual([row["url"] for row in rows if row["site"] == "javdb"],
+                         ["https://javdb.com/actors/bkxd", "https://javdb.com/actors/MmbDR"])
+
     def test_a_site_without_an_id_is_absent_instead_of_a_search_address(self):
         rows = entry_links.build(entry_links.defaults(), "深田えいみ",
                                  [ref("r18dev", "1041521")])
@@ -336,6 +344,33 @@ class MissavDirectoryTests(unittest.TestCase):
                 rows = entry_links.build(entry_links.defaults(), canonical, [ref("javdb", "actor")],
                                          [alias(jp)], directory=directory)
                 self.assertEqual(next(row["url"] for row in rows if row["site"] == "missav"), address)
+
+    def test_a_han_current_name_recorded_by_directories_beats_a_former_name_alias(self):
+        """#271：r18 与 avwikidb 都把「森日向子」记成她的名字，可信来源的旧艺名不能顶替。"""
+        aliases = [alias("白石アイリ", "av_name@namewikis-20260924"), alias("朝比奈えみり", "auto:performer-alias@1")]
+        recorded = [ref("javdb", "bkxd"), ref("r18", "森日向子", "performer_name"),
+                    ref("avwikidb", "1") | {"metadata_json": json.dumps({"name": "森日向子", "kana": "もり ひなこ"})}]
+        for refs in (recorded[:2], [recorded[0], recorded[2]]):
+            with self.subTest(refs=[row["provider"] for row in refs]):
+                self.assertEqual(entry_links.japanese_name("森日向子", aliases, refs=refs), "森日向子")
+        self.assertEqual(entry_links.japanese_name("森日向子", aliases, refs=recorded[:1]), "白石アイリ")
+        # 记下的是日文字形时用资料里的写法，中文规范名只用来对上她。
+        self.assertEqual(entry_links.japanese_name("三上悠亚", [alias("ヒュージョン亀頭", "wiki")],
+                                                   refs=[ref("r18", "三上悠亜", "performer_name")]), "三上悠亜")
+        address = "https://missav.ws/dm127/cn/actresses/" + quote("森日向子")
+        directory = self.directory([{"name": "森日向子", "url": address},
+                                    {"name": "白石アイリ", "url": "https://missav.ws/dm31/cn/actresses/X"}], complete=True)
+        rows = entry_links.build(entry_links.defaults(), "森日向子", recorded, aliases, directory=directory)
+        self.assertEqual(next(row["url"] for row in rows if row["site"] == "missav"), address)
+
+    def test_a_recorded_name_without_a_directory_page_keeps_the_alias_page(self):
+        """资料记下的是她改名前的写法、名录里只有新艺名的页时，照旧链到别名挑出的那页。"""
+        address = "https://missav.ws/dm62/cn/actresses/" + quote("とみの伊織")
+        directory = self.directory([{"name": "とみの伊織", "url": address}], complete=True)
+        rows = entry_links.build(entry_links.defaults(), "富野伊织",
+                                 [ref("javdb", "a"), ref("r18", "富野伊織", "performer_name")],
+                                 [alias("とみの伊織", "wiki")], directory=directory)
+        self.assertEqual(next(row["url"] for row in rows if row["site"] == "missav"), address)
 
     def test_ambiguous_directory_names_have_no_missav_entry(self):
         directory = self.directory([

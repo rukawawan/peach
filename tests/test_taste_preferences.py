@@ -292,6 +292,7 @@ class TastePreferenceTests(unittest.TestCase):
         with patch.object(web_jav_discovery, "_external", return_value=candidates), \
              patch.object(web_jav_discovery, "_metadata_response", return_value={}), \
              patch.object(web_jav_discovery.wants, "wanted_keys", return_value=set()), \
+             patch.object(web_jav_discovery.feed_followup, "cover_states", return_value={}), \
              patch.object(web_jav_discovery.web_feeds, "_discovery_performers", return_value={10: [], 11: [], 12: []}):
             descending = web_jav_discovery.q_jav_discoveries(contract, {})["items"]
             ascending = web_jav_discovery.q_jav_discoveries(contract, {"direction": "asc"})["items"]

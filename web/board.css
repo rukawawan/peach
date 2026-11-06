@@ -261,8 +261,8 @@ body{background:var(--page)}
 /* Task entry cards and editing panels have different information density. */
 /* 管理区每一页的正文跟标题走同一条中线。标题由页头岛（`react/manage-header/`）钉在 1120 上，
    正文也得钉到同一个数：`.scraping-page` 和 `.ui-activitypage` 自己声明的 812 窄列比标题
-   每边窄 154px，读起来就是正文整块往右缩了一截。数据管理、活动页骨架与配置页的同一条在
-   frontend/src 的 management.css、board-skeleton.css 与 react/settings/configuration-page.css。 */
+   每边窄 154px，读起来就是正文整块往右缩了一截。数据管理与活动页骨架用 `max-w-board`，配置页的同一条在
+   frontend/src/react/settings/configuration-page.css。 */
 .scraping-page{width:100%;max-width:var(--board-content)}
 .cleanupfieldset{border:1px solid var(--line);border-radius:16px;box-shadow:0 1px 2px #00000003}
 .cleanupfieldset>.geist-fieldset-content{padding:20px 20px 16px;min-height:120px}
@@ -274,7 +274,7 @@ body{background:var(--page)}
    内边距 16，32px 的图标格里 20px 字形，标签 Body Medium 次文字色，读数 title-1-medium 24/34）。Peach 把整张卡做成
    按钮——它就是那一页的入口，读数下面那行 Caption 是同一份 payload 里的分项。五张在 1120 内一行摆下，窄了折两列、
    再折一列。上游的卡不可点也没有悬停；悬停抬主文字色 6% 底是 Peach 自己加的，告诉人这张卡按得下去。
-   骨架里那一排的网格、折行与卡头在 frontend/src/management.css 的 `.ui-cleanupstats`。 ── */
+   骨架里那一排与 React 共用 `react/components/stat-card.tsx` 的 `PLAIN_STAT_STRIP`。 ── */
 .board-plain-stat{display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-width:0;min-height:132px;margin:0;padding:16px;border:0;border-radius:16px;background:var(--color-background-secondary-default);color:var(--color-text-primary);font:var(--board-body);text-align:left;cursor:pointer;transition:background-color .15s ease}
 .board-plain-stat:hover{background:color-mix(in srgb,var(--color-text-primary) 6%,var(--color-background-secondary-default))}
 .board-plain-stat:disabled{cursor:default}
@@ -742,6 +742,8 @@ body .gselectmenu [role=option][aria-selected=true],body .popmenu [aria-checked=
 [data-split-button][data-variant=primary]{--split-seam:var(--color-accent-400);border:0;background:none;box-shadow:none}
 [data-split-button][data-variant=primary]>button:not(:disabled){background:var(--board-blue);color:#fff}
 [data-split-button][data-variant=primary]>button:not(:disabled,[aria-disabled=true]):active{background:var(--board-blue-active)}
+/* 只标 `aria-disabled` 的键（已有任务在跑，点了要说明原因）沿用忙碌键的淡出面，光标换成不可用。 */
+[data-split-button][data-variant=primary]>button[aria-disabled=true]:not([aria-busy=true]){cursor:not-allowed;opacity:.55;filter:saturate(.35)}
 [data-split-button][data-variant=primary]>button:last-child{width:36px;padding:8px}
 /* 骨架里等数据的键（`data-skeleton-action`，原生 `disabled`）不管哪一档都是同一副禁用面：
    `--surface` 底、一圈 `--border-15`、`--muted` 字，不靠 opacity。属性写两遍是为了压过

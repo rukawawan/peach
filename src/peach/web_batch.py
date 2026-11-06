@@ -65,8 +65,17 @@ BATCH_LABELS = {
     "like": "批量标记喜欢", "seen": "批量标记看过", "later": "批量加入稍后看",
     "dispose": "批量移入回收站", "restore": "批量还原", "delete": "批量永久删除",
     "dismiss-junk": "批量确认不是垃圾", "reconsider-junk": "批量重新判定垃圾",
+    "keep-duplicates": "重复组标记都保留", "reconsider-duplicates": "重复组重新列出",
     "region": "批量判定产地",
 }
+
+#: 重复组「都保留」记在 `review_decision` 的这一类下，键是组员 id 升序连写。组里文件一增一减，
+#: 键就对不上，这组自动回到列表（做法参考 SakuraMedia `608abc0bfb`）。
+DUPLICATE_KEEP_CATEGORY = "duplicate_group"
+
+
+def duplicate_group_key(ids) -> str:
+    return ",".join(str(asset_id) for asset_id in sorted(int(asset_id) for asset_id in ids))
 
 
 def q_ads(contract: WebContract, limit=200, offset=0, kind="", status="pending"):
@@ -340,8 +349,13 @@ def _finish_purge(outcome):
     return outcome
 
 
-def _purge_media_path(row, online_roots: dict[str, tuple[Path, ...]]) -> Path:
-    """核对永久删除目标的路径映射和来源可读性，失败时拒绝删除。"""
+def _purge_media_path(row, online_roots: dict[str, tuple[Path, ...]], *,
+                      missing_only: bool = False) -> Path:
+    """核对永久删除目标的路径映射和来源可读性，失败时拒绝删除。
+
+    `missing_only` 只删账本行：媒体目录已从设置里移除时，这一行不在任何来源根下，
+    所在的盘可读就交给调用方 `stat`，文件确实不在才删。要删媒体文件的仍只认在线来源根。
+    """
     media = row["path"]
     from .smb_media import resolve
     if remote := resolve(media):
@@ -351,10 +365,21 @@ def _purge_media_path(row, online_roots: dict[str, tuple[Path, ...]]) -> Path:
         raise OSError("媒体路径未映射到可访问的挂载目录")
     if PureWindowsPath(str(media)).drive:
         location = row["location"] if "location" in row.keys() else None
-        if not any(within_root(translated, root) and root_online(root)
-                   for root in online_roots.get(location, ())):
-            raise OSError("媒体来源未挂载或不可读取")
+        if any(within_root(translated, root) and root_online(root)
+               for root in online_roots.get(location, ())):
+            return translated
+        if missing_only and not _inside_declared_root(translated) and root_online(Path(translated.anchor)):
+            return translated
+        raise OSError("媒体来源未挂载或不可读取")
     return translated
+
+
+def _inside_declared_root(path: Path) -> bool:
+    """路径是否落在设置里任一来源根下，包括此刻离线的根。SMB 根下的行由 `resolve` 先接走。"""
+    from .smb_media import resolve
+    return any(within_root(path, translate_ledger_path(declaration))
+               for declarations in LOCATION_ROOT_DECLARATIONS.values()
+               for declaration in declarations if resolve(declaration) is None)
 
 
 def purge_assets(connection, rows, *, missing_only: bool = False):
@@ -374,7 +399,7 @@ def purge_assets(connection, rows, *, missing_only: bool = False):
             try:
                 if online_roots is None and PureWindowsPath(str(media)).drive:
                     online_roots = _online_source_roots()
-                translated = _purge_media_path(row, online_roots or {})
+                translated = _purge_media_path(row, online_roots or {}, missing_only=missing_only)
             except OSError as error:
                 blocked.append({"id": row["id"], "path": media,
                                 "reason": error.strerror or str(error)})
@@ -485,6 +510,9 @@ def _reject_ineligible_targets(operation: str, rows) -> None:
             row["location"] not in SCANNABLE_LOCATIONS
             or row["disposal"] is not None for row in rows):
         raise ValueError("junk decisions are only allowed for active physical assets")
+    if operation in {"keep-duplicates", "reconsider-duplicates"} and (
+            len(rows) < 2 or any(row["disposal"] is not None for row in rows)):
+        raise ValueError("duplicate decisions need a whole group of active assets")
 
 
 def _batch_disposal_reason(body):
@@ -495,6 +523,27 @@ def _batch_disposal_reason(body):
     if reason not in (None, "manual", "junk", "duplicate", "missing"):
         raise ValueError("unsupported disposal reason")
     return reason
+
+
+#: 只在 `review_decision` 里记一笔或撤一笔、不碰 asset 行的几种批量操作。
+REVIEW_MARKS = frozenset({"dismiss-junk", "reconsider-junk", "keep-duplicates", "reconsider-duplicates"})
+
+
+def _write_review_mark(connection, operation, ids, now):
+    """「不是垃圾」按文件一条；「都保留」按整组一条，键随组员走。"""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    upsert = ("INSERT INTO review_decision(category,item_key,status,note,updated_at) "
+              "VALUES(?,?,'rejected',?,?) ON CONFLICT(category,item_key) DO UPDATE SET "
+              "status='rejected',note=excluded.note,updated_at=excluded.updated_at")
+    remove = "DELETE FROM review_decision WHERE category=? AND item_key=?"
+    if operation == "dismiss-junk":
+        connection.executemany(upsert, [("junk_file", str(i), "用户确认不是垃圾", stamp) for i in ids])
+    elif operation == "reconsider-junk":
+        connection.executemany(remove, [("junk_file", str(i)) for i in ids])
+    elif operation == "keep-duplicates":
+        connection.execute(upsert, (DUPLICATE_KEEP_CATEGORY, duplicate_group_key(ids), "用户确认这组都保留", stamp))
+    else:
+        connection.execute(remove, (DUPLICATE_KEEP_CATEGORY, duplicate_group_key(ids)))
 
 
 def _write_batch_state(connection, rows, operation, now, disposal_reason):
@@ -527,8 +576,7 @@ def w_batch(contract: WebContract, body):
         raise ValueError("batch requires 1 to 200 assets")
     operation = body.get("operation")
     if operation not in {
-        "like", "seen", "later", "dispose", "restore", "delete",
-        "dismiss-junk", "reconsider-junk", "region",
+        "like", "seen", "later", "dispose", "restore", "delete", "region", *REVIEW_MARKS,
     }:
         raise ValueError("unsupported batch operation")
     # 产地的取值在这里就要认出来，别等到写库那一步才发现拼错了。
@@ -564,20 +612,8 @@ def w_batch(contract: WebContract, body):
                         # 下一轮扫描会把它们接回在库。选中里有一条已消失的，整批都按这条口径删。
                         purge_outcome = purge_assets(
                             connection, found, missing_only=any(row["disposal"] == VANISHED for row in found))
-                    elif operation == "dismiss-junk":
-                        connection.executemany(
-                            "INSERT INTO review_decision(category,item_key,status,note,updated_at) "
-                            "VALUES('junk_file',?,'rejected','用户确认不是垃圾',?) "
-                            "ON CONFLICT(category,item_key) DO UPDATE SET "
-                            "status='rejected',note=excluded.note,updated_at=excluded.updated_at",
-                            [(str(asset_id), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)))
-                             for asset_id in valid_ids],
-                        )
-                    elif operation == "reconsider-junk":
-                        connection.executemany(
-                            "DELETE FROM review_decision WHERE category='junk_file' AND item_key=?",
-                            [(str(asset_id),) for asset_id in valid_ids],
-                        )
+                    elif operation in REVIEW_MARKS:
+                        _write_review_mark(connection, operation, valid_ids, now)
                     elif operation == "region":
                         # 走 `write_owned_fields` 而不是直接 UPDATE：产地是真相字段，用户这一
                         # 笔要压得住后面每一轮刮削与推断，归属列是它唯一的凭据。
@@ -745,6 +781,9 @@ def q_duplicates(contract: WebContract, args):
             "FROM asset WHERE medium='video' AND code IS NOT NULL AND code<>'' "
             "AND disposal IS NULL"
         ).fetchall()
+        kept = {row[0] for row in connection.execute(
+            "SELECT item_key FROM review_decision WHERE category=? AND status='rejected'",
+            (DUPLICATE_KEEP_CATEGORY,))}
 
     grouped: dict[str, list[dict]] = {}
     for row in rows:
@@ -755,7 +794,8 @@ def q_duplicates(contract: WebContract, args):
         item["drive"] = str(item.get("path") or "")[:2].upper()
         grouped.setdefault(normalise_code_key(row["code"]), []).append(item)
 
-    groups = _duplicate_groups(grouped)
+    found = _duplicate_groups(grouped)
+    groups = [g for g in found if duplicate_group_key(f["id"] for f in g["files"]) not in kept]
     groups.sort(key=lambda g: -g["reclaimable"])
     window = groups[offset:offset + limit]
     return {
@@ -764,4 +804,6 @@ def q_duplicates(contract: WebContract, args):
         "reclaimable": sum(g["reclaimable"] for g in groups),
         "groups": window,
         "has_more": offset + limit < len(groups),
+        # 标过「都保留」、组员没变的组数；它们不进上面任何一项。
+        "kept": len(found) - len(groups),
     }

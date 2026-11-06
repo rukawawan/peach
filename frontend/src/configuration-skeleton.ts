@@ -10,7 +10,6 @@ import { esc } from '@peach/legacy/core';
 import { islandButton, islandGlyph, islandSelect } from './island-skeleton';
 import { CONFIGURATION_SECTIONS } from './history/settings-route';
 import { diagnosticsSkeleton } from './diagnostics-skeleton';
-import { sectionGuide } from './onboarding/guide-catalog';
 import { LIBRARY_FOLDER_HELP, POLICY_SUMMARY } from './react/settings/library-policy-copy';
 import { ENTRY_LINKS_HELP, ENTRY_LINKS_HINT } from './configuration-copy';
 import CREDENTIAL_REGISTRY from './react/follow-manage/credential-providers.json' with { type: 'json' };
@@ -29,6 +28,8 @@ export interface JavBrowserShape { enabled: boolean; ready: boolean }
 export interface CloudProxyShape { configured: boolean; accounts: [boolean, boolean][]; unlinked: number }
 export interface DownloadsShape { cloud: boolean; has115: boolean; pikpak: boolean; pikpakRoots: boolean; pikpakLoggedIn: boolean; browserLogin: boolean }
 export interface NetworkShape { port: boolean; addresses?: number; networkEditable?: boolean; lan?: boolean; proxyAddress: boolean; access: string; tunnelNamed: boolean; tunnelNamedMode: boolean; tunnelNote: boolean }
+/** 已登录的设备：行数，以及底栏有没有「撤销其他设备」。 */
+export interface DevicesShape { rows: number; manageable: boolean }
 export interface MaintenanceShape {
   releaseFacts: number; releaseNotes: number; autoUpdateHelp: boolean; startupNote: boolean; desktopNote: boolean;
   storageRows: number; storageNotes: number; reporting: boolean; reportingIdle: boolean; sharing: boolean;
@@ -37,7 +38,7 @@ export interface MaintenanceShape {
 export interface ConfigurationShape {
   media: MediaShape; discovery: DiscoveryShape; credentials: CredentialsShape; indexers: IndexersShape;
   javBrowser: JavBrowserShape; cloudProxy: CloudProxyShape; downloads: DownloadsShape; network: NetworkShape;
-  maintenance: MaintenanceShape;
+  devices: DevicesShape; maintenance: MaintenanceShape;
 }
 type Shapes = { [K in keyof ConfigurationShape]?: Partial<ConfigurationShape[K]> };
 
@@ -84,11 +85,15 @@ const heading = (name: string, aside: string, mark: boolean) => {
   return aside ? `<div class="flex w-full flex-wrap items-center justify-between gap-2"><div class="min-w-40 flex-1">${label}</div><div class="flex min-w-0 max-w-full">${aside}</div></div>` : label;
 };
 const section = (name: string, content: string, actions = '', { aside = '', status = '', mark = false } = {}) =>
-  `<section aria-label="${name}" class="flex w-full flex-col gap-2 wrap-anywhere">${heading(name, aside, mark)}${sectionGuide(name) ? `<div aria-hidden="true" class="flex items-center gap-1 text-body-2-medium text-text-secondary">${islandGlyph('chevron-right', 'size-(--icon-inline) shrink-0')}设置说明</div>` : ''}<div class="flex w-full flex-col rounded-2xl bg-background-secondary-default pl-3">${content}${actions ? footer(actions, status) : ''}</div></section>`;
-const controlRow = (label: string, description: string, control: string) => `<div class="flex min-h-[52px] w-full items-center justify-between gap-4 py-2.5 pr-2.5 border-b border-separator-border last:border-b-0"><div class="flex min-w-0 flex-col"><p class="text-body-regular text-text-primary">${label}</p>${description ? `<p class="text-body-2-regular text-text-secondary">${description}</p>` : ''}</div>${control}</div>`;
+  `<section aria-label="${name}" class="flex w-full flex-col gap-2 wrap-anywhere">${heading(name, aside, mark)}<div class="flex w-full flex-col rounded-2xl bg-background-secondary-default pl-3">${content}${actions ? footer(actions, status) : ''}</div></section>`;
+/** 同 BoardUI `SettingsRow`；`lead` 是行首图标的占位。 */
+const controlRow = (label: string, description: string, control: string, lead = '') => {
+  const body = `<div class="flex min-w-0 flex-col"><p class="text-body-regular text-text-primary">${label}</p>${description ? `<p class="text-body-2-regular text-text-secondary">${description}</p>` : ''}</div>`;
+  return `<div class="flex min-h-[52px] w-full items-center justify-between gap-4 py-2.5 pr-2.5 border-b border-separator-border last:border-b-0">${lead ? `<div class="flex min-w-0 items-center gap-3">${lead}${body}</div>` : body}${control}</div>`;
+};
 const row = (label: string, description = '', control = 'ui-configuration-skeleton-toggle') => controlRow(label, description, `<span class="skeleton ${control}"></span>`);
 /* 只读一句读数的行（「每 3 个月」）：右边是一段文字宽的占位，行高同开关行。 */
-const valueRow = (label: string, width = '4em') => controlRow(label, '', text(width));
+const valueRow = (label: string, description = '', width = '4em') => controlRow(label, description, text(width));
 const help = (content: string) => `<p class="text-body-2-regular text-text-secondary">${content}</p>`;
 const fieldLabel = (label: string) => `<p class="text-body-medium text-text-primary">${label}</p>`;
 const inputField = (label: string, hint = '') => `<div class="flex w-full flex-col items-start gap-1"><span class="flex items-center gap-0.5 text-body-medium text-text-primary">${label}</span>${input()}${hint ? `<span class="pt-px text-caption-1-medium text-text-secondary">${hint}</span>` : ''}</div>`;
@@ -221,7 +226,7 @@ export function discoverySkeleton(): string {
   const prefixRow = `<div class="flex items-start gap-2"><span class="min-w-0 flex-1">${input()}</span>${islandSelect(text('4em'), { prefix: '对应目录' })}${islandButton({ glyph: 'trash', variant: 'secondary', attrs: wait })}</div>`;
   return section('自动发现新文件', stack(`<div class="flex flex-wrap items-center gap-2"><span class="text-body-regular text-text-secondary">本机监视</span>${chip()}</div>`)
     + row('发现新文件后自动入库', enabled ? text('10em') : '') + row('监视本机文件夹', enabled && on(shape?.watchLocal) ? text('12em') : '')
-    + row('接收 CloudDrive2 通知') + (cloud ? controlRow('Webhook 配置', text('20em'), '') : '')
+    + row('接收 CloudDrive2 通知', '网盘目录有变化时由 CloudDrive2 推送过来。') +(cloud ? controlRow('Webhook 配置', text('20em'), '') : '')
     + (webhook ? stack(summary('查看配置'), true) : '')
     + (cloud ? stack(`<div class="flex flex-col gap-3">${fieldLabel('云端路径前缀')}<div class="flex flex-col gap-3">${prefixRow.repeat(count(shape?.prefixes, 20))}</div><div>${button('添加前缀', 'secondary')}</div></div>`, true) : ''),
   (webhook ? button('更换密钥', 'secondary') : '') + button('保存配置'));
@@ -248,7 +253,8 @@ const media = () => {
 const subscriptions = () => `<div>${button('采集来源与登录状态', 'secondary')}</div>`
   + credentialsSkeleton()
   + section('关注采集', controlRow('自动检查更新', '', `<span class="flex items-center gap-2"><span class="skeleton ui-configuration-skeleton-toggle"></span><span class="skeleton ui-configuration-skeleton-input" style="width:96px"></span></span>`)
-    + valueRow('订阅源拉取') + row('首次采集范围', '', 'ui-configuration-skeleton-select') + valueRow('头像刷新') + valueRow('favicon 刷新'))
+    + valueRow('订阅源拉取') + row('首次采集范围', '新关注的来源第一次回看多久以前的内容。', 'ui-configuration-skeleton-select')
+    + valueRow('头像刷新', '重新获取关注创作者的头像。') + valueRow('favicon 刷新', '重新获取来源站点的图标。'))
   + indexersSkeleton()
   + section('作品资料站点', stack(`<p class="text-body-2-regular text-text-secondary">${ENTRY_LINKS_HELP}</p>${inputField(marked('JavDB 地址'), ENTRY_LINKS_HINT)}${inputField(marked('MISSAV 地址'), ENTRY_LINKS_HINT)}`), button('保存配置'));
 
@@ -289,6 +295,14 @@ function accessBody(mode: string): string {
     + (mode === 'password' ? inputField('当前访问密码 *') : '') + pair;
 }
 
+/** 已登录的设备：分区自己取数时也画这一份。没有记录时按一行（本机）画。 */
+export function devicesSkeleton(): string {
+  const shape = rememberedShape('devices');
+  const rows = Array.from({ length: Math.max(1, count(shape?.rows, 8)) }, () => controlRow(text('8em'), text('14em'), text('3em'), block('20px', '20px'))).join('');
+  return section('已登录的设备', rows, on(shape?.manageable) ? button('撤销其他设备', 'secondary') : '',
+    on(shape?.manageable) ? { status: '修改访问密码会让全部设备退出。' } : {});
+}
+
 const network = () => {
   const shape = rememberedShape('network');
   /* 没有记录时按服务端的默认状态画：没有访问设置文件就是 `legacy`（系统生成的口令）。 */
@@ -304,9 +318,10 @@ const network = () => {
       + (on(shape?.port) ? inputField('端口') : '')), on(shape?.port) ? button('保存配置') : '',
       on(shape?.port) ? { status: '保存后 Peach 会重启，并跳转到新地址。' } : {}) : '')
     + section('访问密码', stack(accessBody(mode)), mode === 'locked' ? '' : button('保存配置'))
+    + (mode === 'password' || mode === 'legacy' ? devicesSkeleton() : '')
     + section('Cloudflare 公网入口', stack((named ? block('10.5em', '36px') : '') + tunnel),
       button('启动公网入口', named ? 'secondary' : 'primary') + (named ? button('保存配置') : ''), { aside: chip() })
-    + section('Peach 代理', row('连接方式', '', 'ui-configuration-skeleton-select') + (on(shape?.proxyAddress) ? stack(inputField('代理地址'), true) : ''), button('保存配置'));
+    + section('Peach 代理', row('连接方式', 'Peach 访问外网和采集来源时使用。', 'ui-configuration-skeleton-select') + (on(shape?.proxyAddress) ? stack(inputField('代理地址'), true) : ''), button('保存配置'));
 };
 
 /* ---------- 应用与维护 ---------- */
@@ -328,8 +343,8 @@ const maintenance = () => {
   const sharing = given(shape?.sharing) ? `<div class="border-t border-separator-border">${row('上传馆藏与口味明细', on(shape?.sharingNotice) ? text('12em') : '')}${on(shape?.sharingIdle) ? stack(idle, true) : ''}${footer(button('预览上传内容', 'secondary'))}</div>` : '';
   return section('检查更新', facts(releaseFacts) + (releaseNotes ? stack(help(text('50%')).repeat(releaseNotes), true) : ''),
     button('检查更新'), { aside: chip('4em'), status: text('5em') })
-    + section('自动更新', row('自动检查新版本') + row('自动下载更新') + row('检查频率', on(shape?.autoUpdateHelp) ? text('12em') : '', 'ui-configuration-skeleton-select'), button('保存配置'))
-    + section('开机自启', row('开机后启动 Peach') + row('只启动托盘，不打开网页') + row('在桌面创建快捷方式', on(shape?.desktopNote) ? text('12em') : '')
+    + section('自动更新', row('自动检查新版本') + row('自动下载更新', '发现新版本后先下载，重启安装前会询问。') +row('检查频率', on(shape?.autoUpdateHelp) ? text('12em') : '', 'ui-configuration-skeleton-select'), button('保存配置'))
+    + section('开机自启', row('开机后启动 Peach') + row('只启动托盘，不打开网页', '开机后在后台运行，需要时从托盘打开页面。') +row('在桌面创建快捷方式', on(shape?.desktopNote) ? text('12em') : '')
       + (on(shape?.startupNote) ? stack(help(text('60%')), true) : ''), button('保存配置'))
     + section('视频播放', row('转码方式', '用于播放时的视频转码。', 'ui-configuration-skeleton-select'))
     + section('存储空间', facts(['数据目录', '所在磁盘'])

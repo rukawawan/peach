@@ -93,7 +93,7 @@ export function PushDiscoveryForm({ initial, receipt }: {
             isDisabled={!state.available || !state.enabled}
             onChange={(watchLocal) => setState({ ...state, watch_local: watchLocal })} />
         </SettingsRow>
-        <SettingsRow label="接收 CloudDrive2 通知">
+        <SettingsRow label="接收 CloudDrive2 通知" description="网盘目录有变化时由 CloudDrive2 推送过来。">
           <Switch aria-label="接收 CloudDrive2 通知" isSelected={state.cloud}
             isDisabled={!state.available || !state.enabled}
             onChange={(cloud) => setState({ ...state, cloud })} />

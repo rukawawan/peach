@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CONFIGURATION_URL, PICK_FOLDER_URL } from '../../src/configuration-endpoints';
 import type { ConfigurationData } from '../../src/react/bundle';
@@ -13,7 +13,15 @@ vi.mock('../../src/react/settings/cloud-proxy-settings', () => ({ CloudProxySett
 vi.mock('@peach/legacy/ui', async (original) => ({
   ...await original<Record<string, unknown>>(),
   MEDIA_SOURCE_ICONS: (await import('../../src/ui-kit/media-source-icons')).MEDIA_SOURCE_ICONS,
+  confirmModal: (await import('../../src/ui-kit/modal')).confirmModal,
 }));
+/* 保存前先读一次扫描与采集的状态。单独接住它，各用例的 `fetch` 桩只数配置请求。 */
+const processing = vi.hoisted(() => ({ read: vi.fn(async (): Promise<{ status: string; trigger?: string }> => ({ status: 'idle' })) }));
+vi.mock('../../src/react/library-processing/library-processing', async (original) => ({
+  ...await original<Record<string, unknown>>(),
+  fetchLibraryProcessing: () => processing.read(),
+}));
+afterEach(() => { processing.read.mockReset(); processing.read.mockResolvedValue({ status: 'idle' }) });
 
 const data = (over: Partial<ConfigurationData> = {}): ConfigurationData => ({
   editable: true, notice: '', revision: 'rev-1', media_dirs: ['D:\\Media'], library_count: 1, port: 9123, facts: [], ...over,
@@ -294,6 +302,28 @@ describe('选择文件夹', () => {
 });
 
 describe('保存', () => {
+  it('扫描与采集在跑时先确认重启的影响，取消就不保存；读不到任务状态时照常保存', async () => {
+    const fetcher = fetchMock(200, { saved: true, url: '/', revision: 'rev-2' });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      processing.read.mockResolvedValue({ status: 'running', trigger: 'cli' });
+      const host = await open();
+      await submit(host.querySelector('form'));
+      await settle();
+      const dialog = document.querySelector('dialog');
+      expect(dialog?.textContent).toContain('由命令行或托盘发起，在独立进程里运行，不受重启影响');
+      await click(dialog!.querySelector('[data-modal-cancel]'));
+      await settle();
+      expect(fetcher).not.toHaveBeenCalled();
+      processing.read.mockRejectedValue(new Error('连接中断'));
+      await submit(host.querySelector('form'));
+      await settle();
+      expect(fetcher.mock.calls[0]?.[0]).toBe(CONFIGURATION_URL);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('提交带上指纹、全部文件夹、端口与是否扫描，成功后回执并留下新地址', async () => {
     const fetcher = fetchMock(200, { saved: true, url: 'http://127.0.0.1:9124/', revision: 'rev-2' });
     vi.stubGlobal('fetch', fetcher);

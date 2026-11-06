@@ -13,6 +13,7 @@
   {"name": "javascript", "color": "168700", "description": "JavaScript 依赖更新 / JavaScript dependency updates"},
   {"name": "github_actions", "color": "000000", "description": "GitHub Actions 依赖更新 / GitHub Actions dependency updates"},
   {"name": "python:uv", "color": "2b67c6", "description": "uv 管理的 Python 依赖更新 / Python dependency updates managed by uv"},
+  {"name": "docker", "color": "21ceff", "description": "Docker 基础镜像更新 / Docker base image updates"},
   {"name": "platform:windows", "color": "0366d6", "description": "已确认影响 Windows / Confirmed on Windows"},
   {"name": "platform:macos", "color": "0366d6", "description": "已确认影响 macOS / Confirmed on macOS"},
   {"name": "platform:linux", "color": "0366d6", "description": "已确认影响 Linux / Confirmed on Linux"},
@@ -21,6 +22,8 @@
   {"name": "area:web", "color": "5319e7", "description": "网页界面与交互 / Web interface and interactions"},
   {"name": "area:media", "color": "5319e7", "description": "扫描、播放、抽帧与媒体处理 / Scanning, playback, frames and media processing"},
   {"name": "area:metadata", "color": "5319e7", "description": "刮削、来源及元数据编目 / Scraping, sources and metadata cataloging"},
+  {"name": "area:tooling", "color": "bfd4f2", "description": "测试、构建、持续集成与开发工具 / Tests, builds, CI and developer tooling"},
   {"name": "status:needs-info", "color": "d876e3", "description": "缺少定位所需信息；见维护者具体问题 / Missing information; see maintainer questions"},
-  {"name": "status:needs-verification", "color": "fbca04", "description": "修复版本已发布，等待目标环境验证 / Fix released; awaiting verification"}
+  {"name": "status:needs-verification", "color": "fbca04", "description": "修复版本已发布，等待目标环境验证 / Fix released; awaiting verification"},
+  {"name": "status:needs-template", "color": "e4e669", "description": "未按模板填写，已自动关闭；补齐章节后重开 / Missing template sections; closed until filled in"}
 ]

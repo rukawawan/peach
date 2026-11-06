@@ -55,7 +55,7 @@ DELIVERY_STEPS = [
 RECIPES = {
     "docker": {
         "label": "应用与工作流 Docker 镜像",
-        "manifests": ("Dockerfile", ".github/actions/actionlint/Dockerfile"),
+        "manifests": ("Dockerfile", ".github/actions/actionlint/Dockerfile", "compose.yaml"),
         "derived": (),
         "commands": (),
         "checks": (),

@@ -64,6 +64,7 @@ from peach.task_runs import TaskRunHandle, cli_run, inert_handle
 from peach.platform import system_volume
 from peach.catalog_rules import (
     code_letter_stem,
+    code_serial,
     is_amateur_code,
     is_jav_code,
     is_korean_mib_code,
@@ -96,10 +97,12 @@ SMALL_MIN_WIDTH = 240
 PLACEHOLDER = re.compile(r"now_?printing", re.I)
 #: 官方候选一张都量不出可用尺寸时的两种说法，下标是「有没有量到过偏小的图」。
 NO_USABLE_OFFICIAL = ("官方封面地址都没有取到图片", "官方封面只有缩略图或占位图")
-#: 占位图是来源自己说「没有图」：DMM 下架的作品两个版本都只剩这一张。
-PLACEHOLDER_REASON = "来源给的是「准备中」占位图"
+#: 两句占位图原因共有的那几个字，取图记录按它认出「官方只回占位图」。
+PLACEHOLDER_MARK = "「准备中」占位图"
+#: 占位图是来源自己说「没有图」：DMM 发售前还没出图、下架的作品两个版本都只剩这一张。
+PLACEHOLDER_REASON = f"来源给的是{PLACEHOLDER_MARK}"
 #: 官方候选里取到的只有占位图、没有偏小的真图时的说法。
-OFFICIAL_PLACEHOLDER_ONLY = "官方封面地址只回「准备中」占位图，作品多半已从官方下架"
+OFFICIAL_PLACEHOLDER_ONLY = f"官方封面地址只回{PLACEHOLDER_MARK}：未发售的新作是官方还没出图，旧作多半已从官方下架"
 #: 韩国 MIB 的编号不在 JAV 目录站上，封面来源一律不问；记进日志算确认落空，不重探。
 MIB_NOT_JAV = "韩国 MIB 不适用 JAV 封面来源"
 #: 量尺寸只需要 JPEG 头部，别把整张 1 MB 的图拉下来。
@@ -566,9 +569,10 @@ def is_cross_product_cover(code: str, url: str) -> bool:
     if stem not in cid:
         return True
     # 字母段对上还不够：`YUJ-101` 取回的是 `yuj00011`，`CHU-201` 是 `chu00021`，
-    # `435MFC-135` 是 `h_1711mfcc00027`。数字段按整数比，补零和厂牌前缀都不影响。
+    # `435MFC-135` 是 `h_1711mfcc00027`。数字段按 `code_serial` 比，补零和厂牌前缀都不影响；
+    # 只有 `SHORT_SERIAL_PREFIXES` 的短号例外：DMM 的 `mcdv00024` 是有码 `MCDV-024`，不是无码 `MCDV-24`。
     wanted, got = _CODE_NUMBER.search(code or ""), _CID_NUMBER.search(cid)
-    return bool(wanted and got) and int(wanted.group(1)) != int(got.group(1))
+    return bool(wanted and got) and code_serial(stem, wanted.group(1)) != code_serial(stem, got.group(1))
 
 
 def _is_prestige(evidence: MetadataEvidence) -> bool:

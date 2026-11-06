@@ -70,6 +70,15 @@ class CopyFinalStateTests(unittest.TestCase):
         found = checker.scan_lines("sample.md", source, skip_code_fences=True)
         self.assertEqual([item.line for item in found], [5])
 
+    def test_markdown_rejects_vague_jargon_but_keeps_link_local(self):
+        source = "失败时兜底\n结果落盘\n```\n兜底\n```\n拒绝链路本地地址\n"
+        found = checker.scan_lines("sample.md", source, skip_code_fences=True)
+        self.assertEqual([(item.line, item.term, item.severity) for item in found],
+                         [(1, "兜底", "error"), (2, "落盘", "error")])
+
+    def test_source_comments_are_outside_the_markdown_jargon_rule(self):
+        self.assertEqual(checker.scan_python("sample.py", "# 失败时兜底\n"), [])
+
     def test_every_rule_reports_file_line_and_term(self):
         found = checker.scan_lines("sample.md", "# 曾经有另一种做法\n",
                                    skip_code_fences=True)
@@ -81,7 +90,7 @@ class CopyFinalStateTests(unittest.TestCase):
     def test_the_scan_covers_every_declared_surface(self):
         """扫描面写死成 glob 就会漏掉新目录，所以直接核对它收到了哪些文件。"""
         picked = {path.relative_to(ROOT).as_posix() for path in checker.targets(ROOT)}
-        for required in ("AGENTS.md", "README.md", "docs/WRITING.md",
+        for required in ("AGENTS.md", "CONTRIBUTING.md", "README.md", "docs/WRITING.md",
                          "web/index.html",
                          "src/peach/web_entity.py",
                          "tests/test_web_ui.py",

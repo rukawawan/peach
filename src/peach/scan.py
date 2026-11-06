@@ -6,6 +6,7 @@
 文件消失、带着个人记录的行由资源同步标 `disposal='vanished'`（ADR-0087）。登记时把它们接回：
 同一路径的文件回来了，upsert 清掉那一行的 `disposal`；新登记的行由 `record_rehome.reattach`
 按番号或「创作者 + 文件名主干 + 时长」找它的旧行，把记录搬过来、删掉旧行，记一个可撤回的批次。
+旧行还在库、文件已不在盘上时，登记前先由 `record_rehome.CodeRelocator` 按番号把它改指到新文件。
 接着由 `wants.reconcile` 按番号对一遍「想要」清单，命中的标「已入库」，同样记可撤回的批次。
 
 两条不变量都在这里守：
@@ -39,6 +40,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from functools import partial
 from itertools import chain
 from pathlib import Path, PureWindowsPath
 from filelock import FileLock
@@ -285,6 +287,28 @@ class IngestResult:
     reattached: int = 0
     #: 新行让几条「想要」标了已入库（`wants.reconcile`）。
     acquired: int = 0
+    #: 登记前按番号改指过来的旧行（`record_rehome.CodeRelocator`）；有它时 `new` 为假。
+    relocated: int | None = None
+
+
+def _video_names(entries) -> list[str]:
+    """同一目录里视频的文件名，按番号改指时数同目录有几个同番号视频。"""
+    return [entry.name for entry in entries if medium_of(entry.name) == "video"]
+
+
+def _relocate_ingested(connection, registered, location, ledger_path, here, *, declared_roots, mounts, windows):
+    """推送发现登记的视频接不上文件身份时，在它所在的媒体根里按番号找旧行（ADR-0131）。"""
+    key = str(ledger_path).casefold()
+    root = next((value for value in declared_roots.get(location, ())
+                 if PureWindowsPath(value) in ledger_path.parents), None)
+    if key in registered or medium_of(ledger_path.name) != "video" or root is None:
+        return None
+    relocator = record_rehome.CodeRelocator(connection, location, root, walk_root_for(
+        location, root, declared_roots=declared_roots, mounts=mounts or {}, windows=windows))
+    moved = relocator.relocate(str(ledger_path), lambda: [name for name in here or () if medium_of(name) == "video"])
+    if moved is not None:
+        registered[key] = str(ledger_path)
+    return moved
 
 
 def _directory_stats(directory: Path) -> dict[str, tuple[int, str]]:
@@ -385,6 +409,8 @@ def ingest_path(
                 previous = (location, move_from, old_directory / old.name)
             if identities.relocate(connection, location, str(ledger_path), directory / name, stat, previous=previous):
                 registered[str(ledger_path).casefold()] = str(ledger_path)
+        relocated = _relocate_ingested(connection, registered, location, ledger_path, here,
+                                       declared_roots=declared_roots, mounts=mounts, windows=windows)
         inserted_ids = _upsert_records(connection, [(location, str(ledger_path), name, medium,
                                      stat.st_size, mtime, now, now)], registered, conflicts)
         stored_path = registered[str(ledger_path).casefold()]
@@ -407,7 +433,8 @@ def ingest_path(
     from .library_new_assets import remember
     remember(db_path, inserted_ids)
     return IngestResult(location, str(ledger_path), True, stat.st_size, tracks,
-                        asset_id=asset_id, new=new, reattached=reattached, acquired=acquired)
+                        asset_id=asset_id, new=new, reattached=reattached, acquired=acquired,
+                        relocated=relocated)
 
 
 @dataclass(frozen=True)
@@ -433,6 +460,8 @@ class ScanResult:
     junk_isolated: int = 0
     junk_review: int = 0
     path_conflicts: int = 0
+    #: 登记前按番号改指到新文件的旧行（`record_rehome.CodeRelocator`）；不在 `new_ids` 里，增量探测要并进来。
+    relocated_ids: tuple[int, ...] = ()
 
     def summary(self) -> str:
         return (f"✓ {self.location}: {self.files:,} 文件 / "
@@ -495,30 +524,47 @@ def _relative_directory(directory, top):
 
 
 def _walk_smb(top, pending, onerror):
+    """SMB 版 `_walk`：整趟遍历共用一条连接。
+
+    逐目录新建连接时，TCP 握手、会话认证与挂载共享的开销远大于列目录本身。
+    连接断开或请求超时就换一条新连接重试一次；单个路径不存在或无权访问不影响连接，照常跳过。
+    """
     from types import SimpleNamespace
+    from .smb_transport import PATH_ERRNOS
     stack = pending if pending is not None else [str(top)]
-    while stack:
-        checkpoint('scan')
-        directory = stack.pop()
-        resource = top.joinpath(*_relative_directory(directory, top))
-        try:
-            entries = resource.scandir()
-        except OSError as error:
-            onerror(error)
-            continue
-        files, children = [], []
-        for entry in entries:
-            if entry.is_symlink:
+    transport = top._transport()
+    try:
+        while stack:
+            checkpoint('scan')
+            directory = stack.pop()
+            resource = top.joinpath(*_relative_directory(directory, top))
+            try:
+                try:
+                    entries = resource.scandir(transport)
+                except OSError as error:
+                    if error.errno in PATH_ERRNOS:
+                        raise
+                    transport.close()
+                    transport = top._transport()
+                    entries = resource.scandir(transport)
+            except OSError as error:
+                onerror(error)
                 continue
-            path = str(resource / entry.name)
-            if entry.is_dir:
-                if not entry.name.startswith('@') and entry.name.casefold() != '#recycle':
-                    children.append(path)
-            else:
-                stat = SimpleNamespace(st_size=entry.size, st_mtime=entry.mtime, st_mtime_ns=entry.mtime_ns)
-                files.append(SimpleNamespace(name=entry.name, path=path, stat=lambda value=stat: value))
-        stack.extend(path for path in sorted(children, reverse=True) if path not in stack)
-        yield directory, sorted(files, key=lambda entry: entry.name)
+            files, children = [], []
+            for entry in entries:
+                if entry.is_symlink:
+                    continue
+                path = str(resource / entry.name)
+                if entry.is_dir:
+                    if not entry.name.startswith('@') and entry.name.casefold() != '#recycle':
+                        children.append(path)
+                else:
+                    stat = SimpleNamespace(st_size=entry.size, st_mtime=entry.mtime, st_mtime_ns=entry.mtime_ns)
+                    files.append(SimpleNamespace(name=entry.name, path=path, stat=lambda value=stat: value))
+            stack.extend(path for path in sorted(children, reverse=True) if path not in stack)
+            yield directory, sorted(files, key=lambda entry: entry.name)
+    finally:
+        transport.close()
 
 
 class _ScanProgress:
@@ -575,7 +621,8 @@ def _scan_resume_state(walk_root, resume_state):
     if previous.get('mapping') != mapping:
         previous = {}
     result = previous.get('result')
-    completed = ScanResult(**{**result, 'new_ids': tuple(result['new_ids'])}) if result else None
+    completed = ScanResult(**{**result, 'new_ids': tuple(result['new_ids']),
+                              'relocated_ids': tuple(result.get('relocated_ids', ()))}) if result else None
     return mapping, previous, completed
 
 
@@ -588,8 +635,9 @@ def _record_directory_subtitles(connection, location, directory, here, conflicts
     return subtitles.record(connection, location, unambiguous, now)
 
 
-def _scan_file_stat(connection, identities, registered, observations, location, ledger_path, directory, entry, *, direct):
-    """读取本次文件快照，接回已移动的身份，并积累提交后的身份观测。"""
+def _scan_file_stat(connection, identities, registered, observations, location, ledger_path, directory, entry, *,
+                    direct, relocate=lambda path: None):
+    """读取本次文件快照，接回已移动的身份或同番号的旧行，并积累提交后的身份观测。"""
     stat = entry.stat()
     if identities is not None:
         native = Path(directory) / entry.name
@@ -598,6 +646,9 @@ def _scan_file_stat(connection, identities, registered, observations, location, 
         if identities.relocate(connection, location, ledger_path, native, stat):
             registered[ledger_path.casefold()] = ledger_path
         observations.append((location, ledger_path, native, stat))
+    if (ledger_path.casefold() not in registered and medium_of(entry.name) == "video"
+            and relocate(ledger_path) is not None):
+        registered[ledger_path.casefold()] = ledger_path
     return stat
 
 
@@ -661,7 +712,8 @@ def _scan_location(
         video_dirs.intersection_update(artwork_parents)
         save_checkpoint(dict(mapping=mapping, scan_time=now, pending=list(pending), files=files,
                              total_bytes=total, sidecars=skipped, subtitles=tracks,
-                             orphan_subtitles=orphans, new_ids=sorted(discovered), video_dirs=sorted(video_dirs),
+                             orphan_subtitles=orphans, new_ids=sorted(discovered), relocated_ids=sorted(relocator.moved),
+                             video_dirs=sorted(video_dirs),
                              current_directory=directory, cursor=cursor, here=dict(here or {})))
     # 写事务只在每批 upsert 到 commit 之间打开，遍历与 stat 都在两次 commit 之间，不持锁。
     # 忙等时长与 `LedgerDatabase.connect` 一致。
@@ -671,6 +723,8 @@ def _scan_location(
         registered, conflicts = _registered_paths(connection, location, root)
         from .file_identity import FileIdentityIndex
         identities = FileIdentityIndex(db_path) if location == 'local' and not remote else None
+        relocator = record_rehome.CodeRelocator(connection, location, root, walk_root,
+                                                moved=previous.get('relocated_ids', ()))
         observations = []
         for conflict in conflicts.values():
             onerror(conflict)
@@ -702,7 +756,8 @@ def _scan_location(
                     continue
                 try:
                     stat = _scan_file_stat(connection, identities, registered, observations, location,
-                                           ledger_path, directory, entry, direct=read_directory is None)
+                                           ledger_path, directory, entry, direct=read_directory is None,
+                                           relocate=partial(relocator.relocate, video_names=partial(_video_names, entries)))
                 except OSError as error:
                     onerror(error)
                     continue
@@ -749,7 +804,7 @@ def _scan_location(
     checked = junk.isolate(db_path, roots=[(location, root)], asset_ids=list(new_ids) if new_only else None)
     result = ScanResult(location, root, files, total, time.time() - started, gone,
                         tracks, orphans, skipped, new_ids, reattached, acquired,
-                        checked['isolated'], checked['review'], len(conflicts))
+                        checked['isolated'], checked['review'], len(conflicts), tuple(sorted(relocator.moved)))
     save_checkpoint({'mapping': mapping, 'result': asdict(result)})
     progress(files, total, force=True)
     report(result.summary())

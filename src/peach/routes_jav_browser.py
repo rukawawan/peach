@@ -40,6 +40,10 @@ def status(code: str, service=Depends(browser_client)):
         raise HTTPException(400, str(error)) from None
 
 
+def active(service=Depends(browser_client)):
+    return JSONResponse(service.active(), headers={"Cache-Control": "no-store"})
+
+
 def identify(source_url: str, code: str = "", service=Depends(browser_client)):
     try:
         return JSONResponse(service.status(identify_source(source_url, code)), headers={"Cache-Control": "no-store"})
@@ -57,6 +61,39 @@ def people(request: Request, codes: str, performers: list[str] = Query(default=[
     try:
         result = cached_people(service.contract, request.app.state.preview_service, codes, performers)
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+
+
+def performer(request: Request, source_url: str, names: list[str] = Query(default=[]),
+              service=Depends(browser_client)):
+    from .web_jav_browser_performer import performer_status
+    try:
+        result = performer_status(service.contract, request.app.state.preview_service, source_url, names)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+
+
+def follow_performer(request: Request, body: dict = Body(...), service=Depends(browser_client)):
+    from .web_jav_browser_performer import follow_performer as follow
+    try:
+        result = follow(service.contract, request.app.state.preview_service, body)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+
+
+def retry_postprocess(body: dict = Body(...), service=Depends(browser_client)):
+    try:
+        return JSONResponse(service.retry_postprocess(body.get("code")), headers={"Cache-Control": "no-store"})
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+
+
+def dismiss(body: dict = Body(...), service=Depends(browser_client)):
+    try:
+        return JSONResponse(service.dismiss(body), headers={"Cache-Control": "no-store"})
     except ValueError as error:
         raise HTTPException(400, str(error)) from None
 
@@ -98,10 +135,15 @@ def create_router(local_only) -> APIRouter:
     router.add_api_route("/integrations/peach-userscript-bridge", userscript_bridge, methods=["GET"],
                         dependencies=[Depends(require_auth)])
     router.add_api_route("/api/jav-browser", status, methods=["GET"])
+    router.add_api_route("/api/jav-browser/active", active, methods=["GET"])
     router.add_api_route("/api/jav-browser/identify", identify, methods=["GET"])
     router.add_api_route("/api/jav-browser/updates", updates, methods=["GET"])
     router.add_api_route("/api/jav-browser/people", people, methods=["GET"])
     router.add_api_route("/api/jav-browser", add, methods=["POST"])
+    router.add_api_route("/api/jav-browser/postprocess", retry_postprocess, methods=["POST"])
+    router.add_api_route("/api/jav-browser/performer", performer, methods=["GET"])
+    router.add_api_route("/api/jav-browser/performer", follow_performer, methods=["POST"])
+    router.add_api_route("/api/jav-browser/dismiss", dismiss, methods=["POST"])
     router.add_api_route("/api/jav-browser/errors", errors, methods=["POST"])
     permissions = [Depends(require_auth), Depends(local_only)]
     router.add_api_route("/api/configuration/jav-browser", settings, methods=["GET"], dependencies=permissions)

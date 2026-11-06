@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import httpx
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -293,7 +295,7 @@ class ServiceStatusTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("两侧已经一致", message)
         process.terminate.assert_called_once()
-        start.assert_called_once()
+        start.assert_called_once_with(reason="数据库同步后恢复")
         self.assertEqual(
             manager._run.call_args.args[0][:2],
             [str(Path("/venv/peach")), "ledger-sync"],
@@ -579,12 +581,14 @@ class SetupGateTests(unittest.TestCase):
                                  popen=Mock(), health_get=lambda *a, **k: Response())
         gate = SetupGate(manager, config, waiting=False, load=self._config)
         with patch("peach.tray.lan_ipv4", return_value="192.0.2.10"), patch(
-                "peach.distribution.standalone", return_value=False):
+                "peach.distribution.standalone", return_value=False), patch.object(
+                manager, "start_missing") as start:
             self.assertTrue(gate.poll())
             self.assertFalse(gate.poll())
         self.assertFalse(reload_path.exists())
         self.assertEqual(manager.child_environment()["PEACH_TRAY_MANAGED"], "1")
         self.assertTrue(manager.specs)
+        start.assert_called_once_with(reason="首次设置完成，切换到正式服务")
 
     def test_a_finished_setup_switches_to_the_normal_services_and_runs_the_first_scan(self):
         config = self._config()
@@ -851,6 +855,7 @@ class SourceSyncTests(unittest.TestCase):
         tray.sync_source(icon)
         self.assertTrue(completed.wait(2))
         manager.restart.assert_called_once()
+        self.assertEqual(manager.restart.call_args.kwargs["reason"], "同步开发进度后重启")
         manager.stop_owned.assert_not_called()
 
     def test_windows_source_sync_stops_services_only_after_replacer_is_ready(self):
@@ -905,7 +910,7 @@ class SourceSyncTests(unittest.TestCase):
         from peach import tray as tray_module
         source = inspect.getsource(tray_module.run_macos_menu_bar)
         self.assertIn("if restarted.returncode != 0:", source)
-        self.assertIn("manager.start_missing()", source)
+        self.assertIn('manager.start_missing(reason="菜单栏项重启失败，恢复服务")', source)
 
 
 class FakeVersions:
@@ -1466,7 +1471,7 @@ class ServiceRevivalTests(unittest.TestCase):
     def test_a_port_that_went_dark_is_refilled_on_the_next_health_round(self):
         manager = self.manager(healthy=False)
         self.one_health_round(self.tray(manager))
-        manager.start_missing.assert_called_once_with()
+        manager.start_missing.assert_called_once_with(reason="健康监测发现服务未应答")
 
     def test_healthy_services_are_left_alone(self):
         manager = self.manager(healthy=True)
@@ -1549,6 +1554,134 @@ class ServiceRevivalTests(unittest.TestCase):
             self.assertFalse(manager.waiting_for_startup())
 
 
+class ServiceLaunchEvidenceTests(unittest.TestCase):
+    """每次拉起都在托盘日志里写明原因，并记下拉起到首次通过健康检查的耗时。
+
+    诊断包里托盘日志多次出现「拉起 http 服务」，却看不出是子进程退出、托盘重启还是
+    有人点了重启，也看不出服务启动花了多久。
+    """
+
+    SPEC = ServiceSpec("http", "http://local/healthz", ("peach", "serve"), True)
+
+    def setUp(self):
+        self.now = 1000.0
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.process = Mock(pid=4321)
+        self.process.poll.return_value = None
+        self.get = Mock(side_effect=httpx.ConnectError("refused"))
+        self.manager = ServiceManager((self.SPEC,), popen=Mock(return_value=self.process),
+                                      log_dir=Path(directory.name), health_get=self.get)
+        for patcher in (patch("peach.tray.time.monotonic", side_effect=lambda: self.now),
+                        patch("peach.tray.assign_to_job"),
+                        patch("peach.tray.create_kill_on_close_job")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def launch_log(self, reason):
+        with self.assertLogs("peach.tray", "INFO") as logs:
+            self.manager.start_missing(reason=reason)
+        launches = [line for line in logs.output if "拉起 http 服务" in line]
+        self.assertEqual(len(launches), 1, logs.output)
+        return launches[0]
+
+    def become_healthy(self):
+        self.get.side_effect = None
+        self.get.return_value = Response()
+
+    def test_first_launch_names_the_caller_reason_and_that_the_tray_had_no_child(self):
+        line = self.launch_log("托盘启动")
+        self.assertIn("PID 4321", line)
+        self.assertIn("原因：托盘启动", line)
+        self.assertIn("本托盘没有该服务的子进程", line)
+        self.assertIn("健康检查连续失败 1 次", line)
+        self.assertIn("最后一次：无响应（ConnectError）", line)
+
+    def test_relaunch_after_the_child_exited_records_exit_code_runtime_and_readiness(self):
+        self.manager.start_missing(reason="托盘启动")
+        self.now += 95.0
+        self.process.poll.return_value = 3
+        line = self.launch_log("健康监测发现服务未应答")
+        self.assertIn("原因：健康监测发现服务未应答", line)
+        self.assertIn("上一个子进程已退出，退出码 3，运行 95.0 秒，从未通过健康检查", line)
+
+    def test_relaunch_after_a_ready_child_exited_says_it_had_been_ready(self):
+        self.manager.start_missing(reason="托盘启动")
+        self.become_healthy()
+        self.assertTrue(self.manager.healthy(self.SPEC))
+        self.get.side_effect = httpx.ReadTimeout("timed out")
+        self.now += 10.0
+        self.manager.healthy(self.SPEC)
+        self.now += 10.0
+        self.manager.healthy(self.SPEC)
+        self.process.poll.return_value = 1
+        line = self.launch_log("健康监测发现服务未应答")
+        self.assertIn("退出码 1，运行 20.0 秒，曾通过健康检查", line)
+        # 两轮监测加上补拉前那一次探测；超时与拒连由异常类名区分。
+        self.assertIn("健康检查连续失败 3 次，持续 10.0 秒，最后一次：无响应（ReadTimeout）", line)
+
+    def test_a_vanished_service_the_tray_never_owned_records_the_failed_checks(self):
+        self.get.side_effect = httpx.ConnectTimeout("timed out")
+        self.manager.healthy(self.SPEC)
+        self.now += 10.0
+        line = self.launch_log("健康监测发现服务未应答")
+        self.assertIn("本托盘没有该服务的子进程", line)
+        self.assertIn("健康检查连续失败 2 次，持续 10.0 秒，最后一次：无响应（ConnectTimeout）", line)
+
+    def test_an_error_status_is_recorded_as_the_last_failure(self):
+        self.get.side_effect = None
+        self.get.return_value = ReadyResponse(503, {"ok": False})
+        line = self.launch_log("托盘启动")
+        self.assertIn("最后一次：状态码 503", line)
+
+    def test_the_first_successful_check_logs_the_startup_time_once(self):
+        self.manager.start_missing(reason="托盘启动")
+        self.now += 42.5
+        self.become_healthy()
+        with self.assertLogs("peach.tray", "INFO") as logs:
+            self.assertTrue(self.manager.healthy(self.SPEC))
+            self.now += 10.0
+            self.assertTrue(self.manager.healthy(self.SPEC))
+        ready = [line for line in logs.output if "首次通过健康检查" in line]
+        self.assertEqual(len(ready), 1, logs.output)
+        self.assertIn("http 服务首次通过健康检查，距拉起 42.5 秒", ready[0])
+
+    def test_an_expired_wait_logs_the_elapsed_time_and_keeps_timing_the_startup(self):
+        def sleep(seconds):
+            self.now += seconds
+
+        self.manager.start_missing(reason="手动重启服务")
+        with patch("peach.tray.time.sleep", side_effect=sleep), \
+                self.assertLogs("peach.tray", "INFO") as logs:
+            self.assertFalse(self.manager.wait_until_ready(timeout=20.0))
+        expired = [line for line in logs.output if "本次等待" in line]
+        self.assertEqual(len(expired), 1, logs.output)
+        self.assertIn("http 服务拉起 20.0 秒后仍未通过健康检查，本次等待 20 秒已到期", expired[0])
+        self.assertIn("最后一次：无响应（ConnectError）", expired[0])
+        self.now += 100.0
+        self.become_healthy()
+        with self.assertLogs("peach.tray", "INFO") as logs:
+            self.manager.healthy(self.SPEC)
+        self.assertIn("首次通过健康检查，距拉起 120.0 秒", logs.output[0])
+
+    def test_stopping_a_service_that_never_became_ready_logs_how_long_it_ran(self):
+        self.manager.start_missing(reason="托盘启动")
+        self.now += 7.0
+        with self.assertLogs("peach.tray", "INFO") as logs:
+            self.manager.stop_owned()
+        self.assertIn("停止 http 服务，距拉起 7.0 秒，期间从未通过健康检查", logs.output[0])
+        # 停掉之后端口上别人的服务应答了，不能把过期计时当成本托盘子进程的启动耗时。
+        self.become_healthy()
+        with self.assertNoLogs("peach.tray", "INFO"):
+            self.manager.healthy(self.SPEC)
+
+    def test_restart_passes_its_reason_to_the_launch(self):
+        with patch.object(self.manager, "wait_until_ready", return_value=True), \
+                self.assertLogs("peach.tray", "INFO") as logs:
+            self.manager.restart(reason="手动重启服务")
+        self.assertTrue(any("原因：手动重启服务" in line for line in logs.output), logs.output)
+
+
 class TrayLogFileTests(unittest.TestCase):
     def test_the_file_keeps_tray_events_and_drops_per_probe_http_noise(self):
         """健康检查十秒一轮，httpx 的 INFO 进文件的话一天一万多行，真正的启停记录被淹掉。"""
@@ -1629,12 +1762,12 @@ class TrayPreparationTests(unittest.TestCase):
     def manager(self, *, ready=True, problems=()):
         manager = Mock()
         manager.specs = ()
-        manager.start_missing.side_effect = lambda: self.events.append("start")
+        manager.start_missing.side_effect = lambda **_kwargs: self.events.append("start")
         manager.wait_until_ready.return_value = ready
         manager.waiting_for_startup.return_value = False
         manager.readiness_problems.return_value = list(problems)
 
-        def restart(prepare=None):
+        def restart(prepare=None, **_kwargs):
             self.events.append("stop")
             if prepare is not None:
                 prepare()
@@ -1706,7 +1839,7 @@ class TrayPreparationTests(unittest.TestCase):
             ServiceRevivalTests.one_health_round(self, tray)
         self.assertTrue(runtime_prepare.read_record(self.root / "state", pid=os.getpid())["ok"])
         tray.gate.open.assert_called_once_with()
-        manager.start_missing.assert_called_once_with()
+        manager.start_missing.assert_called_once_with(reason="托盘启动")
 
     def test_first_setup_opens_after_late_readiness_unless_silent(self):
         for silent in (False, True):
@@ -1788,6 +1921,7 @@ class TrayPreparationTests(unittest.TestCase):
         self.assertEqual(self.events, ["deps", "stop", "migrate", "start"])
         self.assertEqual(self.spawned, [])
         icon.notify.assert_not_called()
+        self.assertEqual(tray.manager.restart.call_args.kwargs["reason"], "手动重启服务")
 
     def test_stale_dependencies_hand_the_restart_to_a_whole_tray_restart(self):
         process = Mock()

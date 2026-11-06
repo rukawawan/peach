@@ -45,7 +45,16 @@ describe('非 Windows 媒体目录配置', () => {
         await form.getByRole('button', { name: '给 电影 添加文件夹', exact: true }).click();
         await form.getByRole('textbox', { name: '媒体目录 2', exact: true }).fill('/media/other');
         assert.equal(await internal.count(), 0);
+        // 保存会重启 Peach：扫描与采集在跑时先确认，取消就什么都不写。
+        await page.route('**/api/library-processing', route => route.fulfill({ json: { status: 'running', trigger: 'cli' } }));
         await form.getByRole('button', { name: '保存配置', exact: true }).click();
+        const restart = page.getByRole('dialog', { name: '扫描与采集正在进行', exact: true });
+        await restart.getByText(/由命令行或托盘发起，在独立进程里运行，不受重启影响/).waitFor();
+        await restart.getByRole('button', { name: '取消', exact: true }).click();
+        await restart.waitFor({ state: 'hidden' });
+        assert.equal(writes.length, 0);
+        await form.getByRole('button', { name: '保存配置', exact: true }).click();
+        await restart.getByRole('button', { name: '仍然保存', exact: true }).click();
         await page.getByText('配置已保存', { exact: true }).waitFor();
         assert.deepEqual(writes.at(-1)?.media_sources.map(({ path, root }) => ({ path, root })), [
           { path: '/media/影视', root: 'R:\\media' }, { path: '/media/other', root: '' },

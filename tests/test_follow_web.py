@@ -174,6 +174,35 @@ class FollowContractTests(unittest.TestCase):
         self.assertEqual([row['source'] for row in result['results']], [selected])
         self.assertEqual(factory.call_count, 1)
 
+    def test_sources_skipped_for_a_site_cooldown_are_not_reported_as_failures(self):
+        """站点限流冷却中：同站的来源这一轮不问，也不进失败清单（ADR-0134）。"""
+        from peach.follow_stream import FollowMediaResolver
+        self._seed(ref='first')
+        self._seed(ref='second')
+        self.contract.follow_media_resolver = FollowMediaResolver(transport=None)
+        self.contract.follow_media_resolver.pause('rule34video', 60)
+        with mock.patch.object(web_follow, 'build_connector') as factory:
+            result = self._post('/api/follow/check', {})
+            # 往回一路抓到底也一样：冷却中的那条只跳过一次，不在原地空转翻页。
+            backfill = self._post('/api/follow/check', {'older': True, 'backfill_all': True})
+        self.assertEqual(factory.call_count, 0)
+        self.assertEqual((result['results'], result['deferred']), ([], 2))
+        self.assertEqual((backfill['results'], backfill['deferred']), ([], 2))
+
+    def test_a_scheduled_round_checks_only_the_sources_that_are_due(self):
+        """定时那一跳跳过刚查过、又久未更新的来源；手动检查照旧全查。"""
+        stale = self._seed(ref='stale')
+        recent = self._seed(ref='recent')
+        with self.contract.database.write_transaction() as connection:
+            connection.execute("UPDATE follow_source SET last_checked_at=? WHERE id=?",
+                               (datetime.now(timezone.utc).isoformat(), recent))
+        with mock.patch.object(web_follow, 'build_connector') as factory:
+            factory.return_value.fetch.side_effect = FollowSourceError('offline')
+            scheduled = self._post('/api/follow/check', {'automatic': True})
+            manual = self._post('/api/follow/check', {})
+        self.assertEqual([row['source'] for row in scheduled['results']], [stale])
+        self.assertEqual({row['source'] for row in manual['results']}, {stale, recent})
+
     def test_failed_numeric_source_has_a_readable_author(self):
         source = self._seed(ref='patreon/12387984', label='Pantsushi · patreon')
         with mock.patch.object(web_follow, 'build_connector') as factory:
@@ -1484,6 +1513,18 @@ class FollowContractTests(unittest.TestCase):
         # 同名的几种写法里取大写最多的那个：那更像作者自己写的名字。
         self.assertEqual(row["k"], "LazyProcrastinator")
         self.assertEqual(sorted(row["providers"]), ["rule34video", "rule34xxx"])
+
+    def test_the_online_roster_carries_each_authors_latest_post_and_follows_new_items(self):
+        """搜索推荐写「最新更新于」读的就是这一格；名册按账本缓存，新条目进来就得重数。"""
+        self._seed(ref="a", label="Author A", candidates=(
+            self._clip("a1", published_at="2026-03-01T00:00:00Z"),
+            self._clip("a2", published_at="2026-05-02T08:00:00Z")))
+        row = self._get("/api/follow/authors")["items"][0]
+        self.assertEqual((row["n"], row["latest"]), (2, "2026-05-02T08:00:00Z"))
+        self._seed(ref="a", label="Author A", candidates=(
+            self._clip("a3", published_at="2026-06-03T00:00:00Z"),))
+        row = self._get("/api/follow/authors")["items"][0]
+        self.assertEqual((row["n"], row["latest"]), (3, "2026-06-03T00:00:00Z"))
 
     def test_the_online_roster_supports_search_and_paging(self):
         """形状与 /api/index 一致：艺人页的分页、过滤和「载入更多」换个地址就能用。"""

@@ -3,6 +3,9 @@ main{position:relative;z-index:1;padding:14px 16px 90px}
 #catalogPageHeading,#javLibraryHeader,#listTitle{padding:20px 16px 0;margin:0 0 20px}
 #catalogPageHeading[hidden],#javLibraryHeader[hidden]{display:none}
 #catalogPageHeading h2{margin:0;font:var(--board-title)}
+/* 搜索结果的标题带着搜索词，长词只占一行：词那一段由 `fitTitleWords` 截到放得下，收尾的「」」
+   留在末尾；全文在悬停与搜索框里。 */
+#catalogPageHeading h2{overflow:hidden;white-space:nowrap}
 h2[data-page-title]{margin:0;font:var(--board-title);letter-spacing:0}
 @media(max-width:760px){#catalogPageHeading h2,h2[data-page-title]{font:var(--board-figure)}}
 .count{position:sticky;top:calc(var(--topH) + var(--filterH));z-index:60;
@@ -197,13 +200,17 @@ body .card:focus-within{background:var(--hover);box-shadow:0 0 0 8px var(--hover
    子元素就不截，iOS 上长标题会整段摊开，把「接着看」那一排撑得老高。 */
 .meta .t{font-size:var(--fs-md);line-height:1.35;min-height:2.7em;max-height:2.7em;overflow:hidden;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
+/* 徽章字样永远一行：放进挤窄的 flex 行里时不收缩、不折字，宁可整枚换到下一行。 */
 .javedition{display:inline-flex;align-items:center;min-height:18px;padding:0 5px;border:1px solid currentColor;
-  border-radius:var(--badge-radius);font-size:var(--fs-xs);line-height:16px;font-weight:600;letter-spacing:0;vertical-align:1px}
+  border-radius:var(--badge-radius);font-size:var(--fs-xs);line-height:16px;font-weight:600;letter-spacing:0;vertical-align:1px;
+  white-space:nowrap;flex-shrink:0}
 .javedition.subtitle{color:var(--ink-2)}
 .javedition.uncensored{color:var(--meter)}
-.javedition.cracked{color:var(--drop)}
+.javedition.leaked{color:var(--loupe)}
+/* 破解不用 `--drop`：那是删除与出错的颜色，放在版次上像是文件坏了。紫色取 Board UI 状态色，明暗各一套。 */
+.javedition.cracked{color:var(--color-status-purple-text)}
 .javedition.censored{color:var(--muted)}
-/* 卷号说的是「这是第几份文件」，不是版次，用中性灰和三种版次色区分开。 */
+/* 卷号说的是「这是第几份文件」，不是版次，用中性灰和各版次色区分开。 */
 .javedition.partlabel{color:var(--muted);margin-left:6px}
 .meta .s{display:flex;gap:8px;color:var(--muted);align-items:center;flex-wrap:wrap}
 .meta .who{color:var(--ink-2);min-width:0;max-width:100%;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
@@ -248,7 +255,18 @@ body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
 }
 /* 连不上图片主机那条 Note 与下面一行隔 12px：横排自己往上收了 8px，这里先垫回来。 */
 .feednetwork{margin-bottom:20px}
+/* 这一行的一键插队（提示条或进度条）同理；没有排队的就整块不占位。 */
+[data-feed-cover-queue]:not(:empty){margin-bottom:20px}
 .feednewcard{flex:none;width:168px}
+/* 首页那一行行尾的「查看全部新作」：和卡同宽、只占封面那一格的高，底色与圆角同旁边新作卡的封面格，
+   一排看下来是同一种格子；字和箭头排成一行，与分页「下一页」那颗键同一个写法。悬停换到同一组令牌的
+   悬停档。 */
+.feednewall{flex:none;align-self:flex-start;width:168px;aspect-ratio:var(--card-ratio);display:flex;
+  align-items:center;justify-content:center;gap:4px;border-radius:var(--surface-radius);background:var(--color-background-tertiary-default);
+  color:var(--ink-2);font-size:var(--fs-sm);font-weight:500;text-decoration:none;transition:background-color .2s ease-out,color .2s ease-out}
+.feednewall:hover{background:var(--color-background-tertiary-hover);color:var(--ink)}
+.feednewall:focus-visible{outline:2px solid var(--tungsten);outline-offset:2px}
+.feednewall svg{width:var(--icon-inline);height:var(--icon-inline);stroke:currentColor;fill:none;stroke-width:2}
 /* 已看过的不移走，只退到背景里：已读是标记，不是关掉。 */
 .feednewcard.isread{opacity:.55}
 /* 通向作品页的点击区，铺满整张卡，是一条外链。
@@ -256,8 +274,18 @@ body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
    接；这张卡只有这条外链，所以两块放行指针，落到下面的链接上，悬浮键自己再收回来。 */
 .feednewopen{position:absolute;inset:0;z-index:1;border-radius:inherit}
 .feednewcard>.pic,.feednewcard>.meta{pointer-events:none}
-.feednewcard .meta a.mav{pointer-events:auto}
+/* 头像不论认没认出都收回指针：叠放头像的抬起与让位靠 `:hover`，没认出的那枚放行了指针就抬不起来，
+   整组的动画在它那里断掉。没认出的不是链接，点它不打开作品，名字在悬停说明里。 */
+.feednewcard .meta .mav{pointer-events:auto}
 .feednewcard .meta span.mav{cursor:default}
+/* 还没有封面的那一格（`coverStateHtml`）：状态字、一两行原因、一颗当场取的键。原因多了截在三行，
+   全文在悬停说明里。封面格放行了指针，这颗键自己收回来。 */
+.feedcoverstate{display:flex;flex-direction:column;align-items:center;gap:6px;max-width:100%;padding:0 12px;text-align:center}
+.feedcoverreason{font-size:var(--fs-xs);line-height:1.45;color:var(--muted);display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:3;overflow:hidden;overflow-wrap:anywhere}
+.feedcoverstate button{pointer-events:auto;margin-top:4px}
+/* 正在取那一枚不定进度圆环摆在状态字上面，不带横幅里那份右侧间距。 */
+.feedcoverstate>[role="progressbar"]{margin:0}
 .feednewopen:focus-visible{outline:2px solid var(--tungsten);outline-offset:2px}
 /* 三颗动作键沿用 `.hovertools` 的磨砂圆底，只换尺寸和落点。`.hovertools` 默认
    `pointer-events:none`——那是为了让指针落到底下的预览上，而这三颗是这张卡唯一能按的
@@ -278,7 +306,9 @@ body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
 /* 占位卡直接套真卡的 `.t` 与 `.s`：标题块是两行 2.7em，下面那行放一个零宽字符，行高
    跟真卡那行字同一套规则，到货那一下整行不跳。 */
 .feednewskeleton{pointer-events:none}
-.feednewcard:not(.feednewskeleton) .pic{background-color:var(--surface);color:var(--muted)}
+/* 没有图的封面格用 BoardUI 的三级底：浅色主题里 `--hover`、`--surface` 都只比页面白一点点，
+   「抓取中」「排队中」「无封面」那几格看不出格子。 */
+.feednewcard:not(.feednewskeleton) .pic{background-color:var(--color-background-tertiary-default);color:var(--muted)}
 .feednewskeleton .pic{background:var(--hover)}
 .feednewskeleton .t>.skeleton{height:2.7em}
 .feednewskeleton .s>.skeleton{width:72%;height:auto}

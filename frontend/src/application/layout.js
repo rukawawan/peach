@@ -14,7 +14,7 @@ import { tagLabel } from '../core/tags';
 import { followFeedLive, followState, followView, followViewPath, routeFollowFeed } from './follow.js';
 import { applicationEffects } from './effects';
 import { entityJavLayout, notifyShell, pageOpens, runtimeConfigurable, selectMode, selectSurface, state, writeShell } from './../shell/index';
-import { censorOn, preferencesState, setCensored, setHighContrast } from './preferences.js';
+import { censorOn, preferencesState, setCensored, setHighContrast, setSfwShortcut, sfwShortcut } from './preferences.js';
 import { playUiSound } from '../ui-kit/sounds';
 import { THEME_OPTIONS } from './../appearance/theme';
 import { JAV_LAYOUTS, cardLayoutFor, storeHomeLayout, storeJavLayout, storeVideoLayout } from './../appearance/layout';
@@ -226,7 +226,45 @@ export function paintListTitle(){
   const path=decodeURIComponent(location.pathname);
   const label=!manageSection()&&isCatalogPath(path)?STATE_LABELS[state.state]||'':'';
   el.hidden=!label;if(label)el.textContent=label;
-  $('#catalogPageHeading').hidden=!!manageSection()||!isCatalogPath(path)||!!label||state.jav==='1';
+  const heading=$('#catalogPageHeading');
+  heading.hidden=!!manageSection()||!isCatalogPath(path)||!!label||state.jav==='1';
+  paintCatalogPageTitle(heading,state.q);
+}
+
+/* 首页标题跟着搜索词走：搜出来的这一屏是这个词的结果，不再是首页。清掉搜索词回到「首页」。 */
+export function paintCatalogPageTitle(heading,query){
+  const title=heading?.querySelector('[data-page-title]');if(!title)return;
+  const words=String(query||'').trim();
+  const next=words?`搜索结果：「${words}」`:'首页';
+  if(title.title===next||(!words&&title.textContent===next))return;
+  if(!words){title.textContent=next;title.removeAttribute('title');return}
+  const part=(text,full)=>{const span=document.createElement('span');span.textContent=text;if(full!==undefined)span.dataset.titleWords=full;return span};
+  title.replaceChildren(part('搜索结果：「'),part(words,words),part('」'));
+  title.title=next;
+  fitTitleWords(title);
+  // 框宽变了由观察者重截；字体晚到时框不变、字变宽，等字体就绪再截一次。
+  titleWidth??=new ResizeObserver(entries=>entries.forEach(entry=>fitTitleWords(entry.target)));
+  titleWidth.observe(title);
+  void document.fonts?.ready.then(()=>fitTitleWords(title));
+}
+
+/* 长词只截搜索词那一段的末尾，省略号紧贴收尾的「」」。CSS 的末尾省略做不到：引号要在词外头，
+   词那一格截断后剩下的空白会留在省略号和引号之间。按标题此刻的宽度二分出放得下的最长前缀。 */
+let titleWidth=null;
+function fitTitleWords(title){
+  const span=title.querySelector('[data-title-words]');if(!span||!title.clientWidth)return;
+  const full=span.dataset.titleWords;
+  span.textContent=full;
+  if(title.scrollWidth<=title.clientWidth)return;
+  const parts=typeof Intl.Segmenter==='function'
+    ?[...new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(full)].map(part=>part.segment):Array.from(full);
+  let low=0,high=parts.length-1,best=0;
+  while(low<=high){
+    const kept=(low+high)>>1;
+    span.textContent=parts.slice(0,kept).join('')+'…';
+    if(title.scrollWidth<=title.clientWidth){best=kept;low=kept+1}else high=kept-1;
+  }
+  span.textContent=parts.slice(0,best).join('')+'…';
 }
 
 export function openManage(section='stats'){
@@ -424,7 +462,7 @@ layoutState.settingsHost = ()=>({
   navCatalog:layoutState.NAV_CATALOG,themeOptions:THEME_OPTIONS,videoLayouts:JAV_LAYOUTS,
   followInitialRanges:FOLLOW_INITIAL_RANGE_OPTIONS,
   videoLayout:()=>cardLayout(),setVideoLayout,
-  censored:censorOn,setCensored,
+  censored:censorOn,setCensored,sfwShortcut,setSfwShortcut,
   highContrast:()=>document.documentElement.classList.contains('board-high-contrast'),setHighContrast,
   receipt:message=>receiptsState.actionReceipt(message),
   failure:receiptsState.actionFailure,

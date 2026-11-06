@@ -35,10 +35,10 @@ TIMEOUT_SECONDS = 20.0
 #: 入库时同时探几个。网盘挂载上这是延迟受限的元数据读取，开多了只会把 CloudDrive 压住。
 WORKERS = 4
 
-UPDATE = (
-    "UPDATE asset SET duration=?,width=?,height=?,vcodec=?,fps=?,has_audio=?,"
-    "ctx_length=?,ctx_orient=?,ctx_quality=? WHERE id=?"
-)
+#: 探测写的列；文件换了版本时 `record_rehome.CodeRelocator` 按这份清空。
+PROBED_COLUMNS = ("duration", "width", "height", "vcodec", "fps", "has_audio",
+                  "ctx_length", "ctx_orient", "ctx_quality")
+UPDATE = f"UPDATE asset SET {','.join(f'{column}=?' for column in PROBED_COLUMNS)} WHERE id=?"
 _UNMEASURED = f"medium='video' AND duration IS NULL AND location=? AND {ACTIVE_ASSET_SQL}"
 
 
@@ -139,8 +139,8 @@ def probe_unmeasured(
     if asset_ids is not None:
         if not asset_ids:
             return 0
-        selected = ' AND id IN (' + ','.join('?' * len(asset_ids)) + ')'
-        parameters += tuple(asset_ids)
+        selected = ' AND id IN (SELECT value FROM json_each(?))'
+        parameters += (json.dumps(list(asset_ids)),)
     with closing(sqlite3.connect(db_path, timeout=30)) as connection:
         rows = connection.execute(
             f"SELECT id,path FROM asset WHERE {_UNMEASURED} AND (path=? OR substr(path,1,?)=?){selected} ORDER BY id",

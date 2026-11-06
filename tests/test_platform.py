@@ -334,6 +334,14 @@ class MountReachabilityTests(unittest.TestCase):
             with patch("peach.platform.os.scandir", side_effect=error):
                 self.assertEqual(root_status(self.root), expected)
 
+    def test_disconnected_network_mount_is_unreachable_not_missing_or_denied(self):
+        # Windows 把网络路径断开（53/67）映射成 FileNotFoundError，设备未就绪（21）映射成 PermissionError。
+        for error_type, winerror in ((FileNotFoundError, 53), (FileNotFoundError, 67), (PermissionError, 21)):
+            error = error_type(2, "network")
+            error.winerror = winerror
+            with self.subTest(winerror=winerror), patch("peach.platform.os.scandir", side_effect=error):
+                self.assertEqual(root_status(self.root), "unavailable")
+
     def test_failure_while_reading_the_first_entry_is_not_online(self):
         class Entries:
             def __enter__(self): return self

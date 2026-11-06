@@ -1,13 +1,12 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, ButtonLink } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
 import { ApiError, apiGet, apiSend } from '../../api';
 import { diagnosticHeaders } from '../../browser-diagnostics';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
-import { LoadingDots } from '../components/loading-dots';
 import { Note } from '../components/note';
-import { Progress } from '../components/progress';
+import { TaskProgress } from '../components/task-progress';
 import { queryClient } from '../query';
 import { busyProps, useAction } from '../settings/use-action';
 
@@ -20,7 +19,11 @@ interface ExportState {
   download_url?: string; error?: string;
 }
 
-export function DiagnosticExportAction({ kind, codes = '' }: { kind: 'support' | 'scraping'; codes?: string }) {
+/** 导出按钮与它的进度、回执。刮削记录在卡片底栏里，进度复用卡片；诊断报告摆在页头，进度自己带框，
+ *  `children` 是页头同一排的其他按钮。 */
+export function DiagnosticExportAction({ kind, codes = '', children }: {
+  kind: 'support' | 'scraping'; codes?: string; children?: ReactNode;
+}) {
   const action = useAction();
   const query = useQuery({ queryKey: KEY, queryFn: ({ signal }) => apiGet<ExportState>(URL, signal),
     refetchInterval: query => ['running', 'cancelling'].includes(query.state.data?.status || '') ? 1000 : false });
@@ -40,17 +43,17 @@ export function DiagnosticExportAction({ kind, codes = '' }: { kind: 'support' |
   const cancel = () => void action.run('cancel', signal => apiSend<ExportState>(
     `${URL}/${state!.job_id}/cancel`, {}, 'POST', signal), update);
   return <div className="flex min-w-0 flex-col gap-3">
-    <div className="flex flex-wrap gap-2">
+    <div className={kind === 'support' ? 'flex flex-wrap justify-end gap-2' : 'flex flex-wrap gap-2'}>
       <Button type="button" variant="secondary" disabled={active} {...busyProps(action.busy === 'start')} onClick={start}>{label}</Button>
       {mine && active ? <Button type="button" variant="secondary" disabled={state.status === 'cancelling'}
         {...busyProps(action.busy === 'cancel')} onClick={cancel}>取消导出</Button> : null}
       {mine && state.status === 'complete' && state.download_url ? <ButtonLink variant="secondary"
         href={state.download_url}>下载已生成的文件</ButtonLink> : null}
+      {children}
     </div>
-    {mine && active ? state.total && state.total > 0 ? <div className="flex flex-col gap-2" role="status">
-      <span className="text-body-2-regular">{state.stage} · {state.done || 0} / {state.total} 项</span>
-      <Progress label="导出进度" value={state.done || 0} max={state.total} />
-    </div> : <LoadingDots label={`${state.stage || '准备导出'}${state.rows ? ` · ${state.rows} 条候选` : ''}${state.files ? ` · ${state.files} 个文件` : ''}`} /> : null}
+    {mine && active ? <TaskProgress embedded={kind === 'scraping'} value={state.done || 0} total={state.total}
+      label={state.total ? `${state.stage} · ${state.done || 0} / ${state.total} 项`
+        : `${state.stage || '准备导出'}${state.rows ? ` · ${state.rows} 条候选` : ''}${state.files ? ` · ${state.files} 个文件` : ''}`} /> : null}
     {mine && state.status === 'complete' ? <p role="status" className="text-body-2-regular text-text-secondary">
       导出已完成 · {((state.bytes || 0) / 1024 / 1024).toFixed(2)} MiB</p> : null}
     {mine && state.status === 'cancelled' ? <Note tone="neutral">导出已取消</Note> : null}

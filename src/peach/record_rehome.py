@@ -10,6 +10,9 @@
 
 同一 `(location, path)` 的文件回来了不归这里管：扫描的 upsert 直接清掉那一行的 `disposal`。
 
+旧行还没标已消失时由 `CodeRelocator` 在登记之前处理（ADR-0131）：旧文件不在、番号唯一对上，就把
+旧行改指新文件，不新建行，也不记批次。
+
 新版本先入库、旧文件后消失时反过来找：资源同步与「同步删除」标完已消失，`reattach_vanished`
 拿刚标的这几行按同一套判据在全部在库视频里找，唯一命中就当场接回，记同一种批次；候选多个
 分不出的照旧留成孤儿。
@@ -29,7 +32,7 @@ import json
 import sqlite3
 import time
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import closing
 from datetime import datetime
 from pathlib import PureWindowsPath
@@ -92,6 +95,79 @@ def _under(path: str, creator: str) -> bool:
     """新文件路径上有一层目录就叫这个创作者名。"""
     folded = creator.casefold()
     return any(part.casefold() == folded for part in PureWindowsPath(path).parent.parts)
+
+
+def _gone(native) -> bool:
+    """只有盘上明确答「没有这个文件」才算；读不了、超时都不算。"""
+    try:
+        native.stat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+class CodeRelocator:
+    """扫描登记新视频之前，把同番号、文件已不在盘上的在库旧行改指到它（ADR-0131）。
+
+    目录改名又换了编码时文件身份对不上；旧行还没被资源同步标已消失，`reattach` 也找不到它。
+    只在同一扫描根里找：番号对上恰好一条在库视频、新文件所在目录里这个番号的视频只有它一个、
+    旧路径 `stat` 明确答文件不在，才把旧行的路径改过来。行 id 不变，标签、封面、资料与个人记录
+    原样保留；文件换了，探测列清空等探测补上。其余情况一概不动，交给资源同步与 `reattach`。
+    """
+
+    def __init__(self, connection, location: str, root: str, walk_root, *, moved: Iterable[int] = ()):
+        from .smb_media import SmbResource
+        self.connection = connection
+        self.location = location
+        self.root = str(PureWindowsPath(root))
+        self.walk_root = walk_root
+        #: SMB 直连的目录对象没有本机 `stat`，问不出「不在」，不改指。
+        self.enabled = not isinstance(walk_root, SmbResource)
+        #: 这一轮（含断点之前）改指过的行 id。
+        self.moved = list(moved)
+        self._by_code: dict[str, list[dict]] | None = None
+
+    def _olds(self, key: str) -> list[dict]:
+        """扫描根下按番号分组的在库视频；第一次用到才查，一轮扫描只查一次。"""
+        if self._by_code is None:
+            from .media_folders import path_predicate
+            scope, params = path_predicate(self.location, self.root)
+            self._by_code = defaultdict(list)
+            for row in _rows(self.connection, f"SELECT a.id,a.path,a.name,a.code FROM asset a WHERE {scope} "
+                             "AND a.medium='video' AND a.disposal IS NULL", params):
+                if found := code_key(row):
+                    self._by_code[found].append(row)
+        return self._by_code.get(key, [])
+
+    def relocate(self, path: str, video_names: Callable[[], Iterable[str]]) -> int | None:
+        """`path` 是还没登记的视频，`video_names()` 列出同目录全部视频的文件名；返回改指过来的行 id。
+
+        名单只在找到唯一候选之后才列：首次扫描的大目录里每个新文件都列一遍会变成平方级。
+        """
+        name = PureWindowsPath(path).name
+        key = code_key({"name": name}) if self.enabled else ""
+        olds = self._olds(key) if key else []
+        if len(olds) != 1 or sum(code_key({"name": other}) == key for other in video_names()) != 1:
+            return None
+        old = olds[0]
+        try:
+            relative = PureWindowsPath(old["path"]).relative_to(self.root)
+        except ValueError:
+            return None
+        if not _gone(self.walk_root.joinpath(*relative.parts)):
+            return None
+        from .media_probe import PROBED_COLUMNS
+        cleared = ",".join(f"{column}=NULL" for column in PROBED_COLUMNS)
+        changed = self.connection.execute(
+            f"UPDATE asset SET path=?,name=?,{cleared} WHERE id=? AND path=? AND disposal IS NULL",
+            (path, name, old["id"], old["path"])).rowcount
+        olds.clear()
+        if not changed:
+            return None
+        self.moved.append(old["id"])
+        return old["id"]
 
 
 def _closest(old: dict, candidates: list[dict]) -> dict | None:

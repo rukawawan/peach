@@ -26,6 +26,35 @@ describe('Board 页面骨架', () => {
       expect(control.closest('[inert]')).not.toBeNull();
     }
   });
+  it('JAV 新作分区在列表模式下画新作自己的表格骨架，下排有卡片／列表开关、没有文件夹开关', () => {
+    const before = location.pathname + location.search;
+    history.replaceState(null, '', '/jav?tab=releases');
+    localStorage.setItem('peach.catalog-view.v1', 'list');
+    const root = document.createElement('div');
+    root.innerHTML = boardPageSkeleton('/jav');
+    localStorage.removeItem('peach.catalog-view.v1');
+    history.replaceState(null, '', before);
+    expect([...root.querySelectorAll('[data-catalog-table] th')].map(node => node.textContent).filter(Boolean))
+      .toEqual(['作品', '艺人', '厂牌', '标签', '发行时间', '时长', '来源评分', '操作']);
+    expect(root.querySelector('[data-skeleton="jav-discover"]')).toBeNull();
+    expect(root.querySelector('[aria-label="馆藏显示方式"] [aria-checked="true"]')?.getAttribute('aria-label')).toBe('列表');
+    expect(root.querySelector('[data-folder-mode-toggle]')).toBeNull();
+  });
+  it('JAV 新作分区骨架按下新作，页头是名册页那种筛选框，下面是两排头像占位与新作自己的排序键', () => {
+    const before = location.pathname + location.search;
+    history.replaceState(null, '', '/jav?tab=releases&sort=duration&dir=asc');
+    const root = document.createElement('div');
+    root.innerHTML = boardPageSkeleton('/jav');
+    history.replaceState(null, '', before);
+    expect([...root.querySelectorAll('span.whitespace-nowrap.rounded-md')].find(node => node.classList.contains('text-text-primary'))?.textContent).toBe('新作');
+    expect(root.querySelector('[data-index-search] input')?.getAttribute('aria-label')).toBe('筛选新作');
+    expect(root.querySelector('form')).toBeNull();
+    expect(root.querySelectorAll('[data-catalog-tier] [data-catalog-placeholder]').length).toBeGreaterThan(0);
+    expect(root.querySelector('[data-entity-tag="external"]')).toBeNull();
+    expect([...root.querySelectorAll('[data-entity-sort]')].map(node => node.textContent)).toEqual(['发行时间', '来源评分', '时长', '番号', '口味']);
+    expect(root.querySelector('[data-entity-sort][aria-pressed="true"]')?.getAttribute('data-entity-sort')).toBe('duration');
+    expect(root.querySelector('[data-entity-batch]')?.getAttribute('aria-label')).toBe('换一批');
+  });
   it('统计预留四张指标卡，未知页面交给自身骨架', () => {
     const root = document.createElement('div');
     root.innerHTML = boardPageSkeleton('/stats');

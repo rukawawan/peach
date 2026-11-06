@@ -97,9 +97,12 @@ export function confirmModal({title,body,items=[],confirmLabel,cancelLabel='取�
   dialog.className='ui-geist-modal';
   const titleId=`geist-modal-title-${++modalSeq}`;
   dialog.setAttribute('aria-labelledby',titleId);
+  dialog.setAttribute('aria-describedby',`${titleId}-body`);
+  // 不可撤销的确认读作 alertdialog：读屏进来先念标题和那句后果，而不是当成普通对话框（同 BoardUI Modal）。
+  if(danger)dialog.setAttribute('role','alertdialog');
   dialog.innerHTML=`<header class="ui-geist-modal-header"><h3 id="${titleId}"></h3></header>
     <div class="ui-geist-modal-scroll"><div class="ui-geist-modal-body">
-      <p></p><div data-modal-error></div></div></div>
+      <p id="${titleId}-body"></p><div data-modal-error></div></div></div>
     <footer class="geist-modal-footer">
       <div><button type="button" class="geist-button" data-modal-cancel></button></div>
       <div><button type="button" class="geist-button primary" data-modal-confirm></button></div>

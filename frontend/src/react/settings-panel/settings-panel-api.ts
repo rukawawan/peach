@@ -8,6 +8,7 @@
 import type { HomeGlow } from '@peach/appearance';
 
 import type { SettingsStore } from '../../settings-store';
+import type { Shortcut } from '../../keyboard-shortcut';
 import type { SyncedSettings } from './settings-data';
 
 /** 面板读写的那几项；对象本身还有别的字段，面板不碰。 */
@@ -72,6 +73,9 @@ export interface SettingsPanelHost {
   /** SFW 与增加对比度各有自己的键，不在 `appSettings` 里；改完壳调 `store.notify()`。 */
   censored(): boolean;
   setCensored(on: boolean): void;
+  /** SFW 开关键，存本机不同步；传 null 恢复默认。改完壳调 `store.notify()`。 */
+  sfwShortcut(): Shortcut;
+  setSfwShortcut(shortcut: Shortcut | null): void;
   highContrast(): boolean;
   setHighContrast(on: boolean): void;
   receipt(message: string): void;

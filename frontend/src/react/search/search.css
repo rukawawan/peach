@@ -27,7 +27,27 @@
   justify-content: space-between;
   gap: 8px;
 }
-.peach-react [data-search-group] > h3 > a { flex: none; font-weight: 400; letter-spacing: normal; }
+.peach-react [data-search-group] > h3 > a,
+.peach-react [data-search-head] > a { flex: none; font-weight: 400; letter-spacing: normal; }
+.peach-react [data-search-head] { display: flex; flex: none; align-items: center; gap: 6px; }
+/* 「换一批」只是一枚图标，不做成按钮框：悬停只把图标提亮。忙时两股线各描一圈（`#i-shuffle .strand`，
+ * 同首页换批键），一圈的长度同 `SHUFFLE_SPIN`。 */
+.peach-react [data-search-shuffle] {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--control-radius);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.peach-react [data-search-shuffle]:hover { color: var(--ink); }
+.peach-react [data-search-shuffle]:focus-visible { outline: 2px solid var(--tungsten); outline-offset: 1px; }
+.peach-react [data-search-shuffle] svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.peach-react [data-search-shuffle][aria-busy="true"] svg { --strand-dash: 100; --strand-cycle: 1.2s; }
 .peach-react [data-search-person] { padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
 .peach-react [data-search-person]:focus-visible { outline: 2px solid var(--tungsten); outline-offset: 2px; }
 
@@ -150,6 +170,55 @@
 .peach-react [data-search-meta] { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .peach-react [data-search-name] { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .peach-react [data-search-sub] { color: var(--muted); font-size: var(--fs-xs); }
+/* 作品格署名前那枚小圆头像：人是 `avatarInner` 的首字母垫底加图，关注作者是 `favatar` 一张图或首字母。 */
+.peach-react [data-search-by] {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  vertical-align: -4px;
+  border-radius: 50%;
+  background: var(--hover);
+}
+.peach-react [data-search-by] img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.peach-react [data-search-by] > span {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+}
+/* 推荐还没取到的那几格：外形与真行、真封面格相同，条与圆片用全站骨架那一道微光（`skeleton-sweep`）。 */
+.peach-react [data-search-placeholder] { pointer-events: none; }
+/* 封面格的比例与圆角同真封面那一格（遗留层 `.pic`：`aspect-ratio: var(--card-ratio)`），占位不借那个类。 */
+.peach-react [data-search-placeholder] [data-search-pic] > span { display: block; aspect-ratio: var(--card-ratio); border-radius: var(--badge-radius); }
+.peach-react [data-search-placeholder] :is([data-search-name], [data-search-sub], [data-search-face], [data-search-pic] > span) {
+  position: relative;
+  overflow: hidden;
+  color: transparent;
+  background: var(--hover);
+}
+.peach-react [data-search-placeholder] :is([data-search-name], [data-search-sub]) { border-radius: var(--control-radius); }
+.peach-react [data-search-placeholder] [data-search-name] { width: 64%; }
+.peach-react [data-search-placeholder] [data-search-sub] { width: 40%; }
+.peach-react [data-search-placeholder] :is([data-search-name], [data-search-sub], [data-search-face], [data-search-pic] > span)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  right: -200%;
+  border-radius: inherit;
+  background: linear-gradient(to right, var(--hover), var(--skeleton-sheen) 50%, var(--hover));
+  background-size: 50% 100%;
+  animation: skeleton-sweep 1.5s ease-in-out infinite reverse;
+}
 
 /* 小封面和卡片同一个 3:4 容器（壳给的 `.pic`，比例从这里继承），取景换算读的就是这个比例。
  * 「无预览」在 36px 宽里按 10px、不加字距排，三个字两边各留一点边：封面那一格里只有它是 span，图都是 <img>。 */

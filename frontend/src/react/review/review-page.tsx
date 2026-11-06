@@ -23,6 +23,7 @@ import { Note } from '../components/note';
 import { Page } from '../components/page';
 import { PillAriaTabList } from '../components/pill-aria-tab-list';
 import { ExternalLink } from '../settings/section';
+import { AutoLandingsCard } from './auto-landings-card';
 import { BulkToolbar } from './bulk-toolbar';
 import { GenreTagList } from './candidate-form';
 import { ReviewCard } from './review-card';
@@ -383,6 +384,9 @@ export function ReviewPage(props: ReviewProps) {
           )}
 
           <Pagination page={win.page} pages={win.pages} onPage={setPage} />
+          {metadata && queueView === 'pending'
+            ? <AutoLandingsCard locked={locked} openItem={openItem} toast={toast} />
+            : null}
         </TabPanel>
       </Tabs>
       </div>

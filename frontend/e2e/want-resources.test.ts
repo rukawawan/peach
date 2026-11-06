@@ -51,7 +51,7 @@ describe('JAV 入库作品卡', () => {
         const style = await card.evaluate(el => ({ radius: getComputedStyle(el).borderRadius,
           border: getComputedStyle(el).borderTopWidth }));
         assert.notEqual(style.radius, '0px');
-        assert.equal(style.border, '1px');
+        assert.equal(style.border, '0px', '想要卡还带着外框，页面上的卡只靠填充底');
         assert.equal(await source.evaluate(el => el.getBoundingClientRect().height), 32);
         assert.equal(await source.evaluate(el => getComputedStyle(el).borderTopWidth), '1px');
         assert.equal(await source.getAttribute('href'), 'https://example.test/work');

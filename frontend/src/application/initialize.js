@@ -20,6 +20,7 @@ import { installSearch20, installSearch22 } from './search.js';
 import { installComposition24 } from './composition.js';
 import { installChrome25 } from './chrome.js';
 import { applicationEffects } from './effects';
+import { installNavigationProgress } from './../navigation-progress';
 
 export function initializeApplication() {
   installLifecycle1();
@@ -50,6 +51,7 @@ export function initializeApplication() {
   installPreferences23();
   installComposition24();
   installChrome25();
+  applicationEffects.own(installNavigationProgress());
   applicationEffects.own(clearCatalogGrid);
   applicationEffects.own(cancelQueueRequest);
 }

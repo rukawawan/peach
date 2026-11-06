@@ -35,8 +35,11 @@ try {
           Object.assign(window, {
             GM_getValue: key => key === 'peach.jav.base' ? 'https://peach-contract.example.invalid' : 'isolated-test-token',
             GM_setValue: () => {}, GM_registerMenuCommand: () => {},
-            GM_xmlhttpRequest: request => window.peachContract({ method: request.method, url: request.url })
-              .then(response => request.onload(response), () => request.onerror()),
+            // 共享进度的任务列表按不提供该接口的 Peach 应答，这里只核对识别接口。
+            GM_xmlhttpRequest: request => new URL(request.url).pathname === '/api/jav-browser/active'
+              ? setTimeout(() => request.onload({ status: 404, responseText: '{}' }), 0)
+              : window.peachContract({ method: request.method, url: request.url })
+                .then(response => request.onload(response), () => request.onerror()),
           });
         });
         await page.goto(url);

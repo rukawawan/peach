@@ -203,7 +203,6 @@ describe('侧栏岛', () => {
       assert.deepEqual(await chips(page, '内容标签'), ENTITY_TAGS.map(([k, n]) => [k, String(n)]), '实体页列的不是这个实体的计数');
       assert.deepEqual(opened.problems, []);
     } finally {
-      await page.unrouteAll({ behavior: 'ignoreErrors' });
       await opened.close();
     }
   });

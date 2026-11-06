@@ -6,10 +6,11 @@
 **一轮拉取一条后继。** 同一轮发现的番号在活动页上是一件事，拆成一部一条，一次订阅
 就是二十张一模一样的卡片；键里带着这一批的番号，重跑、去重都按这一批算。
 
-**补封面单独排队。** 资料已经齐、只缺本机封面的壳不进取资料那一批，而是另派一条
-`feed-cover`（补新作封面）：它只取图、不问资料来源、不写账本，走自己的通道。资料来源
-连不上时取资料每部要等一轮超时，补封面若跟在后面，旧壳会被源源不断的新番号挤到轮不上。
-排在队里或正在跑的番号（`in_flight`）不再进下一批，两种批次也互不重复。
+**补封面单独排队。** 不在这一批取资料里、只缺本机封面的壳另派一条 `feed-cover`
+（新作封面采集）：它只取图、不问资料来源、不写账本，走自己的通道。资料来源连不上时取资料
+每部要等一轮超时，补封面若跟在后面，旧壳会被源源不断的新番号挤到轮不上。还没轮到取资料的
+壳也算：取资料走写账本的串行通道，那条通道被存量补修排满时，新作要等几个小时才轮得到，
+而官方封面只凭番号就能取。排在队里或正在跑的番号（`in_flight`）不再进下一批，两种批次也互不重复。
 
 **不复用 `process_library`**：那条路以 `asset` 行为单位、要写候选 CSV、要按字段优先级链
 结算到真相字段，而壳没有真相字段可写。壳上的每个值都只是「某个来源这么说」，用户复核
@@ -39,9 +40,9 @@ from .followups import Followup, FollowupType, register
 from .metadata import extract_peach_fields
 
 TASK_KEY = "feed-scrape"
-TASK_LABEL = "取新作资料"
+TASK_LABEL = "新作资料采集"
 COVER_TASK_KEY = "feed-cover"
-COVER_TASK_LABEL = "补新作封面"
+COVER_TASK_LABEL = "新作封面采集"
 LABELS = {TASK_KEY: TASK_LABEL, COVER_TASK_KEY: COVER_TASK_LABEL}
 
 #: 一条资料够用就停。四个标量都拿到就不再问下一家——Feed 是后台跑的，
@@ -97,11 +98,13 @@ def plan_covers(codes) -> list[Followup]:
     return plan(codes, COVER_TASK_KEY)
 
 
-def in_flight(task_runs) -> set[str]:
-    """排在队里或正在跑的取资料、补封面后继里的番号键。下一批不再带它们。"""
+def in_flight(task_runs, status: str = "active", task_keys=(TASK_KEY, COVER_TASK_KEY)) -> set[str]:
+    """排在队里或正在跑的取资料、补封面后继里的番号键。下一批不再带它们。
+    `status` 换成 `running` 或 `pending`、`task_keys` 只留一种，就是正在跑的或还排在某条队里的那几批，
+    新作卡据此说清在等什么（`cover_states`）。"""
     codes: set[str] = set()
-    for task_key in (TASK_KEY, COVER_TASK_KEY):
-        for run in task_runs.query(status="active", task_key=task_key, limit=500):
+    for task_key in task_keys:
+        for run in task_runs.query(status=status, task_key=task_key, limit=500):
             try:
                 codes.update(normalise_code_key(code) for code in parse_key(run.followup_key, task_key))
             except ValueError:
@@ -119,8 +122,8 @@ def scrape_batch(connection, fresh=(), *, exclude=(), now: datetime | None = Non
                  retry_after: timedelta = RETRY_AFTER,
                  hidden: frozenset[str] = feeds.DEFAULT_HIDDEN_COMPILATIONS) -> list[str]:
     """下一批取资料的番号：这一轮新发现的 `fresh` 与还没取过资料的壳在前，上次没取到、
-    已经过了 `retry_after` 的壳在后，并且至少留 `RETRY_SHARE` 个名额给后者。资料齐了只缺
-    封面的归 `cover_backlog`。
+    已经过了 `retry_after` 的壳在后，并且至少留 `RETRY_SHARE` 个名额给后者。不在这一批里、
+    只缺封面的归 `cover_backlog`。
 
     已忽略的不算：人说了不想看，就不再替它花配额。已经入库的壳本来就不在表里
     （入库即从列表里消失，ADR-0042 第三条），这里同样用番号键排除掉。取回标题后认出是
@@ -151,15 +154,17 @@ def _first(rows, exclude, hidden, limit: int) -> list[str]:
 def cover_backlog(connection, cover_root: Path, *, exclude=(), now: datetime | None = None,
                   limit: int = MAX_BATCH, retry_after: timedelta = RETRY_AFTER,
                   hidden: frozenset[str] = feeds.DEFAULT_HIDDEN_COMPILATIONS) -> list[str]:
-    """资料已经齐、本机还没有封面、上次取图已经过了 `retry_after` 的壳。
+    """本机还没有封面、上次取图已经过了 `retry_after` 的壳，资料齐了的和还没取过资料的都算。
 
+    上次没取到资料的不算：它归 `scrape_batch` 重试，取完资料就地补封面。调用方把这一批
+    取资料的番号放进 `exclude`，同一部不两头都派。
     上次取图的时间读逐番号的取图记录（`record_cover_attempt`），没试过的排最前，其余由远到近；
     同样远的新片在前。排除规则与 `scrape_batch` 相同。
     """
     from .catalog_rules import is_korean_mib_code
 
     cutoff = (now or datetime.now(timezone.utc)).timestamp() - retry_after.total_seconds()
-    rows = _candidates(connection, "d.scraped_at IS NOT NULL AND d.scrape_error IS NULL", (), "")
+    rows = _candidates(connection, "d.scrape_error IS NULL", (), "")
     due: list[tuple[float, int, str]] = []
     for position, row in enumerate(_visible(rows, exclude, hidden)):
         code = row["code"]
@@ -256,10 +261,15 @@ def fetch_cover(contract, code: str,
     `cover_url` 是取资料那一步来源给的地址，它是官方图路径时一起参与择优。`DAZD-308`
     这类番号 r18 与本机快照里都没有，官方渠道一条候选也列不出来，来源给的却正是 DMM 那张
     封套；不收它，这部就只能在页面上拿远程图按固定比例切，书脊切不干净。
+    上次装图时证据里记的地址同样参与：图片被删后证据还在，想看条目没有 `cover_url`，
+    素人档的 `jp.jpg`、MGS 图这类路径只有靠它才列得回候选。
     取不到就抛；原因交给调用方记账，一部取不到不影响同批其余几部。
     """
     from .jav_cover_fetch import HostLimitedTransport, best_cover, official_image_candidates
     from .scraping_access import SourceTransport
+
+    prior = {candidate.url: candidate for url in (cover_url, _recorded_cover_url(contract.cover_root, code))
+             for candidate in official_image_candidates(url or "")}
 
     raw = SourceTransport(contract.follow_secrets_root, max_requests=40,
                           max_bytes=32 * 1024 * 1024, max_seconds=COVER_SECONDS)
@@ -272,7 +282,7 @@ def fetch_cover(contract, code: str,
             transport, code, 0,
             metadata_root=contract.follow_sources_root / "metadata" / "javinizer-go",
             known=_official_evidence(snapshots),
-            prior_candidates=tuple(official_image_candidates(cover_url or "")),
+            prior_candidates=tuple(prior.values()),
             deadline=time.monotonic() + COVER_SECONDS)
     finally:
         transport.close()
@@ -285,8 +295,84 @@ def fetch_cover(contract, code: str,
     return data, size, evidence
 
 
+def _recorded_cover_url(cover_root: Path, code: str) -> str:
+    try:
+        evidence = json.loads((Path(cover_root) / f"{normalise_code_key(code)}.scraping.json")
+                              .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(evidence.get("source_url") or "") if isinstance(evidence, dict) else ""
+
+
 def cover_attempt_path(cover_root: Path, code: str) -> Path:
     return Path(cover_root).parent / 'feed-cover-attempts' / (normalise_code_key(code) + '.json')
+
+
+def awaiting_official_cover(contract, code: str, release_date: str | None) -> bool:
+    """还没发售、本机没有封面、上次取图官方只回「准备中」占位图：DMM 提前一个多月上架的新作常这样。
+    新作列表先不放它，`/cover-image` 也不代理那张占位图；`cover_backlog` 照旧按 `RETRY_AFTER`
+    重取，官方出图、本机有了封面就回到列表里。已发售的旧作不算：官方那几个地址里常有一张
+    偏窄的真封面，取图记录照样写成占位图。"""
+    from .jav_cover_fetch import PLACEHOLDER_MARK
+    if not release_date or str(release_date)[:10] <= datetime.now().date().isoformat():
+        return False
+    if contract.has_cover(code):
+        return False
+    attempt = cover_attempt(contract.cover_root, code)
+    return bool(attempt and not attempt.get("ok") and PLACEHOLDER_MARK in str(attempt.get("reason") or ""))
+
+
+def cover_states(contract, rows) -> dict[str, tuple[str, str]]:
+    """本机还没有封面的新作，封面那一格说什么：番号键 → (状态, 原因)。
+
+    状态只有三档，判据与后台真的会怎么处理它一致，不让卡片说一套、队列做一套：
+
+    - `fetching`：在正在跑的那一批里。
+    - `queued`：排在某条队里，或者 `cover_backlog` 下一轮会捞走它（资料没出错、没忽略、从没取过图）。
+    - `missing`：取过没取到，或者后台不会替它取。原因用取图记录里那句（已去掉来源地址）。
+
+    `rows` 是壳的行，至少带 `code`、`scrape_error`、`ignored_at`。
+    """
+    from .catalog_rules import is_korean_mib_code
+    from .jav_cover_fetch import MIB_NOT_JAV
+
+    running = in_flight(contract.task_runs, "running")
+    covers = in_flight(contract.task_runs, "pending", (COVER_TASK_KEY,))
+    scrapes = in_flight(contract.task_runs, "pending", (TASK_KEY,))
+    states: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        key = normalise_code_key(row["code"])
+        if not key or contract.has_cover(key):
+            continue
+        attempt = cover_attempt(contract.cover_root, key)
+        if key in running:
+            states[key] = ("fetching", "正在取这一部的封面")
+        elif is_korean_mib_code(key):
+            states[key] = ("missing", MIB_NOT_JAV)
+        elif key in covers:
+            states[key] = ("queued", "排在新作封面采集的队里")
+        elif key in scrapes:
+            states[key] = ("queued", "排在新作资料采集后面，资料取完就取封面")
+        elif attempt is not None and attempt.get("ok"):
+            states[key] = ("missing", "取到过的封面已不在本机，到了重试时间再取")
+        elif attempt is not None:
+            states[key] = ("missing", f"上次没取到：{attempt.get('reason') or '封面处理未完成'}")
+        elif row.get("ignored_at"):
+            states[key] = ("missing", "已标为不想看，后台不再替它取图")
+        elif row.get("scrape_error"):
+            states[key] = ("missing", "资料没取到，到了重试时间连同封面再试")
+        else:
+            states[key] = ("queued", "等下一轮订阅检查分批取图")
+    return states
+
+
+def cover_attempt(cover_root: Path, code: str) -> dict | None:
+    """这个番号上次取图的记录（`record_cover_attempt`）；没取过、或记录读不出来时是 None。"""
+    try:
+        record = json.loads(cover_attempt_path(cover_root, code).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
 
 
 def record_cover_attempt(contract, code: str, *, ok: bool, error=None):

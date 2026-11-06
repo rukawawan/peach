@@ -8,17 +8,24 @@ MGS 的 5/23、标题带 MGS 附注、演员里有男优，各字段按 Peach �
 有隐藏 `origin-title` 时用作原标题，`current-title` 单独保存为显示标题；两者不互相改写。
 
 一部分页面要登录才给，回的是登入页而不是 401/403（`peach.javdb.LOGIN`），搜索页与详情页都要认。
+
+刮削不读详情页，走 `JavDBPublicSource` 的匿名接口（ADR-0144）：不带 Cookie，不占 javdb.com
+的出口配额，字段投影成与详情页同形的记录。详情页解析留给视频预览。
 """
 from __future__ import annotations
 
+import dataclasses
 import re
+import time
 import urllib.parse
 
 from bs4 import BeautifulSoup
 
 from ..catalog_rules import same_release_code
 from ..javdb import LOGIN, clean
+from ..javdb_genres import page_genres
 from ..javdb_identity import RULE
+from ..javdb_public import actor_gender, public_image_url
 from .base import FailureReason, Page, Session, SiteConfig, SiteRecord, SiteSource, SourceFailure
 
 #: 主机间隔由用户定（2026-09-22 定为 3 秒，每分钟 20 页）。参照面：每分钟 40～50 页会招来 3～7 天
@@ -26,6 +33,14 @@ from .base import FailureReason, Page, Session, SiteConfig, SiteRecord, SiteSour
 JAVDB = SiteConfig(name="javdb", label="javdb", provider="javdb-page",
                    base_url="https://javdb.com", domains=("javdb.com", "jdbstatic.com", "jdbimgs.com"),
                    stage="community", interval=3.0, cookie=True)
+#: 刮削那一问的配置。来源名、域名与 Cookie 仍是 `javdb` 这一站的（视频预览照旧读详情页，
+#: 冷却按这个名字记）；解析器名另起，候选与账本证据分得清是哪一种取法。接口自己的间隔、冷却与
+#: 请求预算在 `peach.javdb_public`，这一问不经会话的传输。
+JAVDB_PUBLIC = dataclasses.replace(JAVDB, provider="javdb-api")
+#: 一问的请求上限：签名常量两次（一天一次）、搜索、详情，再留两次给换接口主机（ADR-0148）。
+PUBLIC_REQUESTS = 6
+#: 会话没有动作截止时刻时，一问最多等这么久。
+PUBLIC_SECONDS = 90.0
 
 _BOX = re.compile(r'<a href="(/v/[A-Za-z0-9]+)" class="box" title="[^"]*">.*?<strong>([^<]+)</strong>', re.S)
 _PANEL = re.compile(r'<div class="panel-block[^"]*">\s*<strong>([^<:：]+)[:：]</strong>\s*(?:&nbsp;)?\s*'
@@ -65,54 +80,6 @@ def maker_writing(value: str) -> str:
 
 class JavDBSource(SiteSource):
     DEFAULT = JAVDB
-
-    def resources(self, code: str, *, session: Session) -> dict:
-        """核对作品身份后合并资源区与评论链接；最多读取三页评论。"""
-        with self.holding(session):
-            page = self.fetch(code, session=session)
-            self.parse(page, code)
-            warnings = []
-            try:
-                items = parse_magnets(page)
-            except SourceFailure as error:
-                items = []
-                warnings.append(str(error))
-            soup = BeautifulSoup(page.text, "html.parser")
-            items.extend(parse_comment_links(page))
-            entry = soup.select_one('.review-tab[data-url]')
-            next_url = str(entry.get("data-url", "")) if entry else ""
-            seen = set()
-            for _ in range(3):
-                if not next_url:
-                    break
-                url = urllib.parse.urljoin(page.url, next_url)
-                parts, original = urllib.parse.urlsplit(url), urllib.parse.urlsplit(page.url)
-                if (parts.netloc != original.netloc or parts.scheme != "https"
-                        or not parts.path.startswith(original.path + "/reviews/") or url in seen):
-                    warnings.append("部分评论未取得，请打开来源页查看。")
-                    break
-                seen.add(url)
-                try:
-                    with self.holding(session):
-                        comments = self._page(url, session=session)
-                    body = BeautifulSoup(comments.text, "html.parser")
-                    if not body.select_one('.review-items'):
-                        raise SourceFailure(FailureReason.PARSE_ERROR, "评论区域未取得")
-                    items.extend(parse_comment_links(comments))
-                except Exception:
-                    warnings.append("评论链接未取得，请打开来源页查看。")
-                    break
-                if body.select_one('.more a[href="/plans"]'):
-                    warnings.append("来源只返回了部分评论，资源链接可能不完整。")
-                following = body.select_one('a[rel="next"], .pagination-next:not([disabled])')
-                next_url = str(following.get('href', '')) if following else ""
-            else:
-                if next_url:
-                    warnings.append("已读取前三页评论，其余请打开来源页查看。")
-            if not entry and not soup.select_one('.review-items'):
-                warnings.append("评论入口未取得。")
-            return {"items": merge_resources(items), "warnings": list(dict.fromkeys(warnings)),
-                    "source_url": page.url}
 
     def search_url(self, code: str) -> str:
         return f"{self.config.base_url}/search?q={urllib.parse.quote(code)}&f=all"
@@ -168,67 +135,75 @@ class JavDBSource(SiteSource):
                    'source_id': urllib.parse.urlsplit(page.url).path.rsplit('/', 1)[-1], 'javdb_rule': RULE})
 
 
-def parse_magnets(page: Page) -> list[dict]:
-    """JavDB 磁链区：名称、大小、文件数、标签与收录日期；按 infohash 去重。"""
-    from ..downloads import parse_magnet
+def public_record(movie: dict) -> SiteRecord:
+    """匿名接口的作品资料，投影成与详情页同形的记录。
 
-    soup = BeautifulSoup(page.text, "html.parser")
-    container = soup.select_one("#magnets-content")
-    if container is None:
-        raise SourceFailure(FailureReason.PARSE_ERROR, "JavDB 磁链区域未取得")
-    found: dict[str, dict] = {}
-    invalid = False
-    for row in container.select(".item"):
-        link = row.select_one('a[href^="magnet:"]')
-        if link is None:
-            continue
-        try:
-            magnet = parse_magnet(str(link.get("href", "")))
-        except ValueError:
-            invalid = True
-            continue
-        def text(selector, row=row):
-            node = row.select_one(selector)
-            return node.get_text(" ", strip=True) if node else ""
-        meta = re.split(r"[,，]", text(".meta"), maxsplit=1)
-        found.setdefault(magnet.info_hash, {
-            "id": "magnet:" + magnet.info_hash, "protocol": "magnet",
-            "info_hash": magnet.info_hash, "uri": magnet.uri,
-            "name": text(".name") or magnet.name or magnet.info_hash,
-            "size": meta[0].strip(), "files": meta[1].strip() if len(meta) > 1 else "",
-            "date": text(".time") or text(".date"),
-            "attributes": list(dict.fromkeys(tag.get_text(" ", strip=True)
-                                             for tag in row.select(".tag") if tag.get_text(strip=True))),
-            "source": "JavDB", "source_url": page.url, "origins": [page.url],
-        })
-    if invalid and not found:
-        raise SourceFailure(FailureReason.PARSE_ERROR, "JavDB 磁链格式无法识别")
-    return list(found.values())
+    `origin_title` 对应详情页隐藏的原题，`title` 是显示标题；女优按接口的明确性别字段认。
+    FC2 作品（`type` 3）的 `maker_name` 是卖家：按 `peach.sources.fc2` 的约定记进只作证据的
+    `label`，不进厂牌。类别按 id 换回详情页原词，有表外 id 时不给标签（`javdb_genres.page_genres`）。
+    """
+    movie_id = str(movie.get("id") or "")
+    fc2 = movie.get("type") == 3
+    maker = maker_writing(clean(str(movie.get("maker_name") or "")))
+    origin = clean(str(movie.get("origin_title") or ""))
+    display = clean(str(movie.get("title") or ""))
+    duration = movie.get("duration")
+    cover = movie.get("cover_url")
+    performers = tuple(
+        {"japanese_name": clean(str(actor.get("name"))), "profile_source": "javdb",
+         "external_id": str(actor.get("id") or "")}
+        for actor in movie.get("actors") or []
+        if isinstance(actor, dict) and actor_gender(actor) == "female" and clean(str(actor.get("name") or "")))
+    return SiteRecord(
+        source=JAVDB_PUBLIC.name, provenance=JAVDB_PUBLIC.provider, code=clean(str(movie.get("number") or "")),
+        source_url=f"{JAVDB.base_url}/v/{movie_id}", title=origin or display, performers=performers,
+        studio="" if fc2 else maker,
+        label=clean(str(movie.get("publisher_name") or "")) or (maker if fc2 else ""),
+        series=clean(str(movie.get("series_name") or "")), director=clean(str(movie.get("director_name") or "")),
+        release_date=clean(str(movie.get("release_date") or "")),
+        runtime=duration if type(duration) is int and duration > 0 else None,
+        tags=page_genres(movie), cover_urls=(cover,) if public_image_url(cover) else (),
+        extra={"origin_title": origin, "display_title": display, "source_id": movie_id, "javdb_rule": RULE})
+
+
+class JavDBPublicSource(JavDBSource):
+    """刮削的 javdb 一问：匿名接口取资料，失败按缺失、歧义、冷却与未取得分档。
+
+    接口的问题不写 `javdb` 的来源冷却：那份冷却管的是详情页那条路（视频预览），
+    接口自己按 `PUBLIC_API` 的冷却停下，这里翻成 `SourcePaused`，本趟记作没轮到。
+    """
+
+    DEFAULT = JAVDB_PUBLIC
+
+    def query(self, code: str, *, session: Session) -> SiteRecord:
+        from ..javdb_public import (PUBLIC_API, PublicBudgetExceeded, PublicIdentityAmbiguous, PublicNotFound,
+                                    PublicRequestBudget, PublicSourcePaused, PublicSourceUnavailable)
+        from ..scraping_access import SourcePaused
+        seconds = PUBLIC_SECONDS if session.deadline is None else session.deadline - time.monotonic()
+        budget = PublicRequestBudget(max_requests=PUBLIC_REQUESTS, max_seconds=max(1.0, seconds))
+        with self.holding(session):
+            try:
+                with PUBLIC_API.request_budget(budget):
+                    movie = PUBLIC_API.movie(code)
+            except PublicIdentityAmbiguous as error:
+                raise SourceFailure(FailureReason.PARSE_ERROR, f"javdb {error}", detail="identity_ambiguous") from None
+            except PublicNotFound:
+                raise SourceFailure(FailureReason.NOT_FOUND, "javdb 没有这个番号") from None
+            except PublicSourcePaused as error:
+                raise SourcePaused(f"javdb：{error}") from None
+            except PublicBudgetExceeded:
+                raise SourceFailure(FailureReason.TIMEOUT, "javdb 作品资料在本次预算内未取得") from None
+            except PublicSourceUnavailable as error:
+                raise SourceFailure(FailureReason.NETWORK, f"javdb：{error}") from None
+            return public_record(movie)
 
 
 _COMMENT_LINK = re.compile(r"(?:magnet:\?[^\s<>\"']+|ed2k://\|file\|[^\r\n<>]+?\|/|https?://[^\s<>\"']+)", re.I)
 _ED2K = re.compile(r"ed2k://\|file\|([^|]+)\|(\d+)\|([a-f0-9]{32})\|(?:[^\r\n]*?\|)?/", re.I)
 
 
-def parse_comment_links(page: Page) -> list[dict]:
-    """只取评论正文的链接，跳过作者主页、点赞与站点推广入口。"""
-    found = []
-    soup = BeautifulSoup(page.text, "html.parser")
-    for row in soup.select('.review-item'):
-        content = row.select_one('.content')
-        if content is None:
-            continue
-        links = [str(a.get('href', '')) for a in content.select('a[href]')]
-        links.extend(_COMMENT_LINK.findall(content.get_text(' ', strip=True)))
-        date = row.select_one('.time')
-        # 片段引用保留评论 id；正文中的任意 URL 都不会被服务器追踪请求。
-        origin = page.url + ("#" + str(row['id']) if row.get('id') else "")
-        found.extend(comment_resources(links, origin, date.get_text(' ', strip=True) if date else ""))
-    return merge_resources(found)
-
-
 def parse_comment_text(text: str, origin: str, date: str = "") -> list[dict]:
-    """匿名评论正文与网页评论使用同一资源解析。"""
+    """匿名评论正文里的磁链、ed2k 与网页链接；正文中的 URL 都不会被服务器追踪请求。"""
     return comment_resources(_COMMENT_LINK.findall(text), origin, date)
 
 

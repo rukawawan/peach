@@ -89,7 +89,7 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
         }));
         const waiting = await geometry();
         assert.equal(waiting.length, 1);
-        assert.equal(waiting[0]!.face[3], '1px', '骨架卡缺少外框');
+        assert.equal(waiting[0]!.face[3], '0px', '骨架卡还带着外框，页面上的卡只靠填充底');
         const expected = await disabledTokens(page);
         const faces = await waitingActionFaces(page, `[data-skeleton="${item.skeleton}"] [data-skeleton-action]`);
         assert.deepEqual(faces.map(face => face.name).filter(Boolean), item.names);
@@ -115,6 +115,45 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
         assert.deepEqual(await buttons.evaluateAll(nodes => nodes.map(node => (node as HTMLButtonElement).disabled)), item.names.map(() => false));
         for (const face of await buttons.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundImage))) {
           assert.match(face, /gradient/, '数据到了操作按钮仍未恢复主操作样式');
+        }
+        assert.deepEqual(opened.problems, []);
+      } finally { await opened.close() }
+    });
+  }
+
+  const cleanupTools = [
+    ['/data-cleanup/organize', 'organize'], ['/data-cleanup/resource-sync', 'resource-sync'],
+    ['/data-cleanup/orphan-records', 'orphan-records'], ['/data-cleanup/links', 'links'],
+    ['/data-cleanup/batch-delete', 'batch-delete'],
+  ] as const;
+  for (const viewport of [DESKTOP, MOBILE]) {
+    it(`维护工具二级页的骨架画在正文那一列里，首张卡与接管后同位同宽（${viewport.name}）`, { timeout: 90_000 }, async () => {
+      const opened = await visit(browser, cleanupTools[0][0], viewport);
+      try {
+        const page = opened.page;
+        const release = await holdApi(page);
+        const frame = (column: string) => page.locator(column).evaluate((node) => {
+          const box = (part: Element) => {
+            const { left, width } = part.getBoundingClientRect();
+            return [Math.round(left), Math.round(width)];
+          };
+          return { column: box(node), card: box(node.firstElementChild!) };
+        });
+        const waiting: Record<string, unknown> = {};
+        for (const [path, key] of cleanupTools) {
+          await page.goto(new URL(path, page.url()).href, { waitUntil: 'load' });
+          await page.locator(`[data-skeleton="cleanup/${key}"] [inert] > *`).first().waitFor({ timeout: 15_000 });
+          waiting[path] = await frame(`[data-skeleton="cleanup/${key}"] [inert]`);
+        }
+        release();
+        // 接管那一拍旧骨架挪进淡出层 `.skelfade`，不再挂在 `[data-skeleton]` 下，两层都要排除。
+        const content = '#stats .max-w-board:not([data-skeleton] *, .skelfade *)';
+        for (const [path] of cleanupTools) {
+          await page.goto(new URL(path, page.url()).href, { waitUntil: 'load' });
+          await page.locator(`${content} > *`).first().waitFor({ timeout: 15_000 });
+          await page.locator('#stats .skelfade').waitFor({ state: 'detached', timeout: 15_000 });
+          await settle(page);
+          assert.deepEqual(await frame(content), waiting[path], `${path} 骨架与内容的正文列或首张卡位置不一致`);
         }
         assert.deepEqual(opened.problems, []);
       } finally { await opened.close() }

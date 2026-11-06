@@ -129,7 +129,7 @@ describe('关注域地址与会话控制', () => {
     const ports = { view: () => current, adoptView: (next: FollowView) => { current = next },
       rememberReturn: (path: string) => { calls.push(path) }, close: () => { calls.push('close') },
       open: vi.fn(), openAuthor: vi.fn(), drawer: vi.fn() };
-    const actions = createFollowDetailActions(ports, { toast: vi.fn(), failure: vi.fn() });
+    const actions = createFollowDetailActions(ports, { toast: vi.fn(), failure: vi.fn(), canFlip: () => false });
     actions.openTag('two'); actions.openTag('one');
     expect(calls).toEqual(['/follow?tag=one%2Ctwo', 'close', '/follow?tag=two', 'close']);
     actions.openItem(17, 2);

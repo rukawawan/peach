@@ -1,5 +1,6 @@
 """异常取证与分享报告只使用临时目录；进程级钩子在子进程里验证。"""
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from peach import error_reporting, support_bundle, scraping_diagnostics
+from support.ledger import fresh_ledger
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -232,7 +234,6 @@ class ErrorReportingTests(unittest.TestCase):
         from peach.routes_configuration import router
         from peach.review_csv import write_rows
         from peach.web_contract import WebContract
-        from support.ledger import fresh_ledger
         config, _evidence = self.scraping_config()
         outside = self.root / 'outside.json'
         outside.write_text(json.dumps({'title': 'private-outside-evidence'}), encoding='utf-8')
@@ -559,6 +560,36 @@ class ErrorReportingTests(unittest.TestCase):
         for private in ('private-cookie', 'private-token', 'private.example', 'movie.mp4'):
             self.assertNotIn(private, exported)
 
+    def test_origin_evidence_and_windows_browsing_reach_the_exported_report(self):
+        """来源检查对不上的形态与系统代理、默认浏览器进 report.json；代理地址不出现。"""
+        from peach import diagnostic_context
+        from peach.settings_file import PeachConfig
+        registry = {'ProxyEnable': 1, 'ProxyServer': '127.0.0.1:7897', 'ProxyOverride': 'localhost;<local>',
+                    'AutoConfigURL': None, 'AutoDetect': 0, 'ProgId': '360SE6.HTML'}
+        with mock.patch.object(diagnostic_context.os, 'name', 'nt'), \
+                mock.patch.object(diagnostic_context, '_registry_values',
+                                  lambda path, names: {name: registry[name] for name in names}):
+            browsing = diagnostic_context.windows_browsing()
+        self.assertEqual(browsing['default_browser'], '360SE6.HTML')
+        self.assertEqual(browsing['system_proxy'], {'enabled': True, 'server_configured': True, 'auto_config': False,
+                                                    'auto_detect': False, 'bypass_local': True, 'bypass_loopback': True})
+        self.assertNotIn('7897', json.dumps(browsing))
+        with mock.patch.object(diagnostic_context, '_registry_values', side_effect=PermissionError), \
+                mock.patch.object(diagnostic_context.os, 'name', 'nt'):
+            self.assertEqual(diagnostic_context.windows_browsing()['system_proxy'],
+                             {'status': 'unavailable', 'reason': 'PermissionError'})
+        error_reporting.local_event('origin-mismatch', guard='setup', accepted=False, origin_class='null',
+                                    origin={}, server={'scheme': 'http', 'host_kind': 'loopback', 'port': 8900},
+                                    fetch_site='absent', user_agent='UnitBrowser/1', unrelated='dropped')
+        payload = support_bundle.bundle_bytes(config=PeachConfig(self.root, self.root / 'config.toml'))
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            report = json.loads(archive.read('report.json'))
+        [row] = report['recent_origin_mismatches']
+        self.assertEqual((row['guard'], row['accepted'], row['origin_class'], row['user_agent']),
+                         ('setup', False, 'null', 'UnitBrowser/1'))
+        self.assertNotIn('unrelated', row)
+        self.assertIn('windows_browsing', report['runtime'])
+
     def test_browser_header_handles_unicode_invalid_encoding_and_unknown_fields(self):
         import base64
         from peach.diagnostic_context import browser_header
@@ -859,7 +890,8 @@ class ErrorReportingTests(unittest.TestCase):
         remote.cookies.set(access.COOKIE, access.issue(empty_policy, 1)[0])
         self.assertEqual(remote.post(path, json={'message': 'anonymous'}).status_code, 401)
         policy = access.save(app.state.settings.access_path, 'valid-private-password')
-        remote.cookies.set(access.COOKIE, access.issue(policy, 1)[0])
+        sessions = access.Sessions(access.sessions_path(app.state.settings.access_path))
+        remote.cookies.set(access.COOKIE, access.issue(policy, 1, sessions)[0])
         self.assertEqual(remote.post(path, json={'message': 'phone failed'}).status_code, 200)
         self.assertEqual(remote.post(path, json={'message': 'phone failed'},
                                      headers={'Origin': 'https://other.example'}).status_code, 403)
@@ -1070,6 +1102,156 @@ class ErrorReportingTests(unittest.TestCase):
                 await asyncio.wait_for(server.wait_closed(), timeout=2)
 
         asyncio.run(run())
+
+    def test_shutdown_rejected_during_connection_cleanup_is_the_same_cleanup(self):
+        """对端先断开时，清理回调里的 `shutdown` 报 WinError 10022（普通 OSError），收尾照常完成。"""
+        from peach import remote_reporting
+        error = OSError(22, 'invalid argument')
+        error.winerror = 10022
+        with mock.patch.object(remote_reporting, 'send') as send:
+            loop = self.asyncio_callback(error, recoverable=True)
+        send.assert_not_called()
+        record = self.records()[-1]
+        self.assertEqual(record['classification'], 'connection-cleanup')
+        self.assertTrue(record['cleanup_recovered'])
+        self.assertIsNone(loop.diagnostic_transport._sock)
+        loop.diagnostic_socket.close.assert_called_once()
+        loop.default_exception_handler.assert_not_called()
+
+    def accept_failure(self, error, **handler_options):
+        """按标准库 `_start_serving` 的形状调处理器：监听套接字仍有效时先报告，随后它会关掉监听。"""
+        import socket
+        from asyncio import trsock
+        from peach import remote_reporting
+        listener = socket.create_server(('127.0.0.1', 0))
+        self.addCleanup(listener.close)
+        loop = mock.Mock()
+        with mock.patch.object(remote_reporting, 'send') as send:
+            error_reporting.asyncio_handler(loop, {'message': 'Accept failed on a socket', 'exception': error,
+                                                   'socket': trsock.TransportSocket(listener)}, **handler_options)
+        return loop, send
+
+    def test_a_client_gone_before_accept_completes_is_recorded_locally_with_the_closed_listener(self):
+        """WinError 64：客户端在 AcceptEx 完成前断开。处理器返回后标准库会关掉监听套接字，记录要写明。"""
+        error = OSError(22, 'The specified network name is no longer available')
+        error.winerror = 64
+        loop, send = self.accept_failure(error)
+        send.assert_not_called()
+        loop.default_exception_handler.assert_not_called()
+        record = self.records()[-1]
+        self.assertEqual(record['stage'], 'unhandled-asyncio')
+        self.assertEqual(record['classification'], 'accept-aborted')
+        self.assertTrue(record['listener_closed'])
+        self.assertEqual(record['exception'][0]['winerror'], 64)
+
+    def test_other_accept_failures_keep_remote_evidence_and_the_default_handler(self):
+        error = OSError(24, 'too many open files')
+        error.winerror = 10024
+        loop, send = self.accept_failure(error)
+        send.assert_called_once()
+        self.assertNotIn('classification', self.records()[-1])
+        loop.default_exception_handler.assert_called_once()
+
+    def test_other_accept_failures_do_not_listen_again_even_with_a_server_to_recover(self):
+        error = OSError(24, 'too many open files')
+        error.winerror = 10024
+        uvicorn_server = mock.Mock()
+        loop, send = self.accept_failure(error, uvicorn_server=uvicorn_server)
+        send.assert_called_once()
+        loop.default_exception_handler.assert_called_once()
+        loop.create_task.assert_not_called()
+
+    def test_an_aborted_accept_on_a_socket_the_server_does_not_own_is_only_recorded(self):
+        error = OSError(22, 'The specified network name is no longer available')
+        error.winerror = 64
+        uvicorn_server = mock.Mock(servers=[])
+        loop, send = self.accept_failure(error, uvicorn_server=uvicorn_server)
+        send.assert_not_called()
+        loop.create_task.assert_not_called()
+        record = self.records()[-1]
+        self.assertTrue(record['listener_closed'])
+        self.assertFalse(record['listener_rearm'])
+
+    def serve_with_accept_abort(self, *, bind_failure=None):
+        """起真 uvicorn，让下一次重新挂 accept 时抛 WinError 64，走标准库 `_start_serving` 原路径。"""
+        import functools
+        import socket
+        import time
+        import uvicorn
+        from peach import remote_reporting
+
+        async def app(scope, receive, send):
+            await send({'type': 'http.response.start', 'status': 204, 'headers': []})
+            await send({'type': 'http.response.body', 'body': b''})
+
+        async def request(port, *, within=0.0):
+            deadline = time.monotonic() + within
+            while True:
+                try:
+                    reader, writer = await asyncio.open_connection('127.0.0.1', port)
+                    break
+                except ConnectionRefusedError:
+                    if time.monotonic() >= deadline:
+                        return None
+                    await asyncio.sleep(0.05)
+            writer.write(b'GET / HTTP/1.1\r\nHost: peach\r\nConnection: close\r\n\r\n')
+            status = int((await asyncio.wait_for(reader.readline(), 5)).split()[1])
+            writer.close()
+            await writer.wait_closed()
+            return status
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=0, lifespan='off', log_config=None))
+            loop.set_exception_handler(functools.partial(error_reporting.asyncio_handler, uvicorn_server=server))
+            serving = asyncio.create_task(server.serve())
+            while not server.started:
+                await asyncio.sleep(0.01)
+            port = server.servers[0].sockets[0].getsockname()[1]
+            accept = loop._proactor.accept
+
+            def abort_once(sock):
+                loop._proactor.accept = accept
+                error = OSError(22, 'The specified network name is no longer available')
+                error.winerror = 64
+                raise error
+
+            loop._proactor.accept = abort_once
+            try:
+                with mock.patch.object(remote_reporting, 'send') as send, \
+                        mock.patch.object(socket, 'create_server', side_effect=bind_failure) \
+                        if bind_failure else contextlib.nullcontext():
+                    first = await request(port)
+                    again = await request(port, within=5)
+                    if bind_failure:
+                        await asyncio.wait_for(serving, 10)
+            finally:
+                server.should_exit = True
+                await asyncio.wait_for(serving, 10)
+            return first, again, server, send
+
+        return asyncio.run(run(), loop_factory=asyncio.ProactorEventLoop)
+
+    @unittest.skipUnless(os.name == 'nt', 'Proactor 事件循环只在 Windows 上')
+    def test_a_listener_closed_by_an_aborted_accept_accepts_connections_again(self):
+        first, again, server, send = self.serve_with_accept_abort()
+        self.assertEqual(first, 204)
+        self.assertEqual(again, 204)
+        self.assertEqual(len(server.servers), 2)
+        send.assert_not_called()
+        record = next(row for row in self.records() if row.get('classification') == 'accept-aborted')
+        self.assertTrue(record['listener_closed'])
+        self.assertTrue(record['listener_rearm'])
+
+    @unittest.skipUnless(os.name == 'nt', 'Proactor 事件循环只在 Windows 上')
+    def test_a_listener_that_cannot_be_bound_again_stops_the_service_and_reports(self):
+        first, again, server, send = self.serve_with_accept_abort(bind_failure=OSError(10048, 'address in use'))
+        self.assertEqual(first, 204)
+        self.assertIsNone(again)
+        self.assertTrue(server.should_exit)
+        send.assert_called_once()
+        record = self.records()[-1]
+        self.assertEqual(record['classification'], 'accept-listener-lost')
 
     def test_asyncio_tls_cleanup_keeps_protocol_class_after_application_detaches(self):
         from peach import remote_reporting

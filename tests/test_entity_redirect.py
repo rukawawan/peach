@@ -18,7 +18,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from PIL import Image, ImageDraw
 
-from peach.entities import merge_entity, resolve_entity_id
+from peach.entities import (memoized_resolution, merge_entity, normalize_entity_name, prefer_entity_name,
+                            resolve_entity, resolve_entity_id, upsert_asset_entity)
 from peach.web_review import _use_canonical_entity_names
 
 from support.ledger import fresh_ledger
@@ -62,6 +63,50 @@ class EntityRedirectTests(unittest.TestCase):
     def redirects(self) -> list[tuple]:
         return self.con.execute(
             "SELECT old_id,target_id FROM entity_redirect ORDER BY old_id").fetchall()
+
+    def test_a_read_request_resolves_each_name_once(self):
+        """只读请求里同一个名字只查一次库；块外照旧每次现查，写路径看得到刚写的实体。"""
+        queries = []
+        self.con.set_trace_callback(queries.append)
+        with memoized_resolution():
+            first = [resolve_entity(self.con, "performer", "橋本ありな")[0] for _ in range(3)]
+        within = len(queries)
+        resolve_entity(self.con, "performer", "橋本ありな")
+        resolve_entity(self.con, "performer", "橋本ありな")
+        self.con.set_trace_callback(None)
+        self.assertEqual(first, [10, 10, 10])
+        self.assertEqual(within, 1)
+        self.assertEqual(len(queries) - within, 2)
+
+    def test_resolution_matches_exactly_and_never_scans_the_name_tables(self):
+        """解析按原文逐字比对：只差大小写的写法认不出，别名同理；两条查询都走索引，不扫整张表。"""
+        add_person(self.con, 20, "Mia")
+        self.con.execute("INSERT INTO entity_alias(entity_id,alias,normalized_alias,source,confidence)"
+                         " VALUES(20,'MIA Nanasawa','mia nanasawa','test',1.0)")
+        queries = []
+        self.con.set_trace_callback(queries.append)
+        found = [resolve_entity(self.con, "performer", name) for name in ("Mia", "mia", "MIA Nanasawa", "mia nanasawa")]
+        self.con.set_trace_callback(None)
+        self.assertEqual([row[0] if row else None for row in found], [20, None, 20, None])
+        plans = [detail for sql in queries for *_, detail in self.con.execute("EXPLAIN QUERY PLAN " + sql)]
+        self.assertFalse([detail for detail in plans if detail.startswith("SCAN")], plans)
+        # 规范名那条只用上 `kind` 前缀时也不算扫表，却仍要把同类实体逐个比对；两个归一列都得用上。
+        for key in ("normalized_name=?", "normalized_alias=?"):
+            self.assertTrue([detail for detail in plans if key in detail], plans)
+
+    def test_entity_writes_keep_the_normalized_name_the_resolver_looks_up(self):
+        """建实体、合并留别名、改用别名作规范名之后，归一列都等于对原文现算的结果，名字都解析得到。"""
+        self.con.row_factory = sqlite3.Row
+        entity_id = upsert_asset_entity(self.con, kind="performer", name=" Yua\u200b Mikami ", asset_id=1,
+                                        role="performer", source="test")
+        first = self.con.execute("SELECT canonical_name FROM entity WHERE id=?", (entity_id,)).fetchone()[0]
+        merge(self.con, 11, entity_id, "新ありな")
+        prefer_entity_name(self.con, entity_id, "新ありな")
+        rows = [*self.con.execute("SELECT canonical_name,normalized_name FROM entity"),
+                *self.con.execute("SELECT alias,normalized_alias FROM entity_alias")]
+        self.assertEqual([(text, key) for text, key in rows if normalize_entity_name(text) != key], [])
+        self.assertEqual(resolve_entity(self.con, "performer", "新ありな")[0], entity_id)
+        self.assertEqual(resolve_entity(self.con, "performer", first)[0], entity_id)
 
     def test_the_merged_id_resolves_to_the_target(self):
         merge(self.con, 11, 10, "新ありな")

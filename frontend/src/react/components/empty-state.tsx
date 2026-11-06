@@ -2,7 +2,10 @@
  *
  * 注册表里没有空态条目。标题是真的标题元素，冒烟用例按它认页面主体：一片白和「画出来了、
  * 只是没有内容」在别的断言下长得一模一样。根上的 `data-empty-state` 是给冒烟与外观用例认的
- * 钩子，不参与样式。标准与紧凑两档共用图标、字体、背景和边框。 */
+ * 钩子，不参与样式。标准与紧凑两档共用图标、字体、背景和边框。
+ *
+ * 空态常替卡片落进网格里（外层常是 `display: contents` 的包裹），所以自己铺满整行、
+ * 跨满所有列，同旧版 `.ui-emptystate`；不然只占一列卡宽，旁边空出一大片。 */
 import type { ComponentType, ReactNode } from 'react';
 import { Button } from '@/components/base/buttons/button';
 
@@ -24,7 +27,7 @@ export function EmptyState(
     size?: keyof typeof SIZE },
 ) {
   return (
-    <div data-empty-state="" data-empty-size={size} className={`flex min-w-0 max-w-full flex-col items-center justify-center gap-2 rounded-floating border border-separator-border bg-background-secondary-default text-center ${SIZE[size]}`}>
+    <div data-empty-state="" data-empty-size={size} className={`col-span-full flex w-full min-w-0 max-w-full flex-col items-center justify-center gap-2 rounded-floating border border-separator-border bg-background-secondary-default text-center ${SIZE[size]}`}>
       <span aria-hidden className="mb-2 flex size-empty-glyph shrink-0 items-center justify-center rounded-floating border border-text-primary/15 p-2.5 text-text-secondary">
         <Icon aria-hidden className="size-8 shrink-0" />
       </span>

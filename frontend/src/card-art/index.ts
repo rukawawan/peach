@@ -17,5 +17,7 @@ export {
   avatarFrame, coverAnchor, coverFace, coverRatio, fitNativeImage, frameCachedImages, installCardArt,
   posterPanel, refitNativeImages, relayoutCovers, settleImage, upgradeCover, watchPendingImages,
 } from './framing';
+export { COVER_STATE_TITLE, coverFetchingHtml, coverStateAction, coverStateHtml } from './cover-state';
+export type { CoverState, CoverStateItem } from './cover-state';
 export { configureHoverPreview, releaseHover, releaseHoverPreviews, setHoverState, wireHover } from './hover';
 export type { HoverItem, HoverPreviewConfig } from './hover';

@@ -80,10 +80,10 @@ describe('孤儿记录数据表', () => {
       await pagination.scrollIntoViewIfNeeded();
       await page.screenshot({ path: `../build/table-evidence/orphan-selected-${viewport.name}.png` });
       await section.getByRole('button', { name: '删除所选记录（2）', exact: true }).click();
-      await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+      await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
       await table.locator('thead label:has(input[type="checkbox"])').click();
       await section.getByRole('button', { name: '删除所选记录（23）', exact: true }).click();
-      const dialog = page.getByRole('dialog');
+      const dialog = page.getByRole('alertdialog');
       const list = dialog.getByRole('list', { name: '所选记录', exact: true });
       await list.waitFor();
       assert.equal(await list.locator(':scope > li').count(), items.length);

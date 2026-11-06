@@ -69,6 +69,16 @@
   outline: 2px solid var(--tungsten);
   outline-offset: 2px;
 }
+/* JAV「新作」分区里这两排是筛选：选中的那一枚铺标签条同一档选中底，厂牌后面带部数。 */
+.peach-react :is([data-tier-performer], [data-tier-studio])[aria-pressed="true"] {
+  background: var(--picked);
+  color: var(--color-text-primary);
+}
+.peach-react [data-tier-studio] [data-count-badge] {
+  color: var(--color-text-tertiary);
+  font: var(--board-caption);
+  font-variant-numeric: tabular-nums;
+}
 
 .peach-react [data-tier-performer] {
   display: flex;

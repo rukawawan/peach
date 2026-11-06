@@ -208,11 +208,14 @@ video.video-js{vertical-align:top;font-size:10px;line-height:1;font-family:Arial
   display:flex;flex-direction:column;align-items:center;pointer-events:none;color:#fff}
 .vjs-peach-seek-preview[hidden]{display:none}
 /* 取景框自己裁，图在里面挪。时间轴预览取回来的是一张 10×10 的接触印相，要看的那一格
-   靠把图放大十倍再往左上推整格数得到；边框和圆角画在框上，图挪动时不跟着走。 */
-.vjs-peach-seek-frame{position:relative;width:240px;aspect-ratio:16/9;display:block;overflow:hidden;
+   靠把图放大十倍再往左上推整格数得到；边框和圆角画在框上，图挪动时不跟着走。
+   框按片源比例（`--seek-aspect`）取景，宽、高各有上限：横片顶到宽，竖片顶到高，竖片不会长成一整列。 */
+.vjs-peach-seek-frame{--seek-max-w:240px;--seek-max-h:180px;position:relative;
+  width:min(var(--seek-max-w),calc(var(--seek-max-h) * var(--seek-aspect,1.7778)));aspect-ratio:var(--seek-aspect,16/9);display:block;overflow:hidden;
   border:2px solid #fff;border-radius:var(--floating-radius);background:#000;box-shadow:0 8px 24px #0009}
 .vjs-peach-seek-frame[hidden]{display:none}
-.vjs-peach-seek-preview img{position:absolute;left:0;top:0;width:100%;height:100%;display:block;object-fit:cover}
+/* 拼图要放大到 10 倍再挪格子，预检的 `img{max-width:100%}` 会把它压回一格宽：两个上限都解开。 */
+.vjs-peach-seek-preview img{position:absolute;left:0;top:0;width:100%;height:100%;max-width:none;max-height:none;display:block;object-fit:cover}
 .vjs-peach-seek-preview span{min-width:58px;margin-top:8px;padding:6px 10px;border-radius:var(--pill-radius);
   background:rgba(0,0,0,.68);font-size:var(--fs-sm);font-weight:600;line-height:1;text-align:center;box-shadow:0 2px 8px #0006}
 [data-stage-media] .video-js .vjs-custom-control-spacer{display:block;flex:1 1 auto}
@@ -355,7 +358,7 @@ video.video-js{vertical-align:top;font-size:10px;line-height:1;font-family:Arial
   [data-stage-media] .video-js.vjs-layout-small .vjs-current-time,[data-stage-media] .video-js.vjs-layout-small .vjs-duration,
   [data-stage-media] .video-js.vjs-layout-small .vjs-time-divider{display:flex}
   [data-stage-media] .video-js .vjs-time-control{font-size:var(--fs-xs)}
-  .vjs-peach-seek-frame{width:160px}
+  .vjs-peach-seek-frame{--seek-max-w:160px;--seek-max-h:120px}
   .vjs-peach-settings-menu{right:-100px;width:min(274px,calc(100vw - 16px));border-radius:var(--floating-radius)}
 }
 /* 窄屏梯度照搬 YouTube delhi-modern：base.js 9470c977 里 `v.width<528` 打开 ytp-xsmall-width-mode，

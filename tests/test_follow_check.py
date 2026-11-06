@@ -322,6 +322,44 @@ class PlanCheckTests(_CheckCase):
                          frozenset())
 
 
+class ScheduledCheckTests(_CheckCase):
+    """定时检查按来源活跃度放慢；手动检查照旧全查（ADR-0134）。"""
+
+    def _checked_with_latest(self, ref, age):
+        source_id = self._register(ref=ref, url=f"https://{ref}.fanbox.cc/")
+        published = (MOMENT - age).isoformat().replace("+00:00", "Z")
+        self.store.record(source_id, _fetch(ref=ref, candidates=(
+            FollowCandidate(provider="fanbox", external_id=ref, title=ref,
+                            published_at=published),)), moment=MOMENT)
+        return source_id
+
+    def _due(self, after):
+        return {row["id"] for row in plan_check(self.store, _Credentials(),
+                                                scheduled=timedelta(hours=1),
+                                                moment=MOMENT + after)}
+
+    def test_sources_that_stopped_updating_are_checked_less_often(self):
+        active = self._checked_with_latest("active", timedelta(days=2))
+        monthly = self._checked_with_latest("monthly", timedelta(days=20))
+        quarterly = self._checked_with_latest("quarterly", timedelta(days=60))
+        dormant = self._checked_with_latest("dormant", timedelta(days=200))
+        empty = self._register(ref="empty", url="https://empty.fanbox.cc/")
+        self.store.record(empty, _fetch(ref="empty"), moment=MOMENT)
+        never = self._register(ref="never", url="https://never.fanbox.cc/")
+        self.assertEqual(self._due(timedelta(hours=1)), {active, never})
+        self.assertEqual(self._due(timedelta(hours=3)), {active, monthly, never})
+        self.assertEqual(self._due(timedelta(hours=12)), {active, monthly, quarterly, never})
+        self.assertEqual(self._due(timedelta(hours=24)),
+                         {active, monthly, quarterly, dormant, empty, never})
+        self.assertEqual(len(plan_check(self.store, _Credentials())), 6)
+
+    def test_a_tick_that_lands_just_before_the_interval_still_checks(self):
+        """调度一跳一个间隔，上次检查总比这一跳晚一点；判据放宽半个间隔，不让它多等一跳。"""
+        active = self._checked_with_latest("active", timedelta(days=2))
+        self.assertEqual(self._due(timedelta(minutes=58)), {active})
+        self.assertEqual(self._due(timedelta(minutes=20)), set())
+
+
 class RunCheckTests(_CheckCase):
     def test_a_normal_check_reads_the_first_page_with_the_stored_cursors(self):
         source_id = self._register()
@@ -388,8 +426,9 @@ class RunCheckTests(_CheckCase):
         self.assertEqual(self._row(first)["last_status"], "error")
         connector = _Connector(_fetch(ref="another"))
         skipped = self._run(second, connector, cooldown=cooldown)
-        self.assertFalse(skipped.ok)
-        self.assertIn("冷却", skipped.error)
+        self.assertTrue(skipped.ok)
+        self.assertEqual(skipped.status, "skipped")
+        self.assertIn("冷却", skipped.message)
         self.assertEqual(connector.calls, [])
         self.assertIsNone(self._row(second)["last_status"])
         clock[0] += 121

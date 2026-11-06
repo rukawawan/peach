@@ -88,6 +88,13 @@
   animation:clear-dissolve var(--motion-reveal) forwards}
 .cleardissolve>[data-dissolve-value]{display:block;min-width:max-content;will-change:transform}
 
+/* ── 占位字换一句 ──
+   同一层摆法（`rollPlaceholder`），里面那行走「一行字换一行字」（`.textswap`），颜色由脚本照
+   占位字取。换的这段时间框里自己的占位字收起，见 `web/css/25-motion.css`。 */
+.placeholderroll{position:absolute;z-index:2;display:flex;align-items:center;overflow:hidden;
+  white-space:nowrap;pointer-events:none}
+.placeholderroll>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+
 /* ── 计数徽标弹出来 ──
    从零长到原大小，同时从模糊里清晰起来。整枚一起弹，不按位拆：这一枚说的是「这里有
    几条」，读的是有没有变多，不是变成了哪几个数字——按位拆是读数那一条的事。

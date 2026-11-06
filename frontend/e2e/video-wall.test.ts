@@ -52,10 +52,12 @@ describe('播放墙的浏览与详情', () => {
       const geometry = await notice.evaluate(node => {
         const box = node.getBoundingClientRect(), back = document.querySelector('[data-wall-back]')!.getBoundingClientRect();
         const text = node.querySelector('p')!.getBoundingClientRect(), action = node.querySelector('button')!.getBoundingClientRect();
-        return { left:box.left, right:box.right, backRight:back.right, width:innerWidth,
+        return { left:box.left, right:box.right, top:box.top, backRight:back.right, backBottom:back.bottom, width:innerWidth,
           overlap:action.left < text.right && action.right > text.left && action.top < text.bottom && action.bottom > text.top };
       });
-      assert(geometry.left >= geometry.backRight + 8 && geometry.right <= geometry.width, JSON.stringify(geometry));
+      // 提示条和左上角圆键同排时排在后面，窄屏放不下时换到下一行，都不压住返回键。
+      const clear = geometry.left >= geometry.backRight + 8 || geometry.top >= geometry.backBottom + 8;
+      assert(clear && geometry.right <= geometry.width, JSON.stringify(geometry));
       assert.equal(geometry.overlap, false);
       await notice.getByRole('button', { name:'清除筛选', exact:true }).click();
       await notice.waitFor({ state:'detached' });
@@ -211,10 +213,18 @@ describe('播放墙的浏览与详情', () => {
     const itemsGate = new Promise<void>(resolve => { releaseItems = resolve });
     try {
       await context.addInitScript(() => {
-        const boot = { home:0 }; (window as unknown as { wallBoot:typeof boot }).wallBoot = boot;
+        const boot = { home:0, shown:0 }; (window as unknown as { wallBoot:typeof boot }).wallBoot = boot;
         new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => {
           if (node instanceof Element) boot.home += Number(node.matches('.catalog-skeleton')) + node.querySelectorAll('.catalog-skeleton').length;
         }))).observe(document, { childList:true,subtree:true });
+        // 逐帧查首页残留是否露面：首页标题，以及自己写了 `visibility:visible` 的图片等待态微光。
+        const frame = () => {
+          const heading = document.querySelector<HTMLElement>('#catalogPageHeading');
+          if (heading && !heading.hidden && getComputedStyle(heading).visibility === 'visible') boot.shown++;
+          boot.shown += [...document.querySelectorAll('.imgwait')].filter(node => getComputedStyle(node, '::after').visibility === 'visible').length;
+          if (!document.querySelector('[data-wall-empty]')) requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
       });
       await page.route('**/dist/peach-app.js', async route => { await moduleGate; await route.continue() });
       await page.route(url => url.pathname === '/api/items', async route => {
@@ -227,7 +237,7 @@ describe('播放墙的浏览与详情', () => {
       releaseModule(); await page.locator('[data-wall-skeleton]').first().waitFor();
       assert.equal(await page.locator('header.top').isVisible(), false);
       releaseItems(); await page.locator('[data-wall-empty]').waitFor();
-      assert.equal(await page.evaluate(() => (window as unknown as { wallBoot:{ home:number } }).wallBoot.home), 0);
+      assert.deepEqual(await page.evaluate(() => (window as unknown as { wallBoot:{ home:number; shown:number } }).wallBoot), { home:0, shown:0 });
       await page.getByRole('button', { name:'退出播放墙' }).click();
       await page.locator('header.top').waitFor({ state:'visible' });
       assert.equal(await page.locator('html').getAttribute('data-wall-entry'), null);
@@ -251,8 +261,7 @@ describe('播放墙的浏览与详情', () => {
       assert.equal(await img.evaluate(node => getComputedStyle(node.closest('[data-media-pic]')!).clipPath), 'inset(0px)');
       const wide = await page.locator('[data-wall-id="1"] img').evaluate(node => ({ whole:node.classList.contains('whole'), fit:getComputedStyle(node).objectFit }));
       assert.deepEqual(wide, { whole:true, fit:'cover' });
-      await page.getByRole('button', { name:'播放墙工具', exact:true }).click();
-      await page.getByText('缩略图', { exact:true }).click();
+      await page.getByRole('button', { name:'显示视频缩略图', exact:true }).click();
       assert.equal(await page.locator('[data-wall-id="11"]').count(), 0);
       assert.deepEqual(opened.problems, []);
     } finally { await opened.close() }
@@ -367,11 +376,24 @@ describe('播放墙的浏览与详情', () => {
         await page.mouse.up();
         assert.notDeepEqual(await camera(page), initial);
         assert.equal(await page.locator('[data-wall-focus]').count(), 0, '拖动不展开作品');
-        await region.focus(); await page.keyboard.press('ArrowRight');
-        await page.getByRole('button', { name: '播放墙工具', exact: true }).click();
-        await page.getByRole('button', { name: '回到起点', exact: true }).click();
-        await page.getByText('缩略图', { exact: true }).click();
-        await page.getByText('封面', { exact: true }).click();
+        const anchor = { x: box.x + box.width * .6, y: box.y + box.height * .4 };
+        const under = () => region.evaluate((node, point) => {
+          const view = (node as HTMLElement).dataset, scale = Number(view.cameraScale);
+          return { scale, x: (point.x - Number(view.cameraX)) / scale, y: (point.y - Number(view.cameraY)) / scale };
+        }, { x: anchor.x - box.x, y: anchor.y - box.y });
+        const before = await under();
+        await page.mouse.move(anchor.x, anchor.y); await page.mouse.wheel(0, -300);
+        // 缓动走完、世界层摘掉 `will-change` 才算停稳。
+        await page.waitForFunction(() => Number(document.querySelector<HTMLElement>('[data-wall-viewport]')!.dataset.cameraScale) > 1
+          && !document.querySelector<HTMLElement>('[data-wall-world]')!.style.willChange);
+        const zoomed = await under();
+        assert.ok(zoomed.scale > before.scale, '向上滚轮放大');
+        assert.ok(Math.abs(zoomed.x - before.x) < 1 && Math.abs(zoomed.y - before.y) < 1, '指针下的位置缩放前后不动');
+        await region.focus(); await page.keyboard.press('ArrowRight'); await page.keyboard.press('0');
+        assert.equal(await region.evaluate(node => (node as HTMLElement).dataset.cameraScale), '1');
+        const toggle = page.getByRole('button', { name: '显示视频缩略图', exact: true });
+        await toggle.click(); assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+        await toggle.click(); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
         await pick(page);
         const visuals = await page.locator('[data-video-wall]').evaluate(root => {
           const tile = root.querySelector('[data-wall-tile]')!;
@@ -419,7 +441,14 @@ describe('播放墙的浏览与详情', () => {
       await enter(page);
       const ids = await page.locator('[data-wall-id]').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.wallId));
       assert.equal(new Set(ids).size, ids.length);
-      await page.getByRole('button', { name:'播放墙工具', exact:true }).click();
+      const wallUrl = page.url();
+      await page.getByRole('button', { name:'打开搜索', exact:true }).click();
+      await page.getByRole('button', { name:'搜索', exact:true }).click();
+      assert.equal(page.url(), wallUrl, '关键词没变时再点放大镜只收起，不重进墙面');
+      assert.equal(await page.locator('[data-wall-search][data-open]').count(), 0);
+      assert.ok(await page.locator('[data-wall-tile]').count() > 0);
+      await page.getByRole('button', { name:'打开搜索', exact:true }).click();
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '搜索播放墙', '展开后直接可输入');
       const searched = page.waitForRequest(request => {
         const url = new URL(request.url());
         return url.pathname === '/api/items' && url.searchParams.get('q') === '新的关键词';
@@ -450,12 +479,12 @@ describe('播放墙的浏览与详情', () => {
           location: 'local', is_jav: false, has_cover: true, cover_key: 'NON-JAV', has_thumb: true }], total: params.has('orient') ? 0 : 1 } });
       });
       await page.reload(); await page.locator('[data-media-card]').first().waitFor(); await enter(page);
-      await page.getByRole('button', { name: '播放墙工具', exact: true }).click();
+      const toggle = page.getByRole('button', { name: '显示视频缩略图', exact: true });
       const source = () => page.locator('[data-wall-tile] img').first().getAttribute('src');
       assert.match((await source())!, /\/cover\?/);
-      await page.getByText('缩略图', { exact: true }).click();
+      await toggle.click();
       assert.match((await source())!, /\/poster\?/);
-      await page.getByText('封面', { exact: true }).click();
+      await toggle.click();
       assert.match((await source())!, /\/cover\?/);
     } finally { await opened.close() }
   });
@@ -559,7 +588,7 @@ describe('播放墙的浏览与详情', () => {
       assert.equal(await page.locator('[data-wall-tile]').count(), 0);
       assert.equal(await page.getByRole('button', { name:'退出播放墙' }).isVisible(), true);
       assert.equal(await page.getByRole('button', { name:'清除筛选', exact:true }).isVisible(), true);
-      await page.getByRole('button', { name:'播放墙工具', exact:true }).click();
+      await page.getByRole('button', { name:'打开搜索', exact:true }).click();
       await page.getByRole('searchbox', { name:'搜索播放墙' }).fill('');
       await page.getByRole('searchbox', { name:'搜索播放墙' }).press('Enter');
       await page.locator('[data-wall-tile]').first().waitFor();

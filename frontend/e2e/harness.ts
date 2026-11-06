@@ -194,15 +194,44 @@ export async function visit(browser: Browser, path: string, viewport: Viewport,
       problems.push(`failed ${request.url().slice(origin.length)} ${reason}`);
     }
   });
+  /* 桩回调里的 `route.fetch`、`route.continue` 可能在关上下文时还没返回，之后会以
+   * 「Request context disposed」失败；没人等它，就成了整个文件的 unhandledRejection。
+   * `ignoreErrors` 先撤掉全部桩，让还在路上的那几趟失败时静默返回。 */
+  const close = async () => {
+    if (!page.isClosed()) await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await context.close();
+  };
   // 只打开到 load：等哪块主体、何时 settle 由用例决定，见 `settle` 的说明。
   try {
     await prepare?.(page);
     await page.goto(origin + path, { waitUntil: 'load' });
   } catch (error) {
-    await context.close();
+    await close();
     throw error;
   }
-  return { page, problems, close: () => context.close() };
+  return { page, problems, close };
+}
+
+/** 时间轴预览的桩：`/api/timeline` 回固定间隔的自有接触印相，`/timeline` 回合成的 10×10 拼图，
+ *  每格写「页-格」序号，截图里看得出取的是哪一格。返回每页被请求的次数。 */
+export async function stubTimelineSheets(page: Page, { frames, interval }: { frames: number; interval: number }) {
+  const requested = new Map<number, number>();
+  await page.route((url) => url.pathname === '/api/timeline', (route) => route.fulfill({
+    json: { source: 'peach', frames, interval, sheets: Math.ceil(frames / 100), columns: 10, rows: 10, frame_width: 160 },
+  }));
+  await page.route((url) => url.pathname === '/timeline', (route) => {
+    const sheet = Number(new URL(route.request().url()).searchParams.get('s'));
+    requested.set(sheet, (requested.get(sheet) ?? 0) + 1);
+    const count = Math.min(100, frames - sheet * 100), rows = Math.ceil(count / 10);
+    const cells = Array.from({ length: count }, (_, slot) => {
+      const x = slot % 10 * 160, y = Math.floor(slot / 10) * 90;
+      return `<rect x="${x}" y="${y}" width="160" height="90" fill="hsl(${(sheet * 100 + slot) * 7 % 360} 40% 35%)"/>`
+        + `<text x="${x + 80}" y="${y + 58}" font-size="36" font-family="sans-serif" fill="#fff" text-anchor="middle">${sheet}-${slot}</text>`;
+    }).join('');
+    return route.fulfill({ contentType: 'image/svg+xml',
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="${rows * 90}">${cells}</svg>` });
+  });
+  return requested;
 }
 
 /* 越界名单只报根因：页面一旦被撑宽，移动视口跟着变宽，`fixed` 的顶栏、Toast 会一起

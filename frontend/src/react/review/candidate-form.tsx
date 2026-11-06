@@ -15,6 +15,7 @@ import { errorMessage } from '../../api';
 import type { ReviewCandidate, ReviewRow } from './review';
 import { pendingGenres, recordGenre, reloadReview } from './review';
 import { ComparisonText } from './comparison-text';
+import { composingKey } from '../components/ime';
 
 /** 候选顺带交回来的那些字段在界面上叫什么。表里没有的按原名显示。 */
 const EVIDENCE_LABELS: Record<string, string> = {
@@ -168,7 +169,7 @@ function GenreRow(
         <InputBase size="small" list={tags.length ? GENRE_TAGS_ID : undefined}
           autoComplete="off" placeholder="中文标签"
           onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+            if (event.key !== 'Enter' || composingKey(event.nativeEvent)) return;
             event.preventDefault();
             accept();
           }} />

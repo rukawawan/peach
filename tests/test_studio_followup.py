@@ -1,4 +1,4 @@
-"""补厂牌官网与标识后继：证据确定的直接落，不确定的不写，写下的能整批撤回（ADR-0052）。
+"""厂牌官网与标识补全后继：证据确定的直接落，不确定的不写，写下的能整批撤回（ADR-0052）。
 
 全程临时账本、临时标识目录；试地址与取图都桩掉，不联网。
 """
@@ -170,6 +170,73 @@ class PlanTests(StudioFollowupCase):
             planned = [item.key for item in
                        studio_followup.stock(connection, self.logos, attempts, limit=10)]
         self.assertEqual(planned, [studio_followup.followup_key(studio)])
+
+    def test_stock_tries_again_a_day_after_no_candidate_answered(self):
+        """候选官网全连不上（断网）只挡一天；回了 HTTP 状态的未取得照旧等实体变。"""
+        import time
+
+        from peach.followups import Attempts, attempts_root
+
+        studio = self.entity("studio", "OLDLABEL")
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute("INSERT INTO asset(id,location,path,name,medium,code,size)"
+                               " VALUES(1,'R:','R:\\media\\a.mp4','a.mp4','video','OLD-1',1)")
+            connection.execute("INSERT INTO asset_entity(asset_id,entity_id,role,source)"
+                               " VALUES(1,?,'studio','test')", (studio,))
+        key = studio_followup.followup_key(studio)
+
+        def planned(after: float) -> list[str]:
+            attempts = Attempts(attempts_root(self.contract.candidate_root),
+                                clock=lambda: time.time() + after)
+            with self.database.read_connection() as connection:
+                return [item.key for item in
+                        studio_followup.stock(connection, self.logos, attempts, limit=10)]
+
+        unreached = {**site_row("未取得"), "status": "", "note": "取不到：ConnectError"}
+        with mock.patch.object(studio_followup.studio_sites, "discover",
+                               return_value=(unreached, 0.0)):
+            self.run_followup(studio)
+        self.assertEqual(planned(0), [])
+        self.assertEqual(planned(studio_followup.RETRY_UNREACHED + 60), [key])
+
+        answered = {**site_row("未取得"), "status": 404, "note": "HTTP 404"}
+        with mock.patch.object(studio_followup.studio_sites, "discover",
+                               return_value=(answered, 0.0)):
+            self.run_followup(studio)
+        self.assertEqual(planned(studio_followup.RETRY_UNREACHED + 60), [])
+
+    def test_an_old_miss_without_a_deadline_is_released_once(self):
+        """带期限之前记下的「官网未取得」分不清是不是断网，放一次重试；其余记录不动。"""
+        import json
+
+        from peach.followups import Attempts, attempts_root
+
+        studio = self.entity("studio", "OLDLABEL")
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute("INSERT INTO asset(id,location,path,name,medium,code,size)"
+                               " VALUES(1,'R:','R:\\media\\a.mp4','a.mp4','video','OLD-1',1)")
+            connection.execute("INSERT INTO asset_entity(asset_id,entity_id,role,source)"
+                               " VALUES(1,?,'studio','test')", (studio,))
+        root = attempts_root(self.contract.candidate_root)
+        attempts = Attempts(root)
+        key = studio_followup.followup_key(studio)
+        with self.database.read_connection() as connection:
+            attempts.record(key, studio_followup.fingerprint(connection, studio), "官网未取得")
+        attempts.record("studio-mark:999", "fp", "官网待人确认")
+        attempts.record("studio-mark:998", "fp", "官网未取得", retry_after=studio_followup.RETRY_UNREACHED)
+        attempts.record("performer-profile:1", "fp", "官网未取得")
+
+        def planned() -> list[str]:
+            with self.database.read_connection() as connection:
+                return [item.key for item in studio_followup.stock(connection, self.logos, attempts, limit=10)]
+
+        self.assertEqual(planned(), [])
+        self.assertEqual(studio_followup.release_unbounded_misses(root), 1)
+        self.assertEqual(planned(), [key])
+        self.assertEqual(studio_followup.release_unbounded_misses(root), 0)
+        untouched = {name: json.loads((root / f"{name}.json").read_text(encoding="utf-8"))
+                     for name in ("studio-mark-999", "performer-profile-1")}
+        self.assertTrue(all("retry_until" not in record for record in untouched.values()))
 
     def test_stock_studios_are_not_crowded_out_by_avatarless_performers(self):
         """没头像的女优再多，存量厂牌也有自己那一份名额。"""

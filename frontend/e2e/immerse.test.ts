@@ -8,7 +8,7 @@ import { after, before, describe, it } from 'node:test';
 
 import type { Browser, Page } from 'playwright-core';
 
-import { launch, visit, VIEWPORTS } from './harness.ts';
+import { launch, stubTimelineSheets, visit, VIEWPORTS } from './harness.ts';
 import { currentVideo, muteVideos, openImmerse, pickClips, pinQueue, settledClip } from './immerse-fixture.ts';
 
 const DESKTOP = VIEWPORTS.find((viewport) => !viewport.mobile)!;
@@ -218,6 +218,82 @@ describe('沉浸模式', () => {
       const seeked = await media();
       assert.ok(Math.abs(seeked.time - Math.min(seeked.duration, scrubbed.time + 10)) < 0.5, JSON.stringify({ scrubbed, seeked }));
       assert.equal(seeked.paused, true, '双击与随后合成的 click 都不该切播放');
+      assert.deepEqual(opened.problems, [], JSON.stringify(opened.problems));
+    } finally {
+      await opened.close();
+    }
+  });
+
+  /** 进度条上方那块预览：显没显、相对视口的左右余量、报的时间、取的哪一格。 */
+  const seekPreview = (page: Page) => page.evaluate(() => {
+    const preview = document.querySelector<HTMLElement>('[data-immerse-bar] [data-player-seek-preview]');
+    if (!preview) return null;
+    const box = preview.getBoundingClientRect(), image = preview.querySelector('img');
+    return { hidden: preview.hidden, left: box.left, right: innerWidth - box.right, bottom: innerHeight - box.bottom,
+      time: preview.querySelector('span')!.textContent, src: image?.getAttribute('src') ?? '',
+      cell: image ? [image.style.left, image.style.top] : [] };
+  });
+
+  it('进度条画面预览：桌面悬停按时刻取格、两端整块留在视口里，离开收起；拼图只取一次', async () => {
+    const opened = await visit(browser, '/', DESKTOP);
+    const { page } = opened;
+    try {
+      const { wide } = await pickClips(page);
+      await pinQueue(page, [wide]);
+      await muteVideos(page);
+      // 演示短片 2 秒：0.1 秒一帧共 20 帧，一张拼图。
+      const requested = await stubTimelineSheets(page, { frames: 20, interval: .1 });
+      await openImmerse(page, wide.id);
+      await page.evaluate((selector) => document.querySelector<HTMLVideoElement>(selector)!.pause(), currentVideo);
+      const y = DESKTOP.height - 4, ratio = .65;
+      await page.mouse.move(DESKTOP.width * ratio, y);
+      await page.waitForFunction(() => document.querySelector<HTMLImageElement>('[data-immerse-bar] [data-player-seek-preview] img')?.complete);
+      const middle = await seekPreview(page);
+      assert.equal(middle?.hidden, false, JSON.stringify(middle));
+      assert.equal(middle.src, `/timeline?id=${wide.id}&s=0&source=peach`);
+      const duration = await page.evaluate((selector) => document.querySelector<HTMLVideoElement>(selector)!.duration, currentVideo);
+      const frame = Math.min(19, Math.floor(duration * ratio / .1));
+      assert.deepEqual(middle.cell, [`${-(frame % 10) * 100}%`, `${-Math.floor(frame / 10) * 100}%`], `第 ${frame} 帧`);
+      assert.ok(middle.bottom > 9, `预览要压在悬停加粗到 9px 的进度条上方：${middle.bottom}`);
+      assert.equal(await page.locator('[data-immerse-ui]').evaluate((node) => getComputedStyle(node).visibility), 'hidden',
+        '预览出来时作者与标题要让开');
+      for (const x of [1, DESKTOP.width - 1]) {
+        await page.mouse.move(x, y);
+        const edge = (await seekPreview(page))!;
+        assert.ok(edge.left >= 11.5 && edge.right >= 11.5, `两端要各让出 12px：${JSON.stringify(edge)}`);
+      }
+      await page.mouse.move(DESKTOP.width / 2, DESKTOP.height / 2);
+      assert.equal((await seekPreview(page))?.hidden, true, '离开进度条预览没收起');
+      assert.deepEqual([...requested.entries()], [[0, 1]]);
+      assert.deepEqual(opened.problems, [], JSON.stringify(opened.problems));
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('手机 390 宽：没有时间轴图时横划拖动照样出预览、抬手收起，不去取拼图', async () => {
+    const opened = await visit(browser, '/', MOBILE);
+    const { page } = opened;
+    try {
+      const { tall } = await pickClips(page);
+      await pinQueue(page, [tall]);
+      await muteVideos(page);
+      const sheets: string[] = [];
+      page.on('request', (request) => { if (new URL(request.url()).pathname === '/timeline') sheets.push(request.url()) });
+      await openImmerse(page, tall.id);
+      await page.evaluate((selector) => document.querySelector<HTMLVideoElement>(selector)!.pause(), currentVideo);
+      const cdp = await page.context().newCDPSession(page);
+      const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x = 0, y = 0) =>
+        cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+      await touch('touchStart', 100, 400);
+      for (let step = 1; step <= 8; step += 1) await touch('touchMove', 100 + MOBILE.width / 2 * step / 8, 402);
+      const dragging = (await seekPreview(page))!;
+      assert.equal(dragging.hidden, false, '横划拖动时预览没出来');
+      assert.match(dragging.time, /^0:0[0-2]$/);
+      assert.ok(dragging.left >= 11.5 && dragging.right >= 11.5, JSON.stringify(dragging));
+      await touch('touchEnd');
+      assert.equal((await seekPreview(page))?.hidden, true, '抬手预览没收起');
+      assert.deepEqual(sheets, []);
       assert.deepEqual(opened.problems, [], JSON.stringify(opened.problems));
     } finally {
       await opened.close();

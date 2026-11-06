@@ -48,6 +48,43 @@ describe('扫描与采集控制', () => {
       assert.ok((await layout(page)).scrollWidth <= viewport.width);
     } finally { await opened.close() }
   });
+  it('手机：任务卡、下角小窗与回执装不下时先收起任务明细，点展开仍照办', async () => {
+    const viewport = VIEWPORTS.find(entry => entry.mobile)!;
+    const state = { status: 'failed', job_id: 'crowded-preview', checked: 3, total: 9, completed_at: Date.now() / 1000,
+      error: '115 挂载读取超时，3 个文件未完成扫描',
+      steps: [{ id: 'scan', label: '扫描文件', status: 'complete' }, { id: 'metadata', label: '采集影片资料', status: 'current' },
+        { id: 'preview', label: '生成预览与封面', status: 'pending' }] };
+    // 小窗挂在舞台里：进一次详情，那块节点才在。
+    const opened = await visit(browser, `/assets/${itemId}`, viewport, async page => {
+      await page.route('**/api/library-processing{,?*}', route => route.fulfill({ json: state }));
+    });
+    const { page } = opened;
+    try {
+      const dock = page.locator('#toasts [data-processing-dock]');
+      const toggle = dock.locator('[data-processing-toggle]');
+      await dock.waitFor();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      // 没在播的小窗没有画面撑高度，这里按真实小窗在手机上的高度定死，让三层确实装不下。
+      await page.locator('#miniplayer').evaluate(node => {
+        (node as HTMLElement).style.height = '460px'; (node as HTMLElement).hidden = false;
+      });
+      await page.evaluate(async () => {
+        const entry = '/dist/peach-app.js';
+        const ui = await import(entry);
+        ui.showToast(document.getElementById('toasts'), { success: '<svg/>', error: '<svg/>' },
+          'crowded-preview', { html: '检查失败：来源暂时无法连接，请稍后重试。', alert: true, timeout: Infinity, action: null });
+      });
+      await page.waitForFunction(() => document.querySelector('[data-processing-toggle]')?.getAttribute('aria-expanded') === 'false');
+      await settle(page, '#toasts [data-processing-dock]');
+      const boxes = await page.evaluate(() => [...document.querySelectorAll('#toasts [data-sonner-toast], #miniplayer')]
+        .map(node => node.getBoundingClientRect().toJSON()));
+      for (const box of boxes) assert.ok(box.top >= 0 && box.bottom <= viewport.height, JSON.stringify(boxes));
+      // 明细只是腾空间时暂收，不写进会话里的收起记录。
+      assert.equal(await page.evaluate(() => sessionStorage.getItem('peach.library-processing.collapsed')), null);
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    } finally { await opened.close() }
+  });
   for (const viewport of VIEWPORTS) {
     it(`${viewport.name}：隐藏、刷新、恢复与新任务的浮窗`, async () => {
       let state = { status: 'running', job_id: 'visibility-first', checked: 2, total: 10 };
@@ -253,9 +290,28 @@ describe('扫描与采集控制', () => {
         await resume.waitFor();
         assert.equal(await resume.innerText(), '');
         assert.equal(await resume.locator('svg').count(), 1);
-        assert.equal(await card.getByRole('button', { name: '同步新增文件', exact: true }).getAttribute('aria-disabled'), 'true');
+        const occupied = card.getByRole('button', { name: '同步新增文件', exact: true });
+        assert.equal(await occupied.getAttribute('aria-disabled'), 'true');
+        // 任务没结束时点同步不发请求，但要说清为什么没开始。Playwright 把 aria-disabled 当成不可点，按键又常落在
+        // 视口外或进度浮窗底下，直接在键上派发点击：它照样经过共享忙碌拦截的捕获阶段。
+        const sent = writes.length;
+        await occupied.dispatchEvent('click');
+        await page.locator('#toasts [data-sonner-toast]').filter({ hasText: '当前的扫描与采集任务还没结束' }).waitFor();
+        assert.equal(writes.length, sent);
+        // 和任务中心的取消同一枚图标，先确认；在确认框里点「取消」就不发请求。
+        const cancelTask = dock.getByRole('button', { name: '取消任务', exact: true });
+        assert.equal(await cancelTask.innerText(), '');
+        await cancelTask.click();
+        const confirm = page.getByRole('alertdialog', { name: '取消任务「扫描与采集」', exact: true });
+        await confirm.getByRole('button', { name: '取消', exact: true }).click();
+        await confirm.waitFor({ state: 'hidden' });
+        assert.equal(writes.length, sent);
+        state = { ...state, trigger: 'cli' };
         await page.reload();
         await resume.waitFor();
+        await occupied.dispatchEvent('click');
+        await page.locator('#toasts [data-sonner-toast]')
+          .filter({ hasText: '当前的扫描与采集任务（由命令行或托盘发起）还没结束' }).waitFor();
         const lowSpeed = dock.getByRole('button', { name: '处理速度：低占用' });
         assert.equal(await lowSpeed.innerText(), '低占用');
         assert.equal(await lowSpeed.locator('use[href="#i-snail"]').count(), 1);
@@ -332,7 +388,10 @@ describe('扫描与采集控制', () => {
         assert.equal(noticeMotion.arrow, 'transform');
         assert.notEqual(noticeMotion.arrowDuration, '0s');
         await dock.getByRole('button', { name: '收起任务详情' }).click();
-        assert.equal(await dock.getByRole('button', { name: '查看明细', exact: true }).getAttribute('aria-expanded'), 'false');
+        // 收起后只留标题与文件计数：预估、明细键、速度与入口都收进折叠区。
+        await dock.getByText('查看明细', { exact: true }).waitFor({ state: 'hidden' });
+        await dock.getByRole('link', { name: '任务详情' }).waitFor({ state: 'hidden' });
+        assert.equal(await dock.locator('[data-processing-traffic] section').first().isVisible(), false);
         assert.ok((await dock.boundingBox())!.height < expandedHeight);
         await dock.getByRole('button', { name: '展开任务详情' }).click();
         assert.equal(await dock.getByRole('button', { name: '查看明细', exact: true }).getAttribute('aria-expanded'), 'false');
@@ -344,6 +403,8 @@ describe('扫描与采集控制', () => {
         await page.emulateMedia({ reducedMotion: 'reduce' });
         assert.equal(await dock.locator('[data-processing-body]').evaluate(el => getComputedStyle(el).transitionProperty), 'none');
         assert.equal(await dock.locator('[data-processing-traffic]').isVisible(), true);
+        // 明细区与预估区两段一起收，等收起过渡走完再量。
+        await settle(page, '#toasts [data-processing-dock]');
         const fixed = await dock.boundingBox();
         await dock.hover();
         await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -355,7 +416,8 @@ describe('扫描与采集控制', () => {
         const unhovered = await dock.boundingBox();
         assert.ok(fixed && hovered && unhovered);
         assert.ok(Math.abs(fixed.y - hovered.y) < 1 && Math.abs(fixed.y - unhovered.y) < 1,
-          '收起详情后滚动与悬停保持任务卡位置');
+          `收起详情后滚动与悬停保持任务卡位置：${JSON.stringify({ fixed, hovered, unhovered })}`);
+        await dock.getByRole('button', { name: '展开任务详情' }).click();
         await dock.getByRole('button', { name: '处理速度：标准' }).click();
         const speed = page.getByRole('dialog', { name: '处理速度', exact: true });
         await speed.getByRole('slider').press('End');
@@ -410,9 +472,8 @@ describe('扫描与采集控制', () => {
         await speed.press('Escape');
         await settle(page, '#toasts [data-processing-dock]');
         await dock.getByRole('link', { name: '任务详情' }).click();
-        await dock.getByRole('button', { name: '展开任务详情' }).waitFor();
+        await dock.getByRole('button', { name: '收起任务详情' }).waitFor();
         assert.equal(await dock.count(), 1, '换页保留同一张任务卡');
-        await dock.getByRole('button', { name: '展开任务详情' }).click();
         assert.equal(await dock.locator('[data-processing-step="complete"] s').innerText(), '扫描文件');
         assert.equal(await dock.locator('[aria-current="step"] s').count(), 0);
         await page.evaluate(async () => {

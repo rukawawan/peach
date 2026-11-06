@@ -751,12 +751,14 @@ body[data-peach-copy-mode] .peach-react [data-media-card] [data-media-duration][
   cursor: pointer;
 }
 .peach-react [data-media-tag]:hover { background: var(--hover); color: var(--ink); }
-.peach-react [data-media-tag]:disabled { cursor: not-allowed; }
+/* 只读的标签（关注卡、关注来的作品）是同一张脸的文字，不接筛选：不给手形，悬停也不变色。 */
+.peach-react span[data-media-tag] { cursor: default; }
+.peach-react span[data-media-tag]:hover { background: var(--tag-fill); color: var(--ink-2); }
 @media (max-width: 760px) {
   .peach-react [data-media-tags] > :nth-child(n+3) { display: none; }
 }
 
-/* 密集一档保留标题、身份和标签；窄卡片的日期另起一行。缺少标签时仍保留标签位置；
+/* 密集一档保留标题、身份和标签，各占一行。缺少标签时仍保留标签位置；
  * 普通卡也留出叠层卡的 7px，每行是否出现分卷卡不决定整行高度。回收站的网格列宽是自己定的，
  * 不跟密度走，卡是有边的面，这一套不套给它。 */
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-grid] > :is([data-media-card], [data-mix-card]) { padding-top: 7px; }
@@ -795,17 +797,15 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card] [data-media-tags] { flex-wrap: nowrap; align-items: flex-start; height: 38px; overflow: hidden; }
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-text] > [data-media-tags] { margin-top: -4px; }
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card] [data-media-tag]:nth-child(n+2) { display: none; }
+/* 密集一档的署名始终一行，窄卡不像宽松档那样把日期折到下一行：屏外卡的高度靠元信息区的固定估计，
+   折不折行取决于文字栏宽，而文字栏宽又随头像叠几个而变，估计跟不上，往回滚时整页会跳。
+   放不下时作者名先省略，再依次让出「等 N 人」、体积，最窄时日期也让出。 */
 @container media-meta (width < 360px) {
-  body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-text] {
-    grid-template-rows: 1.35em auto 30px;
-    height: auto;
-  }
-  body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-byline] {
-    flex-wrap: wrap;
-    height: auto;
-    min-height: calc(2.7em + 2px);
-    row-gap: 2px;
-  }
+  body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) :is([data-media-who-more], [data-media-size]) { display: none; }
+  body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-facts] { flex-basis: auto; }
+}
+@container media-meta (width < 160px) {
+  body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-facts] { display: none; }
 }
 
 /* ── 回收站里的资源卡 ── */

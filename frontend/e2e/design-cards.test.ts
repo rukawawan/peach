@@ -575,7 +575,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
       assert.ok((narrow[0]?.x || 0) >= 0 && (narrow[0]?.x || 0) + (narrow[0]?.width || 0) <= 390,
         '390px 下视频卡越出视口');
 
-      const nested = card.locator('[data-media-tag]:not(:disabled)').first();
+      const nested = card.locator('button[data-media-tag]').first();
       const tag = await nested.getAttribute('data-tag');
       assert.ok(tag, '演示卡没有可操作的内部标签');
       await nested.focus();
@@ -1025,9 +1025,9 @@ describe('设计决定：作品卡、管理页与复核', () => {
     const opened = await openReview(browser);
     try {
       /* 量的是 token 对而不是某一条线：`separator-border` 画在哪种面上由各处自己决定，
-         复核卡的外框和候选块之间那条线落在 `primary`，脚注带那条落在 `secondary`。逐条去点名，
+         复核卡页头与候选块之间那条线落在 `primary`，脚注带那条落在 `secondary`。逐条去点名，
          新加一处就得记得再补一条用例，而漏补和「这处本来就没线」在屏幕上看不出区别。
-         末尾再核一次复核卡自己的框线确实取的就是这个 token，免得两档都合格却根本没落到现场。 */
+         末尾再核一次复核卡里的分隔线确实取的就是这个 token，免得两档都合格却根本没落到现场。 */
       const read = () => opened.page.locator('section[data-review-key]').first()
         .evaluate((node) => {
           const context = document.createElement('canvas').getContext('2d')!;
@@ -1043,7 +1043,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
             line: token('--color-separator-border'),
             card: token('--color-background-primary-default'),
             filled: token('--color-background-secondary-default'),
-            edge: paint(style.borderTopColor),
+            edge: paint(getComputedStyle(node.querySelector('.border-separator-border')!).borderBottomColor),
           };
         });
       const before = await read();
@@ -1059,7 +1059,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
         assert.ok(dark >= light,
           `暗色下分隔线压在${label}上只差 ${dark.toFixed(1)} 个明度，浅色下有 ${light.toFixed(1)}`);
       }
-      assert.deepEqual(after.edge, after.line, '复核卡的框线没走 separator-border');
+      assert.deepEqual(after.edge, after.line, '复核卡里的分隔线没走 separator-border');
       assert.deepEqual(opened.problems, []);
     } finally {
       await opened.close();

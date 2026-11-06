@@ -36,6 +36,7 @@ from .metadata_auto_apply import (
     METADATA_FIELD_COLUMNS,
     REVIEW_APPLY_LIMIT,
     _apply_metadata_candidate,
+    _codes_matching,
     _entity_identity_key,
     _fold_genre_decisions,
     _landing_scope,
@@ -46,11 +47,19 @@ from .metadata_auto_apply import (
     _row_candidates,
     _split_multi,
     genres_still_pending,
+    VERIFY_REVIEW,
+    code_assets,
     metadata_decision_is_stale,
-    overwrite_requires_review,
     refresh_current_values,
+    verification_outcome,
 )
-from .metadata_policy import FALLBACK_SOURCES, SOURCE_SPECS, preferred_tag_source
+from .metadata_policy import (
+    CHAIN_OFFICIAL,
+    FALLBACK_SOURCES,
+    SOURCE_SPECS,
+    preferred_tag_source,
+    source_tier,
+)
 from .previews import logo_key
 from .review_csv import CANDIDATE_PREFIX, read_candidates
 
@@ -338,10 +347,19 @@ def _metadata_queue_rows(connection, rows: list[dict],
     # MIB 官网（kmib）的候选是例外：那是这批番号自己的发行方。
     rows = [row for row in rows
             if not is_korean_mib_code(str(row.get("code") or "")) or _only_mib_official(row)]
-    overrides = {row['item_key'] for row in rows if overwrite_requires_review(connection, row)}
+    # 核查差异（ADR-0108）的去向只由 `verification_outcome` 定（ADR-0139）：要人判的
+    # 绕过下面几道过滤留在队列里，保留现值、并集与覆盖的那些不占队列——后两种由处理任务
+    # 落库，判据与这里是同一份。
+    assets = code_assets(connection, rows)
+    verified = {row['item_key']: outcome for row in rows
+                if (outcome := verification_outcome(connection, row, assets=assets)) is not None}
+    overrides = {key for key, outcome in verified.items() if outcome.kind == VERIFY_REVIEW}
     filtered = _drop_community_challenges_to_official(connection, rows)
     filtered = _drop_fallback_challenges(_drop_shop_side_dissent(filtered))
-    kept = {row['item_key'] for row in filtered} | overrides
+    # 社区源对 official 自动落库值的异议，连 NFO 核查的覆盖复核标记也不放行。
+    dismissed = _community_challenges_to_official_owner(connection, rows)
+    dismissed |= set(verified) - overrides
+    kept = ({row['item_key'] for row in filtered} | overrides) - dismissed
     return [row for row in rows if row['item_key'] in kept], genre_decisions
 
 
@@ -551,6 +569,47 @@ def _drop_community_challenges_to_official(connection, rows: list[dict]) -> list
         )
 
     return [row for row in rows if keep(row)]
+
+
+def _official_owner(owner: str) -> bool:
+    """归属串是不是 official 来源的自动落库：`auto:<来源>` 且来源在链上属 official 档。"""
+    kind, _, source = str(owner or "").partition(":")
+    return kind == "auto" and bool(source) and source_tier(source) == CHAIN_OFFICIAL
+
+
+def _community_challenges_to_official_owner(connection, rows: list[dict]) -> set[str]:
+    """只有社区源异议、而现值由 official 源自动写入的行，不占复核队列。
+
+    `_drop_community_challenges_to_official` 只认 `review_decision` note 里记下的取值，
+    NFO 核查（ADR-0108）标了 `requires_review` 的行会经 `overrides` 绕过它。本函数认
+    `asset.field_owners`：目标资产的这一格全部归 `auto:<official 来源>`，候选全部来自
+    official 之下的来源（javdb、avbase、javbus……），就按 `SOURCE_SPECS` 的信任次序视为
+    已定，不交给人。只读判断，不写 `review_decision`。归属为 user/review/空、
+    没有字段归属的多值字段（出演者、标签）、或任一候选是 official/本地 NFO 的，仍进队列。
+    """
+    dismissed: set[str] = set()
+    for row in rows:
+        field = str(row.get("field") or "").strip()
+        column = METADATA_FIELD_COLUMNS.get(field)
+        if not column or not str(row.get("current_value") or "").strip():
+            continue
+        sources = {str(c.get("source") or "").strip() for c in row.get("candidates") or []}
+        if not sources or any(source_tier(source) <= CHAIN_OFFICIAL for source in sources):
+            continue
+        asset_id = str(row.get("asset_id") or "").strip()
+        if row.get("asset_path") and asset_id.isdigit():
+            found = connection.execute(
+                "SELECT id,field_owners FROM asset WHERE id=?", (int(asset_id),)).fetchall()
+        else:
+            code = str(row.get("code") or "").strip()
+            found = _codes_matching(connection, [code, str(row.get("query") or code)],
+                                    "id,code,field_owners") if code else []
+        if not found:
+            continue
+        if all(_official_owner(owner_of(asset["field_owners"], column)) for asset in found):
+            dismissed.add(str(row.get("item_key") or ""))
+    dismissed.discard("")
+    return dismissed
 
 
 #: MGS 是转售店。同一部片它的商品页跟片商自己那份有三处系统性差异：标题尾巴上缀着

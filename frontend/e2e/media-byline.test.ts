@@ -33,6 +33,32 @@ describe('作品卡片署名信息行', () => {
       }
     } finally { await opened.close() }
   });
+  it('密集窄卡的署名保持一行：放不下的让出去，不压标签、不越出行框', { timeout: 60_000 }, async () => {
+    const opened = await openCatalogFixture(browser, payload => {
+      Object.assign(payload.items[0], { is_jav: true, code: 'MIAA-155', performers: ['篠田优', '水野葵', '森田优'], performer_total: 12,
+        release_date: '2019-09-13', size: 6549825126, tags: ['巨乳', '中出'] });
+    });
+    try {
+      await opened.page.evaluate(() => { document.body.dataset.density = 'dense' });
+      for (const [tile, date] of [['300px', true], ['168px', false]] as const) {
+        await opened.page.evaluate(value => document.documentElement.style.setProperty('--tile', value), tile);
+        await settle(opened.page);
+        const rows = await opened.page.locator('#grid [data-media-card]').first().evaluate(card => {
+          const line = card.querySelector('[data-media-byline]')!.getBoundingClientRect();
+          const shown = [...card.querySelectorAll('[data-media-byline] > *, [data-media-facts] > *')]
+            .filter(node => node.getClientRects().length > 0).map(node => node.getBoundingClientRect());
+          return { text: card.querySelector('[data-media-text]')!.getBoundingClientRect().width,
+            line: line.height, outside: shown.filter(box => box.top < line.top - 1 || box.bottom > line.bottom + 1 || box.right > line.right + 1).length,
+            date: card.querySelector('[data-media-release]')!.getClientRects().length > 0,
+            tag: card.querySelector('[data-media-tag]')!.getBoundingClientRect().top, bottom: line.bottom };
+        });
+        assert.ok(rows.text < 360, `这张卡应当是窄卡：${JSON.stringify(rows)}`);
+        assert.equal(rows.outside, 0, `署名行的内容折行或越界：${JSON.stringify(rows)}`);
+        assert.equal(rows.date, date, `${tile} 宽的卡日期${date ? '应保留' : '应让出'}：${JSON.stringify(rows)}`);
+        assert.ok(rows.tag >= rows.bottom, `标签压在署名上：${JSON.stringify(rows)}`);
+      }
+    } finally { await opened.close() }
+  });
   for (const viewport of VIEWPORTS) {
     it(`${viewport.name} 姓名靠左，日期在窄卡片换行保留`, { timeout: 60_000 }, async () => {
       const opened = await openCatalogFixture(browser, payload => {

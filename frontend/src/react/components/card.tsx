@@ -12,9 +12,10 @@
  *   复核页的 `body[data-surface="/review"] .reviewitem` 是这一族——卡浮在页面底上，靠一条
  *   发丝线收边，不靠换底色。
  *
- * 另有一批是「填充再加一条描边」：活动页 `.cleanupfieldset` 是 `--ground` 底加 `--line`，
- * 高清版 `.qualityitem` 是 `--ground` 底加更淡的 `--line-soft`。所以描边是填充之上的一档
- * 可选项（`bordered`），不是填充的对立面。
+ * 旧样式表里还有一批「填充再加一条描边」（活动页 `.cleanupfieldset`、高清版 `.qualityitem`）。
+ * 直接摆在页面上的卡已统一成不描边：深色主题下那条线比填充亮得多，同一页里一半卡有框、
+ * 一半没有。描边只留给底色和所在表面分不开的卡（白卡压在灰卡里、嵌在卡里的代码块），
+ * 是填充之上的一档可选项（`bordered`），不是填充的对立面。
  *
  * 迁移时每页各拼一串 `rounded-2xl border border-separator-border`，同一种卡片在十个文件里
  * 长出二十种描边空心壳，页面整体掉了一层底色——卡面收在这里就是为了不再发生这件事。 */
@@ -41,9 +42,11 @@ export type CardOptions = {
   interactive?: boolean;
   /** 卡片带互斥选中态：选中时换成浮层那一档面、收掉接触阴影，最上层压一圈 2px 的焦点环色描边。 */
   selectable?: boolean;
-  /** 填充之上另加的那条描边：活动页的 Fieldset 用 `--line`，高清版的条目用 `--line-soft`。
-   *  `outlined` 自带描边，不必再给。 */
-  bordered?: 'line' | 'soft';
+  /** 填充之上另加的那条描边，只给底色和所在表面分不开的卡：灰卡里的白卡用 `--line`，
+   *  嵌在卡里的代码块与错误摘录用 `--line-soft`。`outlined` 自带描边，不必再给。
+   *  `error` 是失败的那一轮：整张卡的框线换成 danger 色，不给卡里的字上色。它画成内收的
+   *  outline，不占盒子：同一列里失败卡与正常卡的内容起点要对齐，真 border 会把内容挤进 1px。 */
+  bordered?: 'line' | 'soft' | 'error';
   className?: string;
 };
 
@@ -68,6 +71,7 @@ const RADIUS: Record<CardRadius, string> = {
 const BORDER = {
   line: 'border border-border-button-default',
   soft: 'border border-separator-border',
+  error: 'outline-1 -outline-offset-1 outline-border-error-default',
 };
 
 const PADDING: Record<CardPadding, string> = {

@@ -81,6 +81,22 @@ export function catalogQuery(props: CatalogGridProps) {
   };
 }
 
+/** 目录卡片网格的首屏：取到第一页再挂，岛挂上就是最终样子，壳铺的骨架一直留到数据到，不再交接给岛自己的
+ *  另一份骨架。同一个键缓存里还有（回到看过的筛选），或岛会认领上一代分页（恢复导航、沉浸墙）时不取，
+ *  与 `GridBody` 的初值一致。列表视图与资料页各有自己的取数。 */
+export async function prefetchCatalogGrid(props: CatalogGridProps, view: string, signal: AbortSignal): Promise<void> {
+  if (props.mode === 'items' || props.mode === 'entity' || (view === 'list' && !props.wall)) return;
+  const query = catalogQuery(props);
+  if (queryClient.getQueryData(query.queryKey) !== undefined) return;
+  if ((props.restoreNavigation || props.wall) && latestCatalogPages(query.queryKey)) return;
+  await queryClient.fetchInfiniteQuery({
+    queryKey: query.queryKey,
+    queryFn: ({ pageParam }) => query.queryFn({ pageParam: pageParam as number, signal }),
+    initialPageParam: 0,
+    getNextPageParam: query.getNextPageParam,
+  });
+}
+
 export function entityQuery(props: CatalogGridProps) {
   return {
     queryKey: entityKey(props.entityKey || '', props.revision || 0),

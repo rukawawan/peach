@@ -296,5 +296,48 @@ class SeesaaContractTests(unittest.TestCase):
         self.assertEqual((SEESAA.name, SEESAA.provider), ('sougouwiki', 'sougouwiki'))
 
 
+class ChainWikiTests(unittest.TestCase):
+    """素人链上的认人 Wiki 经 `LibraryMetadataProvider.wiki` 问（ADR-0145）。"""
+
+    SEARCH = b'<div class="result-box"><div class="body"><h3><a href="/w/sougouwiki/d/Person">Person</a></h3></div></div>'
+    PERSON = '<div id="page-body"><div class="user-area"><a href="/w/sougouwiki/d/Label">(レーベル一覧)</a></div></div>'.encode('euc_jp')
+
+    def provider(self, root, transport):
+        from peach.library_processing import LibraryMetadataProvider
+        provider = LibraryMetadataProvider(root / 'secrets', wiki_root=root / 'pages')
+        provider.transport = transport
+        return provider
+
+    def test_one_label_table_serves_the_next_code_of_the_same_label_without_another_search(self):
+        """一张厂牌表列着同厂牌的好几部：读过之后同一次任务里的下一部不再搜索，页也落盘缓存。"""
+        table = fixture().replace(b'</table>', ('<tr><td>ABC-008</td><td></td><td>別の作品</td>'
+                                                '<td><a href="/w/sougouwiki/d/C">架空秋子</a></td><td>2024/12/01</td>'
+                                                '<td></td></tr></table>').encode('euc_jp'))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            transport = Mock(side_effect=[HttpResponse(200, {}, body) for body in (self.SEARCH, self.PERSON, table)])
+            provider = self.provider(root, transport)
+            [(source, first)] = provider.wiki('sougouwiki', 'ABC-007')
+            [(_, second)] = provider.wiki('sougouwiki', 'ABC-008')
+            self.assertEqual((source, len(first['actresses']), second['actresses']),
+                             ('sougouwiki', 2, [{'japanese_name': '架空秋子'}]))
+            self.assertEqual(transport.call_count, 3)
+            self.assertEqual(len(list((root / 'pages').glob('*.json'))), 3)
+
+    def test_an_unfound_code_is_a_miss_and_a_spent_budget_is_not_a_network_failure(self):
+        """搜索范围里没找到按「没有」交出去；动作预算用尽是预算问题，不能被取页层记成网络未取得。"""
+        from peach.jav_cover_fetch import DeadlineExceeded, NotFound
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            transport = Mock(return_value=HttpResponse(200, {}, b'<div class="result-box"></div>'))
+            provider = self.provider(root, transport)
+            with self.assertRaisesRegex(NotFound, '搜索范围内未取得'):
+                provider.wiki('sougouwiki', 'ABC-007')
+            transport.reset_mock()
+            with self.assertRaises(DeadlineExceeded):
+                provider.wiki('av_neme', 'ABC-009', deadline=0.0)
+            transport.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

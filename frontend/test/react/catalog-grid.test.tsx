@@ -417,8 +417,8 @@ describe('作品卡', () => {
   it('关注来源保存的条目用来源的缩略图和标签，标签不可点', async () => {
     const { host } = await render(item(12, { follow_thumb_url: 'https://example.test/t.jpg', follow_item_id: 5, tags: ['本地'], follow_tags: ['来源'] }));
     expect(host.querySelector('[data-media-art] img')?.getAttribute('src')).toBe('https://example.test/t.jpg');
-    const tag = host.querySelector<HTMLButtonElement>('[data-media-tag]');
-    expect([tag?.textContent, tag?.disabled]).toEqual(['#来源', true]);
+    const tag = host.querySelector('[data-media-tag]');
+    expect([tag?.textContent, tag?.tagName, tag?.hasAttribute('data-tag')]).toEqual(['#来源', 'SPAN', false]);
   });
 
   it('看到一半的画一条进度，分卷组不画；比例写进封面格', async () => {

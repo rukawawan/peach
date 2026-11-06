@@ -1,5 +1,6 @@
 """DMM 的 GraphQL 目录套进站点解析器契约：cid 推导与搜索匹配、发售日换算、payload 逐键钉住，以及失败分档。"""
 import json
+import re
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,7 +9,7 @@ from peach.jav_cover_fetch import Unavailable
 from peach.library_processing import LibraryMetadataProvider
 from peach.scraping_access import SourcePaused
 from peach.sources import DMM, DmmSource, FailureReason, Page, Session, SourceFailure
-from peach.sources.dmm import (DETAIL_ATTEMPTS, DETAIL_QUERY, SEARCH_LIMIT, SEARCH_QUERY, code_parts,
+from peach.sources.dmm import (ACTRESS_WORKS_QUERY, DETAIL_ATTEMPTS, DETAIL_QUERY, SEARCH_LIMIT, SEARCH_QUERY, code_parts,
                                code_from_cid, guessed_cid, matching_cids, release_date)
 
 ENDPOINT = "https://api.video.dmm.co.jp/graphql"
@@ -237,6 +238,108 @@ class DmmSourceTests(unittest.TestCase):
         self.assertEqual((caught.exception.reason, caught.exception.status_code), (FailureReason.NETWORK, 422))
         with self.assertRaises(SourcePaused):
             DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": SourcePaused("来源正在冷却")})))
+
+
+def listed(cid, *, status=None, date="2026-10-30T00:00:00+09:00", cast=("森日向子",), maker="ムーディーズ"):
+    """片单里的一行，形状照 2026-11-04 `legacySearchPPV(filter: {actressIds})` 的实测响应写。"""
+    return {"id": cid, "title": f"{cid} の作品", "deliveryStartAt": date, "releaseStatus": status,
+            "actresses": [{"id": "1061586" if name == "森日向子" else "9", "name": name} for name in cast],
+            "maker": {"id": "1", "name": maker}}
+
+
+def catalogue(pages, maker_codes):
+    """假接口：片单按 offset 答 `pages` 里的那一页，别名批量按 cid 答 `maker_codes`。"""
+    calls = []
+
+    def call(request, timeout, limit):
+        payload = json.loads(request.body)
+        if payload["query"] == ACTRESS_WORKS_QUERY:
+            variables = payload["variables"]
+            calls.append(("list", variables["offset"], variables["filter"]))
+            rows, has_next, total = pages[variables["offset"]]
+            body = {"data": {"legacySearchPPV": {"result": {
+                "pageInfo": {"totalCount": total, "hasNext": has_next}, "contents": rows}}}}
+        else:
+            cids = re.findall(r'ppvContent\(id: "([^"]+)"\)', payload["query"])
+            calls.append(("codes", cids))
+            body = {"data": {f"a{index}": ({"id": cid, "makerContentId": maker_codes[cid]}
+                                           if cid in maker_codes else None)
+                             for index, cid in enumerate(cids)}}
+        return HttpResponse(200, {}, json.dumps(body, ensure_ascii=False).encode(), request.url)
+
+    call.calls = calls
+    return call
+
+
+class ActressWorksTests(unittest.TestCase):
+    """按女优编号列片单：分页、预购、官方番号与翻页止点（ADR-0135）。"""
+
+    def test_pages_until_the_catalogue_says_there_is_no_more(self):
+        first = [listed("mizd00570", status="PRE_ORDER", date="2026-11-27T00:00:00+09:00"),
+                 *[listed(f"mide{index:05d}") for index in range(99)]]
+        second = [listed("h_068mxdlp00343", date="2026-10-01T10:00:40+09:00")]
+        codes = {"mizd00570": "MIZD-570", "h_068mxdlp00343": "MXDLP-0343"}
+        transport = catalogue({0: (first, True, 101), 100: (second, False, 101)}, codes)
+        works = DmmSource().actress_works("1061586", session=Session(transport))
+        self.assertEqual([call[:2] for call in transport.calls if call[0] == "list"], [("list", 0), ("list", 100)])
+        self.assertEqual(transport.calls[0][2], {"actressIds": {"ids": [{"id": "1061586"}]}})
+        self.assertEqual((works.name, works.total, len(works.works)), ("森日向子", 101, 101))
+        head, tail = works.works[0], works.works[-1]
+        self.assertEqual((head.cid, head.maker_code, head.pre_order, head.release_date),
+                         ("mizd00570", "MIZD-570", True, "2026-11-27"))
+        self.assertEqual((tail.maker_code, tail.pre_order, tail.release_date, tail.studio),
+                         ("MXDLP-0343", False, "2026-10-01", "ムーディーズ"))
+        # 接口没答官方番号的那几部留空，不拿 cid 去推。
+        self.assertEqual(works.works[1].maker_code, "")
+
+    def test_a_page_with_a_seen_work_stops_paging_and_skips_its_codes(self):
+        first = [listed("mizd00570", status="PRE_ORDER"), listed("mide00001")]
+        transport = catalogue({0: (first, True, 500)}, {"mizd00570": "MIZD-570", "mide00001": "MIDE-001"})
+        works = DmmSource().actress_works("1061586", session=Session(transport), known={"mide00001"})
+        self.assertEqual(transport.calls, [("list", 0, {"actressIds": {"ids": [{"id": "1061586"}]}}),
+                                           ("codes", ["mizd00570"])])
+        self.assertEqual([work.maker_code for work in works.works], ["MIZD-570", ""])
+
+    def test_the_first_poll_stops_at_the_limit(self):
+        page = [listed(f"mide{index:05d}") for index in range(100)]
+        transport = catalogue({0: (page, True, 2066), 100: (page, True, 2066)}, {})
+        works = DmmSource().actress_works("1008785", session=Session(transport), limit=150)
+        self.assertEqual(len(works.works), 150)
+        self.assertEqual([call[1] for call in transport.calls if call[0] == "list"], [0, 100])
+
+    def test_an_empty_catalogue_is_zero_works_not_a_failure(self):
+        works = DmmSource().actress_works("1051912", session=Session(catalogue({0: ([], False, 0)}, {})))
+        self.assertEqual((works.total, works.works), (0, ()))
+
+    def test_failures_are_classified(self):
+        silent = Mock()
+        with self.assertRaises(SourceFailure) as caught:
+            DmmSource().actress_works("森日向子", session=Session(silent))
+        self.assertEqual(caught.exception.reason, FailureReason.NOT_FOUND)
+        silent.assert_not_called()
+        broken = lambda request, timeout, limit: HttpResponse(
+            200, {}, json.dumps({"data": {"legacySearchPPV": None}}).encode(), request.url)
+        with self.assertRaises(SourceFailure) as caught:
+            DmmSource().actress_works("1061586", session=Session(broken))
+        self.assertEqual(caught.exception.reason, FailureReason.PARSE_ERROR)
+
+    def test_rate_limits_cool_the_whole_source(self):
+        class Limited:
+            def __init__(self):
+                self.held = []
+
+            def __call__(self, request, timeout, limit):
+                return HttpResponse(429, {}, b"", request.url)
+
+            def hold(self, source, action):
+                self.held.append((source, action))
+
+        transport, site = Limited(), DmmSource()
+        session = Session(transport)
+        with self.assertRaises(SourceFailure) as caught, site.holding(session):
+            site.actress_works("1061586", session=session)
+        self.assertEqual(caught.exception.reason, FailureReason.RATE_LIMITED)
+        self.assertEqual(transport.held, [("dmm", "rate_limited")])
 
 
 if __name__ == "__main__":

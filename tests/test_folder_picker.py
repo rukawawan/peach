@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import base64
+import ntpath
+import os
 import subprocess
 import unittest
 from unittest import mock
@@ -29,7 +31,7 @@ class CommandTests(unittest.TestCase):
         对话框是 Shell 的 `IFileOpenDialog`（带地址栏），不是 Windows Forms 那块树形面板。
         """
         argv, env = folder_picker.command(r"D:\Media", platform="win32")
-        self.assertEqual(argv[0], "powershell.exe")
+        self.assertEqual(ntpath.basename(argv[0]).casefold(), "powershell.exe")
         self.assertIn("-STA", argv, "COM 对话框要求单线程套间")
         self.assertEqual(argv[-2], "-EncodedCommand")
         script = base64.b64decode(argv[-1]).decode("utf-16-le")
@@ -45,6 +47,16 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("System.Windows.Forms", script)
         self.assertIn(f"Pick('{folder_picker.PROMPT}', $env:PEACH_PICK_INITIAL)", script)
         self.assertEqual(env, {"PEACH_PICK_INITIAL": r"D:\Media"})
+
+    def test_windows_powershell_is_found_under_the_system_root_not_through_path(self):
+        """服务进程的 PATH 可能被安装器或用户改坏；`powershell.exe` 固定装在系统目录里。"""
+        with mock.patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}):
+            argv, _ = folder_picker.command(None, platform="win32")
+        self.assertEqual(argv[0], r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        with mock.patch.dict(os.environ):
+            os.environ.pop("SystemRoot", None)
+            argv, _ = folder_picker.command(None, platform="win32")
+        self.assertEqual(argv[0], "powershell.exe", "取不到系统目录时退回按名字查找")
 
     def test_macos_uses_applescript_choose_folder_and_escapes_the_initial_path(self):
         with mock.patch("os.path.isdir", return_value=True):
@@ -71,7 +83,7 @@ class PickTests(unittest.TestCase):
         chosen = folder_picker.pick_folder(r"D:\Media", platform="win32", run=run)
         self.assertEqual(chosen, r"E:\Movies")
         (argv, kwargs), = run.calls
-        self.assertEqual(argv[0], "powershell.exe")
+        self.assertEqual(ntpath.basename(argv[0]).casefold(), "powershell.exe")
         self.assertEqual(kwargs["env"]["PEACH_PICK_INITIAL"], r"D:\Media")
         self.assertTrue(kwargs["capture_output"])
 
@@ -79,6 +91,19 @@ class PickTests(unittest.TestCase):
         self.assertIsNone(folder_picker.pick_folder(platform="win32", run=FakeRun(b"")))
         cancelled = FakeRun(b"", returncode=1, stderr=b"execution error: User canceled. (-128)\n")
         self.assertIsNone(folder_picker.pick_folder(platform="darwin", run=cancelled))
+
+    def test_cancelling_on_a_localized_macos_is_still_a_cancel(self):
+        """osascript 的消息跟随系统语言，中文系统写「用户已取消。」；错误码 -128 不变。"""
+        cancelled = FakeRun(b"", returncode=1,
+                            stderr="0:120: execution error: 用户已取消。 (-128)\n".encode("utf-8"))
+        self.assertIsNone(folder_picker.pick_folder(platform="darwin", run=cancelled))
+
+    def test_macos_without_interaction_or_automation_permission_has_no_picker(self):
+        """-1713 不允许用户交互、-1743 未获自动化授权：这台机器此刻不提供对话框，不是服务故障。"""
+        for code in (b"-1713", b"-1743"):
+            denied = FakeRun(b"", returncode=1, stderr=b"execution error: Not authorized. (" + code + b")\n")
+            with self.subTest(code=code), self.assertRaises(folder_picker.PickerUnsupported):
+                folder_picker.pick_folder(platform="darwin", run=denied)
 
     def test_macos_paths_lose_the_trailing_slash(self):
         self.assertEqual(folder_picker.pick_folder(platform="darwin", run=FakeRun(b"/Volumes/Media/\n")),
@@ -88,6 +113,14 @@ class PickTests(unittest.TestCase):
     def test_a_dialog_that_fails_to_open_is_reported_not_swallowed(self):
         with self.assertRaises(folder_picker.PickerUnavailable):
             folder_picker.pick_folder(platform="win32", run=FakeRun(b"", returncode=1, stderr=b"boom"))
+
+    def test_a_dialog_program_that_cannot_start_means_no_picker_here(self):
+        """找不到或起不来对话框程序是这台机器不提供，不是服务故障；锁照样放开。"""
+        def missing(argv, **kwargs):
+            raise FileNotFoundError(2, "No such file", argv[0])
+        with self.assertRaises(folder_picker.PickerUnsupported):
+            folder_picker.pick_folder(platform="win32", run=missing)
+        self.assertFalse(folder_picker._LOCK.locked())
 
     def test_a_forgotten_dialog_does_not_hold_the_worker_forever(self):
         def hang(argv, **kwargs):

@@ -21,6 +21,8 @@ export {closeAnchoredMenu, dialSliderHtml, iconSwitchHtml, wireAnchoredMenu, wir
 export {configurationSkeletonHtml, revealSkeleton, SKELETON_REVEAL_DELAY, skeletonHtml} from '../../src/ui-kit';
 // 微光的视口照看与底板动画的撤销用正式实现。
 export {cancelGlide, gateSweep, releaseSweep} from '../../src/ui-kit';
+// 封面格「抓取中」的不定进度圆环用正式模板。
+export {gaugeHtml} from '../../src/ui-kit';
 /* 测试环境没有布局，骨架补齐量不出东西，这里什么都不做。 */
 export const fitSkeleton = (_root: Element | null): void => {};
 export const loadingDotsHtml = (label: string): string => `<span>${label}</span>`;

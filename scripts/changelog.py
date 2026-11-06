@@ -86,6 +86,9 @@ DUE_ENTRIES = 10
 #: 这个清单是封闭的：`tests/test_changelog.py` 拒绝清单外的标签，免得各写一套近义词。
 AREAS = ("界面", "播放", "馆藏", "采集", "复核", "关注", "配置", "更新", "桌面", "账本")
 
+#: 定版条目标签之后的字数上限。条目给使用者扫读：一句话说清在哪儿变了什么，原因和实现细节留在提交与 PR。
+ENTRY_LIMIT = 80
+
 #: scope 到区域标签的映射，只收没有歧义的。`web` 故意不映射——它占了近八成提交，
 #: 机械挂上「界面」等于给每条都贴同一个标签，标签就不再有区分力，留给人按条目内容定。
 AREA_BY_SCOPE = {
@@ -230,29 +233,44 @@ def section_of(document: str, version: str) -> str:
 
 
 def require_labeled_entries(document: str, version: str) -> None:
-    """定版条目必须使用封闭的中文区域标签，不能把提交 scope 直接发给使用者。"""
-    section = section_of(document, version)
+    """定版条目必须使用封闭的中文区域标签，不能把提交 scope 直接发给使用者；
+    全部已发布版本的条目都不超过 `ENTRY_LIMIT` 字，改旧版本时也守住。"""
     allowed = "|".join(re.escape(area) for area in AREAS)
     labeled = re.compile(rf"^- \*\*(?:{allowed})\*\*：")
-    invalid = [line for line in section.splitlines()
-               if line.startswith("- ") and labeled.match(line) is None]
+    entries = [line for line in section_of(document, version).splitlines() if line.startswith("- ")]
+    invalid = [line for line in entries if labeled.match(line) is None]
     if invalid:
         preview = "；".join(invalid[:3])
         remainder = f"（另有 {len(invalid) - 3} 条）" if len(invalid) > 3 else ""
         raise version_bump.VersionError(
             f"{CHANGELOG} 的 {version} 一节还有未归类条目：{preview}{remainder}")
+    # 按读到的字数算：标签与链接地址不算，链接只计显示的文字。
+    label = re.compile(r"^- (?:\*\*[^*]+\*\*：)?")
+    long = [(released, line)
+            for released in re.findall(r"^## \[(\d+\.\d+\.\d+)\]", document, re.M)
+            for line in section_of(document, released).splitlines()
+            if line.startswith("- ")
+            and len(re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", label.sub("", line))) > ENTRY_LIMIT]
+    if long:
+        preview = "；".join(f"{released}：{line[:40]}…" for released, line in long[:3])
+        remainder = f"（另有 {len(long) - 3} 条）" if len(long) > 3 else ""
+        raise version_bump.VersionError(
+            f"{CHANGELOG} 有条目超过 {ENTRY_LIMIT} 字，改成一句话：{preview}{remainder}")
 
 
 def notes(document: str, version: str) -> str:
-    """Release 页的正文：这一版在 `CHANGELOG.md` 里的那一节，后面跟安装提示。
+    """Release 页的正文：这一版在 `CHANGELOG.md` 里的那一节、到上一版的完整变更链接，后面跟安装提示。
 
-    使用者在 GitHub 上读到的就是这段，所以那一节缺了不能静默发一段固定文案顶上，
+    使用者在 GitHub 上读到的就是这段，所以那一节或它的链接缺了不能静默发一段固定文案顶上，
     直接拒绝，让发布链停在这里。
     """
     section = section_of(document, version)
     if not section:
         raise version_bump.VersionError(f"{CHANGELOG} 里没有 {version} 这一节，Release 正文无从生成")
-    return f"{section}\n\n{INSTALL_NOTE}\n"
+    link = re.search(rf"^\[{re.escape(version)}\]:\s*(\S+)\s*$", document, re.M)
+    if link is None:
+        raise version_bump.VersionError(f"{CHANGELOG} 底部缺少 `[{version}]:` 链接，Release 正文无从附上完整变更")
+    return f"{section}\n\n[Full Changelog / 完整变更]({link[1]})\n\n{INSTALL_NOTE}\n"
 
 
 def promote(document: str, version: str, *, date: str, repo: str, previous: str | None,

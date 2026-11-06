@@ -42,15 +42,15 @@ describe('关注页岛', () => {
         const page = opened.page;
         const payload = await page.evaluate(async () => (await fetch('/api/follow')).json());
         let revision = 1;
-        await page.route((url) => url.pathname === '/api/tasks', route => route.fulfill({ json: {
-          available: true, running: [{ id: 1, status: 'running', task_key: 'follow-check' }],
-          finished: [], skipped: [], result_versions: { follow: String(revision) },
+        await page.route((url) => url.pathname === '/api/result-updates', route => route.fulfill({ json: {
+          busy: true,
+          result_versions: { follow: String(revision) },
         } }));
         await page.route((url) => url.pathname === '/api/follow' && !url.searchParams.has('item'), route =>
           route.fulfill({ json: { ...payload, groups: payload.groups.map((group: typeof FIRST[number]) =>
             group.primary.id === 1000 && revision > 1 ? { ...group, primary: { ...group.primary,
               title: '任务运行中已确认的标题' } } : group) } }));
-        const baseline = page.waitForResponse(url => new URL(url.url()).pathname === '/api/tasks');
+        const baseline = page.waitForResponse(url => new URL(url.url()).pathname === '/api/result-updates');
         await page.reload({ waitUntil: 'load' });
         await baseline;
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));

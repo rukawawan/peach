@@ -107,7 +107,7 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v${ReleaseVersion}") { throw 'Tag 与版本不一致' }
           "version=${ReleaseVersion}" >> $env:GITHUB_OUTPUT
       - name: 安装构建依赖
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -286,7 +286,7 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -307,12 +307,13 @@ jobs:
         with:
           key: ${{ steps.media-identity.outputs.key }}
           path: build/media-cache/macos-${{ matrix.arch }}
-      - name: 构建或复用媒体工具并取得 cloudflared
+      - name: 构建或复用媒体工具并取得 cloudflared 与 Sparkle
         run: |
           for tool in ffmpeg untrunc; do
             .venv/bin/python scripts/media_build_cache.py macos --tool "$tool" --arch '${{ matrix.arch }}'
           done
           .venv/bin/python scripts/fetch_cloudflared_macos.py --arch '${{ matrix.arch }}' --destination "build/media-macos/${{ matrix.arch }}/cloudflared"
+          .venv/bin/python scripts/fetch_sparkle_macos.py --destination "build/media-macos/${{ matrix.arch }}/sparkle"
       - name: 构建独立应用与拖放安装镜像
         run: .venv/bin/python scripts/build_macos_standalone.py --target-arch '${{ matrix.arch }}' --destination release
       - name: 上传 macOS 构建的浏览器 source maps
@@ -381,6 +382,8 @@ jobs:
           test "$(readlink "$mount/Applications")" = /Applications
           test -s "$mount/Peach.app/Contents/Resources/LICENSE"
           codesign --verify --deep --strict "$mount/Peach.app"
+          test -f "$mount/Peach.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
+          test ! -e "$mount/Peach.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"
           lipo "$mount/Peach.app/Contents/MacOS/Peach" -verify_arch '${{ matrix.arch }}'
           python scripts/smoke_macos.py "$mount/Peach.app"
 
@@ -390,6 +393,8 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 发布签名私钥放在这个只允许 `v*` 标签部署的 environment 里（ADR-0137）。
+    environment: release
     permissions:
       contents: write
       actions: read
@@ -398,23 +403,105 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - name: 核对并取得同提交演练产物
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python scripts/github_release_candidate.py desktop --destination release
           python scripts/github_release_candidate.py macos --destination macos-candidates
+      - name: 生成并签名发布摘要
+        env:
+          PEACH_RELEASE_SIGNING_KEY: ${{ secrets.PEACH_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          uv sync --locked --python python
+          cp macos-candidates/release/*.dmg release/
+          (cd release && sha256sum ./*.zip ./*-setup.exe ./*.dmg > SHA256SUMS.txt)
+          # 源码没有发布公钥且没配私钥时跳过；公钥已随源码发出却缺私钥时失败，不发布未签名的版本。
+          printf '%s' "$PEACH_RELEASE_SIGNING_KEY" | .venv/bin/python scripts/sign_release.py --sums release/SHA256SUMS.txt
       - name: 创建预发布
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ github.ref_name }}
         run: |
           cd release
-          cp ../macos-candidates/release/*.dmg .
-          tail -n +4 ../macos-candidates/scripts/MACOS_DOWNLOADS.md >> RELEASE_NOTES.md
-          sha256sum ./*.zip ./*-setup.exe ./*.dmg > SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" ./*.zip ./*-setup.exe ./*.dmg SHA256SUMS.txt --verify-tag --prerelease --title "Peach ${VERSION#v} · Windows / macOS 测试版" --notes-file RELEASE_NOTES.md
+          {
+            tail -n +4 ../macos-candidates/scripts/MACOS_DOWNLOADS.md
+            printf '\n'
+            tail -n +4 ../scripts/DOCKER_DOWNLOADS.md | sed "s/{version}/${GITHUB_REF_NAME#v}/g"
+          } >> RELEASE_NOTES.md
+          files=(./*.zip ./*-setup.exe ./*.dmg SHA256SUMS.txt)
+          if [ -f SHA256SUMS.txt.sig ]; then files+=(SHA256SUMS.txt.sig); fi
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" --verify-tag --prerelease --title "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
+
+  # Sparkle 更新源（ADR-0130）：Release 公开之后才写 appcast，下载地址指向同一 Release 的 DMG。
+  # 私钥只在这一个仅标签运行的作业里经标准输入交给官方工具；仓库变量未开启时整个作业跳过。
+  sparkle-appcast:
+    name: macOS 更新源（Sparkle appcast）
+    if: github.ref_type == 'tag' && vars.SPARKLE_APPCAST_ENABLED == 'true'
+    needs: release
+    runs-on: macos-15
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+      PEACH_R2_ACCESS_KEY_ID: ${{ secrets.PEACH_R2_ACCESS_KEY_ID }}
+      PEACH_R2_SECRET_ACCESS_KEY: ${{ secrets.PEACH_R2_SECRET_ACCESS_KEY }}
+      PEACH_R2_ENDPOINT: ${{ secrets.PEACH_R2_ENDPOINT }}
+      PEACH_R2_BUCKET: ${{ vars.PEACH_R2_BUCKET }}
+      PEACH_R2_PUBLIC_BASE: https://downloads.peach.video
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: 取得官方 Sparkle 工具与 rclone
+        run: |
+          uv sync --locked --python python
+          .venv/bin/python scripts/fetch_sparkle_macos.py --destination build/sparkle --tools
+          .venv/bin/python scripts/fetch_release_tools.py --rclone-only
+          echo "PEACH_RCLONE=$PWD/build/release-tools/rclone" >> "$GITHUB_ENV"
+      - name: 生成、核对并发布两个架构的 appcast
+        run: |
+          set -euo pipefail
+          test -n "$SPARKLE_ED_PRIVATE_KEY"
+          version="${GITHUB_REF_NAME#v}"
+          prefix="https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME/"
+          feeds=()
+          for arch in arm64 x86_64; do
+            folder="build/feed/$arch"
+            feed="$folder/macos-$arch.xml"
+            mkdir -p "$folder"
+            gh release download "$GITHUB_REF_NAME" --pattern "Peach-$version-macos-$arch.dmg" --dir "$folder"
+            # 带上本次运行号绕过公开入口的缓存：取到最新一份，首发时的 404 也不会缓存在裸地址上。
+            status="$(curl -sS -o "$feed" -w '%{http_code}' "$PEACH_R2_PUBLIC_BASE/sparkle/macos-$arch.xml?run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
+            case "$status" in
+              200) ;;
+              404) rm -f "$feed" ;;
+              *) echo "现有 appcast 未取得：HTTP $status"; exit 1 ;;
+            esac
+            printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | build/sparkle/bin/generate_appcast --ed-key-file - \
+              --download-url-prefix "$prefix" --maximum-versions 5 -o "$feed" "$folder"
+            .venv/bin/python scripts/sparkle_appcast.py annotate --appcast "$feed" --version "$version"
+            signature="$(.venv/bin/python scripts/sparkle_appcast.py verify --appcast "$feed" --version "$version" \
+              --dmg "$folder/Peach-$version-macos-$arch.dmg" --url-prefix "$prefix" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["signature"])')"
+            printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | build/sparkle/bin/sign_update --ed-key-file - \
+              --verify "$folder/Peach-$version-macos-$arch.dmg" "$signature"
+            feeds+=("$feed")
+          done
+          .venv/bin/python scripts/sparkle_appcast.py publish "${feeds[@]}"
 
   # 镜像在演练中构建和验收，标签核对相同 image ID 后发布；发布排在 GitHub Release 成功之后：
   # 桌面包任何一步没发出去，Docker Hub 的版本号与 edge 都不动（ADR-0121）。
@@ -439,9 +526,12 @@ jobs:
           context: .
           load: true
           tags: longmeidao/peach:candidate
+          # ghcr 包页显示 description；带上这一版的发行说明链接，镜像页能直接点到更新内容。
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Local-first video metadata scraper and media manager for VPS and NAS. Release notes: https://github.com/peach-mitao/peach/releases/tag/v${{ steps.version.outputs.version }}
+            org.opencontainers.image.url=https://github.com/peach-mitao/peach/releases/tag/v${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: 验收临时容器
@@ -466,6 +556,9 @@ jobs:
     needs: [release, validate]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -482,11 +575,19 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # Docker Hub 是应用内更新与 Watchtower 认的来源，先推；ghcr 推同一镜像，挂到仓库侧栏的 Packages（ADR-0147）。
       - name: 推送版本号与 edge
         run: |
-          for tag in "${GITHUB_REF_NAME#v}" edge; do
-            docker tag longmeidao/peach:candidate "longmeidao/peach:$tag"
-            docker push "longmeidao/peach:$tag"
+          for image in longmeidao/peach ghcr.io/peach-mitao/peach; do
+            for tag in "${GITHUB_REF_NAME#v}" edge; do
+              docker tag longmeidao/peach:candidate "$image:$tag"
+              docker push "$image:$tag"
+            done
           done
 
   project-board:

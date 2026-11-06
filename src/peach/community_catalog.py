@@ -164,61 +164,82 @@ def same_scene(data: bytes, other: bytes) -> bool:
     return mask is not None and int(mask.sum()) >= SCENE_INLIERS
 
 
-def _download(transport, candidate: Candidate, *, deadline: float | None) -> tuple[Picture | None, bool]:
-    """一张候选图：下载得到、宽度够小图门槛的静态图，再报下载到没有。"""
+def _download(transport, candidate: Candidate, *, deadline: float | None) -> tuple[Picture | None, str]:
+    """一张候选图：下载得到、宽度够小图门槛的静态图，再报这一张的下落：`fetched` 下载到了，
+    `paused` 来源正在冷却，`failed` 断在连接、5xx 或 404 上。
+
+    JavDB 匿名接口的图床可能给 XOR 包装过的字节，先按公开前端的包装解开再比对。"""
+    from .javdb_public import decode_image, public_image_url
     try:
         data = _fetch(transport, candidate.url, referer=candidate.referer, limit=IMAGE_LIMIT, deadline=deadline)
-    except (NotFound, Unavailable, SourcePaused, httpx.TransportError, OSError):
-        return None, False
+    except SourcePaused:
+        return None, "paused"
+    except (NotFound, Unavailable, httpx.TransportError, OSError):
+        return None, "failed"
     try:
-        found = picture(candidate, data)
+        found = picture(candidate, decode_image(data, original=True) if public_image_url(candidate.url) else data)
     except (OSError, ValueError, Image.DecompressionBombError):
-        return None, True
-    return (found if found.size[0] >= SMALL_MIN_WIDTH else None), True
+        return None, "fetched"
+    return (found if found.size[0] >= SMALL_MIN_WIDTH else None), "fetched"
 
 
 def _pictures(transport, urls: dict[str, Candidate], reference, siblings: tuple[Candidate, ...], *,
-              deadline: float | None) -> tuple[list[Picture], int, int]:
-    """官方小图与它的同页图（有的话）加上社区来源里能用的图；再报社区来源下载到了几张、能用几张。
+              deadline: float | None) -> tuple[list[Picture], int, int, list[str]]:
+    """官方小图与它的同页图（有的话）加上社区来源里能用的图；再报社区来源下载到了几张、能用几张，
+    以及没下载到的那几张各是什么下落（`_download`）。
 
     下载到了却不能用（动图、太窄）和没下载到是两回事：前者再问一遍还是这几张。
     """
     pool = [picture(reference[0], reference[2])] if reference is not None else []
     seen = {pool[0].candidate.url} if pool else set()
+    missed = []
     for candidate in siblings:
         if candidate.url not in seen and candidate.url not in urls:
             seen.add(candidate.url)
-            found, _ = _download(transport, candidate, deadline=deadline)
+            found, outcome = _download(transport, candidate, deadline=deadline)
             pool += [found] if found else []
+            missed += [outcome] if outcome != "fetched" else []
     official = len(pool)
     fetched = 0
     for url, candidate in urls.items():
         if url in seen:
             continue
-        found, downloaded = _download(transport, candidate, deadline=deadline)
-        fetched += downloaded
+        found, outcome = _download(transport, candidate, deadline=deadline)
+        fetched += outcome == "fetched"
         pool += [found] if found else []
-    return pool, fetched, len(pool) - official
+        missed += [outcome] if outcome != "fetched" else []
+    return pool, fetched, len(pool) - official, missed
 
 
-def _unverified(pool: list[Picture], usable: int,
-                fetched: int) -> tuple[Candidate, tuple[int, int], bytes, tuple[str, ...]]:
+def _unverified(pool: list[Picture], usable: int, fetched: int,
+                missed: list[str]) -> tuple[Candidate, tuple[int, int], bytes, tuple[str, ...]]:
     """没有两个图源对得上时的退路：图全出自一个图源就取最大那张，印证图源留空。
 
-    `usable` 是池子里社区来源那几张，不算官方小图与它的同页图。"""
+    `usable` 是池子里社区来源那几张，不算官方小图与它的同页图。`missed` 是没下载到的那几张的下落
+    （`_download`），交给 `_settled` 决定落空是不是确定答复。"""
     if not usable:
         if fetched:
-            raise NotFound("社区来源给的封面都是动图或太小")
+            raise _settled("社区来源给的封面都是动图或太小", missed)
         raise Unavailable("社区来源的封面下载失败")
     origins = sorted({one.origin for one in pool})
     if len(origins) > 1:
         # 几家都答了、图都下到了，只是互相对不上：再问还是这几张，交 `NotFound` 让采集任务记住。
-        raise NotFound(f"{'、'.join(origins)} 给的封面不是同一张图，无法互相印证")
+        raise _settled(f"{'、'.join(origins)} 给的封面不是同一张图，无法互相印证", missed)
     allowed = [one for one in pool if not is_javdb_image(one.candidate.url)]
     if not allowed:
-        raise NotFound('未取得无 JavDB 水印的封面')
+        raise _settled('未取得无 JavDB 水印的封面', missed)
     largest = max(allowed, key=lambda one: one.pixels)
     return largest.candidate, largest.size, largest.data, ()
+
+
+def _settled(message: str, missed: list[str]) -> Exception:
+    """图都下载到了才交 `NotFound`。有图没下载到时不下「没有」的结论（#342）：那一张可能正是能印证的、
+    或不带 JavDB 水印的那张，下次再问答案可能就变了，交 `NotFound` 会被采集任务记成一周不问。
+    没下到的全在冷却就是本趟没轮到（`SourcePaused`）。"""
+    if not missed:
+        return NotFound(message)
+    kind = SourcePaused if all(outcome == "paused" for outcome in missed) else Unavailable
+    return kind(f"{message}；另有 {len(missed)} 张封面没下载到")
 
 
 def verified_cover(transport, code: str, works: list[tuple[str, dict]], *,
@@ -239,7 +260,7 @@ def verified_cover(transport, code: str, works: list[tuple[str, dict]], *,
     if not urls:
         raise NotFound("社区来源没有这部片的封面")
     siblings = tuple(one for one in siblings if not is_cross_product_cover(code, one.url))
-    pool, fetched, usable = _pictures(transport, urls, reference, siblings, deadline=deadline)
+    pool, fetched, usable, missed = _pictures(transport, urls, reference, siblings, deadline=deadline)
     best = None
     for one in pool:
         if is_javdb_image(one.candidate.url):
@@ -248,5 +269,5 @@ def verified_cover(transport, code: str, works: list[tuple[str, dict]], *,
         if len(origins) >= 2 and (best is None or one.pixels > best[0].pixels):
             best = (one, tuple(sorted(origins)))
     if best is None:
-        return _unverified(pool, usable, fetched)
+        return _unverified(pool, usable, fetched, missed)
     return best[0].candidate, best[0].size, best[0].data, best[1]

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
 FROM python:3.15.1-slim-trixie AS build
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
@@ -26,6 +26,7 @@ RUN target="$(.venv/bin/python -c 'import pathlib, peach; print(pathlib.Path(pea
 FROM python:3.15.1-slim-trixie
 LABEL org.opencontainers.image.title="Peach" \
       org.opencontainers.image.source="https://github.com/peach-mitao/peach" \
+      org.opencontainers.image.documentation="https://github.com/peach-mitao/peach/blob/master/docs/DOCKER.md" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 # amane 独立环境在构建阶段准备，空数据卷可直接调用。
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg openssl ca-certificates mesa-va-drivers vainfo \
@@ -49,9 +50,11 @@ COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/amane-runtime /app/amane-runtime
 COPY --from=build /app/tools/amane-bridge /app/tools/amane-bridge
 RUN /app/amane-runtime/.venv/bin/python -X utf8 /app/tools/amane-bridge/bridge.py --self-check
+# 一键更新的令牌目录：compose 在这里挂 peach-update 卷，空卷首次挂载时照搬这个目录的属主（ADR-0140）。
+RUN mkdir /update && chown peach:peach /update
 ENV PATH="/app/.venv/bin:$PATH" PEACH_DATA_ROOT=/data PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 PYTHONUTF8=1 PEACH_FACE_MODELS=/app/tools/face-models PEACH_DISTRIBUTION=docker \
-    PEACH_AMANE_RUNTIME=/app/amane-runtime
+    PEACH_AMANE_RUNTIME=/app/amane-runtime PEACH_UPDATE_DIR=/update
 WORKDIR /data
 USER peach
 EXPOSE 8900

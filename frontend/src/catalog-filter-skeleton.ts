@@ -19,6 +19,10 @@ const esc = (value: string): string => value.replace(/[&<>"]/g, (ch) =>
 
 const slots = (html: string): string => html.repeat(EMPTY_SLOTS);
 
+/** 女优或厂牌那一排的占位格；JAV 新作分区的两排等数据时也用这一份。 */
+export const tierPlaceholdersHtml = (kind: 'performer' | 'studio'): string =>
+  slots(`<span data-catalog-placeholder="${kind}" aria-hidden="true"><span></span><span>&nbsp;</span></span>`);
+
 export function catalogFilterSkeletonHtml(views: readonly CatalogView[], state: string, head?: Pick<CatalogFilterProps, 'sorts' | 'layout'>): string {
   const viewHtml = views.map((view) => `<a href="${esc(view.href)}" data-catalog-view="${esc(view.k)}"`
     + ` data-entity-press="" aria-pressed="${state === view.k}">${esc(view.label)}</a>`).join('');
@@ -26,12 +30,8 @@ export function catalogFilterSkeletonHtml(views: readonly CatalogView[], state: 
   const shape = rememberedTiers();
   return `<div class="peach-react"><div class="contents" data-catalog-root="" data-loading="">`
     + `<div data-catalog-tiers="" aria-busy="true"${shape.performers || shape.studios ? '' : ' hidden'}>`
-    + (shape.performers ? `<div data-catalog-tier="performers" data-skeleton="tiers">`
-      + slots('<span data-catalog-placeholder="performer" aria-hidden="true"><span></span><span>&nbsp;</span></span>')
-      + `</div>` : '')
-    + (shape.studios ? `<div data-catalog-tier="studios">`
-      + slots('<span data-catalog-placeholder="studio" aria-hidden="true"><span></span><span>&nbsp;</span></span>')
-      + `</div>` : '')
+    + (shape.performers ? `<div data-catalog-tier="performers" data-skeleton="tiers">${tierPlaceholdersHtml('performer')}</div>` : '')
+    + (shape.studios ? `<div data-catalog-tier="studios">${tierPlaceholdersHtml('studio')}</div>` : '')
     + `</div>`
     + `<div role="group" aria-label="筛选与排序" data-filter-glass="" data-glass-pane="" data-filter-frame=""`
     + ` data-catalog-frame="" class="sticky top-topbar z-10 mb-5.5 flex flex-col mx-4">`

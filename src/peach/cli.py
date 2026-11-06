@@ -58,16 +58,41 @@ def _require_readable_settings() -> None:
             f"{SETTINGS_ERROR}\n修好这个文件，或者用 `peach init --force` 重新生成。")
 
 
-def _serve(args: argparse.Namespace) -> int:
+def _run_uvicorn(app, **options) -> None:
+    """与单进程的 `uvicorn.run` 相同，只是先在 uvicorn 的事件循环上装好 Peach 的 asyncio 处理器。
+
+    处理器拿着 Server：Windows 上客户端在 accept 完成前断开时，标准库会关掉监听套接字，
+    `error_reporting.asyncio_handler` 靠它按原地址重新监听。
+    """
+    import asyncio
+    import functools
+
     import uvicorn
 
+    from .error_reporting import asyncio_handler
+    config = uvicorn.Config(app, workers=1, **options)
+    server = uvicorn.Server(config)
+
+    async def serve():
+        asyncio.get_running_loop().set_exception_handler(
+            functools.partial(asyncio_handler, uvicorn_server=server))
+        await server.serve()
+
+    try:
+        asyncio.run(serve(), loop_factory=config.get_loop_factory())
+    except KeyboardInterrupt:
+        pass
+    if not server.started:
+        raise SystemExit(uvicorn.config.STARTUP_FAILURE)
+
+
+def _serve(args: argparse.Namespace) -> int:
     _require_readable_settings()
     if args.redirect_origin:
         from .redirect import create_redirect_app
         if args.ssl_certfile or args.ssl_keyfile:
             raise SystemExit("redirect listener must use HTTP")
-        uvicorn.run(create_redirect_app(args.redirect_origin), host=args.host,
-                    port=args.port, workers=1)
+        _run_uvicorn(create_redirect_app(args.redirect_origin), host=args.host, port=args.port)
         return 0
     if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
         raise SystemExit("--ssl-certfile and --ssl-keyfile must be provided together")
@@ -93,12 +118,15 @@ def _serve(args: argparse.Namespace) -> int:
     if not distribution.standalone() and not _is_loopback(args.host) and (publish_mdns or TUNNEL_ENABLED):
         from .mdns import lan_ipv4
         tunnel_lan_address = args.mdns_address or lan_ipv4()
+    token = "" if args.setup else _serve_token(args)
+    secrets_dir = settings_file.active().directory("secrets")
     settings = PeachSettings(
         db_path=args.db,
         host=args.host,
         port=args.port,
-        token="" if args.setup else _serve_token(args),
-        access_path=settings_file.active().directory("secrets") / "access.json",
+        token=token,
+        token_file=auth.token_file(args.token, secrets_dir) if token else None,
+        access_path=secrets_dir / "access.json",
         configured=CONFIGURED and not args.setup,
         docs_enabled=args.docs,
         mdns_enabled=publish_mdns,
@@ -118,8 +146,8 @@ def _serve(args: argparse.Namespace) -> int:
         tunnel_log_root=settings_file.active().directory("logs"),
     )
     sync = _build_sync(args, settings)
-    uvicorn.run(
-        create_app(settings, sync), host=args.host, port=args.port, workers=1,
+    _run_uvicorn(
+        create_app(settings, sync), host=args.host, port=args.port,
         ssl_certfile=str(args.ssl_certfile) if args.ssl_certfile else None,
         ssl_keyfile=str(args.ssl_keyfile) if args.ssl_keyfile else None,
     )
@@ -185,6 +213,11 @@ def _build_sync(args: argparse.Namespace, settings: PeachSettings) -> LedgerSync
 
 def _migrate(args: argparse.Namespace) -> int:
     _require_readable_settings()
+    if args.action == "upgrade":
+        # 托盘起服务前先跑这一步；恢复中断后账本可能暂时不在，不收拾就会迁出一个空账本。
+        from .ledger_backups import recover
+        if (settled := recover(args.db)) is not None:
+            print(f"restore marker: {settled['message']}")
     all_migrations, pending = plan(args.db, MIGRATIONS_DIR)
     print(f"database: {args.db}")
     print(f"migrations: {len(all_migrations)}, pending: {len(pending)}")
@@ -497,6 +530,27 @@ def _scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _processing_line(state: dict) -> str:
+    """一行进度，口径同页面的 `processingLine`：总量已知写完成数，扫描目录时写已发现的文件数。"""
+    if state.get('total'):
+        return f"{state['stage']}：{state.get('checked', 0)}/{state['total']}"
+    if state.get('current_action') == 'scanning_files' or state.get('stage') == '扫描文件':
+        return f"{state['stage']}：已发现 {state.get('scanned', 0):,} 个文件"
+    return str(state['stage'])
+
+
+def _processing_printer():
+    """资料处理的进度回调：流量、问题等回报也会走这里，和上一行相同就不再打印。"""
+    last = None
+    def report(state):
+        nonlocal last
+        line = _processing_line(state)
+        if line != last:
+            print(line, flush=True)
+            last = line
+    return report
+
+
 def _process_library(args: argparse.Namespace) -> int:
     """命令行跑资料处理，和网页那一轮一样记进任务中心、结算时派发声明的后继。
 
@@ -512,11 +566,10 @@ def _process_library(args: argparse.Namespace) -> int:
         try:
             result = process_library(config, args.db, config.directory('generated'),
                                      config.directory('generated') / 'covers', location=args.location,
-                                     database=LedgerDatabase(args.db),
-                                     report=lambda state: print(f"{state['stage']}：{state['checked']}/{state['total']}", flush=True))
+                                     database=LedgerDatabase(args.db), report=_processing_printer())
         except JobCancelled:
             handle.finish('cancelled', error='用户停止任务')
-            print('任务已停止，已保存结果保留。')
+            print('任务已取消，已保存结果保留。')
             return 130
         rows = declared_rows(result.get('followups'))
         queued = handle.store.enqueue_followups(handle.run_id, rows)
@@ -709,6 +762,22 @@ def _doctor(args: argparse.Namespace) -> int:
     return 1 if result["status"] == "failed" else 0
 
 
+
+def _check_sources(args: argparse.Namespace) -> int:
+    import json
+    from .source_preflight import check_sources
+
+    result = check_sources(settings_file.active().directory("secrets"), args.source)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print("检查来源页面与图片 CDN；连通不代表作品资料或登录会话已验证。")
+        for source in result["sources"]:
+            for target in source["results"]:
+                print(f"{source['label']} / {target['label']} [{target['outcome_label']}] {target.get('message', '')}")
+    return 0 if result["ok"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="peach")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -807,6 +876,11 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--db", type=Path, default=DEFAULT_DB)
     status.add_argument("--shared-db", type=Path, default=SHARED_DATABASE_PATH)
     status.set_defaults(handler=_status)
+
+    sources = commands.add_parser("check-sources", help="安装后有界检测外部资料源与图片 CDN，不读取影片")
+    sources.add_argument("--source", action="append", help="只检查指定来源 ID；可重复指定，默认检查全部资料源")
+    sources.add_argument("--json", action="store_true", help="输出不含凭据的 JSON 结果")
+    sources.set_defaults(handler=_check_sources)
 
     doctor = commands.add_parser("doctor", help="逐项诊断本机配置、数据库、工具与挂载，不执行修复")
     doctor.add_argument("--json", action="store_true", help="输出脱敏 JSON 报告")

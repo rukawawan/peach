@@ -51,7 +51,13 @@ export interface DuplicatesData {
   reclaimable: number;
   groups: DuplicateGroup[];
   has_more?: boolean;
+  /** 标过「都保留」、组员没变的组数，不计入上面各项。 */
+  kept?: number;
 }
+
+/** 整组标记都保留，或撤销这个标记。服务端按组员 id 集合记，组员变了这组会自己回来。 */
+export const keepGroup = (ids: readonly number[], keep: boolean) =>
+  apiSend(BATCH_URL, { ids, operation: keep ? 'keep-duplicates' : 'reconsider-duplicates' });
 
 export const fetchDuplicates = (signal?: AbortSignal) =>
   apiGet<DuplicatesData>(DUPLICATES_URL, signal);

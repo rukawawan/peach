@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -155,6 +156,21 @@ class BrowserTests(unittest.TestCase):
                                              headers=self.script_headers).status_code, 400)
         self.assertEqual(self.service.rows, {})
 
+    def test_people_of_an_owned_title_ignore_a_different_stage_name_on_the_detail_page(self):
+        # 素人作品入库后账本按资料站认出真名，详情页仍写店铺艺名；不能把艺名再算成第二个人。
+        from peach.entities import upsert_asset_entity
+        contract = self.app.state.web_contract
+        with contract.database.write_transaction() as connection:
+            asset_id = connection.execute(
+                'INSERT INTO asset(path,name,location,medium,code) VALUES(?,?,?,?,?)',
+                ('R:\\Media\\390JAC-059.mp4', '390JAC-059.mp4', 'local', 'video', '390JAC-059')).lastrowid
+            person = upsert_asset_entity(connection, asset_id=asset_id, kind='performer', name='夏希栗',
+                                         role='performer', source='user:test')
+        response = self.client.get('/api/jav-browser/people', headers=self.script_headers,
+                                   params={'codes': '390JAC-059', 'performers': ['れいか']})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([(row['id'], row['name']) for row in response.json()['items']['390JAC-059']], [(person, '夏希栗')])
+
     def test_people_avatar_is_framed_on_the_recorded_face(self):
         from PIL import Image
         from peach.entities import upsert_asset_entity
@@ -299,6 +315,25 @@ class BrowserTests(unittest.TestCase):
         self.downloads.store.save(task)
         self.assertEqual(self.status().json()["cause"], "magnet")
 
+    def test_script_can_retry_a_failed_organization_but_nothing_else(self):
+        self.add()
+        self.service.process_one()
+        task = self.downloads.store.get(self.status().json()["task_id"])
+        task.state, task.asset_id = dl.INGESTED, 42
+        self.downloads.store.save(task)
+        retry = lambda headers=None: self.client.post("/api/jav-browser/postprocess", json={"code": "ABC-123"},
+                                                      headers=self.script_headers if headers is None else headers)
+        self.assertEqual(retry().status_code, 400)
+        self.downloads.store.postprocess(task.id, dl.POSTPROCESS_FAILED, detail="文件整理未完成")
+        self.assertEqual(retry({}).status_code, 401)
+        # 派发后继由任务中心同一入口负责，这里只核对交给了它。
+        with patch.object(self.downloads, "_dispatch_postprocess") as dispatch:
+            response = retry()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["state"], "ingested")
+        self.assertEqual(response.json()["download"]["postprocess_state"], dl.POSTPROCESS_PENDING)
+        self.assertEqual(dispatch.call_args.args[0].id, task.id)
+
     def test_cloud_failure_is_visible_and_a_manual_retry_uses_existing_task(self):
         self.remote.submit.side_effect = dl.DownloadError("config", "请更新网盘账号")
         self.add()
@@ -353,6 +388,79 @@ class BrowserTests(unittest.TestCase):
         task.state, task.remote_done_at = dl.FAILED, "2026-10-24T13:25:00+00:00"
         self.downloads.store.save(task)
         self.assertEqual(self.status().json()["download"]["phase"], "ingest")
+
+    def test_active_lists_running_and_recently_finished_tasks_for_every_window(self):
+        def listed():
+            response = self.client.get("/api/jav-browser/active", headers=self.script_headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            return {item["code"]: item for item in response.json()["items"]}
+
+        self.assertEqual(listed(), {})
+        self.add()
+        self.assertEqual(listed()["ABC-123"]["state"], "queued")
+        self.service.process_one()
+        task = self.downloads.store.get(self.status().json()["task_id"])
+        task.state, task.progress = dl.REMOTE_RUNNING, .5
+        self.downloads.store.save(task)
+        # 不经浏览器队列的同番号云下载也列出：清掉队列行后按下载任务找到。
+        self.service.rows.clear()
+        self.assertEqual(listed()["ABC-123"]["download"]["progress"], .5)
+        task.state, task.postprocess_state = dl.INGESTED, dl.POSTPROCESS_RUNNING
+        self.downloads.store.save(task)
+        self.assertEqual(listed()["ABC-123"]["download"]["postprocess_state"], dl.POSTPROCESS_RUNNING)
+        task.postprocess_state, task.postprocessed_at = dl.POSTPROCESS_COMPLETE, dl.iso(time.time())
+        self.downloads.store.save(task)
+        self.assertEqual(listed()["ABC-123"]["state"], "ingested")
+        old = "2026-01-01T00:00:00+00:00"
+        task.updated_at = task.finished_at = task.postprocessed_at = old
+        self.downloads.store.save(task)
+        self.assertEqual(listed(), {})
+        self.assertEqual(self.client.get("/api/jav-browser/active").status_code, 401)
+
+    def test_finished_browser_tasks_stay_listed_until_dismissed(self):
+        def listed():
+            response = self.client.get("/api/jav-browser/active", headers=self.script_headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            return {item["code"]: item for item in response.json()["items"]}
+
+        def dismiss(body):
+            return self.client.post("/api/jav-browser/dismiss", json=body, headers=self.script_headers)
+
+        self.add()
+        self.service.process_one()
+        task = self.downloads.store.get(self.status().json()["task_id"])
+        self.assertTrue(task.origin.startswith("browser:"))
+        self.service.ended["since"] = "2026-01-01T00:00:00+00:00"
+        # 结束早已超过 10 分钟，没确认就一直列出。
+        task.state, task.postprocess_state = dl.INGESTED, dl.POSTPROCESS_COMPLETE
+        task.updated_at = task.postprocessed_at = "2026-06-01T00:00:00+00:00"
+        self.downloads.store.save(task)
+        item = listed()["ABC-123"]
+        self.assertEqual((item["ended_key"], item["dismissed"]), (f"{task.id}@2026-06-01T00:00:00+00:00", False))
+        # 之后又改了 updated_at（如停滞复查），结束键不变。
+        task.updated_at = dl.iso(time.time() - 3600)
+        self.downloads.store.save(task)
+        self.assertEqual(listed()["ABC-123"]["ended_key"], item["ended_key"])
+        self.assertEqual(dismiss({"keys": ["../ABC-123"]}).status_code, 400)
+        self.assertEqual(dismiss({"keys": [item["ended_key"]]}).status_code, 200)
+        self.assertEqual(listed(), {})
+        # 重试整理后再次结束是新的结束键，重新列出。
+        task.postprocessed_at = "2026-07-01T00:00:00+00:00"
+        self.downloads.store.save(task)
+        self.assertFalse(listed()["ABC-123"]["dismissed"])
+        response = dismiss({"all": True})
+        self.assertEqual((response.status_code, response.json()["items"]), (200, []))
+        self.assertEqual(json.loads(self.service.ended_path.read_text(encoding="utf-8"))["dismissed"], [])
+        # 刚结束、已被别的窗口确认的仍列出 10 分钟，只标 dismissed，本页状态照旧读得到。
+        task.postprocessed_at = task.updated_at = dl.iso(time.time() - 5)
+        self.downloads.store.save(task)
+        self.assertTrue(listed()["ABC-123"]["dismissed"])
+        # 不是浏览器添加的任务结束后不留存。
+        self.service.ended["since"] = "2026-01-01T00:00:00+00:00"
+        task.origin, task.postprocessed_at, task.updated_at = "wishlist:1", "2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"
+        self.downloads.store.save(task)
+        self.assertEqual(listed(), {})
 
     def test_disable_and_rotation_revoke_tokens(self):
         rotated = self.configure("rotate").json()["token"]
@@ -619,6 +727,9 @@ class BrowserTests(unittest.TestCase):
             "https://www.mgstage.com/product/product_detail/300MIUM-1239/": "300MIUM-1239",
             "https://www.mgstage.com/product/product_detail/259LUXU-1475/": "259LUXU-1475",
             "https://www.mgstage.com/product/product_detail/104DANDY-851C/": "104DANDY-851C",
+            # 素人作品页与 FC2 内容市场商品页：地址里只有商品号或数字编号。
+            "https://video.dmm.co.jp/amateur/content/?id=mfc288": "MFC-288",
+            "https://adult.contents.fc2.com/article/4900901/": "FC2-PPV-4900901",
         }
         for source, expected in cases.items():
             with self.subTest(source=source):

@@ -985,7 +985,7 @@ function nameField(root: ParentNode): HTMLInputElement {
 
 const actorPanel = (root: ParentNode) => root.querySelector('section[aria-label="添加 JAV 订阅"]')!;
 
-const card = (id: string, names: string[], record = '', held_by: FeedLookup['known'] = null) =>
+const card = (id: string, names: string[], record = '', held_by: { id: number; name: string } | null = null) =>
   ({ id, names, record, url: `https://javdb.com/actors/${id}`, held_by, matched: [] });
 
 const LOOKUP: FeedLookup = {
@@ -1096,6 +1096,23 @@ it('回车也是查找；勾的卡已在数据库里谁名下就说会挂给谁�
   expect(host.textContent).toContain('所勾的卡分属数据库里不同的人：甲、乙');
   expect(buttonNamed('添加订阅（2）', host)?.disabled).toBe(true);
   expect(sentBody(fetcher, FEED_SOURCE_URL)).toEqual([]);
+});
+
+it('JavDB 搜不成时，库里已有编号的她可以直接订，原因照样说明', async () => {
+  const lookup = vi.fn(() => ({ ...LOOKUP, suggested: [], candidates: [], unavailable: 'JavDB 没有搜成：来源正在冷却',
+    known: { id: 5, name: '瀬戸環奈', subscribable: true, following: false } }));
+  const feedWrite = vi.fn(() => ok({ ok: true, entity_id: 5, following: true, sources: [7] }));
+  const { host, props } = await open({ feeds: FEEDS, lookup, feedWrite }, { tab: 'add' });
+  await type(nameField(host), '瀬戸環奈');
+  await click(buttonNamed('查找', actorPanel(host)));
+  await settle();
+  expect(host.textContent).toContain('JavDB 没有搜成：来源正在冷却');
+  expect(host.textContent).toContain('数据库里的「瀬戸環奈」已有 JavDB 或 DMM 编号，可以直接订阅。');
+  expect(host.textContent).not.toContain('JavDB 上没有搜到这个名字。');
+  await click(buttonNamed('订阅「瀬戸環奈」', host));
+  await settle();
+  expect(feedWrite).toHaveBeenCalledWith({ action: 'follow', entity_id: 5, enabled: true });
+  expect(props.toast).toHaveBeenCalledWith('已订阅「瀬戸環奈」的新作');
 });
 
 it('查找被服务端挡回时原因摆在卡里，没有候选时直说', async () => {

@@ -117,6 +117,15 @@ describe('画进宿主', () => {
     expect(given.actions.settled).toHaveBeenLastCalledWith(true);
   });
 
+  it('首页那一行行尾带「查看全部新作」，指向 JAV 页的新作分区', async () => {
+    serve([1]);
+    const rowWithAll = vi.fn((data: FeedDiscoveries | null, allHref = '') => `${rowHtml(data).slice(0, -6)}<a class="feednewall" href="${allHref}">查看全部新作</a></div>`);
+    const given = props({ helpers: { feedRowHtml: rowWithAll, wireFeedRow: vi.fn() } });
+    await open(given);
+    expect(rowWithAll).toHaveBeenLastCalledWith(expect.anything(), '/jav?tab=releases');
+    expect(given.host.querySelector('.feednewrow > a.feednewall')?.getAttribute('href')).toBe('/jav?tab=releases');
+  });
+
   it('一条都没有就整块不出，报给壳「没有」', async () => {
     serve([]);
     const given = props();

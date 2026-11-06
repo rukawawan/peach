@@ -20,6 +20,9 @@ const glyph = (html: string, draw: boolean) => (
 let mounted: { host: Element; root: Root } | null = null;
 /* Agent Progress 的 rounded-2xl 外框，沿用现有半径 token 并限定在通知栈内。 */
 const FRAME = { '--floating-radius': 'var(--radius-2xl)' } as CSSProperties;
+/* 通知栈的底边：贴底的多选操作条、停在下角的小窗各自写下占的高度（含间距），栈落在最高的那个
+   之上；都没有时就是默认边距。 */
+const floor = (edge: number) => `max(${edge}px, var(--selection-dock-space, 0px), var(--miniplayer-space, 0px))`;
 
 /** 应用卸载时撤下 Sonner 的订阅与计时；同一宿主之后可重新挂载。 */
 export function unmountToaster(): void {
@@ -33,19 +36,20 @@ export const mountToaster: typeof Bundle.mountToaster = (host, icons) => {
   unmountToaster();
   const root = createRoot(host);
   mounted = { host, root };
-  /* 底边读 `--toast-bottom`：教程卡在右下角时，遗留层把它写成卡上沿之上的位置；没写就是
-     Sonner 的默认边距。栈为长回执留出空间，每条回执的宽度由内容决定。 */
+  /* 右下角的浮层都进这两列：后台任务卡落在底边上，回执与提示的栈压在它上沿之上
+     （`--processing-toast-space` 由任务卡按自己的高度写），上下排开不重叠。别处要在右下角提示，
+     走 `toast` 进栈，不另钉一块 `position: fixed`。栈为长回执留出空间，每条回执的宽度由内容决定。 */
   root.render(
     <Providers><Toaster id="receipts" position="bottom-right" closeButton gap={8}
       style={{ ...FRAME, '--width': 'min(560px, calc(100vw - 48px))' } as CSSProperties}
-      offset={{ right: 24, bottom: 'calc(var(--toast-bottom, 24px) + var(--processing-toast-space, 0px))' }}
-      mobileOffset={{ right: 16, left: 16, bottom: 'calc(var(--toast-bottom, 16px) + var(--processing-toast-space, 0px))' }}
+      offset={{ right: 24, bottom: `calc(${floor(24)} + var(--processing-toast-space, 0px))` }}
+      mobileOffset={{ right: 16, left: 16, bottom: `calc(${floor(16)} + var(--processing-toast-space, 0px))` }}
       toastOptions={{ closeButtonAriaLabel: '关闭提示' }} containerAriaLabel="通知"
       icons={{ success: glyph(icons.success, true), error: glyph(icons.error, false) }} />
       <Toaster id="processing" position="bottom-right" gap={8} expand
         style={{ ...FRAME, '--width': 'min(400px, calc(100vw - 32px))' } as CSSProperties}
-        offset={{ right: 24, bottom: 'var(--toast-bottom, 24px)' }}
-        mobileOffset={{ right: 16, left: 16, bottom: 'var(--toast-bottom, 16px)' }}
+        offset={{ right: 24, bottom: floor(24) }}
+        mobileOffset={{ right: 16, left: 16, bottom: floor(16) }}
         toastOptions={{ closeButtonAriaLabel: '关闭任务提示' }} containerAriaLabel="后台任务" />
     </Providers>,
   );

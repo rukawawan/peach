@@ -229,3 +229,34 @@ def ensure_certificate(
     LOGGER.info("重签服务器证书：%s", reason)
     reissue(files, common_name, names, wanted)
     return reason
+
+
+@dataclass(frozen=True)
+class PublicCa:
+    """给其他设备安装的根证书：只有公开部分，私钥从不经过这里。"""
+    pem: bytes
+    fingerprint: str
+    not_after: datetime
+
+
+def public_ca(ca_cert: Path) -> PublicCa | None:
+    """读本机 CA 的公开证书；文件不在返回 None，内容不是证书时抛 ValueError。
+
+    下发的字节由 `cryptography` 解析后重新编码，不是把文件原样吐出去：哪怕有人把私钥拼进了
+    这份 `.crt`，发出去的也只有证书本身。指纹按 openssl `-fingerprint -sha256` 的写法给出，
+    冒号分隔、大写，便于和手机上看到的逐字比对。
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+
+    try:
+        data = ca_cert.read_bytes()
+    except FileNotFoundError:
+        return None
+    certificate = x509.load_pem_x509_certificate(data)
+    digest = certificate.fingerprint(hashes.SHA256()).hex().upper()
+    return PublicCa(
+        pem=certificate.public_bytes(serialization.Encoding.PEM),
+        fingerprint=":".join(digest[index:index + 2] for index in range(0, len(digest), 2)),
+        not_after=certificate.not_valid_after_utc,
+    )
