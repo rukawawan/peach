@@ -5,12 +5,13 @@ import json
 import re
 import time
 from functools import cache
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 
 from .catalog_rules import (
     _jav_code_pattern, is_jav_code, promo_free_key, release_code_from_filename, without_store_prefix,
 )
 from .media_sources import SCANNABLE_LOCATIONS
+from .config import STATE_DIR
 from .settings_file import PROJECT_ROOT
 from .personal_records import record_holders
 from .repository import LedgerDatabase
@@ -128,6 +129,11 @@ JUNK_REVIEW_SCORE = 40
 AUTO_TRASH_SCORE = 60
 #: 极短附件的结构证据只进入复核：目录中须有同名长正片，且附件相对它足够短、小。
 SHORT_ATTACHMENT_SECONDS = 30
+#: 用户设定的短视频广告规则（`STATE_DIR/junk-rules.json` 的 `short_ad_minutes`）：探测到的时长
+#: 短于它的视频单独就够自动移入回收站，体积不限。0 表示关闭。文件名自带番号的仍只进复核
+#: （`_can_isolate`），可能是预告或下载不全的正片。
+JUNK_RULES_FILE = "junk-rules.json"
+SHORT_AD_MAX_MINUTES = 30
 SHORT_ATTACHMENT_BYTES = 32 * 1024**2
 SHORT_ATTACHMENT_CLUSTER = 3
 #: 「来源站名 + 序号」也用于正常短片；站点水印不能成为自动隔离依据。
@@ -147,6 +153,42 @@ ARTWORK_NAME = re.compile(
 #: 同名同体积的文件散布在这么多个目录，就是被成批塞进不同发行包的同一份附件。
 REPEATED_COPY_FOLDERS = 3
 REPEATED_COPY_MAX_BYTES = 16 * 1024**2
+
+
+def short_ad_minutes(state_root=STATE_DIR) -> int:
+    """短视频广告规则的分钟数；没设置或读不了时为 0（关闭）。"""
+    try:
+        value = json.loads((Path(state_root) / JUNK_RULES_FILE).read_text(encoding="utf-8"))
+        minutes = int(value.get("short_ad_minutes") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+    return max(0, min(SHORT_AD_MAX_MINUTES, minutes))
+
+
+def save_short_ad_minutes(minutes, state_root=STATE_DIR) -> int:
+    """保存短视频广告规则；超出 0–30 分钟的输入拒绝。"""
+    value = int(minutes)
+    if not 0 <= value <= SHORT_AD_MAX_MINUTES:
+        raise ValueError(f"短视频广告的时长要在 0 到 {SHORT_AD_MAX_MINUTES} 分钟之间")
+    root = Path(state_root)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / JUNK_RULES_FILE).write_text(json.dumps({"short_ad_minutes": value}), encoding="utf-8")
+    return value
+
+
+def _short_ad_limit(seconds: int | None) -> int:
+    """调用方给的秒数，或用户设定的短视频广告规则换成秒。"""
+    return short_ad_minutes() * 60 if seconds is None else seconds
+
+
+def _is_short_ad(row, short_ad_seconds: int) -> bool:
+    """探测到的时长短于短视频广告规则的视频。"""
+    return row.get("medium") == "video" and 0 < (row.get("duration") or 0) < short_ad_seconds
+
+
+def _structural_junk(attachment_reason: str, attachment_reasons, row, short_ad_seconds: int) -> bool:
+    """附件结构或短视频广告规则命中：有真实归属的水印正片折扣不适用。"""
+    return bool(attachment_reason or attachment_reasons or _is_short_ad(row, short_ad_seconds))
 
 
 def despaced(name: str) -> str:
@@ -255,7 +297,7 @@ def _scope_clause(*, asset_ids=None, roots=None):
     return (" AND (" + " OR ".join(clauses) + ")", tuple(values)) if clauses else (" AND 0", ())
 
 
-def _junk_rows(connection, *, asset_ids=None, roots=None):
+def _junk_rows(connection, *, asset_ids=None, roots=None, short_ad_seconds=0):
     """读取能进入垃圾复核的物理文件；字幕、NFO 与大视频在最外层排除。"""
     marks = ",".join("?" for _ in SCANNABLE_LOCATIONS)
     scope, parameters = _scope_clause(asset_ids=asset_ids, roots=roots)
@@ -264,8 +306,8 @@ def _junk_rows(connection, *, asset_ids=None, roots=None):
         "feedback,disposal,play_count,leave_ratio,o_count,studio,ctx_orient,path "
         f"FROM asset WHERE location IN ({marks}) AND disposal IS NULL "
         "AND (COALESCE(medium,'other')<>'video' OR (size < ? "
-        "AND (duration IS NULL OR duration <= 1200)))" + scope,
-        (*SCANNABLE_LOCATIONS, JUNK_VIDEO_MAX_BYTES, *parameters)).fetchall()
+        "AND (duration IS NULL OR duration <= 1200)) OR (duration > 0 AND duration < ?))" + scope,
+        (*SCANNABLE_LOCATIONS, JUNK_VIDEO_MAX_BYTES, short_ad_seconds, *parameters)).fetchall()
     # NFO 是媒体资料边车，不是等待清理的物理内容；即使名字或所在目录带推广词，
     # 也应由资料读取报告解析问题，不能进入会把文件移入回收站的垃圾队列。
     return [row for row in rows if _junk_file_eligible(row)]
@@ -554,7 +596,8 @@ def _attachment_evidence(row, suffix: str, name: str, download_attachments: dict
 
 
 def _video_evidence(row, stem: str, longer: dict, promo_dir: bool,
-                    directory_points: int, attachment_reason: str = "") -> tuple[int, int, list[str]]:
+                    directory_points: int, attachment_reason: str = "",
+                    short_ad_seconds: int = 0) -> tuple[int, int, list[str]]:
     """视频自己的证据：同番号完整版、时长、体积与推广目录。
 
     返回（分数，其中只够复核的分数，理由）。时长没探测到的视频可能就是正片：
@@ -570,7 +613,9 @@ def _video_evidence(row, stem: str, longer: dict, promo_dir: bool,
         # 分卷已排除，真番号下不到两成时长基本就是片段/预告，单独即可入队复核。
         # 用户标记的 `反抗不如享受.mp4`（ABW-220，244 秒）正好卡在旧的 35 分门外。
         score += 40; why.append(f"同番号有 {longest/60:.0f} 分完整版")
-    if duration is not None and 0 < duration < 240:
+    if duration is not None and 0 < duration < short_ad_seconds:
+        score += AUTO_TRASH_SCORE; why.append(f"短于 {short_ad_seconds // 60} 分钟，按广告处理")
+    elif duration is not None and 0 < duration < 240:
         score += 15; why.append("不足 4 分钟")
     context = directory_points
     if (row["size"] or 0) < JUNK_VIDEO_MAX_BYTES:
@@ -589,10 +634,10 @@ def _video_evidence(row, stem: str, longer: dict, promo_dir: bool,
     return score, review_only, why
 
 
-def _judgement_inputs(database, *, asset_ids, roots):
+def _judgement_inputs(database, *, asset_ids, roots, short_ad_seconds=0):
     """读取同一账本快照中的候选、用户决定、作品版本与目录上下文。"""
     with database.read_connection() as c:
-        rows = _junk_rows(c, asset_ids=asset_ids, roots=roots)
+        rows = _junk_rows(c, asset_ids=asset_ids, roots=roots, short_ad_seconds=short_ad_seconds)
         if not rows:
             return [], {}, frozenset(), {}, {}, {}, {}, {}
         # 同番号是否存在明显更长的版本；只在 code 是真番号时才有意义。
@@ -629,10 +674,16 @@ def _promo_shape(medium, stem: str, name: str) -> tuple[bool, bool]:
     return promo and not named_release, named_release
 
 
-def scored_candidates(database, *, asset_ids=None, roots=None) -> tuple[list[dict], frozenset[int]]:
-    """候选按嫌疑分从高到低排序，连同用户已确认不是垃圾的 id。"""
+def scored_candidates(database, *, asset_ids=None, roots=None,
+                      short_ad_seconds: int | None = None) -> tuple[list[dict], frozenset[int]]:
+    """候选按嫌疑分从高到低排序，连同用户已确认不是垃圾的 id。
+
+    `short_ad_seconds` 不给时读用户设定的短视频广告规则（`short_ad_minutes`）。
+    """
+    short_limit = _short_ad_limit(short_ad_seconds)
     (rows, longer, dismissed_ids, folder_assets, folder_videos, short_attachments,
-     download_attachments, copies) = _judgement_inputs(database, asset_ids=asset_ids, roots=roots)
+     download_attachments, copies) = _judgement_inputs(database, asset_ids=asset_ids, roots=roots,
+                                                       short_ad_seconds=short_limit)
     # 每个目录里挂着推广名的候选有多少个；插页判据要看它有没有同伙。
     promo_neighbours = _promo_neighbour_counts(rows)
     out = []
@@ -722,10 +773,11 @@ def scored_candidates(database, *, asset_ids=None, roots=None) -> tuple[list[dic
                 s += 50; why.append("住在推广目录")
         if d.get("medium") == "video":
             points, weak, reasons = _video_evidence(
-                d, nm, longer, promo_dir, directory_points, short_attachments.get(d["id"], ""))
+                d, nm, longer, promo_dir, directory_points, short_attachments.get(d["id"], ""), short_limit)
             s += points; review_only += weak; why.extend(reasons)
         # 有真实创作者归属、且名字剥完仍有实质描述的，是被打了水印的正片，不是广告。
-        if real_owner and residue >= 14 and not (attachment_reason or attachment_reasons):
+        if real_owner and residue >= 14 and not _structural_junk(
+                attachment_reason, attachment_reasons, d, short_limit):
             s -= 45
         if review_only and s - review_only < AUTO_TRASH_SCORE:
             s = min(s, AUTO_TRASH_SCORE - 1)
@@ -736,7 +788,7 @@ def scored_candidates(database, *, asset_ids=None, roots=None) -> tuple[list[dic
     return out, frozenset(dismissed_ids)
 
 
-def isolate(database, *, asset_ids=None, roots=None, protected_ids=()) -> dict:
+def isolate(database, *, asset_ids=None, roots=None, protected_ids=(), short_ad_seconds=None) -> dict:
     """将明确范围内的高分垃圾移入可还原回收站，不读取或删除媒体。
 
     人工保留、个人记录、文件自身作品身份和调用方点名的正片受保护。写入前重查评分依据，
@@ -746,7 +798,8 @@ def isolate(database, *, asset_ids=None, roots=None, protected_ids=()) -> dict:
         raise ValueError("自动垃圾检查必须指定资产或来源目录")
     if not isinstance(database, LedgerDatabase):
         database = LedgerDatabase(database)
-    scored, dismissed = scored_candidates(database, asset_ids=asset_ids, roots=roots)
+    scored, dismissed = scored_candidates(database, asset_ids=asset_ids, roots=roots,
+                                          short_ad_seconds=short_ad_seconds)
     protected = set(protected_ids) | set(dismissed)
     chosen = [row for row in scored if row['score'] >= AUTO_TRASH_SCORE and row['id'] not in protected]
     isolated = []

@@ -368,6 +368,31 @@ def _post_western_scrape(contract, body):
     raise ValueError("unsupported western scrape action")
 
 
+def _junk_rules(contract):
+    """短视频广告规则的分钟数，和库里现在短于它、还没处置的视频数。"""
+    from . import junk
+    from .media_sources import SCANNABLE_LOCATIONS
+    minutes = junk.short_ad_minutes()
+    marks = ",".join("?" for _ in SCANNABLE_LOCATIONS)
+    with contract.database.read_connection() as connection:
+        matching = connection.execute(
+            f"SELECT count(*) FROM asset WHERE location IN ({marks}) AND disposal IS NULL "
+            "AND medium='video' AND duration>0 AND duration<?",
+            (*SCANNABLE_LOCATIONS, minutes * 60)).fetchone()[0]
+    return {"short_ad_minutes": minutes, "max_minutes": junk.SHORT_AD_MAX_MINUTES, "matching": matching}
+
+
+def _get_junk_rules(contract, _args):
+    return _junk_rules(contract)
+
+
+def _post_junk_rules(contract, body):
+    """保存短视频广告规则（`junk.save_short_ad_minutes`），0 为关闭。"""
+    from . import junk
+    junk.save_short_ad_minutes(body.get("short_ad_minutes") or 0)
+    return _junk_rules(contract)
+
+
 def _get_jasna(contract, _args):
     from . import jasna_restore
     return jasna_restore.summary(contract)
@@ -490,6 +515,7 @@ GET_HANDLERS = {
     "/api/ads": _get_ads,
     "/api/western-scrape": _get_western_scrape,
     "/api/jasna": _get_jasna,
+    "/api/junk-rules": _get_junk_rules,
     "/api/ai-subtitles": _get_ai_subtitles,
     "/api/related": _get_related,
     "/api/custom-metadata": q_custom_metadata,
@@ -556,6 +582,7 @@ POST_HANDLERS = {
     "/api/ads/bulk": w_junk_bulk,
     "/api/western-scrape": _post_western_scrape,
     "/api/jasna": _post_jasna,
+    "/api/junk-rules": _post_junk_rules,
     "/api/ai-subtitles": _post_ai_subtitles,
     "/api/search-history": w_search_history,
     "/api/taste/refresh": w_taste_refresh,

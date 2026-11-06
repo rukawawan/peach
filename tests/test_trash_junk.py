@@ -481,3 +481,40 @@ class TrashJunkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShortAdRuleTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.db_path = fresh_ledger(self.root)
+        TrashJunkTests.add(self, 1, "115", r"B:\合集\宣传片.mp4", "video", 600 * 1024**2, 170)
+        TrashJunkTests.add(self, 2, "115", r"B:\合集\正片.mp4", "video", 600 * 1024**2, 3600)
+        TrashJunkTests.add(self, 3, "115", r"B:\合集\SONE-804.mp4", "video", 30 * 1024**2, 100)
+
+    def test_videos_shorter_than_the_setting_move_to_trash_whatever_their_size(self):
+        from peach import junk
+
+        result = junk.isolate(self.db_path, asset_ids=[1, 2, 3], short_ad_seconds=300)
+
+        self.assertEqual(result["ids"], [1])
+        self.assertEqual(TrashJunkTests.disposal(self, 1), "trash")
+        self.assertIsNone(TrashJunkTests.disposal(self, 2))
+        # 名字自带番号的短视频可能是预告或下载不全的正片，只进复核。
+        self.assertIsNone(TrashJunkTests.disposal(self, 3))
+        from peach.repository import LedgerDatabase
+        scored, _ = junk.scored_candidates(LedgerDatabase(self.db_path), asset_ids=[3], short_ad_seconds=300)
+        self.assertIn("短于 5 分钟", scored[0]["why"])
+
+    def test_the_rule_is_off_until_the_user_sets_minutes(self):
+        from peach import junk
+
+        state = self.root / "state"
+        self.assertEqual(junk.short_ad_minutes(state), 0)
+        with mock.patch.object(junk, "short_ad_minutes", lambda: 0):
+            self.assertEqual(junk.isolate(self.db_path, asset_ids=[1, 2, 3])["ids"], [])
+        self.assertEqual(junk.save_short_ad_minutes(5, state), 5)
+        self.assertEqual(junk.short_ad_minutes(state), 5)
+        with self.assertRaises(ValueError):
+            junk.save_short_ad_minutes(31, state)
