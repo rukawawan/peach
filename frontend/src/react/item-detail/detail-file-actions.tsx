@@ -1,5 +1,5 @@
-/* 详情页的文件操作：交给 Jasna 去码、生成 AI 中文字幕（`src/peach/ai_subtitles.py`），
- * 或把这部影片连同磁盘上的文件永久删除。
+/* 详情页的文件操作：在资源管理器里打开文件所在位置（`/api/reveal`），交给 Jasna 去码、
+ * 生成 AI 中文字幕（`src/peach/ai_subtitles.py`），或把这部影片连同磁盘上的文件永久删除。
  *
  * 去码在服务端排队（`src/peach/jasna_restore.py`），进度在任务中心；成品是同目录的
  * `<原文件名>-去码.mkv`，登记后作为新的一条出现在片库。永久删除走与回收站相同的两步：
@@ -43,6 +43,17 @@ export function DetailFileActions({ item, toast, onDeleted }: {
   const stem = String(item.name || '').replace(/\.[^.]+$/, '');
   const video = (item.medium || 'video') === 'video';
 
+  /* 路径由服务端按 id 查，资源管理器开在 Peach 所在的那台电脑上，并选中这个文件。 */
+  const reveal = async () => {
+    setBusy('reveal');
+    try {
+      await apiSend('/api/reveal', { id: item.id });
+      toast('已在资源管理器中显示');
+    } catch (cause) {
+      toast(errorMessage(cause));
+    } finally { setBusy('') }
+  };
+
   const restore = async () => {
     setBusy('jasna');
     try {
@@ -84,6 +95,7 @@ export function DetailFileActions({ item, toast, onDeleted }: {
 
   return (
     <div className="flex flex-wrap items-center gap-2" data-detail-file-actions="">
+      <Button size="small" variant="secondary" disabled={!!busy} onClick={() => void reveal()}>打开所在位置</Button>
       {video && !RESTORED.test(stem) ? (
         <Button size="small" variant="secondary" disabled={!!busy || queued} onClick={() => void restore()}>
           {queued ? '已排进 Jasna 去码队列' : '用 Jasna 去码'}
