@@ -369,17 +369,17 @@ def _post_western_scrape(contract, body):
 
 
 def _post_folder_performers(contract, body):
-    """按文件夹归艺人（`folder_performers`）：preview 看子文件夹，apply 写入，undo 撤回。"""
+    """按文件夹归艺人（`folder_performers`）：preview 看子文件夹，apply 设目录规则，undo 移除。"""
     from . import folder_performers
     action = body.get("action")
     parent = body.get("parent") or ""
     if action == "apply":
-        result = folder_performers.apply(contract.database, parent, body.get("folders") or [])
-        return {**folder_performers.preview(contract.database, parent), "applied": result}
+        result = folder_performers.apply(contract, parent, body.get("folders") or [])
+        return {**folder_performers.preview(contract, parent), "applied": result}
     if action == "undo":
-        result = folder_performers.undo(contract.database, parent)
-        return {**folder_performers.preview(contract.database, parent), "undone": result}
-    return folder_performers.preview(contract.database, parent)
+        result = folder_performers.undo(contract, parent)
+        return {**folder_performers.preview(contract, parent), "undone": result}
+    return folder_performers.preview(contract, parent)
 
 
 def _junk_rules(contract):

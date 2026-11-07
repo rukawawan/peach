@@ -1,17 +1,16 @@
-"""按文件夹指定艺人：一个父目录下每个子文件夹是一位艺人，里面的视频都记到她名下。
+"""按文件夹归艺人：一个父目录下每个子文件夹是一位艺人，给它们一次设好「人物」目录规则。
 
 用户已经按艺人分好文件夹（如 `D:\\Downloads\\欧美\\Kayden_Kross`），文件名却刮削不到时，
 在「数据管理 → 按文件夹归艺人」里填父目录，勾选哪些子文件夹是艺人，一次写入。
 
-写入是用户确认过的断言：`asset_tag` 的 `演员:<名字>` 与规范实体关系，来源都是 `SOURCE`，
-可以按来源整批撤回（`undo`）。`asset.path` 保持 Windows 形态，只读不改。
+写入复用目录用途（`folder_rules`）：每个勾选的子文件夹得到一条「人物」规则，包含子文件夹、
+新文件沿用。现有视频立即关联到这位艺人，以后扫描进这个文件夹的新视频自动关联；已有不同
+人物或逐件确认的视频保留原归属。撤回就是移除这些目录规则（`undo`）。`asset.path` 只读不改。
 """
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 
-SOURCE = "user:folder-performer"
 MAX_FOLDERS = 500
 
 _PAREN = re.compile(r"\s*[(（\[【].*$")
@@ -59,69 +58,93 @@ def _videos(connection, prefix: str):
             yield int(asset_id), rest.split("\\", 1)[0]
 
 
-def preview(database, parent: str) -> dict:
-    """父目录下各子文件夹的视频数、建议的艺人名、是否默认勾选和已经归过的数量。"""
+def preview(contract, parent: str) -> dict:
+    """父目录下各子文件夹的视频数、建议的艺人名、是否默认勾选，以及已经设好的艺人。"""
     parent = normalize_parent(parent)
     prefix = _prefix(parent)
-    with database.read_connection() as connection:
-        groups: dict[str, list[int]] = {}
-        for asset_id, folder in _videos(connection, prefix):
-            groups.setdefault(folder, []).append(asset_id)
-        done = {row[0] for row in connection.execute(
-            "SELECT DISTINCT asset_id FROM asset_tag WHERE source=?", (SOURCE,))}
+    with contract.read_connection() as connection:
+        groups: dict[str, int] = {}
+        for _, folder in _videos(connection, prefix):
+            groups[folder] = groups.get(folder, 0) + 1
+    assigned = assigned_names(contract, parent)
     folders = []
     for folder in sorted(groups, key=str.casefold)[:MAX_FOLDERS]:
-        name = suggested_name(folder)
-        ids = groups[folder]
-        folders.append({"folder": folder, "name": name, "videos": len(ids),
-                        "assigned": sum(1 for asset_id in ids if asset_id in done),
-                        "selected": looks_like_name(name)})
+        held = assigned.get(folder.casefold(), "")
+        name = held or suggested_name(folder)
+        folders.append({"folder": folder, "name": name, "videos": groups[folder], "assigned": held,
+                        "selected": not held and looks_like_name(name)})
     return {"parent": parent, "folders": folders, "truncated": len(groups) > MAX_FOLDERS}
 
 
-def apply(database, parent: str, choices: list[dict]) -> dict:
-    """把勾选的子文件夹里的视频记到对应艺人名下；返回写了多少部、几位艺人。"""
-    from .entities import upsert_asset_entity
+def _nodes(contract, parent: str) -> dict[str, dict]:
+    """父目录下第一层子文件夹在目录索引里的节点，键是小写的文件夹名。"""
+    from .web_folders import _index
+    prefix = _prefix(parent).casefold()
+    found = {}
+    for node in _index(contract, {}).values():
+        path = str(node["path"])
+        rest = path[len(prefix):] if path.casefold().startswith(prefix) else ""
+        if rest and "\\" not in rest:
+            found[rest.casefold()] = node
+    return found
+
+
+def _rules(connection) -> dict[str, dict]:
+    from . import folder_rules
+    _, data = folder_rules.load(connection)
+    return {rule["id"]: rule for rule in data["rules"]}
+
+
+def assigned_names(contract, parent: str) -> dict[str, str]:
+    """父目录下已经设成「人物」的子文件夹：小写文件夹名 → 艺人名。"""
+    nodes = _nodes(contract, normalize_parent(parent))
+    with contract.read_connection() as connection:
+        rules = _rules(connection)
+    return {key: rules[node["id"]]["name"] for key, node in nodes.items()
+            if rules.get(node["id"], {}).get("purpose") == "performer"}
+
+
+def apply(contract, parent: str, choices: list[dict]) -> dict:
+    """勾选的子文件夹各设一条「人物」目录规则（含子文件夹、新文件沿用）；返回关联数与跳过的原因。"""
+    from . import folder_rules
     parent = normalize_parent(parent)
-    prefix = _prefix(parent)
     names = {}
     for choice in choices or []:
         folder = str(choice.get("folder") or "")
         name = _SPACES.sub(" ", str(choice.get("name") or "")).strip()
         if folder and name and "\\" not in folder:
-            if len(name) > 80:
-                raise ValueError(f"艺人名太长：{name[:20]}…")
-            names[folder.casefold()] = name
+            names[folder.casefold()] = (folder, name)
     if not names:
         raise ValueError("没有勾选任何文件夹")
-    now = datetime.now(timezone.utc).isoformat()
-    written: dict[str, int] = {}
-    with database.write_transaction() as connection:
-        for asset_id, folder in list(_videos(connection, prefix)):
-            name = names.get(folder.casefold())
-            if not name:
+    nodes = _nodes(contract, parent)
+    linked, performers, skipped = 0, 0, []
+    with contract.write_transaction() as connection:
+        for key, (folder, name) in names.items():
+            node = nodes.get(key)
+            if node is None:
+                skipped.append(f"{folder}：不在 Peach 的媒体目录里")
                 continue
-            connection.execute(
-                "INSERT OR IGNORE INTO asset_tag(asset_id,tag,confidence,source) VALUES(?,?,?,?)",
-                (asset_id, "演员:" + name, 1.0, SOURCE))
-            upsert_asset_entity(connection, kind="performer", name=name, asset_id=asset_id,
-                                role="performer", source=SOURCE, confidence=1.0, now=now)
-            written[name] = written.get(name, 0) + 1
-    return {"videos": sum(written.values()), "performers": len(written)}
+            settings, data = folder_rules.load(connection)
+            try:
+                rule = folder_rules.validate(connection, node, {
+                    "purpose": "performer", "name": name, "recursive": True, "future": True})
+            except ValueError as error:
+                skipped.append(f"{folder}：{error}")
+                continue
+            preview = folder_rules.plan(connection, rule, data)
+            linked += folder_rules.save(connection, settings, data, rule, preview, preview["plan_version"])
+            performers += 1
+    return {"videos": linked, "performers": performers, "skipped": skipped}
 
 
-def undo(database, parent: str) -> dict:
-    """撤回这个父目录下按文件夹归过的艺人；其他来源的艺人不动。"""
-    parent = normalize_parent(parent)
-    prefix = _prefix(parent)
-    with database.write_transaction() as connection:
-        ids = [asset_id for asset_id, _ in _videos(connection, prefix)]
-        removed = 0
-        for start in range(0, len(ids), 500):
-            batch = ids[start:start + 500]
-            marks = ",".join("?" for _ in batch)
-            removed += connection.execute(
-                f"DELETE FROM asset_tag WHERE source=? AND asset_id IN ({marks})", (SOURCE, *batch)).rowcount
-            connection.execute(
-                f"DELETE FROM asset_entity WHERE source=? AND asset_id IN ({marks})", (SOURCE, *batch))
+def undo(contract, parent: str) -> dict:
+    """移除父目录下各子文件夹的「人物」目录规则，撤回它们写入的关联；其他来源不动。"""
+    from . import folder_rules
+    nodes = _nodes(contract, normalize_parent(parent))
+    removed = 0
+    with contract.write_transaction() as connection:
+        for node in nodes.values():
+            settings, data = folder_rules.load(connection)
+            if any(rule["id"] == node["id"] and rule["purpose"] == "performer" for rule in data["rules"]):
+                removed += folder_rules.remove(connection, settings, data, node["id"])
     return {"removed": removed}
