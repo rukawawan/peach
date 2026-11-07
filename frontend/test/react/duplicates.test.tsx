@@ -90,6 +90,11 @@ describe('每组留谁', () => {
     expect(duplicateVictims(groups, '115')).toEqual([2, 3]);
     expect(duplicateVictims([groups[1]!], 'all')).toEqual([3, 4]);
   });
+
+  it('只留这个：这一组只留点中的那一份，其余回收；别的组不动', () => {
+    expect(duplicateVictims([groups[0]!], 'file:2')).toEqual([1]);
+    expect(duplicateVictims(groups, 'file:2')).toEqual([1]);
+  });
 });
 
 it('首屏一次取回分组和来源可达性，页面挂上去不再补取', async () => {

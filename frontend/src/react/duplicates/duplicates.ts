@@ -97,7 +97,7 @@ export type KeepRule = 'largest' | 'longest' | 'all' | (string & {});
 
 /** 确认弹层里「每组保留……」那半句。 */
 export const KEEP_LABELS: Record<string, string> = {
-  largest: '最大的一个', longest: '最长的一个',
+  largest: '最大的一个', longest: '最长的一个', file: '你选的那一个',
   '115': '115（没有则留最大）', pikpak: 'PikPak（没有则留最大）', all: '零个文件',
 };
 
@@ -129,7 +129,12 @@ export function duplicateVictims(groups: readonly DuplicateGroup[], keep: KeepRu
       continue;
     }
     let keeper: DuplicateFile | undefined;
-    if (keep === 'largest' || keep === 'longest') {
+    if (keep.startsWith('file:')) {
+      // 「只留这个」：组里只留点中的那一份，其余都回收；点中的不在这组就整组不动。
+      const chosen = group.files.find((file) => `file:${file.id}` === keep);
+      if (!chosen) continue;
+      keeper = chosen;
+    } else if (keep === 'largest' || keep === 'longest') {
       const flag = keep === 'longest' ? 'is_longest' : 'is_largest';
       keeper = group.files.find((file) => file[flag]) ?? group.files[0];
     } else {
