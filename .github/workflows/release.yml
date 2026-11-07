@@ -142,6 +142,15 @@ jobs:
       - name: 构建独立目录包与安装包
         shell: pwsh
         run: '& ./scripts/build_windows.ps1 -Installer -CloudflaredPath "$env:RUNNER_TEMP/cloudflared.exe" -FFmpegPath "$env:RUNNER_TEMP/ffmpeg-build/ffmpeg" -UntruncPath "$env:RUNNER_TEMP/untrunc-build/untrunc"'
+      - name: 前端类型检查与单元测试
+        # 自定义 fork 不随推送跑 Test，打包前在这里补上前端检查：类型错误不会让构建失败，却会让页面白屏。
+        if: github.repository_owner == 'rukawawan'
+        shell: pwsh
+        run: |
+          npm --prefix frontend run typecheck
+          if ($LASTEXITCODE -ne 0) { throw '前端类型检查失败' }
+          npm --prefix frontend run test
+          if ($LASTEXITCODE -ne 0) { throw '前端单元测试失败' }
       - name: 上传 Windows 构建的浏览器 source maps
         shell: pwsh
         env:

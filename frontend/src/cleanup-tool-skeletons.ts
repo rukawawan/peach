@@ -115,6 +115,12 @@ const batchDelete = () => `<section class="flex min-w-0 scroll-mt-20 flex-col ga
   ],
 })}</section>`;
 
+/** 自定义设置页（欧美刮削、Jasna、AI 字幕、短视频广告）共用的骨架：一张卡，若干行输入框。 */
+const settingsCard = (rows: number) => `<section class="flex min-w-0 flex-col gap-3 rounded-2xl border border-separator-border p-5">${
+  `<span class="skeleton rounded-md" style="width:8em;height:20px"></span>`
+  + Array.from({ length: rows }, () => `<span class="skeleton rounded-lg" style="width:100%;height:36px"></span>`).join('')
+}</section>`;
+
 const BODIES: Record<CleanupToolKey, { label: string; body: () => string }> = {
   organize: { label: '正在读取整理配置', body: organize },
   'resource-sync': { label: '正在读取资源同步状态', body: resourceSync },
@@ -122,6 +128,10 @@ const BODIES: Record<CleanupToolKey, { label: string; body: () => string }> = {
   'media-repair': { label: '正在读取媒体修复状态', body: repairCardSkeletonHtml },
   links: { label: '正在读取链接统计', body: links },
   'batch-delete': { label: '正在读取女优列表', body: batchDelete },
+  'western-scrape': { label: '正在读取欧美资料刮削状态', body: () => settingsCard(3) },
+  jasna: { label: '正在读取 Jasna 去码设置', body: () => settingsCard(3) },
+  'ai-subtitles': { label: '正在读取 AI 字幕设置', body: () => settingsCard(5) },
+  'short-ads': { label: '正在读取短视频广告设置', body: () => settingsCard(1) },
 };
 
 /** 二级页骨架：外层是读屏的等待状态，里面那一列与 React `Page` 同宽同间距，整块 `inert`。 */
