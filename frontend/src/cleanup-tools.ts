@@ -16,6 +16,8 @@ export const CLEANUP_TOOLS = [
     description: '设置本机 Jasna，在影片详情页一键去码，成品放回原文件夹。' },
   { key: 'ai-subtitles', path: '/data-cleanup/ai-subtitles', title: 'AI 字幕', icon: 'file-stack',
     description: '本机听写日语，用 DeepSeek 翻成中文字幕，放在影片旁边。' },
+  { key: 'folder-performers', path: '/data-cleanup/folder-performers', title: '按文件夹归艺人', icon: 'user-round',
+    description: '已经按艺人分好的文件夹，把里面的视频都记到这位艺人名下。' },
   { key: 'short-ads', path: '/data-cleanup/short-ads', title: '短视频广告', icon: 'trash',
     description: '设定多短的视频算广告，新入库的自动移入回收站，可还原。' },
   { key: 'batch-delete', path: '/data-cleanup/batch-delete', title: '批量删除', icon: 'trash',

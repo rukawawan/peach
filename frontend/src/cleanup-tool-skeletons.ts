@@ -132,6 +132,7 @@ const BODIES: Record<CleanupToolKey, { label: string; body: () => string }> = {
   jasna: { label: '正在读取 Jasna 去码设置', body: () => settingsCard(3) },
   'ai-subtitles': { label: '正在读取 AI 字幕设置', body: () => settingsCard(5) },
   'short-ads': { label: '正在读取短视频广告设置', body: () => settingsCard(1) },
+  'folder-performers': { label: '正在打开按文件夹归艺人', body: () => settingsCard(1) },
 };
 
 /** 二级页骨架：外层是读屏的等待状态，里面那一列与 React `Page` 同宽同间距，整块 `inert`。 */

@@ -1612,7 +1612,7 @@ class WebDataTests(unittest.TestCase):
             "/api/organize/preview", "/api/organize/apply", "/api/organize/rollback",
             "/api/feeds/check", "/api/feeds/source", "/api/feeds/discovery",
             "/api/wants", "/api/face-models",
-            "/api/ads/bulk", "/api/western-scrape", "/api/jasna", "/api/ai-subtitles", "/api/junk-rules",
+            "/api/ads/bulk", "/api/western-scrape", "/api/jasna", "/api/ai-subtitles", "/api/junk-rules", "/api/folder-performers",
         })
         with self.assertRaises(rm_web.ContractRouteNotFound):
             rm_web.dispatch_api_get(self.contract, "/api/typo", {})

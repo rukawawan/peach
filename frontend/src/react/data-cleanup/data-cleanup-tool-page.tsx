@@ -17,6 +17,7 @@ import { WesternScrapeCard } from './western-scrape-card';
 import { JasnaCard } from './jasna-card';
 import { AiSubtitlesCard } from './ai-subtitles-card';
 import { ShortAdsCard } from './short-ads-card';
+import { FolderPerformersCard } from './folder-performers-card';
 
 function ResourceSyncPage({ toast }: Pick<DataCleanupProps, 'toast'>) {
   const sources = useQuery({ queryKey: MEDIA_SOURCES_KEY, queryFn: ({ signal }) => fetchMediaSources(signal) });
@@ -45,6 +46,7 @@ export function DataCleanupToolPage({ tool, toast, failure }: {
     case 'jasna': content = <JasnaCard toast={notify} />; break;
     case 'ai-subtitles': content = <AiSubtitlesCard toast={notify} />; break;
     case 'short-ads': content = <ShortAdsCard toast={notify} />; break;
+    case 'folder-performers': content = <FolderPerformersCard toast={notify} />; break;
   }
   return <Page>{content}</Page>;
 }

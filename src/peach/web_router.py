@@ -368,6 +368,20 @@ def _post_western_scrape(contract, body):
     raise ValueError("unsupported western scrape action")
 
 
+def _post_folder_performers(contract, body):
+    """按文件夹归艺人（`folder_performers`）：preview 看子文件夹，apply 写入，undo 撤回。"""
+    from . import folder_performers
+    action = body.get("action")
+    parent = body.get("parent") or ""
+    if action == "apply":
+        result = folder_performers.apply(contract.database, parent, body.get("folders") or [])
+        return {**folder_performers.preview(contract.database, parent), "applied": result}
+    if action == "undo":
+        result = folder_performers.undo(contract.database, parent)
+        return {**folder_performers.preview(contract.database, parent), "undone": result}
+    return folder_performers.preview(contract.database, parent)
+
+
 def _junk_rules(contract):
     """短视频广告规则的分钟数，和库里现在短于它、还没处置的视频数。"""
     from . import junk
@@ -583,6 +597,7 @@ POST_HANDLERS = {
     "/api/western-scrape": _post_western_scrape,
     "/api/jasna": _post_jasna,
     "/api/junk-rules": _post_junk_rules,
+    "/api/folder-performers": _post_folder_performers,
     "/api/ai-subtitles": _post_ai_subtitles,
     "/api/search-history": w_search_history,
     "/api/taste/refresh": w_taste_refresh,
