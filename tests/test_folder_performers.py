@@ -68,6 +68,36 @@ class FolderPerformerTests(unittest.TestCase):
         fp.undo(self.contract, PARENT)
         self.assertEqual(self.performers(), [])
 
+    def test_a_name_written_differently_lands_on_the_existing_performer(self):
+        from peach.entities import upsert_asset_entity
+        with self.contract.write_transaction() as connection:
+            upsert_asset_entity(connection, kind='performer', name='Mia Malkova', asset_id=5,
+                                role='performer', source='tpdb', confidence=0.9)
+        result = fp.apply(self.contract, PARENT, [{'folder': 'Kayden_Kross', 'name': 'mia MALKOVA'}])
+        self.assertEqual(result['skipped'], [])
+        self.assertIn(('a.wmv', 'Mia Malkova'), self.performers())
+
+    def test_same_named_performers_pick_the_one_already_in_the_folder_or_ask(self):
+        from peach.entities import upsert_asset_entity
+        with self.contract.write_transaction() as connection:
+            ids = [row[0] for row in connection.execute("SELECT id FROM asset ORDER BY id")]
+            connection.execute("INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at) "
+                               "VALUES('performer','JULIA','julia','2026-01-01','2026-01-01')")
+            upsert_asset_entity(connection, kind='performer', name='Julia Ann', asset_id=ids[4],
+                                role='performer', source='tpdb', confidence=0.9)
+            julia_ann = connection.execute("SELECT id FROM entity WHERE canonical_name='Julia Ann'").fetchone()[0]
+            connection.execute("INSERT INTO entity_alias(entity_id,alias,normalized_alias,source) "
+                               "VALUES(?,?,?,?)", (julia_ann, 'Julia', 'julia', 'tpdb'))
+        result = fp.apply(self.contract, PARENT, [{'folder': 'Kayden_Kross', 'name': 'Julia'}])
+        self.assertEqual(len(result['skipped']), 1)
+        self.assertIn('2 位同名艺人', result['skipped'][0])
+        with self.contract.write_transaction() as connection:
+            upsert_asset_entity(connection, kind='performer', name='Julia Ann', asset_id=ids[0],
+                                role='performer', source='tpdb', confidence=0.9)
+        result = fp.apply(self.contract, PARENT, [{'folder': 'Kayden_Kross', 'name': 'Julia'}])
+        self.assertEqual(result['skipped'], [])
+        self.assertIn(('a.wmv', 'Julia Ann'), self.performers())
+
     def test_suggested_names_drop_separators_and_notes(self):
         self.assertEqual(fp.suggested_name("Lola Bellucci(Lola Bellucci's Fetish Ni"), 'Lola Bellucci')
         self.assertEqual(fp.suggested_name('Riley.Reid'), 'Riley Reid')

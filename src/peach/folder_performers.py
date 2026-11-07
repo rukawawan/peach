@@ -104,6 +104,36 @@ def assigned_names(contract, parent: str) -> dict[str, str]:
             if rules.get(node["id"], {}).get("purpose") == "performer"}
 
 
+def _identity(connection, name: str, node: dict) -> tuple[str, str]:
+    """把填的名字落到库里已有的那位艺人：(规范名, 没落上的原因)。
+
+    大小写或写法不同（`Mia MalKova` 对 `Mia Malkova`）、名字是别名时取那唯一一位；同名的有
+    好几位时，取这个文件夹里已经关联作品最多的那位，一部都没有就不猜，把候选列出来。
+    """
+    from .entities import normalize_entity_name
+    from .media_folders import path_predicate
+    key = normalize_entity_name(name)
+    rows = connection.execute(
+        "SELECT DISTINCT e.id, e.canonical_name FROM entity e LEFT JOIN entity_alias al ON al.entity_id=e.id "
+        "WHERE e.kind='performer' AND (e.normalized_name=? OR al.normalized_alias=?) ORDER BY e.id",
+        (key, key)).fetchall()
+    if not rows:
+        return name, ""
+    if len(rows) == 1:
+        return str(rows[0][1]), ""
+    clause, values = path_predicate(node["location"], node["path"], True)
+    counts = []
+    for entity_id, canonical in rows:
+        held = connection.execute(
+            "SELECT count(DISTINCT a.id) FROM asset a JOIN asset_entity ae ON ae.asset_id=a.id "
+            "WHERE ae.entity_id=? AND " + clause, (entity_id, *values)).fetchone()[0]
+        counts.append((held, str(canonical)))
+    counts.sort(reverse=True)
+    if counts[0][0] and (len(counts) == 1 or counts[0][0] > counts[1][0]):
+        return counts[0][1], ""
+    return "", "有 " + str(len(rows)) + " 位同名艺人（" + "、".join(c for _, c in counts) + "），请改成其中一位的完整名字"
+
+
 def apply(contract, parent: str, choices: list[dict]) -> dict:
     """勾选的子文件夹各设一条「人物」目录规则（含子文件夹、新文件沿用）；返回关联数与跳过的原因。"""
     from . import folder_rules
@@ -125,6 +155,10 @@ def apply(contract, parent: str, choices: list[dict]) -> dict:
                 skipped.append(f"{folder}：不在 Peach 的媒体目录里")
                 continue
             settings, data = folder_rules.load(connection)
+            name, reason = _identity(connection, name, node)
+            if reason:
+                skipped.append(f"{folder}：{reason}")
+                continue
             try:
                 rule = folder_rules.validate(connection, node, {
                     "purpose": "performer", "name": name, "recursive": True, "future": True})
