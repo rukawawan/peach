@@ -518,3 +518,16 @@ class ShortAdRuleTests(unittest.TestCase):
         self.assertEqual(junk.short_ad_minutes(state), 5)
         with self.assertRaises(ValueError):
             junk.save_short_ad_minutes(31, state)
+
+
+class WindowsLongPathTests(unittest.TestCase):
+    def test_local_windows_paths_get_the_long_path_prefix_on_windows_only(self):
+        from peach.web_batch import _windows_long_path
+
+        deep = Path("E:\\D\\Downloads\\" + "很长的目录名" * 60 + "\\019.jpg")
+        with mock.patch("peach.web_batch.os.name", "nt"):
+            self.assertEqual(str(_windows_long_path(deep)), "\\\\?\\" + str(deep))
+            self.assertEqual(_windows_long_path(Path("\\\\nas\\share\\a.mp4")), Path("\\\\nas\\share\\a.mp4"))
+            self.assertIsNone(_windows_long_path(None))
+        with mock.patch("peach.web_batch.os.name", "posix"):
+            self.assertEqual(_windows_long_path(deep), deep)

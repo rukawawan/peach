@@ -382,6 +382,19 @@ def _inside_declared_root(path: Path) -> bool:
                for declaration in declarations if resolve(declaration) is None)
 
 
+def _windows_long_path(path):
+    """Windows 本地路径加 `\\\\?\\` 前缀，超过 260 个字符也能读、改名和删除。
+
+    不加时这类深层长名文件 `stat` 报找不到、改名报「系统找不到指定的路径」，
+    永久删除就一直删不掉。网络共享、SMB 资源和非 Windows 路径原样返回。
+    """
+    text = str(path) if path is not None else ""
+    if os.name != "nt" or not isinstance(path, Path) or text.startswith("\\\\") \
+            or not PureWindowsPath(text).drive:
+        return path
+    return Path("\\\\?\\" + os.path.normpath(text))
+
+
 def purge_assets(connection, rows, *, missing_only: bool = False):
     """删除媒体和账本行，调用方提交后清理隔离文件。
 
@@ -405,9 +418,10 @@ def purge_assets(connection, rows, *, missing_only: bool = False):
                                 "reason": error.strerror or str(error)})
                 continue
         media_stat = None
+        local = _windows_long_path(translated)
         if media:
             try:
-                media_stat = translated.stat()
+                media_stat = local.stat()
             except FileNotFoundError:
                 pass
             except OSError as error:
@@ -419,7 +433,7 @@ def purge_assets(connection, rows, *, missing_only: bool = False):
                 blocked.append({"id": row["id"], "path": media, "reason": "文件仍在盘上"})
                 continue
         elif media:
-            original = translated
+            original = local
             try:
                 if media_stat is not None and not stat.S_ISREG(media_stat.st_mode):
                     raise OSError("not a regular file")
