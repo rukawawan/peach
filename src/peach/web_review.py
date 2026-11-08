@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import time
 from functools import cache, partial
 from pathlib import Path, PurePosixPath
@@ -47,6 +48,7 @@ from .metadata_auto_apply import (
     _row_candidates,
     _split_multi,
     genres_still_pending,
+    pending_genres,
     VERIFY_REVIEW,
     code_assets,
     metadata_decision_is_stale,
@@ -57,6 +59,7 @@ from .metadata_policy import (
     CHAIN_OFFICIAL,
     FALLBACK_SOURCES,
     SOURCE_SPECS,
+    chain_rank,
     preferred_tag_source,
     source_tier,
 )
@@ -1080,6 +1083,53 @@ def w_review_decision(contract: ReviewContract, body):
     contract.cache_bust()   # 标签写完，聚合缓存必须失效，否则 facets 最多 90 秒还是旧数
     return {"ok": True, "category": category, "item_key": item_key, "status": status,
             "applied_assets": applied, "asset_revisions": asset_revisions}
+
+
+def _official_choice(row: dict) -> dict | None:
+    """这一行里排在字段优先级链最前的官方来源候选（含本地 NFO）；没有官方候选返回 None。"""
+    field = str(row.get("field") or "").strip()
+    code = str(row.get("code") or "").strip()
+    official = [candidate for candidate in row.get("candidates") or []
+                if isinstance(candidate, dict) and candidate.get("candidate_key")
+                and source_tier(str(candidate.get("source") or "")) <= CHAIN_OFFICIAL]
+    if not official:
+        return None
+    return min(official, key=lambda candidate: chain_rank(field, str(candidate.get("source") or ""), code=code))
+
+
+def w_review_adopt_official(contract: ReviewContract, body):
+    """资料字段待处理队列里，有官方来源的每一行都采用官方值（用户 2026-11-08 决定）。
+
+    逐行走与「通过」按钮相同的落地（`_approve_metadata_with_receipt`），每行一个事务，
+    一行失败不影响其余；没有官方候选的、内容标签还有未收录原文的留在队列里给人判。
+    """
+    rows, _source, _skipped = _review_rows(contract, "metadata_fields", queue="pending")
+    groups = {row["item_key"]: row for row in read_candidates("metadata_fields", contract.candidate_root)[0]}
+    adopted, left, failures = 0, 0, []
+    for row in rows:
+        choice = _official_choice(row)
+        group = groups.get(row["item_key"])
+        if choice is None or group is None or pending_genres(row.get("candidates") or []):
+            left += 1
+            continue
+        try:
+            selected = next(candidate for candidate in _parsed_candidates(group)
+                            if str(candidate.get("candidate_key") or "") == str(choice["candidate_key"]))
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            with contract.write_transaction() as connection:
+                connection.execute(
+                    "INSERT INTO review_decision(category,item_key,status,note,updated_at) "
+                    "VALUES('metadata_fields',?,'approved','',?) ON CONFLICT(category,item_key) DO UPDATE SET "
+                    "status=excluded.status,note=excluded.note,updated_at=excluded.updated_at",
+                    (row["item_key"], now))
+                _approve_metadata_with_receipt(connection, group, selected, now, "批量采用官方资料", None)
+            adopted += 1
+        except (StopIteration, ValueError, sqlite3.Error) as error:
+            left += 1
+            if len(failures) < 20:
+                failures.append(f"{row.get('code') or row['item_key']}：{error}")
+    contract.cache_bust()
+    return {"ok": True, "adopted": adopted, "left": left, "failures": failures}
 
 
 def w_review_genre(contract: ReviewContract, body):

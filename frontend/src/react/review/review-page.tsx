@@ -16,7 +16,9 @@ import { Tab, TabPanel, Tabs } from 'react-aria-components';
 
 import { Button } from '@/components/base/buttons/button';
 import type { ReviewProps } from '../bundle';
-import { errorMessage } from '../../api';
+import { apiSend, errorMessage } from '../../api';
+import { confirmModal } from '@peach/legacy/ui';
+import { queryClient } from '../query';
 import { DOTS, paginationRange } from '../../pagination';
 import { EmptyState } from '../components/empty-state';
 import { Note } from '../components/note';
@@ -236,6 +238,28 @@ export function ReviewPage(props: ReviewProps) {
   };
 
   /* 统一选择来源只动所选那几行的选中项，不替人按下「通过」：改的是要写什么，判断仍归人。 */
+  /* 资料字段队列里有官方来源的行一次全部采用官方值（`/api/review/adopt-official`）；
+   * 只有社区来源、或内容标签还有未收录原文的留在队列里。 */
+  const adoptOfficial = () => {
+    void confirmModal({
+      title: '全部采用官方资料',
+      body: '待处理里凡是有官方来源（如 r18dev、DMM、片商官网）的字段，都改成官方的值；只有社区来源的留下给你判断。',
+      confirmLabel: '全部采用',
+      onConfirm: async () => {
+        setFeedback('正在采用官方资料…');
+        try {
+          const out = await apiSend<{ adopted: number; left: number; failures: string[] }>('/api/review/adopt-official', {});
+          await queryClient.invalidateQueries({ queryKey: REVIEW_KEY });
+          setSelected(new Set());
+          setFeedback(`已采用官方资料 ${out.adopted} 条，剩 ${out.left} 条需要你判断`
+            + (out.failures.length ? `；未能采用：${out.failures.join('；')}` : ''));
+        } catch (cause) {
+          setFeedback(errorMessage(cause));
+        }
+      },
+    });
+  };
+
   const unifySource = (source: string) => {
     setChoices((now) => {
       const next = new Map(now);
@@ -318,7 +342,8 @@ export function ReviewPage(props: ReviewProps) {
               selectedRows={selectedRows} metadata={metadata}
               approvable={selectedRows.every((row) => canApprove(category, row))}
               busy={bulk.isPending || decide.isPending} feedback={feedback}
-              onUnifySource={unifySource} onRun={runBulk} />
+              onUnifySource={unifySource} onRun={runBulk}
+              onAdoptOfficial={category === 'metadata_fields' ? adoptOfficial : undefined} />
 
           {win.rows.length ? pageGroups.map((group) => (
             <section key={group.key} className="flex flex-col gap-3">

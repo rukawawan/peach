@@ -1849,6 +1849,32 @@ class ReviewQueueTests(unittest.TestCase):
             con.close()
         self.assertEqual(owner_of(owners, "release_date"), "review:javbus")
 
+    def test_adopt_official_lands_every_row_with_an_official_candidate(self):
+        """「全部采用官方资料」：有官方来源的行采用官方值，只有社区来源的留给人判。"""
+        self._asset(120, "IDBD-812", "IDBD-812.mp4")
+        self._asset(121, "ABC-123", "ABC-123.mp4")
+        con = sqlite3.connect(self.db_path)
+        with con:
+            con.execute("UPDATE asset SET studio='S级素人' WHERE id=120")
+            con.execute("UPDATE asset SET studio='旧厂牌' WHERE id=121")
+        con.close()
+        self.write_metadata_rows([
+            {"item_key": "IDBD-812:studio", "field": "studio", "current": "S级素人", "code": "IDBD-812",
+             "candidates": [{"value": "S级素人", "source": "javbus"},
+                            {"value": "Idea Pocket", "source": "r18dev"}]},
+            {"item_key": "ABC-123:studio", "field": "studio", "current": "旧厂牌", "code": "ABC-123",
+             "candidates": ["新厂牌"], "source": "javdb"},
+        ])
+        result = rm_review.w_review_adopt_official(self.contract, {})
+        self.assertEqual((result["adopted"], result["failures"]), (1, []))
+        con = sqlite3.connect(self.db_path)
+        try:
+            studios = dict(con.execute("SELECT id,studio FROM asset WHERE id IN (120,121)").fetchall())
+        finally:
+            con.close()
+        self.assertEqual(studios, {120: "Idea Pocket", 121: "旧厂牌"})
+        self.assertNotIn("IDBD-812:studio", self.queue_keys("metadata_fields"))
+
     def test_a_stale_expected_revision_refuses_the_approval(self):
         """乐观并发：客户端手上的取值过期时整次批准不落地，`review_decision` 也不留。"""
         self._asset(99, "HHH-8", "HHH-8.mp4")

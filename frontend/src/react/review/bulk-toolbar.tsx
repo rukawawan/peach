@@ -41,13 +41,15 @@ export interface BulkToolbarProps {
   feedback: string;
   onUnifySource(source: string): void;
   onRun(status: DecisionStatus): void;
+  /** 资料字段待处理队列：有官方来源的全部采用官方值。不给就不显示按钮。 */
+  onAdoptOfficial?(): void;
 }
 
 export function BulkToolbar(props: BulkToolbarProps) {
   const {
     groupOptions, groupBy, onGroupBy, groups, filter, onFilter, pageKeys, selected, onSelected,
     selectedRows, metadata, approvable, busy, feedback, onUnifySource, onRun, queueView = 'pending',
-    queueCounts, onQueueChange, locked, fields, fieldFilter, onFieldFilter,
+    queueCounts, onQueueChange, locked, fields, fieldFilter, onFieldFilter, onAdoptOfficial,
   } = props;
   const shown = pageKeys.filter((key) => selected.has(key));
   const allShown = shown.length > 0 && shown.length === pageKeys.length;
@@ -128,6 +130,9 @@ export function BulkToolbar(props: BulkToolbarProps) {
           aria-pressed={allShown} disabled={busy} onClick={toggleAll}>
           {allShown ? '清空当前选择' : filter ? '全选当前分类' : '全选本页'}
         </Button>}
+        {!locked && metadata && queueView === 'pending' && onAdoptOfficial
+          ? <Button variant="primary" size="small" disabled={busy} onClick={onAdoptOfficial}>全部采用官方资料</Button>
+          : null}
         </> : null} />
 
         <SelectionDock label="复核所选项目" visible={!locked && selected.size > 0} count={`已选 ${selected.size} 项`}>
