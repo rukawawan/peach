@@ -176,6 +176,17 @@ def _set_processing_speed(contract, control, previous, body):
     return q_library_processing(contract, {})
 
 
+def _controllable(contract, state) -> bool:
+    """进度文件在跑，或任务中心那一轮还挂着（安装更新时暂停、进度文件已不是进行中）。
+
+    后一种不放行的话，那一轮在任务中心一直显示「已暂停」，继续和停止都点不动。
+    """
+    if state.get('status') in ACTIVE:
+        return True
+    run = contract.task_runs.get(state['run_id']) if state.get('run_id') is not None else None
+    return run is not None and run.active and run.task_key == 'library-processing'
+
+
 def _control_action(contract, config, body):
     action = body['action']
     if action in ('archive', 'unarchive'):
@@ -188,7 +199,7 @@ def _control_action(contract, config, body):
         raise ValueError('请选择正在处理的任务')
     if job_id and str(job_id) != str(previous.get('job_id') or ''):
         raise ValueError('任务已变化，请刷新页面后重试')
-    if action != 'set_speed' and previous.get('status') not in ACTIVE:
+    if action != 'set_speed' and not _controllable(contract, previous):
         raise ValueError('当前没有可暂停或继续的任务')
     control = control_for(config)
     control.refresh(force=True)

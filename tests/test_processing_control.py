@@ -683,6 +683,72 @@ class ProcessingControlTests(unittest.TestCase):
             self.assertEqual(control_for(self.config).mode, 'high')
             self.assertEqual(runs.get(initial['run_id']).status, 'succeeded')
 
+    def test_a_paused_run_whose_progress_file_stopped_can_still_resume(self):
+        from peach.jobs import BackgroundJob
+        from peach.library_processing import _save, state_path
+        from peach.repository import LedgerDatabase
+        from peach.task_runs import TaskRunStore
+        database_root = self.config.directory('database')
+        database_root.mkdir(parents=True)
+        db = fresh_ledger(database_root)
+        runs = TaskRunStore(LedgerDatabase(db))
+        first = BackgroundJob('library-processing', runs=runs)
+        self.addCleanup(first.stop, timeout=None)
+        contract = SimpleNamespace(db_path=db, library_processing_job=first,
+                                   task_runs=runs,
+                                   candidate_root=self.root / 'candidates', cover_root=self.root / 'covers',
+                                   database=runs.database, cache_bust=lambda: None)
+        entered, advance = (threading.Event() for _ in range(2))
+        identities, resumes = [], []
+        def process(*_args, **kwargs):
+            identity = kwargs['job_id']
+            identities.append(identity)
+            resumes.append(kwargs['resume_state'])
+            state = dict(job_id=identity, requested_stage='metadata', status='running', completed_metadata=['1:R:\\a.mp4'])
+            def report(**values):
+                values.pop('resumed_after', None)
+                state.update(values)
+                _save(state_path(self.config), state)
+                kwargs['report'](dict(state))
+            with control_for(self.config).bind(identity, publish=report, active=kwargs['active'], db_path=db):
+                _save(state_path(self.config), state)
+                if len(identities) == 1:
+                    entered.set()
+                    advance.wait(2)
+                try:
+                    checkpoint()
+                except Exception:
+                    from peach.processing_control import interrupted_state
+                    state.update(interrupted_state(control_for(self.config)))
+                    _save(state_path(self.config), state)
+                    raise
+                return {'status': 'complete'}
+        with patch('peach.web_library_processing.settings_file.active', return_value=self.config), \
+                patch('peach.web_library_processing.process_library', side_effect=process):
+            initial = w_library_processing(contract, {'stage': 'metadata', 'speed_mode': 'high'})
+            self.assertTrue(entered.wait(2))
+            w_library_processing(contract, {'action': 'pause', 'job_id': initial['job_id']})
+            advance.set()
+            self.assert_processing_status(contract, 'paused')
+            first.stop()
+            self.assertEqual(runs.get(initial['run_id']).status, 'pending')
+            self.assertEqual(runs.get(initial['run_id']).progress_label, '已暂停，等待继续')
+            # 安装更新后进度文件已不是进行中，任务中心那一轮还挂着：继续仍要能接上。
+            from peach.library_processing import snapshot as state_snapshot
+            stale = dict(state_snapshot(self.config), status="interrupted")
+            _save(state_path(self.config), stale)
+            second = BackgroundJob('library-processing', runs=runs)
+            self.addCleanup(second.stop, timeout=None)
+            contract.library_processing_job = second
+            w_library_processing(contract, {'action': 'resume', 'job_id': initial['job_id']})
+            second.thread.join(2)
+            self.assertEqual(identities, [initial['job_id'], initial['job_id']])
+            self.assertEqual(resumes[1]['completed_metadata'], ['1:R:\\a.mp4'])
+            self.assertEqual(second.snapshot()['status'], 'complete')
+            self.assertEqual(second.snapshot()['run_id'], initial['run_id'])
+            self.assertEqual(control_for(self.config).mode, 'high')
+            self.assertEqual(runs.get(initial['run_id']).status, 'succeeded')
+
     def test_three_intensities_set_distinct_io_start_intervals(self):
         control = control_for(self.config)
         intervals = {}
