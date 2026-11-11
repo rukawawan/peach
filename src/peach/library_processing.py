@@ -2157,10 +2157,10 @@ def _scan_sources(config, db_path, *, locations, asset_ids, stage, guard, update
                                            onerror=lambda error: issue(None, str(error), action='scanning_files'),
                                            resume_state=scan_checkpoints.get(key), save_checkpoint=remember,
                                            new_only=incremental,
-                                           progress=lambda files, size: update(
+                                           progress=lambda files, size, seen=0: update(
                                                stage='扫描文件', scanned=result.scanned + files,
                                                scanned_bytes=result.scanned_bytes + size,
-                                               checked=0, total=0, current_action='scanning_files'))
+                                               checked=seen, total=0, current_action='scanning_files'))
                 result.scanned += registered.files
                 result.scanned_bytes += registered.total_bytes
                 result.junk_isolated += registered.junk_isolated

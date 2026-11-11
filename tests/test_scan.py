@@ -132,6 +132,17 @@ class PosixShapeTests(_ScanCase):
             self.assertEqual(connection.execute('SELECT id,name,rating,catalog_title FROM asset WHERE medium=\'video\'').fetchall(),
                              [(asset_id,'changed.mp4',5,'人工标题')])
 
+    def test_new_only_scan_reports_known_files_it_checked(self):
+        """只登记新增时，已有文件不算「发现」，但核对数要往前走，否则一直显示 0 像卡住。"""
+        options = dict(declared_roots={'local': ('R:\\media',)}, mounts={'local': (self.media,)}, windows=False)
+        first, _ = self._scan('R:\\media', **options)
+        reports = []
+        second, _ = self._scan('R:\\media', **options, new_only=True,
+                               progress=lambda files, size, seen=0: reports.append((files, seen)))
+        self.assertEqual(second.files, 0)
+        self.assertEqual(reports[-1][0], 0)
+        self.assertEqual(max(seen for _, seen in reports), first.files)
+
     def test_same_size_copy_and_hardlink_are_separate_files(self):
         options = dict(declared_roots={'local': ('R:\\media',)}, mounts={'local': (self.media,)}, windows=False)
         self._scan('R:\\media', **options)

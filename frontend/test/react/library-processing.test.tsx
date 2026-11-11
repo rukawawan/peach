@@ -643,6 +643,8 @@ it('处理较慢时各任务面显示等待进展，不沿用旧估时', async (
 it('扫描总量未知时显示已发现文件数，已知阶段显示完成数', () => {
   expect(processingLine({ status: 'running', stage: '扫描文件', scanned: 12345 }))
     .toBe('扫描文件 · 已发现 12,345 个文件');
+  expect(processingLine({ status: 'running', stage: '扫描文件', scanned: 2, checked: 9000 }))
+    .toBe('扫描文件 · 已发现 2 个新文件 · 已核对 9,000 个已有文件');
   expect(processingLine({ status: 'paused', checked: 38, total: 100 })).toBe('已暂停 · 38 / 100 项');
 });
 

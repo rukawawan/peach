@@ -270,7 +270,8 @@ export function currentLine(state: LibraryProcessingData): string {
 export function processingLine(state: LibraryProcessingData): string {
   const count = state.total ? `${progressText(state.checked, state.total)} 项`
     : state.current_action === 'scanning_files' || state.stage === '扫描文件'
-      ? `已发现 ${(state.scanned || 0).toLocaleString()} 个文件` : '';
+      ? `已发现 ${(state.scanned || 0).toLocaleString()} 个${state.checked ? '新' : ''}文件`
+        + (state.checked ? ` · 已核对 ${state.checked.toLocaleString()} 个已有文件` : '') : '';
   return currentLine(state) + (count ? ` · ${count}` : '');
 }
 

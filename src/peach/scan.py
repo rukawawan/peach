@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 import ntpath
 import hashlib
+import inspect
 import json
 import re
 import sqlite3
@@ -568,15 +569,26 @@ def _walk_smb(top, pending, onerror):
 
 
 class _ScanProgress:
-    """结构化扫描进度按时间节流，首项与最终汇总始终报告。"""
+    """结构化扫描进度按时间节流，首项与最终汇总始终报告。
+
+    只登记新增文件时，已登记的文件不计入 `files`；`seen` 报告核对过的已有文件数，
+    让进度在一个新文件都没有时也在走，而不是一直显示「已发现 0 个文件」像卡住一样。
+    """
     def __init__(self, callback):
         self.callback = callback
         self.reported_at = 0.0
+        try:
+            self.takes_seen = 'seen' in inspect.signature(callback).parameters
+        except (TypeError, ValueError):
+            self.takes_seen = False
 
-    def __call__(self, files, total_bytes, *, force=False):
+    def __call__(self, files, total_bytes, *, force=False, seen=0):
         now = time.monotonic()
         if force or files == 1 or now - self.reported_at >= 0.5:
-            self.callback(files, total_bytes)
+            if seen and self.takes_seen:
+                self.callback(files, total_bytes, seen=seen)
+            else:
+                self.callback(files, total_bytes)
             self.reported_at = now
 
 
@@ -697,6 +709,7 @@ def _scan_location(
     progress = _ScanProgress(progress)
     files = previous.get('files', 0)
     total = previous.get('total_bytes', 0)
+    seen = 0
     skipped = previous.get('sidecars', 0)
     tracks = previous.get('subtitles', 0)
     orphans = previous.get('orphan_subtitles', 0)
@@ -753,6 +766,8 @@ def _scan_location(
                     continue
                 if new_only and ledger_path.casefold() in registered:
                     here[name] = (None, None)
+                    seen += 1
+                    progress(files, total, seen=seen)
                     continue
                 try:
                     stat = _scan_file_stat(connection, identities, registered, observations, location,
@@ -806,6 +821,6 @@ def _scan_location(
                         tracks, orphans, skipped, new_ids, reattached, acquired,
                         checked['isolated'], checked['review'], len(conflicts), tuple(sorted(relocator.moved)))
     save_checkpoint({'mapping': mapping, 'result': asdict(result)})
-    progress(files, total, force=True)
+    progress(files, total, force=True, seen=seen)
     report(result.summary())
     return result
