@@ -261,6 +261,52 @@ class SegmentCommandTests(unittest.TestCase):
         asyncio.run(drive())
         self.assertEqual(calls, 1)
 
+    def test_source_stats_and_cache_eviction_stay_off_the_event_loop(self):
+        """片源 stat 可能卡在网盘上，淘汰要把缓存目录列一遍：都不在事件循环上做，淘汰按新写入字节攒够才跑。"""
+        on_loop, evictions = [], []
+
+        def running() -> bool:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return False
+            return True
+
+        class _Process:
+            returncode = 0
+
+            async def communicate(self):
+                return b"", b""
+
+        async def fake_exec(*command, **_kwargs):
+            Path(command[-1]).write_bytes(bytes(100))
+            return _Process()
+
+        async def drive():
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "clip.mp4"
+                source.write_bytes(b"x")
+                # 上限 4000 字节，攒够十六分之一（250）才淘汰：每片 100，第三片之后跑一次。
+                service = HlsSegmentService(
+                    resolver=mock.Mock(ffmpeg=lambda: type("C", (), {"path": "ffmpeg"})),
+                    work_root=root / "cache", cache_bytes=4000,
+                )
+                fingerprint, evict = service.fingerprint, service._evict
+                service.fingerprint = lambda path: (on_loop.append(running()), fingerprint(path))[1]
+                service._evict = lambda: (evictions.append(running()), evict())[1]
+                registry = StreamSessionRegistry()
+                with mock.patch("asyncio.create_subprocess_exec", fake_exec):
+                    for index in range(5):
+                        await service.generate(source, index * 6, 6, asset_id=1, index=index,
+                                               session="s", registry=registry)
+                    await service.generate(source, 0, 6, asset_id=1, index=0, session="s", registry=registry)
+
+        asyncio.run(drive())
+        self.assertTrue(on_loop)
+        self.assertNotIn(True, on_loop, "片源 stat 不能在事件循环上")
+        self.assertEqual(evictions, [False])
+
     def test_hardware_encode_failure_falls_back_to_libx264_for_the_slice(self):
         """没有 NVENC 的机器分片不能缺席：CUDA 解码、软件解码两条 NVENC 路都失败后走 libx264。"""
         captured: list[list[str]] = self._transcode_commands("h264")

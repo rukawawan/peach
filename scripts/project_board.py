@@ -2,14 +2,23 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = "scripts"
+
+from . import issue_intake
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".github/project-board.json"
+TEMPLATE_GRACE = timedelta(hours=2)
 
 
 def gh(*args, payload=None):
@@ -99,6 +108,9 @@ def decision(content, current, linked, published):
     status = current.get("Status", "待评估")
     if is_pr:
         status = "已完成" if merged else ("已关闭未合入" if content["state"] == "CLOSED" else "进行中")
+    elif content["state"] == "CLOSED" and issue_intake.LABEL in labels and \
+            datetime.now(timezone.utc) - datetime.fromisoformat(content["closedAt"]) < TEMPLATE_GRACE:
+        status = current.get("Status", "待评估")
     elif content["state"] == "CLOSED":
         status = "已取消" if content.get("stateReason") == "NOT_PLANNED" else "已完成"
     elif "status:needs-verification" in labels:
@@ -119,8 +131,9 @@ def decision(content, current, linked, published):
     return result
 
 
-CONTENT = '''__typename ... on DraftIssue{id title} ... on Issue{id number title url state stateReason repository{nameWithOwner}
-labels(first:100){nodes{name}}}
+ISSUE_CONTENT = '''__typename id number title url state stateReason closedAt body authorAssociation author{__typename} repository{nameWithOwner}
+labels(first:100){nodes{name}}'''
+CONTENT = '''__typename ... on DraftIssue{id title} ... on Issue{''' + ISSUE_CONTENT + '''}
 ... on PullRequest{id number title url state merged mergeCommit{oid} body repository{nameWithOwner}
 closingIssuesReferences(first:100){nodes{id number repository{nameWithOwner}}}}'''
 PR_CONTENT = '''__typename id number title url state merged mergeCommit{oid} body repository{nameWithOwner}
@@ -169,11 +182,20 @@ def incoming_issues(config):
     for repository in config.get("issue_repositories", [config["repository"]]):
         owner, name = repository.split("/")
         incoming.extend(connection('''query($owner:String!,$name:String!,$states:[IssueState!],$cursor:String){repository(owner:$owner,name:$name){
-issues(first:100,after:$cursor,states:$states){nodes{__typename id number title url state stateReason repository{nameWithOwner}
-labels(first:100){nodes{name}}}pageInfo{hasNextPage endCursor}}}}''',
+issues(first:100,after:$cursor,states:$states){nodes{''' + ISSUE_CONTENT + '''}pageInfo{hasNextPage endCursor}}}}''',
                                    ("repository", "issues"), owner=owner, name=name,
                                    states=None if repository == config.get("planning_repository") else ["OPEN"]))
     return incoming
+
+
+def eligible_incoming(node, repository):
+    """应用仓库的新 Issue 先通过同一模板判定，再加入看板；既有条目不追溯清退。"""
+    if node["__typename"] != "Issue" or node["repository"]["nameWithOwner"] != repository:
+        return True
+    return issue_intake.verdict({"action": "opened", "issue": {
+        "body": node["body"], "author_association": node["authorAssociation"],
+        "user": {"type": (node["author"] or {}).get("__typename")},
+    }}) != "close"
 
 
 def include_incoming(config, candidates, prs, event, apply):
@@ -191,6 +213,8 @@ def include_incoming(config, candidates, prs, event, apply):
         if config.get("issues_only") and node["__typename"] != "Issue":
             continue
         if node["id"] not in candidates:
+            if not eligible_incoming(node, repository):
+                continue
             item = {"id": None, "content": node, "fieldValues": {"nodes": []}, "isArchived": False}
             if apply:
                 item["id"] = graphql('''mutation($project:ID!,$content:ID!){addProjectV2ItemById(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import subprocess
 import tempfile
@@ -204,6 +205,21 @@ class ProbeUnmeasuredTests(unittest.TestCase):
 
 
 class ProbeProcessTests(unittest.TestCase):
+    def test_probe_uses_positive_sar_then_dar_and_keeps_unknown_ratios_unscaled(self):
+        cases = [('256:81', '16:9', 2276), ('N/A', '16:9', 2276),
+                 ('0:1', '16:9', 2276), ('1:1', '16:9', 720),
+                 ('-1:1', 'N/A', 720), ('1:0', None, 720)]
+        for sar, dar, width in cases:
+            payload = json.dumps({'format': {'duration': '12.5'}, 'streams': [dict(
+                width=720, height=1280, sample_aspect_ratio=sar, display_aspect_ratio=dar)]}).encode()
+            with self.subTest(sar=sar, dar=dar), mock.patch.object(media_probe.subprocess, 'run',
+                    return_value=SimpleNamespace(stdout=payload, returncode=0, stderr=b'')), \
+                    mock.patch.object(media_probe, 'resolve_case_insensitive', return_value='sample.mp4'):
+                result = media_probe.measure('ffprobe', 1, 'sample.mp4')
+            self.assertEqual(result[1:3], (width, 1280))
+            self.assertEqual(result[7], '横屏' if width > 1280 else '竖屏')
+            self.assertEqual(result[8], '2K' if width > 1280 else '720P')
+
     def test_probe_reads_metadata_with_a_hidden_windows_process(self):
         payload = b'{"format":{"duration":"12.5"},"streams":[{"width":320,"height":240,' \
                   b'"codec_name":"h264","avg_frame_rate":"25/1"}]}'

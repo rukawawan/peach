@@ -94,6 +94,14 @@ def _serve(args: argparse.Namespace) -> int:
             raise SystemExit("redirect listener must use HTTP")
         _run_uvicorn(create_redirect_app(args.redirect_origin), host=args.host, port=args.port)
         return 0
+    if distribution.docker():
+        # Docker 没有托盘，日志的半年保留、按月切段与空进程日志清理在这里做；子进程还没起。
+        import logging
+        from . import log_retention
+        try:
+            log_retention.sweep(settings_file.active().directory("logs"))
+        except Exception:
+            logging.getLogger(__name__).warning("日志整理失败", exc_info=True)
     if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
         raise SystemExit("--ssl-certfile and --ssl-keyfile must be provided together")
     for path in (args.ssl_certfile, args.ssl_keyfile):

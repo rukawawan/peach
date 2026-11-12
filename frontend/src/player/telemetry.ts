@@ -6,6 +6,12 @@ import type { PlayerItem } from './types';
 
 const cleanup = new WeakMap<HTMLVideoElement, () => void>();
 
+/** 心跳回执里的观看进度，在 `document` 上广播。心跳不推账本版本（migration 0054），网格不会因此重取，
+ *  卡片上的进度条靠这一份改写缓存里那张卡。 */
+export const PLAYBACK_PROGRESS_EVENT = 'peach-playback-progress';
+export interface PlaybackProgress { id: number; play_seconds: number; leave_ratio?: number }
+interface ActivityReceipt { play_seconds?: number; leave_ratio?: number | null; real_ratio?: number | null }
+
 export function stopTelemetry(video: HTMLVideoElement): void {
   cleanup.get(video)?.();
   cleanup.delete(video);
@@ -62,8 +68,13 @@ export function wireTelemetry(item: PlayerItem, video: HTMLVideoElement | null, 
     const duration = realDuration(item.duration) || realDuration(video.duration);
     if (!acc && !ended && !seeks) return;
     (api('/api/activity', { method: 'POST', keepalive: true, body: JSON.stringify(
-      { id: item.id, position: video.currentTime, duration, delta: acc, ended: !!ended, seeks }) }) as Promise<{ real_ratio?: number | null } | null>)
+      { id: item.id, position: video.currentTime, duration, delta: acc, ended: !!ended, seeks }) }) as Promise<ActivityReceipt | null>)
       .then((result) => { // 回填面板的真实观看率
+        if (result && typeof result.play_seconds === 'number') {
+          const detail: PlaybackProgress = { id: item.id, play_seconds: result.play_seconds,
+            ...(result.leave_ratio != null ? { leave_ratio: result.leave_ratio } : {}) };
+          document.dispatchEvent(new CustomEvent(PLAYBACK_PROGRESS_EVENT, { detail }));
+        }
         const real = document.getElementById('realTxt');
         if (real && result && result.real_ratio != null) {
           const percent = Math.min(result.real_ratio, 1) * 100;

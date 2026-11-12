@@ -182,7 +182,7 @@ class DiscoveryMetadataTests(unittest.TestCase):
         failure = {"job_id": "sample", "status": "failed", "error": "RuntimeError: https://example.invalid/?private=sample",
                    "codes": ["EXM-001"], "completed": 0, "total": 1, "stop_reason": ""}
         with patch("peach.web_jav_discovery.discovery_metadata") as metadata:
-            metadata.return_value.ensure.return_value = failure
+            metadata.return_value.current.return_value = failure
             response = _metadata_response(None, {}, [], [], 60, "external")
         self.assertEqual(response["metadata_job"]["message"], "作品资料未取得")
         self.assertEqual(response["metadata_job"]["error"], "作品资料未取得")

@@ -67,6 +67,45 @@ class BrowserTests(unittest.TestCase):
     def status(self):
         return self.client.get("/api/jav-browser", params={"code": "ABC-123"}, headers=self.script_headers)
 
+    def test_temporary_search_retries_persist_and_wait_until_due(self):
+        now = [1_800_000_000.0]
+        self.downloads.clock = lambda: now[0]
+        self.service.search.return_value = {'state': 'error', 'items': [], 'error': '请求超时', 'retry_after': 120.0}
+        self.add()
+        self.service.process_one()
+        status = self.status().json()
+        self.assertEqual((status['state'], status['retry_attempt']), ('queued', 1))
+        restored = JavBrowser(self.service.contract, search=self.service.search)
+        self.assertFalse(restored.process_one())
+        self.assertEqual(self.service.search.call_count, 1)
+        now[0] += 120
+        self.service.search.return_value = {'items': [{'name': 'ABC-123 1080p', 'uri': MAGNET}]}
+        self.assertTrue(restored.process_one())
+        self.assertEqual(restored.status('ABC-123')['state'], 'submitted')
+        self.remote.submit.assert_called_once()
+
+    def test_permanent_search_failure_is_not_automatically_requeued(self):
+        self.service.search.return_value = {'state': 'unavailable', 'items': [], 'error': '需要配置索引器'}
+        self.add()
+        self.service.process_one()
+        self.assertEqual(self.status().json()['state'], 'failed')
+        self.assertFalse(self.service.process_one())
+
+    def test_postprocess_retry_is_dispatched_by_the_download_scheduler_after_restart(self):
+        now = [1_800_000_000.0]
+        self.downloads.clock = lambda: now[0]
+        task = self.downloads.store.save(dl.DownloadTask(id=0, info_hash=HASH, provider='115', source_uri=MAGNET,
+            display_name='ABC-123', target='/115/Movies', state=dl.INGESTED, postprocess_state=dl.POSTPROCESS_PENDING))
+        self.downloads.store.fail_postprocess(task.id, TimeoutError('暂时超时'), now=now[0])
+        restored = dl.DownloadStore(self.downloads.store.database)
+        self.assertEqual(restored.pending_postprocess(now[0]), [])
+        self.assertEqual(self.downloads.poll_once(), 0)
+        self.downloads.after_ingest = lambda value: self.downloads.store.postprocess(value.id, dl.POSTPROCESS_QUEUED)
+        now[0] += 60
+        self.assertEqual(self.downloads.poll_once(), 1)
+        self.assertEqual(restored.get(task.id).postprocess_state, dl.POSTPROCESS_QUEUED)
+        self.remote.submit.assert_not_called()
+
     def test_queued_request_searches_then_uses_the_cloud_download_contract(self):
         self.assertEqual(self.status().json()["state"], "idle")
         response = self.add()
@@ -359,6 +398,26 @@ class BrowserTests(unittest.TestCase):
         task.state = dl.CANCELLED
         self.downloads.store.save(task)
         self.assertEqual(self.status().json()["state"], "failed")
+
+    def test_library_ownership_keeps_the_latest_unfinished_postprocessing_visible_without_queue_cache(self):
+        self.add()
+        self.service.process_one()
+        task = self.downloads.store.get(self.status().json()['task_id'])
+        with self.downloads.store.database.write_transaction() as connection:
+            asset_id = connection.execute('INSERT INTO asset(path,name,location,medium,code) VALUES(?,?,?,?,?)',
+                (r'C:\Media\ABC-123.mp4', 'ABC-123.mp4', 'local', 'video', 'ABC-123')).lastrowid
+        task.state, task.asset_id = dl.INGESTED, asset_id
+        self.downloads.store.save(task)
+        self.downloads.store.postprocess(task.id, dl.POSTPROCESS_FAILED, detail='需要检查挂载')
+        self.service.rows.clear()
+        status = self.status().json()
+        self.assertEqual((status['state'], status['task_id'], status['download']['postprocess_state']),
+                         ('ingested', task.id, dl.POSTPROCESS_FAILED))
+        self.assertEqual(self.service.active()['items'][0]['download']['postprocess_state'], dl.POSTPROCESS_FAILED)
+        self.downloads.store.fail_postprocess(task.id, TimeoutError('暂时断开'))
+        self.assertEqual(self.status().json()['retry_attempt'], 1)
+        self.downloads.store.postprocess(task.id, dl.POSTPROCESS_COMPLETE)
+        self.assertEqual(self.status().json()['state'], 'owned')
 
     def test_status_projects_remote_progress_and_postprocessing_without_private_task_fields(self):
         self.add()

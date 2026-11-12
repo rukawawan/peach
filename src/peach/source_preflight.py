@@ -52,7 +52,8 @@ def check_sources(secrets_root: Path, sources: list[str] | None = None, *,
     finished: dict[str, dict] = {}
     pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="source-check")
     try:
-        futures = {pool.submit(check, source): source for source in selected}
+        from contextvars import copy_context
+        futures = {pool.submit(copy_context().run, check, source): source for source in selected}
         for future in as_completed(futures):
             row = finished[futures[future]] = future.result()
             if on_result is not None:

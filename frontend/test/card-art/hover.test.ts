@@ -41,6 +41,8 @@ describe('悬停放大设置', () => {
     leave(el);
     settings.hoverDelaySeconds = 3;
     enter(el);
+    expect(el.hasAttribute('data-previewing')).toBe(false);
+    el.querySelector('img.ui-hvframes')!.dispatchEvent(new Event('load'));
     expect(el.hasAttribute('data-previewing')).toBe(true);
     vi.advanceTimersByTime(2999);
     expect(el.hasAttribute('data-longhover')).toBe(false);
@@ -56,6 +58,7 @@ describe('悬停放大设置', () => {
     const el = card();
     wireHover(el, { id: 7, location: 'pikpak', has_thumb: true });
     enter(el);
+    el.querySelector('img.ui-hvframes')!.dispatchEvent(new Event('load'));
     settings.hoverDelaySeconds = 0;
     vi.advanceTimersByTime(3000);
     expect(el.hasAttribute('data-longhover')).toBe(false);
@@ -88,6 +91,9 @@ describe('远端源只扫接触印相', () => {
     enter(el);
     const layer = el.querySelector<HTMLImageElement>('img.ui-hvframes')!;
     vi.advanceTimersByTime(430);
+    expect(preloads).toHaveLength(0);
+    layer.dispatchEvent(new Event('load'));
+    vi.advanceTimersByTime(430);
     expect(preloads.map(img => img.getAttribute('src'))).toEqual(['/poster?id=7&c=5']);
     vi.advanceTimersByTime(430);
     expect(preloads).toHaveLength(1);
@@ -107,6 +113,39 @@ describe('远端源只扫接触印相', () => {
     wireHover(el, { id: 7, location: 'pikpak', has_thumb: false });
     enter(el);
     expect(el.querySelector('img.ui-hvframes')).toBeNull();
+  });
+
+  it('首图失败撤掉图层和倒计时，保留封面；重新进入可以再取图', () => {
+    settings.hoverDelaySeconds = 3;
+    const el = card();
+    el.querySelector('[data-media-pic]')!.innerHTML = '<img class="cover" src="/cover?id=7">';
+    wireHover(el, { id: 7, location: '115', has_thumb: true });
+    enter(el);
+    el.querySelector('img.ui-hvframes')!.dispatchEvent(new Event('error'));
+    vi.advanceTimersByTime(5000);
+    expect(el.querySelector('img.ui-hvframes')).toBeNull();
+    expect(el.hasAttribute('data-previewing')).toBe(false);
+    expect(el.hasAttribute('data-longhover')).toBe(false);
+    expect(el.querySelector('img.cover')?.getAttribute('src')).toBe('/cover?id=7');
+    leave(el); enter(el);
+    expect(el.querySelector('img.ui-hvframes')).not.toBeNull();
+  });
+
+  it('卡片换资源后撤掉旧图层、计时与监听，只请求当前资源', () => {
+    settings.hoverDelaySeconds = 3;
+    const el = card();
+    wireHover(el, { id: 7, location: '115', has_thumb: true });
+    enter(el);
+    const old = el.querySelector('img.ui-hvframes')!;
+    wireHover(el, { id: 8, location: '115', has_thumb: false });
+    old.dispatchEvent(new Event('load'));
+    enter(el); vi.advanceTimersByTime(5000);
+    expect(el.querySelector('img.ui-hvframes')).toBeNull();
+    expect(el.hasAttribute('data-longhover')).toBe(false);
+    wireHover(el, { id: 9, location: '115', has_thumb: true });
+    enter(el);
+    expect(el.querySelectorAll('img.ui-hvframes')).toHaveLength(1);
+    expect(el.querySelector('img.ui-hvframes')?.getAttribute('src')).toBe('/poster?id=9&c=4');
   });
 
   it('多选或遮挡时不起', () => {

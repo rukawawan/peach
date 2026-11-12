@@ -43,7 +43,6 @@ function GettingStarted({ go }: { go(path: string): void }) {
   const reviews = Object.values(data?.review.counts || {}).reduce((total, value) => total + Number(value || 0), 0);
   return <div className="flex flex-col gap-4">
     <GuideBanner icon={RiRocketLine} title="从第一份收藏开始" description="连接媒体目录，查看入库结果，再打开馆藏。">
-      <span className="text-body-2-regular text-text-secondary">3 个入口 · 按当前进度选择</span>
       <Button onClick={() => go('/settings/library')}>连接媒体目录</Button>
     </GuideBanner>
     {error ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => setAttempt(attempt + 1)}>重试</Button>}>{error}</Note> : null}

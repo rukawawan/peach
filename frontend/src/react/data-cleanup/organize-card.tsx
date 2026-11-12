@@ -28,11 +28,12 @@ import {
   pickOrganizeFolder, previewOrganize, rememberTemplates, startOrganize, withOrganizeJob,
   type OrganizeCommand, type OrganizeData, type OrganizeJob, type OrganizePlan,
 } from './organize';
+import { t } from '../../i18n';
 
-const APPLY_BODY = (name: string, path: string) => `将整理「${name}」${path ? `的「${path}」及其子目录` : '上的文件名与目录'}，清理特殊符号与乱码，并按已填模板改名或移动。目标已存在的行会整行跳过。`
-  + '这一批可以从「回滚上一批」整批退回。';
-const ROLLBACK_BODY = '将把上一批整理动过的文件退回整理前的名字与位置，数据库路径跟着退回。'
-  + '退回后这一批不再出现在这里。';
+const APPLY_BODY = (name: string, path: string) => (path
+  ? t('cleanup:organize.applyBodyPath', { name, path })
+  : t('cleanup:organize.applyBodyAll', { name }));
+const ROLLBACK_BODY = t('cleanup:organize.rollbackBody');
 /** 预览只列前 8 行：这里是给人扫一眼方向对不对，完整计划在 CSV 里。 */
 const PLAN_ROWS = 8;
 
@@ -50,7 +51,7 @@ function PlanRows({ plan }: { plan: OrganizePlan }) {
         ))}
       </ol>
       {plan.truncated || plan.rows.length > PLAN_ROWS
-        ? <p className="text-caption-1-regular text-text-secondary">只列出前 8 行，完整计划在计划 CSV 里。</p>
+        ? <p className="text-caption-1-regular text-text-secondary">{t('cleanup:organize.planTruncated')}</p>
         : null}
     </>
   );
@@ -126,7 +127,7 @@ export function OrganizeCard(
       void queryClient.invalidateQueries({ queryKey: ORGANIZE_KEY, exact: true });
       if (finished.status !== 'complete') return;
       const { text, failed } = organizeOutcome(finished);
-      if (failed) failure('整理文件', new Error(`${failed} 行未能处理`));
+      if (failed) failure(t('cleanup:tools.organize'), new Error(t('cleanup:organize.rowsFailed', { count: failed })));
       else toast(text.replace(/。$/, ''));
     },
   });
@@ -159,7 +160,7 @@ export function OrganizeCard(
     const sent = preview.variables;
     if (!sent || !plan || !changes) return;
     void confirmModal({
-      title: '整理文件', body: APPLY_BODY(name, sent.path), confirmLabel: '整理文件',
+      title: t('cleanup:tools.organize'), body: APPLY_BODY(name, sent.path), confirmLabel: t('cleanup:tools.organize'),
       /* 确认执行时保存该来源的模板。 */
       onConfirm: async () => {
         await job.start.mutateAsync({ kind: 'apply', request: sent });
@@ -170,7 +171,7 @@ export function OrganizeCard(
     });
   };
   const runRollback = () => void confirmModal({
-    title: '回滚上一批整理', body: ROLLBACK_BODY, confirmLabel: '回滚整理',
+    title: t('cleanup:organize.rollbackTitle'), body: ROLLBACK_BODY, confirmLabel: t('cleanup:organize.rollbackConfirm'),
     onConfirm: () => job.start.mutateAsync({ kind: 'rollback' }),
   });
 
@@ -180,21 +181,21 @@ export function OrganizeCard(
   const current = job.job;
   const outcome = job.outcome;
   if (current?.status === 'running') {
-    const line = current.message || current.stage || '正在整理文件';
+    const line = current.message || current.stage || t('cleanup:organize.running');
     state = <TaskProgress embedded label={line} value={Math.min(current.checked || 0, current.total || 0)} total={current.total} />;
   } else if (outcome?.status === 'failed') {
-    state = <Note tone="error" title="文件整理未完成">{outcome.error || '请查看任务记录，核对已处理的文件。'}</Note>;
+    state = <Note tone="error" title={t('cleanup:organize.incomplete')}>{outcome.error || t('cleanup:shared.checkTaskLogFiles')}</Note>;
   } else if (outcome) {
     const { text, failed } = organizeOutcome(outcome);
-    state = <Note tone={failed ? 'warning' : 'success'} title={failed ? '部分完成' : '整理结果'}>{text}</Note>;
+    state = <Note tone={failed ? 'warning' : 'success'} title={failed ? t('cleanup:shared.partiallyCompleted') : t('cleanup:organize.result')}>{text}</Note>;
   } else if (job.start.isError) {
-    state = <Note tone="error" title="整理失败">{errorMessage(job.start.error)}</Note>;
+    state = <Note tone="error" title={t('cleanup:organize.failed')}>{errorMessage(job.start.error)}</Note>;
   } else if (preview.isPending) {
-    state = <TaskProgress embedded label="正在核对整理计划" />;
+    state = <TaskProgress embedded label={t('cleanup:organize.checkingPlan')} />;
   } else if (preview.isError && previewMatches) {
-    state = <Note tone="error" title="整理预览失败">{errorMessage(preview.error)}</Note>;
+    state = <Note tone="error" title={t('cleanup:organize.previewFailed')}>{errorMessage(preview.error)}</Note>;
   } else if (plan) {
-    state = <><Note tone="neutral" title="预览结果">{planSummary(plan)}</Note>{changes ? <PlanRows plan={plan} /> : null}</>;
+    state = <><Note tone="neutral" title={t('cleanup:organize.previewResult')}>{planSummary(plan)}</Note>{changes ? <PlanRows plan={plan} /> : null}</>;
   }
 
   return (
@@ -203,24 +204,24 @@ export function OrganizeCard(
       footer={
         <>
           {data?.last_batch
-            ? <Button variant="secondary" {...busyProps(running)} onClick={runRollback}>回滚上一批</Button>
+            ? <Button variant="secondary" {...busyProps(running)} onClick={runRollback}>{t('cleanup:organize.rollbackLastBatch')}</Button>
             : null}
           <Button variant={applicable ? 'secondary' : 'primary'} disabled={!locations.length || running}
-            {...busyProps(preview.isPending)} onClick={runPreview}>预览</Button>
-          {applicable ? <Button variant="primary" onClick={runApply}>执行整理</Button> : null}
+            {...busyProps(preview.isPending)} onClick={runPreview}>{t('cleanup:organize.preview')}</Button>
+          {applicable ? <Button variant="primary" onClick={runApply}>{t('cleanup:organize.apply')}</Button> : null}
         </>
       }>
-      <FieldsetTitle id="cleanup-organize-title" gap="medium">整理</FieldsetTitle>
+      <FieldsetTitle id="cleanup-organize-title" gap="medium">{t('cleanup:organize.title')}</FieldsetTitle>
       <p className="text-body-regular text-text-secondary">
         {ORGANIZE_TEXT}
       </p>
       {organize.isError
-        ? <div className="mt-3"><Note tone="error" title="整理配置读取失败">{errorMessage(organize.error)}</Note></div>
+        ? <div className="mt-3"><Note tone="error" title={t('cleanup:organize.settingsLoadFailed')}>{errorMessage(organize.error)}</Note></div>
         : null}
       <div className="mt-3 flex flex-col gap-3">
         <div data-organize-scope className="flex min-w-0 flex-wrap items-start gap-2">
         {locations.length
-          ? <Select aria-label="整理哪个来源" prefix="来源" className="w-fit min-w-25" selectedKey={location || null}
+          ? <Select aria-label={t('cleanup:organize.storageLabel')} prefix={t('cleanup:organize.storagePrefix')} className="w-fit min-w-25" selectedKey={location || null}
               onSelectionChange={(key) => {
                 if (key === null) return;
                 setChosen(String(key)); setScope({ location: String(key), path: '' });
@@ -234,27 +235,27 @@ export function OrganizeCard(
             </Select>
           : null}
           <div className="flex min-w-0 basis-64 flex-1 items-start gap-2">
-            <Input aria-label="整理路径" className="min-w-0 flex-1" placeholder="留空整理整个来源"
+            <Input aria-label={t('cleanup:organize.pathLabel')} className="min-w-0 flex-1" placeholder={t('cleanup:organize.pathPlaceholder')}
               name="organize-path" autoComplete="off" spellCheck="false" value={path} ref={pathInput}
               isInvalid={invalid === 'path'}
               onChange={(value) => { setScope({ location, path: value }); setInvalid(null); preview.reset(); picker.reset() }} />
-            <IconButton icon={FolderSearchIcon} aria-label="选择整理路径" {...busyProps(picker.isPending)}
+            <IconButton icon={FolderSearchIcon} aria-label={t('cleanup:organize.choosePath')} {...busyProps(picker.isPending)}
               onClick={() => picker.mutate({ initial: path || locations.find((row) => row.location === location)?.roots[0] || '', location, path })} />
           </div>
         </div>
         <p className="text-caption-1-regular text-text-secondary">{ORGANIZE_SCOPE_HINT}</p>
-        {picker.isError ? <Note tone="error" title="目录选择失败">{errorMessage(picker.error)}；也可直接输入路径。</Note> : null}
-        <Input label="文件名模板" placeholder="{code}[ {title}]" value={fields.file} ref={fileInput}
+        {picker.isError ? <Note tone="error" title={t('cleanup:organize.pickerFailed')}>{errorMessage(picker.error)}{t('cleanup:organize.pickerFallback')}</Note> : null}
+        <Input label={t('cleanup:organize.fileTemplate')} placeholder="{code}[ {title}]" value={fields.file} ref={fileInput}
           spellCheck="false" isInvalid={invalid === 'file'}
           onFocus={() => { setTarget('file'); focused.current = true }}
           onChange={(value) => changeTemplates({ file: value })} />
-        <Input label="目录模板" placeholder="留空表示原地改名" value={fields.dir} ref={dirInput}
+        <Input label={t('cleanup:organize.dirTemplate')} placeholder={t('cleanup:organize.dirTemplatePlaceholder')} value={fields.dir} ref={dirInput}
           spellCheck="false" isInvalid={invalid === 'dir'}
           onFocus={() => { setTarget('dir'); focused.current = true }}
           onChange={(value) => changeTemplates({ dir: value })} />
         {data?.presets?.length
-          ? <div className="flex flex-col gap-2" role="group" aria-label="套用模板">
-              <p className="text-caption-1-medium text-text-secondary">套用模板</p>
+          ? <div className="flex flex-col gap-2" role="group" aria-label={t('cleanup:organize.applyPreset')}>
+              <p className="text-caption-1-medium text-text-secondary">{t('cleanup:organize.applyPreset')}</p>
               <div className="flex flex-wrap gap-2">
               {data.presets.map((preset) => (
                 <Button key={preset.label} variant="secondary" size="small" title={preset.example || preset.label}
@@ -268,12 +269,12 @@ export function OrganizeCard(
           : null}
         <p aria-live="polite" aria-busy={example.isFetching} data-organize-example=""
           className="text-caption-1-regular text-text-secondary">
-          路径示例：<code className="wrap-anywhere">{example.data?.example || example.data?.error
-            || (example.isError ? errorMessage(example.error) : '正在预览…')}</code>
+          {t('cleanup:organize.examplePath')}<code className="wrap-anywhere">{example.data?.example || example.data?.error
+            || (example.isError ? errorMessage(example.error) : t('cleanup:organize.previewLoading'))}</code>
         </p>
-        {data?.placeholders?.length ? <div className="flex flex-col gap-2" role="group" aria-label="插入参数">
+        {data?.placeholders?.length ? <div className="flex flex-col gap-2" role="group" aria-label={t('cleanup:organize.insertParameter')}>
           <p className="text-caption-1-regular text-text-secondary" aria-live="polite">
-            <strong className="text-caption-1-semibold text-text-primary">插入参数</strong>（到{target === 'file' ? '文件名模板' : '目录模板'}）
+            <strong className="text-caption-1-semibold text-text-primary">{t('cleanup:organize.insertParameter')}</strong>{t('cleanup:organize.insertTarget', { target: target === 'file' ? t('cleanup:organize.fileTemplate') : t('cleanup:organize.dirTemplate') })}
           </p>
           <div className="flex flex-wrap gap-1">
             {data.placeholders.map((item) => <Button key={item.key} variant="ghost" size="small"

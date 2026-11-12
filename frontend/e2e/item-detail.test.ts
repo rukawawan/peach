@@ -74,7 +74,8 @@ describe('作品详情岛', () => {
       });
       await page.reload();
       await received;
-      const initialHeight = await page.locator('#stage [data-stage-media]').evaluate(node => node.getBoundingClientRect().height);
+      const media = page.locator('#stage [data-item-media]');
+      const initialHeight = await media.evaluate(node => node.getBoundingClientRect().height);
       release();
       const reasons = '#stage [data-item-related] [aria-label^="查看推荐理由"]';
       await page.locator(reasons).first().waitFor();
@@ -85,7 +86,7 @@ describe('作品详情岛', () => {
           .every(reason => reason.getBoundingClientRect().bottom <= bottom + 1);
       }, reasons);
       await visible();
-      const finalHeight = await page.locator('#stage [data-stage-media]').evaluate(node => node.getBoundingClientRect().height);
+      const finalHeight = await media.evaluate(node => node.getBoundingClientRect().height);
       assert.ok(Math.abs(initialHeight - finalHeight) <= 1, `${initialHeight} → ${finalHeight}`);
       const card = page.locator('#stage [data-item-related] [data-media-card]').first();
       await card.hover();

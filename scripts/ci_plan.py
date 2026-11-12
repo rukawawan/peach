@@ -59,7 +59,7 @@ def runtime_paths(paths: list[str], contents: dict | None) -> list[str]:
                      and change_impact.kind(path, *contents[path]) == "prose")]
 
 
-def browser_input(path: str) -> bool:
+def browser_input(path: str, *, root: Path = ROOT) -> bool:
     from . import test_runner as runner
     if path == "tests/test_web_e2e.py" or path.startswith("frontend/e2e/"):
         return True
@@ -67,20 +67,20 @@ def browser_input(path: str) -> bool:
         return False
     return path in {"src/peach/auth.py", "src/peach/server.py"} \
         or path.startswith(("src/peach/web_", "src/peach/routes_")) \
-        or "web" in runner.scopes_for_changes([path])[0]
+        or "web" in runner.scopes_for_changes([path], root=root)[0]
 
 
-def plan(event: str, paths: list[str], contents: dict | None = None) -> dict:
+def plan(event: str, paths: list[str], contents: dict | None = None, *, root: Path = ROOT) -> dict:
     from . import test_runner as runner
-    scopes, _ = runner.scopes_for_changes(paths, contents=contents)
+    scopes, _ = runner.scopes_for_changes(paths, contents=contents, root=root)
     wide = event == "workflow_dispatch" or "full" in scopes
     runtime_tools = wide or scopes != ("checks",)
-    selected_count = len({path for scope in scopes for path in runner.selected_files(scope)}) if not wide else 0
+    selected_count = len({path for scope in scopes for path in runner.selected_files(scope, root=root)}) if not wide else 0
     rows = []
     for system in ("macos-latest", "windows-latest"):
         scope = "full" if wide else "auto"
         # 独立 runner 承担分片，避免共享文件、端口和全量证据锁。
-        split = wide or (system == "windows-latest" and selected_count >= AUTO_SHARD_FILES)
+        split = wide or selected_count >= AUTO_SHARD_FILES
         shards = (4 if system == "windows-latest" else 2) if split else 1
         for index in range(shards):
             rows.append({"os": system, "python": "3.14", "scope": scope,
@@ -90,7 +90,7 @@ def plan(event: str, paths: list[str], contents: dict | None = None) -> dict:
               {"os": "macos-latest", "python": "3.14"}]
     shared = wide
     effective = runtime_paths(paths, contents)
-    browser = shared or any(browser_input(path) for path in effective)
+    browser = shared or any(browser_input(path, root=root) for path in effective)
     frontend = shared or any(path.startswith(("frontend/", "web/dist/", ".github/workflows/test.yml"))
                              or path == "scripts/copy-rules.json" for path in effective)
     vendor = shared or any(path.startswith(("web/vendor/", ".github/workflows/test.yml"))
@@ -103,7 +103,7 @@ def plan(event: str, paths: list[str], contents: dict | None = None) -> dict:
                                             (vendor, ["web-vendor"]), (wheel, ["wheel-build", "wheel-smoke"]))
                  if enabled for name in names]
     return {"matrix": {"include": rows}, "wheel_matrix": {"include": wheels}, "wide": wide,
-            "browser_matrix": browser_matrix(), "browser": browser, "frontend": frontend,
+            "browser_matrix": browser_matrix(root), "browser": browser, "frontend": frontend,
             "vendor": vendor, "wheel": wheel, "required_jobs": required}
 
 
@@ -144,11 +144,11 @@ def main() -> None:
         if args.event == 'push':
             base = github_verified_base(root)
         paths = runner.changed_files(root, base)
-        result = plan(args.event, paths, runner.changed_contents(root, base, paths))
+        result = plan(args.event, paths, runner.changed_contents(root, base, paths), root=root)
     except (OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
         # 首次推送、浅克隆或已删除基线：扩大验证，不能把无 diff 当成无需测试。
         print(f'已验证基线未取得，使用全量：{error}', file=sys.stderr)
-        result = plan("workflow_dispatch", [])
+        result = plan("workflow_dispatch", [], root=root)
     result['base'] = base
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if output := os.environ.get("GITHUB_OUTPUT"):

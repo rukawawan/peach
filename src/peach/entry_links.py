@@ -29,10 +29,14 @@
 - 同样形态的有多条时，优先 `avdb-actor-mapping`、`javdb`、`wiki` 这几类艺名来源。
 - 一条都挑不出时才用规范名：拼错的地址和没有地址相比，前者更难发现。
 
-**同一个站点可以有多枚入口。** 一位女优在 javdb 常有两个演员页，两边挂的作品不同，
-所以每个 id 各出一枚，第二枚起在标签后缀一个序号。采集作品时在作品页上署过名的 id
-（资料带 `provider_id`）排在前面，按名字回填的排在后面：旧艺名那页常年是空的
-（`/actors/MmbDR` 白石アイリ「0 部影片」），排第一会让人以为链接错了（#271）。
+**同一个站点可以有多枚入口。** 一位女优在 javdb 常有两个演员页，有碼一条、無碼一条，
+两边挂的作品不同，所以每个 id 各出一枚，第二枚起在标签后缀一个序号。采集作品时在作品页上
+署过名的 id（资料带 `provider_id`）排在前面，按名字找到的排在后面。
+
+按名字找到的 id 与署名的 id 记录类型相同（资料里 `uncensored` 一样）时不出入口：同一类
+记录她只有一页，署名那页就是，按名字对上的是同名或旧艺名的另一页（`/actors/MmbDR`
+白石アイリ「0 部影片」，#271）。记录类型不同的照出，那是她的另一条记录。没记下记录类型、
+或同一类只有按名字找到的几枚时判不了，几枚都出，交给用户点开核对。
 
 **两种位置。** minnano-av 是一份资料页，和事务所官网、社媒是同一类东西，所以它排进上面
 那排链接里。JavDB 与 MISSAV 是「去看片」的入口，另起一行，用两站自己的标识。
@@ -235,19 +239,27 @@ def _ref_metadata(ref) -> dict:
 def provider_ids(refs) -> dict[str, list[str]]:
     """`entity_external_ref` 的行 → 这个站点上的 id 们。只认人物那一档。
 
-    作品页上署过名的 id 排前面，同一档内保持原顺序；判据见模块开头。
+    作品页上署过名的 id 排前面，同一档内保持原顺序；与署名 id 记录类型相同的按名字找到的
+    id 不给。判据见模块开头。
     """
-    found: dict[str, list[tuple[bool, str]]] = {}
+    found: dict[str, dict[str, tuple[bool, bool | None]]] = {}
     for ref in refs or ():
         if str(ref.get("external_kind") or "") != EXTERNAL_KIND:
             continue
         external_id = str(ref.get("external_id") or "").strip()
-        provider = str(ref.get("provider") or "")
-        ids = found.setdefault(provider, [])
-        if external_id and all(value != external_id for _, value in ids):
-            ids.append((not _ref_metadata(ref).get("provider_id"), external_id))
-    return {provider: [value for _, value in sorted(ids, key=lambda item: item[0])]
-            for provider, ids in found.items()}
+        ids = found.setdefault(str(ref.get("provider") or ""), {})
+        if external_id and external_id not in ids:
+            metadata = _ref_metadata(ref)
+            record = metadata.get("uncensored")
+            ids[external_id] = (bool(metadata.get("provider_id")),
+                                record if isinstance(record, bool) else None)
+    out: dict[str, list[str]] = {}
+    for provider, ids in found.items():
+        signed = {record for is_signed, record in ids.values() if is_signed and record is not None}
+        kept = [(value, is_signed) for value, (is_signed, record) in ids.items()
+                if is_signed or record is None or record not in signed]
+        out[provider] = [value for value, _ in sorted(kept, key=lambda item: not item[1])]
+    return out
 
 
 #: 记下她现名的外部资料：目录站与 avwikidb 资料里的 `name`；r18 的名字映射另算。
@@ -519,6 +531,13 @@ def build(settings: dict, canonical_name: str, refs, aliases=(), localization=No
 def entry_links(root: Path, canonical_name: str, refs, aliases=(), localization=None) -> list[dict]:
     """读设置并拼出入口。资料页只调这一个。"""
     return build(read(root), canonical_name, refs, aliases, localization, read_directory(root))
+
+
+def javdb_actor_page(external_id: str) -> str:
+    """一个 javdb 演员 id 在默认域名下的地址，和订阅新作存下的地址同一个写法。"""
+    site = _BY_KEY["javdb"]
+    return f"https://{site.host}" + site.path.replace(
+        "{" + site.placeholder + "}", quote(external_id, safe=""))
 
 
 def javdb_actor_pages(canonical_name: str, refs) -> list[str]:

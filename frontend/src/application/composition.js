@@ -1,6 +1,6 @@
 /* composition 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { loadingState, renderInitialSurfaceLoading } from './loading.js';
-import { clearHomeFeed, installEntityShapeBootstrap, isFeedNewPath, loadEntityShapes, prepareHomeFeed } from './feed.js';
+import { clearHomeFeed, feedState, installEntityShapeBootstrap, isFeedNewPath, loadEntityShapes, prepareHomeFeed } from './feed.js';
 import { buildManageBar, closeStats, enterManagementSurface, loadSyncedSettings, mountManageHeader, mountSidebar, openManage, openSettings, paintCatalogPageTitle, paintListTitle, scheduleStickySurfaces, showHomeSurfaces, showManagementBody, syncHeaderActions } from './layout.js';
 import { disposeStage, mediaState, openItem, openJavMovie, openPlaylist, openQueue, openTok } from './media.js';
 import { currentBarsContext, entityState, openEntity, revealForIsland, routeEntityPage, showEntityMissing } from './entity.js';
@@ -135,14 +135,17 @@ compositionState.shellActions = {
 
   // 索引页与资料页的元素用。
   configurable:()=>!!runtimeConfigurable,
-  /* 整页画上之后：索引页重读侧栏按下态、重排吸顶；资料页重拉侧栏与顶部横条。 */
-  surfaceShown:kind=>{if(kind==='index'){syncNavigation();scheduleStickySurfaces()}else buildBars()},
+  /* 整页画上之后：索引页重读侧栏按下态、重排吸顶；资料页重拉侧栏与顶部横条，按取到的名字重写标题（按 ID 直达时导航那一刻还不知道名字）。 */
+  surfaceShown:kind=>{if(kind==='index'){syncNavigation();scheduleStickySurfaces()}else{buildBars();loadingState.syncPageTitle(location.href)}},
   entity:{
     missing:kind=>{compositionState.shellActions.surfaceChanged('entity',location.pathname);showEntityMissing(kind)},
     /* 名单启动时就在取；深链直接落在资料页时它可能还在路上，稍等一下再画骨架，画出来就是最终的形状。等不到
        就先画，名单到了再补那两块。名单每进一页重取一遍，下一页用的就是服务端的现状。 */
     loading:(kind,name,current)=>entityState.application.loading(kind,name,current),
-    props:(kind,name,search)=>entityState.application.addressProps(kind,name,search),
+    props:(kind,name,search)=>{
+      writeShell({entityJavLayout:['performer','studio'].includes(kind)&&feedState.hasEntityPart(kind,name,'jav')});
+      return entityState.application.addressProps(kind,name,search);
+    },
     /* 后退前进落在同一位的另一份筛选上：这一页还画着就只把地址上的新筛选推过去。 */
     refresh:(kind,name,search)=>{
       const filters=entityState.parseEntityFilters(search);if(kind==='creator')filters.creator='';
@@ -201,11 +204,7 @@ loadRouter(compositionState.shellActions).catch(error=>console.error('客户端�
 mountManageHeader();
 mountBatchDock();
 buildManageBar();
-/* 形状名单只在一处挡开页：目录页还不知道有没有新作那一行（本机没记过结论），目录骨架的比例要等它定。
-   其余页面不等：名单在后台任务频繁写账本时要算好几秒，资料页自己按 `waitEntityShapes` 封顶等待。 */
-const shapesGate=isFeedNewPath(decodeURIComponent(location.pathname))&&catalogState.homeHasFeed==null
-  ?loadingState.entityShapesReady:null;
-Promise.all([loadSourceStatus(),loadSyncedSettings(),shapesGate])
+Promise.all([loadSourceStatus(),loadSyncedSettings()])
   .then(()=>{
     if(!effects.isActive)return;
     /* 顶部两排与筛选栏的两个聚合自带骨架、取回后自己落位，页面打开不等它们：作品列表与它们同时去取。 */

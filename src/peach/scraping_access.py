@@ -111,6 +111,25 @@ class SourceBudgetExhausted(SourcePaused):
     """本趟采集预算耗尽，不能作为单个来源的冷却跳过。"""
 
 
+#: 整趟预算三项到顶时的说明，键是 `SourceTransport` 的三个上限。
+BUDGET_SPENT = {
+    'requests': "本趟采集次数已用完，再跑一次接着采；已有图片保留",
+    'seconds': "本趟采集时间已用完，再跑一次接着采；已有图片保留",
+    'bytes': "本趟下载量已用完，再跑一次接着采；已有图片保留",
+}
+
+
+class SourceRefused(SourcePaused):
+    """站方回的是拒绝这个出口的说明页（`sources.base.refusal_page`），来源已经记下冷却。
+
+    `reason` 是 `FailureReason` 的取值（`geo_restricted`／`ip_banned`），来源检查按它报细档。
+    """
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 def cooldown_path(root: Path, source: str) -> Path:
     """这个来源的冷却记录。键是来源名；没有来源名的请求按主机名散列，见 `SourceTransport`。"""
     return Path(root) / ("scraping-" + source + ".cooldown.json")
@@ -443,6 +462,18 @@ class SourceTransport:
                                   target, headers, None if response.status == 303 else request.body)
         raise ValueError("采集重定向次数超过上限")
 
+    def exhausted(self) -> str:
+        """本趟预算到顶时返回那一句说明，没到顶返回空串。
+
+        到顶之后这个传输再也发不出请求，调用方据此整趟停下，不必逐项去撞同一句话。"""
+        if self.max_requests and self.requests >= self.max_requests:
+            return BUDGET_SPENT['requests']
+        if self.deadline and self.deadline <= time.monotonic():
+            return BUDGET_SPENT['seconds']
+        if self.max_bytes and self.bytes >= self.max_bytes:
+            return BUDGET_SPENT['bytes']
+        return ''
+
     def _request(self, request: HttpRequest, timeout: float, max_bytes: int):
         """闸门到顶的三句话都写「本趟」和「再跑一次接着采」：这三条按任务重新计数，
         读的人要据以决定的是「现在重跑一遍」，不是去查哪里还有配额。"""
@@ -452,17 +483,15 @@ class SourceTransport:
             headers = {key: value for key, value in request.headers.items() if key.lower() != "accept-language"}
             request = HttpRequest(request.method, request.url,
                                   {**headers, "Accept-Language": "zh-CN,zh;q=0.9"}, request.body)
-        if self.max_requests and self.requests >= self.max_requests:
-            raise SourceBudgetExhausted("本趟采集次数已用完，再跑一次接着采；已有图片保留")
+        spent = self.exhausted()
+        if spent:
+            raise SourceBudgetExhausted(spent)
         if self.deadline:
             timeout = min(timeout, self.deadline - time.monotonic())
             if timeout <= 0:
-                raise SourceBudgetExhausted("本趟采集时间已用完，再跑一次接着采；已有图片保留")
+                raise SourceBudgetExhausted(BUDGET_SPENT['seconds'])
         if self.max_bytes:
-            remaining = self.max_bytes - self.bytes
-            if remaining <= 0:
-                raise SourceBudgetExhausted("本趟下载量已用完，再跑一次接着采；已有图片保留")
-            max_bytes = min(max_bytes, remaining - 1)
+            max_bytes = min(max_bytes, self.max_bytes - self.bytes - 1)
         key = source or hashlib.sha256(hostname_of(request.url).encode()).hexdigest()
         cooldown = cooldown_path(self.root, key)
         # 冷却只认这条路自己撞出来的账：直连 403 攒下的 `blocks` 与 `until` 不压到浏览器那条路上，反之亦然。
@@ -501,6 +530,7 @@ class SourceTransport:
                     until = time.time() + 900
             _pause(cooldown, until, blocks, via)
             raise SourcePaused("来源限流，已记录冷却时间；已有图片保留")
+        self._refuse(source, request.url, response, cooldown, blocks, via)
         blocked_pause = SOURCES.get(source or "", {}).get("blocked_pause")
         if response.status == 403 and blocked_pause:
             blocks += 1
@@ -514,6 +544,31 @@ class SourceTransport:
             # 这一趟通了，封已经解除：清掉记录，下次撞上从最短的一档重新起算。
             cooldown.unlink(missing_ok=True)
         return response
+
+    @staticmethod
+    def _refuse(source: str | None, url: str, response, cooldown: Path, blocks: int, via: str) -> None:
+        """回的是拒绝这个出口的说明页（地区限制、出口封禁）就记冷却并抛 `SourceRefused`。
+
+        状态码多半是 200，交给调用方只会被读成「这一页解不出东西」或「站上没有」。两种都是换一部片
+        问结果不变，整站停下。地区限制要换出口才会变，用户改完代理不该再等一整天，所以固定停
+        `FIRST_BLOCKED_PAUSE`、不往上翻倍；封禁和 403 一样按次翻倍到 `blocked_pause`。
+        """
+        from .sources.base import FailureReason, refusal_page
+
+        reason = refusal_page(response.body)
+        if reason is None:
+            return
+        label = SOURCES.get(source or "", {}).get("label") or hostname_of(url)
+        if reason is FailureReason.GEO_RESTRICTED:
+            _pause(cooldown, time.time() + FIRST_BLOCKED_PAUSE, blocks, via)
+            raise SourceRefused(
+                f"{label} 不对当前出口所在的地区开放，请在代理里给它换一个它接受的地区的出口；"
+                f"暂停向它请求 {FIRST_BLOCKED_PAUSE // 60} 分钟", reason.value)
+        blocks += 1
+        limit = SOURCES.get(source or "", {}).get("blocked_pause") or 24 * 3600
+        _pause(cooldown, time.time() + min(FIRST_BLOCKED_PAUSE * 2 ** (blocks - 1), limit), blocks, via)
+        raise SourceRefused(f"{label} 封禁了当前出口 IP，暂停向它请求一段时间，"
+                            "也可以在代理里给它换一个出口", reason.value)
 
     def hold(self, source: str, action: str) -> None:
         """契约报的冷却细档（`SourceFailure.cooldown_action`）写回这个来源的冷却记录。

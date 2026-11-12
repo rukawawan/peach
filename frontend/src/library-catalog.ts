@@ -7,6 +7,12 @@ export interface LibraryRow {
   roots?: { root_id?: string; location: string }[];
 }
 
+/** 新建媒体库接在自定义顺序末尾，已删除的 ID 不参与显示。 */
+export function orderLibraries<T>(rows: readonly T[], keys: readonly string[], id: (row: T) => string): T[] {
+  const rank = new Map(keys.map((key, index) => [key, index]));
+  return [...rows].sort((a, b) => (rank.get(id(a)) ?? keys.length) - (rank.get(id(b)) ?? keys.length));
+}
+
 const CACHE_KEY = 'peach.library-colors.v1';
 let rows: readonly LibraryRow[] | null = null;
 const listeners = new Set<(rows: readonly LibraryRow[]) => void>();

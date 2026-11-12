@@ -79,10 +79,12 @@ function catalogFetch({ deferred = false } = {}) {
   const pending: Array<() => void> = [];
   const fetched = vi.fn((input: string, init?: RequestInit) => {
     const url = new URL(String(input), 'http://peach.test');
-    const body = url.pathname === '/api/playlists' ? playlistPage
+    const summary = url.pathname === '/api/items' && url.searchParams.get('summary_only') === '1';
+    const body = summary ? { total: 3, bytes: 0, work_total: 3 }
+      : url.pathname === '/api/playlists' ? playlistPage
       : url.pathname === '/api/ads' ? junkPage(url.searchParams.get('kind') || '')
         : catalogPage(url.searchParams.get('sort') || '');
-    if (!deferred || url.pathname !== '/api/items') return Promise.resolve(reply(body));
+    if (!deferred || url.pathname !== '/api/items' || summary) return Promise.resolve(reply(body));
     return new Promise<Reply>((resolve, reject) => {
       pending.push(() => resolve(reply(body)));
       init?.signal?.addEventListener('abort', () => { reject(new DOMException('已中止', 'AbortError')) });
@@ -91,7 +93,10 @@ function catalogFetch({ deferred = false } = {}) {
   vi.stubGlobal('fetch', fetched);
   const calls = (path: string) => fetched.mock.calls
     .map(([input]) => new URL(String(input), 'http://peach.test')).filter((url) => url.pathname === path);
-  return { fetched, calls, resolve: () => { for (const settle of pending.splice(0)) settle() } };
+  return { fetched, calls,
+    pages: () => calls('/api/items').filter(url => url.searchParams.get('summary_only') !== '1'),
+    summaries: () => calls('/api/items').filter(url => url.searchParams.get('summary_only') === '1'),
+    resolve: () => { for (const settle of pending.splice(0)) settle() } };
 }
 
 const helpers: MediaCardHelpers = {
@@ -197,7 +202,8 @@ it('冷启动深链首页取齐首屏再挂，壳的骨架一直留到数据到�
   expect(grid.querySelector('.skelfade')?.contains(skeleton), '壳的骨架抬成淡出层与内容交叉').toBe(true);
   expect(grid.querySelector('[data-content-transition]')?.getAttribute('aria-busy')).toBe('false');
   expect(grid.querySelector('[data-content-skeleton]')?.getAttribute('aria-hidden')).toBe('true');
-  expect(fetch.calls('/api/items'), '首屏只取一次').toHaveLength(1);
+  expect(fetch.pages(), '首屏列表只取一次').toHaveLength(1);
+  expect(fetch.summaries(), '统计单独取一次').toHaveLength(1);
   expect(open.settled).toHaveBeenCalledWith(0);
   expect(r.managedEntry(grid)).toMatchObject({ path: '/', props: { filters: { sort: 'seed' } } });
   // jsdom 不发 transitionend，淡出层靠 `revealSkeleton` 的兜底定时器收掉。
@@ -224,7 +230,8 @@ it('`#grid` 上画着网格时，收 `#stats` 与 `#index` 不动它；点名 `#
   expect(painted(grid), '收别的容器不许卸网格').toBe(page);
   expect(r.managedEntry(grid)?.revision).toBe(revision);
   expect(cards(grid)).toHaveLength(3);
-  expect(fetch.calls('/api/items'), '网格不重取').toHaveLength(1);
+  expect(fetch.pages(), '网格不重取').toHaveLength(1);
+  expect(fetch.summaries(), '统计不重取').toHaveLength(1);
   act(() => { r.releaseManagedRoute(grid) });
   expect([grid.querySelector('.peach-react'), r.managedEntries().length]).toEqual([null, 0]);
 });
@@ -246,7 +253,8 @@ it('就地推选择态与版式：代次不变、不重挂、不重取', async (
   });
   expect(painted(grid), '推选择态与版式不许重挂').toBe(page);
   expect(r.managedEntry(grid)?.revision).toBe(revision);
-  expect(fetch.calls('/api/items'), '不重取').toHaveLength(1);
+  expect(fetch.pages(), '列表不重取').toHaveLength(1);
+  expect(fetch.summaries(), '统计不重取').toHaveLength(1);
   expect(r.managedEntry(grid)?.props).toMatchObject({ selectMode: true, seekSeconds: 30, layout: { size: 'big' } });
   expect((r.managedEntry(grid)!.props as CatalogGridProps).actions, '壳那一份动作原样留着').toBe(open.actions);
 });
@@ -263,7 +271,8 @@ it('就地推筛选与刷新代次：宿主与代次不变，只按新键重取�
   const revision = r.managedEntry(grid)?.revision;
   await act(async () => { r.updateManagedRoute(grid, { filters: { sort: 'new' }, revision: 1 }) });
   await until(() => Boolean(grid.textContent?.includes('作品 1 new')), '按新键重取回来的那一份画上');
-  expect(fetch.calls('/api/items').map((url) => url.searchParams.get('sort')), '只按新键重取一次').toEqual(['seed', 'new']);
+  expect(fetch.pages().map((url) => url.searchParams.get('sort')), '列表只按新键重取一次').toEqual(['seed', 'new']);
+  expect(fetch.summaries().map((url) => url.searchParams.get('sort')), '统计按相同筛选各取一次').toEqual(['seed', 'new']);
   expect(grid.querySelectorAll(':scope > .peach-react'), '宿主只有一个').toHaveLength(1);
   expect(r.managedEntry(grid)?.host).toBe(host);
   expect(r.managedEntry(grid)?.revision).toBe(revision);

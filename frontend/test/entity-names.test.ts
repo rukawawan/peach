@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  entityDisplayName, nameFallback, nameLanguage, registerNameWriting, registerNameWritings,
+  entityDisplayName, nameLanguage, registerNameWriting, registerNameWritings,
   setNameLanguage, type NameWriting,
 } from '../src/core/entity-names';
 
@@ -58,13 +58,9 @@ describe('实体名称的只读显示投影', () => {
     expect(entityDisplayName('creator', '枫花恋', 1)).toBe('枫花恋');
   });
 
-  it('缺少已核对的写法时保留原名并给出对应提示', () => {
+  it('缺少已核对的写法时保留原名', () => {
     registerNameWriting({ ...writing, zh_cn: null });
     expect(entityDisplayName('performer', '枫花恋', 1)).toBe('枫花恋');
-    expect(nameFallback('performer', '枫花恋', 1)).toBe('暂无已核对的中文写法，保留当前名称');
-    setNameLanguage('ja');
-    expect(nameFallback('performer', '枫花恋', 1)).toBe('');
-    expect(nameFallback('studio', '原名')).toBe('');
   });
 
   it('刷新资料集合清除过期名称，但保留用户的语言偏好', () => {

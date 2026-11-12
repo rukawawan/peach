@@ -1,4 +1,5 @@
 import { islandButton, islandSelect, islandSummary } from './island-skeleton';
+import { RESULT_PANEL, RESULT_SECTION } from './react/components/fieldset';
 
 const placeholder = 'relative overflow-hidden skeleton-sheen bg-background-tertiary-default rounded-lg';
 const text = (width = '60%') => `<span class="${placeholder} inline-block max-w-full align-middle" style="width:${width};height:1em"></span>`;
@@ -19,7 +20,6 @@ export function statsSkeleton(): string {
     <div class="inline-grid w-full grid-cols-3 gap-2 max-sm:grid-cols-2">${Array.from({ length: 3 }, () => `<div class="flex min-w-0 flex-col gap-1 rounded-xl bg-background-tertiary-default p-2.5"><span class="text-caption-1-regular">${text()}</span><b class="text-title-2-medium">${text('3em')}</b><small class="text-caption-1-regular">${text()}</small></div>`).join('')}</div>
   </section>`;
   return `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">
-    <p class="text-caption-1-regular text-text-secondary">数据库中的当前统计 · ${text('12em')}</p>
     <div class="flex flex-col gap-4"><div class="inline-grid w-full grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4" data-stats-metrics>${metrics}</div>
       <div class="flex flex-col gap-5"><div class="inline-grid w-full gap-5 md:grid-cols-2">${radial('网盘与本地')}${radial('媒体库')}</div>
         <div class="inline-grid w-full gap-5 md:grid-cols-2 xl:grid-cols-3">${['时长', '画质', '文件类型'].map(title => `<section class="${chart}"><h3 class="text-title-2-medium">${title}</h3><div class="${placeholder} h-64"></div></section>`).join('')}</div>
@@ -102,5 +102,21 @@ export function qualityGoalsSkeleton(): string {
   return `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">
     ${islandSummary('待升级')}
     <ul class="card-grid-cover gap-5">${card.repeat(6)}</ul>
+  </div></div>`;
+}
+
+/** 「修复与迁移」：页首说明与分区标题照写，结果面板里几行占位，和 `react/settings/repair-center.tsx`
+ *  的 `Row` 同一串类名：左边标题与说明，右边读数与状态标签。项数等数据才知道，按常见的三项画。 */
+export function repairCenterPanelSkeleton(rows = 3): string {
+  const row = `<div class="${RESULT_SECTION} flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+    <div class="flex min-w-0 flex-1 flex-col gap-0.5"><span class="text-body-medium">${text('7em')}</span><span class="text-body-2-regular">${text('62%')}</span></div>
+    <div class="flex shrink-0 items-center gap-3"><span class="text-body-2-regular">${text('4em')}</span><span class="${placeholder} inline-block h-6 w-14 rounded-full"></span></div>
+  </div>`;
+  return `<div class="${RESULT_PANEL}">${row.repeat(rows)}</div>`;
+}
+
+export function repairCenterSkeleton(): string {
+  return `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">
+    <section class="flex flex-col gap-4"><h2 class="text-title-2-medium! m-0! text-text-primary">修复项目</h2>${repairCenterPanelSkeleton()}</section>
   </div></div>`;
 }

@@ -24,6 +24,7 @@ export const MIX_SLOT = 7;
  *  「没有符合的」。 */
 export interface GridPage extends MediaPage {
   offset: number;
+  batch?: number;
   libraryEmpty?: boolean;
 }
 
@@ -40,14 +41,14 @@ export const entityKey = (key: string, revision: number): QueryKey => ['catalog-
 
 /** 目录的一页。第一页为空、又不是回收站时，再问一次整个馆藏有没有东西。 */
 export async function fetchCatalogPage(
-  params: string, offset: number, batch: number, trash: boolean, signal: AbortSignal,
+  params: string, offset: number, batch: number, trash: boolean, signal: AbortSignal, includeTotal = true,
 ): Promise<GridPage> {
   const query = new URLSearchParams(params);
   query.set('limit', String(batch));
   query.set('offset', String(offset));
-  if (offset) query.set('count', '0');
+  if (offset || !includeTotal) query.set('count', '0');
   const page = await apiGet<MediaPage>(`/api/items?${query}`, signal);
-  const result: GridPage = { ...page, items: page.items || [], offset };
+  const result: GridPage = { ...page, items: page.items || [], offset, batch };
   if (!offset && !result.items.length && !trash) {
     const library = await apiGet<MediaPage>('/api/items?limit=1&thumb=0', signal);
     result.libraryEmpty = library.total === 0;
@@ -57,9 +58,31 @@ export async function fetchCatalogPage(
 
 /** 下一页从哪儿取。第一页按总数判断，往后的页不带总数，看 `has_more`。 */
 export const nextOffset = (batch: number) => (last: GridPage): number | undefined => {
-  const more = last.offset === 0 ? last.items.length < (last.total || 0) : !!last.has_more;
-  return more ? last.offset + batch : undefined;
+  const more = last.has_more ?? (last.items.length < (last.total || 0));
+  return more ? last.offset + (last.batch ?? batch) : undefined;
 };
+
+/** 首批覆盖当前视口；后续仍按用户设置的每批条数补齐。 */
+export function visibleCatalogBatch(columns: number, room: number, cardHeight: number, gap: number, maximum: number): number {
+  return Math.max(1, Math.min(maximum, Math.max(1, columns) * Math.max(1, Math.ceil((room + gap) / (cardHeight + gap)))));
+}
+
+function firstCatalogBatch(maximum: number): number {
+  const grid = document.querySelector<HTMLElement>('#grid .skeletonpanel[data-fill]>div, #grid [data-media-grid]');
+  const first = grid?.firstElementChild;
+  if (!grid || !first) return Math.min(maximum, 18);
+  const style = getComputedStyle(grid);
+  const height = first.getBoundingClientRect().height;
+  if (!height || style.display !== 'grid') return Math.min(maximum, 18);
+  return visibleCatalogBatch(style.gridTemplateColumns.split(' ').filter(Boolean).length,
+    window.innerHeight - grid.getBoundingClientRect().top, height, parseFloat(style.rowGap) || 0, maximum);
+}
+
+export function catalogSummary(params: string, signal: AbortSignal): Promise<MediaPage> {
+  const query = new URLSearchParams(params);
+  query.set('summary_only', '1');
+  return apiGet<MediaPage>(`/api/items?${query}`, signal);
+}
 
 /** 资料页作品区的下一页：壳给的第一页可能带 `has_more`，也可能只有总数。 */
 export const nextEntityOffset = (last: GridPage, pages: GridPage[]): number | undefined => {
@@ -72,10 +95,11 @@ export function catalogQuery(props: CatalogGridProps) {
   const params = catalogParams(props.filters || {}, !!props.excludeVertical);
   const batch = props.batchSize || 60;
   const trash = props.filters?.state === 'trash';
+  const progressive = !trash && !props.wall;
   return {
     queryKey: catalogKey(params, props.revision || 0),
     queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) =>
-      fetchCatalogPage(params, pageParam, batch, trash, signal),
+      fetchCatalogPage(params, pageParam, progressive && !pageParam ? firstCatalogBatch(batch) : batch, trash, signal, !progressive),
     initialPageParam: 0,
     getNextPageParam: nextOffset(batch),
   };
@@ -159,7 +183,7 @@ export function mixSeed(visible: readonly MediaItem[], javImage: string): MediaI
 /** 网格里的一格：一张作品卡，或一张 Mix。 */
 export type Tile = { kind: 'card'; item: MediaItem } | { kind: 'mix'; seed: MediaItem };
 
-/** 把已取回的各页排成一列格子。每一页各自折叠、各自插 Mix，和逐页接上来时一样。
+/** 把已取回的各页排成一列格子。首枚 Mix 等累计够八张再插入，随后各页独立插入。
  *  `pageStarts[i]` 是第 i 页在这一列里的起点，竖屏带的落点要落在那一页新增的格子之间。 */
 export function arrangeTiles(
   pages: readonly GridPage[], { collapse, mix, javImage }: { collapse: boolean; mix: boolean; javImage: string },
@@ -175,11 +199,13 @@ export function arrangeTiles(
     const fresh = page.items.filter((item) => !ids.has(item.id) && Boolean(ids.add(item.id)));
     const visible = collapseGroups(fresh, seen, collapse);
     const cards: Tile[] = visible.map((item) => ({ kind: 'card', item }));
-    if (mix && visible.length >= 8) {
-      const seed = mixSeed(visible, javImage);
-      if (seed) cards.splice(MIX_SLOT, 0, { kind: 'mix', seed });
-    }
     tiles.push(...cards);
+    if (mix) {
+      const firstMix = !tiles.some((tile) => tile.kind === 'mix');
+      const pool = firstMix ? tiles.flatMap((tile) => tile.kind === 'card' ? [tile.item] : []) : visible;
+      const seed = pool.length >= 8 ? mixSeed(pool, javImage) : undefined;
+      if (seed) tiles.splice(firstMix ? MIX_SLOT : pageStarts.at(-1)! + MIX_SLOT, 0, { kind: 'mix', seed });
+    }
   }
   return { tiles, pageStarts };
 }

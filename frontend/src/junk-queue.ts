@@ -9,6 +9,7 @@
 import { esc } from '@peach/legacy/core';
 
 import { islandSummary } from './island-skeleton';
+import { t } from './i18n';
 
 export type JunkView = 'pending' | 'dismissed';
 export type JunkKind = '' | 'video' | 'image' | 'archive' | 'audio' | 'url' | 'other';
@@ -17,9 +18,9 @@ export interface JunkRoute { kind: JunkKind; view: JunkView }
 
 /** 分类条上的几项：键、标签、雪碧图字形。键与 `/api/ads?kind=` 的取值一一对应。 */
 export const JUNK_KIND_OPTIONS: readonly (readonly [JunkKind, string, string])[] = [
-  ['', '全部', 'layout-grid'], ['video', '视频', 'play'], ['image', '图片', 'pics'],
-  ['archive', '压缩包', 'file-archive'], ['audio', '音频', 'file-audio'], ['url', '网址', 'globe'],
-  ['other', '其它', 'hard-drive'],
+  ['', t('cleanup:shared.all'), 'layout-grid'], ['video', t('cleanup:junk.kindVideos'), 'play'], ['image', t('cleanup:junk.kindImages'), 'pics'],
+  ['archive', t('cleanup:junk.kindArchives'), 'file-archive'], ['audio', t('cleanup:junk.kindAudio'), 'file-audio'], ['url', t('cleanup:junk.kindUrls'), 'globe'],
+  ['other', t('cleanup:junk.kindOther'), 'hard-drive'],
 ];
 
 /** 认不出的分类一律落回「全部」。 */
@@ -44,11 +45,11 @@ export function junkPath(kind: JunkKind = '', view: JunkView = 'pending'): strin
 /** 分类条末尾那一项：待判断时去「已排除」，已排除时回「待判断」。 */
 export function junkViewLink(view: JunkView): { view: JunkView; label: string; glyph: string; href: string } {
   return view === 'dismissed'
-    ? { view: 'pending', label: '返回待判断', glyph: 'rotate-ccw', href: junkPath('', 'pending') }
-    : { view: 'dismissed', label: '已排除', glyph: 'eye-off', href: junkPath('', 'dismissed') };
+    ? { view: 'pending', label: t('cleanup:junk.backToUndecided'), glyph: 'rotate-ccw', href: junkPath('', 'pending') }
+    : { view: 'dismissed', label: t('cleanup:junk.excluded'), glyph: 'eye-off', href: junkPath('', 'dismissed') };
 }
 
-export const junkSummaryLabel = (view: JunkView) => (view === 'dismissed' ? '已排除' : '待判断');
+export const junkSummaryLabel = (view: JunkView) => (view === 'dismissed' ? t('cleanup:junk.excluded') : t('cleanup:junk.undecided'));
 
 const glyph = (name: string) => `<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
 
@@ -61,7 +62,7 @@ export function junkCountSkeletonHtml({ kind, view }: JunkRoute): string {
   return `<div class="peach-react" data-junk-count-skeleton=""><div data-junk-count="">`
     + `<div data-junk-summary="" aria-live="polite">${islandSummary(junkSummaryLabel(view))}</div>`
     + `<div data-junk-filters-frame="" data-filter-glass="" data-glass-pane=""><span data-view-glide="" aria-hidden="true" hidden></span>`
-    + `<nav data-junk-filters="" aria-label="垃圾文件分类">${links}<i data-junk-divider="" aria-hidden="true"></i>`
+    + `<nav data-junk-filters="" aria-label="${esc(t('cleanup:junk.categories'))}">${links}<i data-junk-divider="" aria-hidden="true"></i>`
     + `<a href="${other.href}" data-junk-view-link="${other.view}"${view === 'dismissed' ? ' aria-current="page"' : ''}>${glyph(other.glyph)}${other.label}</a>`
     + `</nav></div></div></div>`;
 }

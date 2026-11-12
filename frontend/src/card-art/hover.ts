@@ -21,7 +21,7 @@ export interface HoverPreviewConfig {
 /** 卡片上那几个要用到的字段。 */
 export interface HoverItem { id: number; location?: string; has_thumb?: boolean }
 
-type HoverCard = HTMLElement & { _stopHover?: () => void };
+type HoverCard = HTMLElement & { _stopHover?: () => void; _hoverEvents?: AbortController };
 type HoverVideo = HTMLVideoElement & { _hop?: ReturnType<typeof setInterval> };
 
 const HOVER_CARDS = '.card,[data-media-card],[data-mix-card]';
@@ -65,7 +65,9 @@ export function setHoverState(el: HTMLElement, name: 'previewing' | 'longhover',
 /** 给一张卡挂上悬停预览。画面格是卡里的 `[data-media-pic]`，没有就不挂。 */
 export function wireHover(el: HTMLElement, it: HoverItem): void {
   const card = el as HoverCard;
+  card._hoverEvents?.abort(); card._stopHover?.(); delete card._stopHover;
   const pic = el.querySelector('[data-media-pic]'); if (!pic) return;
+  const events = new AbortController(); card._hoverEvents = events;
   el.dataset.hoverMode = it.location === 'local' ? 'video' : 'frames';
   let longTimer: ReturnType<typeof setTimeout> | undefined;
   const armLong = () => {
@@ -83,32 +85,34 @@ export function wireHover(el: HTMLElement, it: HoverItem): void {
     if (!it.has_thumb) return;        // 没有接触印相就没有可扫的格子
     let t: ReturnType<typeof setInterval> | undefined, i = 4, layer: HTMLImageElement | null = null, loading = false;
     el.addEventListener('mouseenter', () => {
-      if (config.selecting() || config.censored()) return; armLong();
+      if (config.selecting() || config.censored()) return;
       if (!layer) {
         layer = document.createElement('img');
         layer.className = 'ui-hvframes'; layer.alt = '';
         const pending = layer;
         pending.hidden = true;
         pending.addEventListener('load', () => {
-          if (layer === pending) pending.hidden = false;
+          if (layer !== pending) return;
+          pending.hidden = false; armLong();
+          clearInterval(t);
+          t = setInterval(() => {
+            if (layer !== pending || loading) return;
+            const next = (i + 1) % 9, pre = new Image(); loading = true;
+            pre.onload = () => { if (layer === pending) { layer.src = pre.src; i = next; } loading = false; };
+            pre.onerror = () => { loading = false; };
+            pre.src = `/poster?id=${it.id}&c=${next}`;
+          }, 430);
         }, { once: true });
+        pending.addEventListener('error', () => { if (layer === pending) stop() });
         layer.src = `/poster?id=${it.id}&c=${i}`;
         pic.appendChild(layer);
       }
-      clearInterval(t);
-      t = setInterval(() => {
-        if (!layer || loading) return;
-        const next = (i + 1) % 9, pre = new Image(); loading = true;
-        pre.onload = () => { if (layer) { layer.src = pre.src; i = next; } loading = false; };
-        pre.onerror = () => { loading = false; };
-        pre.src = `/poster?id=${it.id}&c=${next}`;
-      }, 430);
-    });
+    }, { signal: events.signal });
     const stop = () => {
-      clearLong(); clearInterval(t); t = undefined;
+      clearLong(); clearInterval(t); t = undefined; loading = false;
       if (layer) { layer.remove(); layer = null; } i = 4;
     };
-    card._stopHover = stop; el.addEventListener('mouseleave', stop);
+    card._stopHover = stop; el.addEventListener('mouseleave', stop, { signal: events.signal });
     return;
   }
   let timer: ReturnType<typeof setTimeout> | undefined, v: HoverVideo | null = null;
@@ -139,11 +143,11 @@ export function wireHover(el: HTMLElement, it: HoverItem): void {
       }, { once: true });
       pic.appendChild(video); video.play().catch(() => {});
     }, 340);                         // 340ms 防抖，鼠标划过不触发
-  });
+  }, { signal: events.signal });
   const stop = () => {
     clearLong();
     clearTimeout(timer); timer = undefined;
     if (v) { if (v._hop) clearInterval(v._hop); v.pause(); v.removeAttribute('src'); v.load(); v.remove(); v = null; }
   };
-  card._stopHover = stop; el.addEventListener('mouseleave', stop);
+  card._stopHover = stop; el.addEventListener('mouseleave', stop, { signal: events.signal });
 }

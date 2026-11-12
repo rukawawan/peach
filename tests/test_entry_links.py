@@ -55,6 +55,44 @@ class EntryLinkAddressTests(unittest.TestCase):
         self.assertEqual([row["url"] for row in rows if row["site"] == "javdb"],
                          ["https://javdb.com/actors/bkxd", "https://javdb.com/actors/MmbDR"])
 
+    def test_a_name_matched_page_of_the_same_record_as_the_credited_one_is_dropped(self):
+        """#271：署名那页与按名字对上的那页都是有碼记录时，她在这一类只有署名那页。
+
+        白石アイリ 那页是旧艺名的空页，点开就是查无此人；订阅新作同样不能去拉它。
+        """
+        def page(external_id, **metadata):
+            return ref("javdb", external_id) | {"metadata_json": json.dumps(metadata)}
+
+        refs = [page("MmbDR", source="backfill_performer_entry_ids", uncensored=False),
+                page("bkxd", source="javdb", provider_id="NNPJ-466", uncensored=False)]
+        rows = entry_links.build(entry_links.defaults(), "森日向子", refs)
+        self.assertEqual([(row["label"], row["url"]) for row in rows if row["site"] == "javdb"],
+                         [("JavDB", "https://javdb.com/actors/bkxd")])
+        self.assertEqual(entry_links.javdb_actor_pages("森日向子", refs), ["https://javdb.com/actors/bkxd"])
+
+    def test_name_matched_pages_stay_when_the_record_differs_or_cannot_be_told(self):
+        def page(external_id, **metadata):
+            return ref("javdb", external_id) | {"metadata_json": json.dumps(metadata)}
+
+        backfill = {"source": "backfill_performer_entry_ids"}
+        cases = {
+            # 署名的是有碼那条，按名字对上的是同一人的無碼那条：两页都是她的。
+            "另一类记录": ([page("E26vd", **backfill, uncensored=True),
+                          page("pRMq", source="javdb", provider_id="MIDV-001", uncensored=False)],
+                         ["pRMq", "E26vd"]),
+            # 没记下记录类型，分不出是不是同一类。
+            "类型未知": ([page("MmbDR", **backfill),
+                        page("bkxd", source="javdb", provider_id="NNPJ-466", uncensored=False)],
+                       ["bkxd", "MmbDR"]),
+            # 同一类只有按名字对上的几页，没有署名可比，交给用户点开核对。
+            "没有署名": ([page("GydD", **backfill, uncensored=False),
+                        page("ZzOA", **backfill, uncensored=False)],
+                       ["GydD", "ZzOA"]),
+        }
+        for name, (refs, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(entry_links.provider_ids(refs)["javdb"], expected)
+
     def test_a_site_without_an_id_is_absent_instead_of_a_search_address(self):
         rows = entry_links.build(entry_links.defaults(), "深田えいみ",
                                  [ref("r18dev", "1041521")])

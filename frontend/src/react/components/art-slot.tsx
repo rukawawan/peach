@@ -7,10 +7,13 @@
  * `relayout` 在同一张图上换，换了图才整段重写。 */
 import { useLayoutEffect, useRef, useState } from 'react';
 
-export function ArtSlot({ artwork, identity = artwork.html, relayout }: {
+/* 片段里的图不经 React，`onError` 挂不上；`onFailed` 在格子上按捕获阶段接住子图的 `error`，
+   交出取失败的那个地址。 */
+export function ArtSlot({ artwork, identity = artwork.html, relayout, onFailed }: {
   artwork: { kind: string; html: string };
   identity?: string;
   relayout?(root: HTMLElement): void;
+  onFailed?(src: string): void;
 }) {
   const [kept, keep] = useState({ identity, artwork });
   if (kept.identity !== identity) keep({ identity, artwork });
@@ -22,5 +25,16 @@ export function ArtSlot({ artwork, identity = artwork.html, relayout }: {
   useLayoutEffect(() => {
     if (slot.current) latest.current?.(slot.current);
   }, [artwork.html]);
+  const failed = useRef(onFailed);
+  failed.current = onFailed;
+  useLayoutEffect(() => {
+    const node = slot.current;
+    if (!node) return;
+    const listen = (event: Event) => {
+      if (event.target instanceof HTMLImageElement) failed.current?.(event.target.getAttribute('src') || '');
+    };
+    node.addEventListener('error', listen, true);
+    return () => node.removeEventListener('error', listen, true);
+  }, []);
   return <span ref={slot} data-media-art={shown.kind} dangerouslySetInnerHTML={{ __html: shown.html }} />;
 }

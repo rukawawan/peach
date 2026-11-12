@@ -5,8 +5,8 @@ description: 执行真实 ledger 迁移、真相字段写入、实体合并或�
 
 # 真实 ledger 写入流程
 
-最后复核：2026-10-26
-证据来源：[开发约定](../../../AGENTS.md)、ADR-0005、ADR-0015、ADR-0017、ADR-0052、ADR-0091、ADR-0106。
+最后复核：2026-11-07
+证据来源：[开发约定](../../../AGENTS.md)、ADR-0005、ADR-0015、ADR-0017、ADR-0052、ADR-0091、ADR-0106、用户 2026-11-07 尽量不复核的要求。
 
 真实库：当前写入者本机 `PEACH_DATA_ROOT/database/ledger.db`（WAL）。绝不能把共享传输副本或
 另一台机器的副本当当前真实库；测试只用临时 SQLite 与临时媒体。
@@ -38,6 +38,8 @@ Windows 写者的托盘在启动与「重启服务」时、子服务停着的间
   覆盖人的判断、能按 `source`／`batch` 整批撤回（`scripts/revert_auto_landing.py`）的，由处理
   任务或后继直接写，每条记 `source`、判词与批次。LLM 输出、打分、`weak`、多候选与来源冲突
   只产候选，人复核后才 `approved`；撤不回的（合并、改规范名）判据再确定也要授权。
+- 能不复核就不复核：修复、升级补修与新判据先设计成自动落库加可撤回回执，复核只留给可信来源
+  真正冲突或判据本身不确定的情况。发现问题后只计数或只标「需复核」不算修复（#478 乱码人物）。
 - 运维脚本默认 dry-run：`scrape_codes.py` 默认只写复核 CSV，`clean_names.py` 默认只生成
   改名计划且 `--apply` 前备份 SQLite 并在数据库更新失败时回滚文件名。
 - 种子包按 ADR-0073、0075、[0106](../../../docs/adr/0106-seed-correction-history-and-explicit-withdrawals.md) 校验；只匹配已有实体，保留源置信度与非种子归属，冲突记 `seed-landing.csv`。
@@ -58,7 +60,7 @@ Windows 写者的托盘在启动与「重启服务」时、子服务停着的间
 
 ## 删除
 
-- 物理删除只有一条实现 `purge_assets()`，`/api/batch` 的 `delete` 与 `/api/trash/empty` 共用。
+- 物理删除只有一条实现：`stage_purge()` 在写事务外处理媒体，`commit_purge()` 在事务里复核后删行。
 - 顺序固定：先删媒体文件、再删账本行。删不掉的文件整条跳过并在 `blocked` 里回报，前端必须
   显示 `blocked`。反过来先删行会留下无人认领的媒体文件，那才是不可恢复的丢失。
 - `asset_search` 不列入 `ASSET_REFERENCE_TABLES`，FTS 行由 `0004` 的删除触发器负责。

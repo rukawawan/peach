@@ -1,7 +1,9 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react';
+import { VisuallyHidden } from 'react-aria-components';
 import { attachOverlayScrollbar, revealTexts, spinnerHtml, wireHorizontalScroller } from '@peach/legacy/ui';
 import { Button, ButtonLink } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
+import { ObjectOrderDialog } from '../components/object-order-dialog';
 import { errorMessage } from '../../api';
 import { entityDisplayName } from '../../core/entity-names';
 import { useEntityNames } from '../use-entity-names';
@@ -12,6 +14,8 @@ import { EmptyState } from '../components/empty-state';
 import { spriteGlyph } from '../components/sprite-glyph';
 import { SettingsDialogClose } from '../components/settings-dialog-close';
 import { useViewGlide } from '../components/use-view-glide';
+import { NavigationDropLine, NavigationOrderMenu, useNavigationOrder } from '../components/navigation-order';
+import { useSidebarReorder } from '../sidebar/use-sidebar-reorder';
 import { busyProps } from '../settings/busy-props';
 import { favoriteHref, isFavorite, useShortcuts, useShortcutWrite, type Favorite } from './library-shortcuts';
 import './shortcuts.css';
@@ -71,6 +75,7 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
   const [scope, setScope] = useState(kind || 'all');
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [sorting, setSorting] = useState(false);
   const id = useId();
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 760px)').matches);
   useEffect(() => {
@@ -80,12 +85,15 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
     return () => media.removeEventListener('change', changed);
   }, []);
   const navigation = useRef<HTMLDivElement>(null);
+  const order = useNavigationOrder('favorites');
+  const scopes = order.keys.flatMap(key => SCOPES.filter(([value]) => value === key));
   const head = useRef<HTMLDivElement>(null);
   const previousScope = useRef(scope);
   const pane = useRef<HTMLSpanElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const scroll = useRef<(() => void) | null>(null);
-  const glide = useViewGlide(pane, navigation, '[role="tab"][aria-selected="true"]', scope, { axis: 'y' });
+  const glide = useViewGlide(pane, navigation, '[role="tab"][aria-selected="true"]', `${scope}:${order.keys.join(',')}`, { axis: narrow ? 'x' : 'y' });
+  const reorder = useSidebarReorder(navigation, order.keys, order.commit, () => requestAnimationFrame(glide.sync), narrow ? 'x' : 'y', 'tab', ['all']);
   useLayoutEffect(() => { if (content.current) scroll.current = attachOverlayScrollbar(content.current) || null }, []);
   useLayoutEffect(() => {
     const scroller = wireHorizontalScroller(navigation.current);
@@ -99,6 +107,7 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
   useLayoutEffect(() => { scroll.current?.() });
   const label = SCOPES.find(([value]) => value === scope)?.[1] || '全部';
   const selectWithKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey) return;
     const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     const index = tabs.indexOf(event.target as HTMLButtonElement);
     if (index < 0) return;
@@ -128,18 +137,31 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
       <SettingsDialogClose label="关闭我的收藏" onPress={close} />
     </div>
       <aside data-shortcuts-sidebar="" data-settings-nav="" data-glass-pane={narrow ? undefined : ''}>
-      <div ref={navigation} data-shortcuts-categories="" data-glass-pane={narrow ? '' : undefined} role="tablist" aria-label="收藏类型" onKeyDown={selectWithKeys} onPointerLeave={glide.leave}>
+      <div ref={navigation} data-shortcuts-categories="" data-glass-pane={narrow ? '' : undefined} role="tablist" aria-label="收藏类型"
+        data-navigation-order="favorites" data-navigation-axis={narrow ? 'x' : 'y'} data-reordering={reorder.picked ? '' : undefined}
+        onClickCapture={reorder.clickCapture} onKeyDown={selectWithKeys} onPointerLeave={glide.leave}>
         <span ref={pane} data-view-glide="" data-shortcuts-glide="" aria-hidden="true" hidden />
         <p data-shortcuts-caption="" role="presentation">我的收藏</p>
-        {SCOPES.map(([value, label]) => {
+        {scopes.map(([value, label]) => {
           const Glyph = GLYPHS[value as keyof typeof GLYPHS] || Star;
           const count = value === 'filters' ? data?.filters.length || 0 : (data?.favorites || []).filter(row => value === 'all' || row.kind === value).length;
           return <button key={value} type="button" role="tab" id={`${id}-${value}`} aria-controls={`${id}-content`}
+            data-tab={value} data-dragging={reorder.picked?.key === value ? '' : undefined}
+            style={{ '--navigation-picked-left': `${reorder.picked?.bounds.left || 0}px`,
+              '--navigation-picked-top': `${reorder.picked?.bounds.top || 0}px`,
+              '--navigation-picked-width': `${reorder.picked?.bounds.width || 0}px`,
+              '--navigation-picked-offset': `${reorder.picked?.offset || 0}px`,
+              '--sidebar-nudge': `${reorder.nudge(value).distance}px`, '--sidebar-delay': `${reorder.nudge(value).delay}ms` } as CSSProperties}
+            {...reorder.bindings(value)}
+            aria-keyshortcuts={narrow ? 'Alt+ArrowLeft Alt+ArrowRight' : 'Alt+ArrowUp Alt+ArrowDown'}
             aria-label={label} aria-selected={scope === value} tabIndex={scope === value ? 0 : -1} onPointerEnter={glide.hover} onClick={() => setScope(value)}>
             <Glyph aria-hidden className="size-(--icon-inline)" /><span>{label}</span><span data-shortcuts-count="">{count}</span>
           </button>;
         })}
+        <NavigationDropLine reorder={reorder} />
       </div>
+      <NavigationOrderMenu order={order} />
+      <VisuallyHidden role="status" aria-live="polite">{reorder.announcement}</VisuallyHidden>
       <nav data-shortcuts-footer="" aria-label="收藏作品清单">
         <a href="/flagged" onClick={close}><Star aria-hidden />已标记<ChevronRight aria-hidden /></a>
         <a href="/watch-later" onClick={close}><Bookmark aria-hidden />稍后看<ChevronRight aria-hidden /></a>
@@ -167,6 +189,9 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
           onClick={() => { if (!write.isPending) write.mutate({ action: 'favorite', ...row, on: false }) }}>取消收藏</Button>
       </div>)}</div>
     </> : <>
+      {data.filters.length > 1 ? <Button variant="secondary" size="small" onClick={() => setSorting(true)}>调整筛选顺序</Button> : null}
+      {sorting ? <ObjectOrderDialog title="调整筛选顺序" items={data.filters} close={() => setSorting(false)}
+        save={async ids => { await write.mutateAsync({ action: 'reorder_filters', ids }); setMessage('筛选顺序已保存') }} /> : null}
       {!data.filters.length ? <EmptyState size="compact" icon={spriteGlyph('list-filter')} title="还没有保存的筛选"
         actions={<ButtonLink size="small" href="/" onClick={close}>浏览馆藏</ButtonLink>}>在馆藏页保存当前条件，随时打开。</EmptyState> : null}
       {data.filters.map((row) => <div key={row.id} className="flex min-w-0 items-center justify-between gap-2">

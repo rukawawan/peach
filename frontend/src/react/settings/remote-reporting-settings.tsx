@@ -5,12 +5,13 @@ import { Switch } from '@/components/base/switch/switch';
 import { StatusLabel } from '../components/status-label';
 
 import { apiSend } from '../../api';
-import { ErrorText, Rows, Stack } from './section';
+import { Disclosure, ErrorText, Help, Rows, Stack } from './section';
 import { busyProps, useAction } from './use-action';
 
 export interface RemoteReportingState {
   usage: boolean; errors: boolean; available: boolean;
   fields: { usage: string; errors: string }; notice: string;
+  delivery?: Partial<Record<'usage' | 'errors', { status: string; at?: string; last_sent_at?: string; reason?: string }>>;
 }
 
 export function ReportingChoices({ value, onChange, busy = false }: {
@@ -32,6 +33,9 @@ export function RemoteReportingSettings({ initial, receipt }: {
 }) {
   const [value, setValue] = useState(initial);
   const action = useAction();
+  const sentDates = Object.values(value.delivery ?? {}).flatMap(delivery =>
+    delivery.last_sent_at ? [Date.parse(delivery.last_sent_at)] : []).filter(Number.isFinite);
+  const lastSent = sentDates.length ? Math.max(...sentDates) : null;
   return <>
     <ReportingChoices value={value} busy={action.busy === 'save'} onChange={(next) => {
       void action.run('save', (signal) => apiSend<RemoteReportingState>('/api/configuration/remote-reporting',
@@ -39,6 +43,14 @@ export function RemoteReportingSettings({ initial, receipt }: {
       setValue(saved); receipt('已保存诊断选项');
     });
     }} />
+    <Stack divided>
+      <Disclosure summary="统计字段与发送规则">
+        <Help>{value.fields.usage}</Help>
+        <Help>{value.fields.errors}</Help>
+        <Help>{value.notice}</Help>
+      </Disclosure>
+      {lastSent !== null ? <Help>上次发送：{new Date(lastSent).toLocaleDateString()}</Help> : null}
+    </Stack>
     {action.error ? <Stack divided><ErrorText>{action.error}</ErrorText></Stack> : null}
   </>;
 }

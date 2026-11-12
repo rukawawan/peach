@@ -8,7 +8,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { queryClient } from '../../src/react/query';
 import { WANT_PAGE_SIZE, WantList } from '../../src/react/wants/want-list';
 import type { Want, WantsData } from '../../src/react/wants/wants';
-import { actionOrder, buttonNamed, click, mount, settle, type } from './render';
+import { actionOrder, buttonNamed, choose, click, mount, settle, type } from './render';
 
 afterEach(() => { queryClient.clear(); localStorage.clear() });
 notifyManager.setScheduler((notify) => notify());
@@ -182,5 +182,23 @@ it(`一段多于 ${WANT_PAGE_SIZE} 条时分页，页码各段各记各的；报
   expect([...unreleased.querySelectorAll<HTMLElement>('li[data-want-id]')].map((row) => row.dataset.wantId)).toEqual(['41', '42']);
   const acquired = host.querySelector('[data-want-phase="acquired"]')!;
   expect(acquired.querySelectorAll('li[data-want-id]')).toHaveLength(3);
-  expect(acquired.querySelector('[data-want-pager]')).toBeNull();
+  expect(acquired.querySelector('[data-want-pager]')?.textContent).toContain('1–3 / 3 条');
+  await choose(unreleased.querySelector('button[aria-label="每页显示数量"]'), '每页 10 条');
+  expect(unreleased.querySelectorAll('li[data-want-id]')).toHaveLength(10);
+  expect(unreleased.querySelector('li[data-want-id]')?.getAttribute('data-want-id')).toBe('1');
+  expect(acquired.querySelector('button[aria-label="每页显示数量"]')?.textContent).toContain('每页 20 条');
+});
+
+it('想要筛选为空时仍可选择每页数量，清除筛选后使用所选数量', async () => {
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  serve(listed(Array.from({ length: 25 }, (_, index) => want(index + 1, { has_magnets: false }))));
+  const { host } = await open();
+  await click(host.querySelector('input[value="available"]'));
+  await settle();
+  expect(host.querySelectorAll('[data-want-id]')).toHaveLength(0);
+  expect(host.querySelector('[data-want-pager]')?.textContent).toContain('0–0 / 0 条');
+  await choose(host.querySelector('button[aria-label="每页显示数量"]'), '每页 10 条');
+  await click(buttonNamed('查看全部', host));
+  await settle();
+  expect(host.querySelectorAll('[data-want-id]')).toHaveLength(10);
 });

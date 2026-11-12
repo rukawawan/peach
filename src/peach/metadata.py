@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from functools import lru_cache
 from urllib.parse import urlsplit
 
 from .catalog_rules import (
@@ -190,6 +191,13 @@ def identifies_code(code: str, payload: dict) -> bool:
     两条判据取并集：`same_release_code` 严格但不认厂牌数字前缀（`MAAN-545` 与
     `300MAAN-545`），正则宽松但认得，去掉任何一条都有 16 条合法候选被误拒。
     """
+    return _identifies_code(str(code or ""), *(str(payload.get(field) or "") for field in IDENTITY_FIELDS))
+
+
+#: 复核队列整页核对时，同一番号与同一组来源编号要比好几万次；判据只看这几样原文，按原文缓存。
+@lru_cache(maxsize=65536)
+def _identifies_code(code: str, provider_id: str, content_id: str, source_url: str) -> bool:
+    payload = {"id": provider_id, "content_id": content_id, "source_url": source_url}
     if any(same_release_code(code, writing) for writing in _release_writings(payload)):
         return True
     if re.match(r"^\d{3}[A-Z]", str(code or "").upper()):

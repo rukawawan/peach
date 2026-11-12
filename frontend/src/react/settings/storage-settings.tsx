@@ -25,6 +25,7 @@ import { Progress } from '../components/progress';
 import { CommandSteps, ErrorText, Fact, FactList, Footer, Help, Stack, Section } from './section';
 import { CATEGORY_SWATCH, REST_SWATCH, StorageOverview } from './storage-charts';
 import { busyProps, useAction } from './use-action';
+import { StorageBudgetSettings } from './storage-budget-settings';
 
 const STORAGE_URL = '/api/configuration/storage';
 const POLL_MS = 1500;
@@ -101,6 +102,11 @@ export function StorageSettings({ initial, receipt }: { initial: StorageState; r
   const reported = useRef(running);
 
   useEffect(() => {
+    if (initial.usage || initial.job.state !== 'idle' || document.body.classList.contains('peach-guiding')) return;
+    void action.run('measure', signal => apiSend<StorageState>(`${STORAGE_URL}/measure`, {}, 'POST', signal), setStorage);
+  }, []);
+
+  useEffect(() => {
     if (!running) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -174,7 +180,7 @@ export function StorageSettings({ initial, receipt }: { initial: StorageState; r
     if (next) copy.add(key); else copy.delete(key);
     return copy;
   });
-  return (
+  return (<>
     <Section id="storageSettings" guide="storage" title="存储空间">
       <FactList>
         <Fact term="数据目录">
@@ -184,6 +190,8 @@ export function StorageSettings({ initial, receipt }: { initial: StorageState; r
       </FactList>
       <Stack divided>
         {storage.job.state === 'measuring' ? <Measuring job={storage.job} /> : null}
+        {usage?.capacity_error ? <ErrorText>容量统计不完整：{usage.capacity_error}</ErrorText> : null}
+        {usage?.allocated_bytes != null ? <Help>Peach 数据实际占盘 {fmtSize(usage.allocated_bytes)}</Help> : null}
         {usage
           ? <div data-storage-result="" className={cardClass({ variant: 'outlined', padding: 'none', className: 'flex flex-col' })}>
               <div className="border-b border-separator-border p-4"><StorageOverview storage={storage} /></div>
@@ -223,5 +231,7 @@ export function StorageSettings({ initial, receipt }: { initial: StorageState; r
         </Button>
       </Footer>
     </Section>
+    {storage.budget ? <StorageBudgetSettings initial={storage.budget} after={setStorage} receipt={receipt} /> : null}
+    </>
   );
 }

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/base/buttons/button';
 import { CloudDownloadDialog, type DownloadPrefill } from '../activity/cloud-download-dialog';
 import { JAV_TABS, javPath } from './jav';
-import { BoardTabs } from '../components/board-tabs';
+import { SortableBoardTabs } from '../components/navigation-order';
 
 /** 页头一行：标题、分区自己的筛选框（同名册页的 `IndexSearch`，靠右）、查找资源。馆藏用目录顶栏的搜索，不传。 */
 export function JavHeader({ tab, navigate, find, search }: {
@@ -14,7 +14,7 @@ export function JavHeader({ tab, navigate, find, search }: {
       {search}
       <Button variant="primary" className={search ? 'flex-none' : 'ml-auto flex-none'} onClick={find}>查找资源</Button>
     </div>
-    <BoardTabs tabs={JAV_TABS.map(([value, label]) => ({ value, label }))} value={tab}
+    <SortableBoardTabs group="jav" tabs={JAV_TABS.map(([value, label]) => ({ value, label }))} value={tab}
       label="JAV 分区" className="" onChange={key => navigate(javPath(key))} />
   </div>;
 }

@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { appSettingsStore } from '../../src/appearance/settings';
 import { queryClient } from '../../src/react/query';
-import { FollowPreferenceRows, VideoThumbnailRow } from '../../src/react/settings/service-preferences';
+import { FollowPreferenceRows, VideoThumbnailRow, TaskSpeedSettings } from '../../src/react/settings/service-preferences';
 import { configurationContentSkeleton } from '../../src/configuration-skeleton';
 import { buttonNamed, choose, click, mount, mountRoot, pending, settle, type } from './render';
 
@@ -42,6 +42,22 @@ const mountFollowRows = async () => {
   await settle();
   return host;
 };
+
+it('默认任务档位通过共享设置保存，并显示保存回执', async () => {
+  const { posts } = server();
+  const receipt = vi.fn();
+  const host = await mount(<QueryClientProvider client={queryClient}><TaskSpeedSettings receipt={receipt} /></QueryClientProvider>);
+  await settle();
+  await click(buttonNamed('标准', host));
+  const slider = document.querySelector('input[type="range"]')!;
+  await act(async () => {
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    slider.dispatchEvent(new KeyboardEvent('keyup', { key: 'Home', bubbles: true }));
+  });
+  await vi.waitFor(() => expect(buttonNamed('低占用', host)).not.toBeNull());
+  expect(posts).toEqual([{ url: '/api/settings', body: { taskSpeedMode: 'low' } }]);
+  expect(receipt).toHaveBeenCalledWith('已保存默认处理速度');
+});
 
 it('订阅源拉取读出间隔，没有失败时两个调度都不出提示', async () => {
   server();

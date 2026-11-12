@@ -448,8 +448,10 @@ class PublicAPI:
         """番号对应的来源作品。来源去掉 MGS 的数字前缀（`259LUXU-891` 记作 `LUXU-891`），
         搜索词与身份核对都按 `release_identity` 认同一部作品。"""
         canonical = normalise_code_key(code)
+        matches = []
 
         def identify():
+            nonlocal matches
             product = re.fullmatch(r'FC2-PPV-(\d+)', canonical)
             query = product[1] if product else release_identity(canonical) or canonical
             rows = self._rows("/v2/search", "movies", {"q": query, "type": "movie", "page": 1})
@@ -464,6 +466,15 @@ class PublicAPI:
 
         if source_id is None:
             identities = self._cached("movie-id:" + canonical, identify, refresh=refresh)
+            if len(identities) == 2:
+                # 旧快照保存的是 ID 列表；补取搜索原题后仍须核对两份详情。
+                if not matches:
+                    identities = identify()
+                    self._remember('movie-id:' + canonical, identities)
+                resolved = self._regular_edition(canonical, identities, matches, refresh=refresh)
+                if resolved is not None:
+                    self._remember('movie-id:' + canonical, [resolved['id']])
+                    return resolved
             if len(identities) != 1:
                 raise PublicIdentityAmbiguous("同番号对应多个作品，请核对来源身份：" + '、'.join(identities))
             movie_id = identities[0]
@@ -471,6 +482,31 @@ class PublicAPI:
             movie_id = source_id
         else:
             raise PublicSourceUnavailable("来源作品身份不匹配")
+
+        return self._movie(canonical, movie_id, refresh=refresh)
+
+    def _regular_edition(self, canonical, identities, matches, *, refresh):
+        from .javdb_identity import fanza_regular_id
+        rows = list({row['id']: row for row in matches}.values())
+        regular = fanza_regular_id(rows)
+        if regular is None or set(identities) != {row['id'] for row in rows}:
+            return None
+        movies = [self._movie(canonical, identity, refresh=refresh) for identity in identities]
+        if fanza_regular_id(movies) != regular:
+            return None
+        performers = [{actor['id'] for actor in movie.get('actors') or []
+                       if isinstance(actor, dict) and isinstance(actor.get('id'), str)
+                       and actor_gender(actor) == 'female'} for movie in movies]
+        duration = movies[0].get('duration')
+        if (not performers[0] or performers[0] != performers[1]
+                or type(duration) is not int or duration <= 0 or movies[1].get('duration') != duration):
+            return None
+        series = [movie.get('series_id') for movie in movies]
+        if all(series) and series[0] != series[1]:
+            return None
+        return next(movie for movie in movies if movie['id'] == regular)
+
+    def _movie(self, canonical, movie_id, *, refresh):
 
         def fetch():
             movie = self._json("/v4/movies/" + movie_id).get("movie")

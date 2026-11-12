@@ -8,11 +8,13 @@
 /* 分类与正文共用一组页签语义；窄屏分类折行。 */
 .ui-configpage:has(>.ui-board-local-nav){grid-template-columns:190px minmax(0,1fr);gap:24px;align-items:start}
 .ui-configpage>.ui-board-local-nav{grid-column:1;grid-row:1;position:sticky;top:calc(var(--topH) + 8px);align-self:start;z-index:1;display:flex;flex-direction:column;align-items:stretch;max-height:calc(100dvh - var(--topH) - 16px);overflow-y:auto;overscroll-behavior:contain;margin:0;padding:0;border:0;border-radius:0}
-body #stats .ui-configpage>.ui-board-local-nav>button{text-align:left;justify-content:flex-start;white-space:normal}
+body #stats .ui-configpage>.ui-board-local-nav [role=tab]{text-align:left;justify-content:flex-start;white-space:normal}
 .ui-configpage:has(>.ui-board-local-nav)>:not(.ui-board-local-nav):not(.ui-configgroup){grid-column:2;grid-row:1;min-width:0}
 @media(max-width:900px){
 .ui-configpage:has(>.ui-board-local-nav){display:flex;flex-direction:column;align-items:stretch;gap:20px}
 body #stats .ui-configpage>.ui-board-local-nav{align-self:stretch;flex-direction:row;flex-wrap:wrap;max-height:none;overflow:visible;background:var(--page)}
+body #stats .ui-configpage>.ui-board-local-nav>[data-navigation-frame]{width:100%}
+body #stats .ui-configpage>.ui-board-local-nav [data-board-tab-list]{flex-wrap:wrap;overflow:visible}
 .ui-configpage:has(>.ui-board-local-nav)>:not(.ui-board-local-nav):not(.ui-configgroup){grid-column:1;grid-row:2}}
 /* 按页签切分组时只显示选中的那一组（`configuration-panel.ts` 的 `groupRoot`）。 */
 [data-board-group]:not(.ui-board-group-active){display:none!important}

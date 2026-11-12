@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from collections.abc import Awaitable, MutableSet
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -192,6 +195,40 @@ class BufferedFileResponse(FileResponse):
             return
         await _send_until_disconnect(super().__call__, scope, receive, send, is_cancelled=self._is_cancelled)
 
+    @asynccontextmanager
+    async def _open_file(self):
+        """读块走送流自己的线程（`STREAM_EXECUTOR`），不和同步端点抢 anyio 默认的 40 个线程。
+
+        Starlette 三种发法（整份、单段、多段）都经这里拿文件，只用 `read` 与 `seek`。
+        关闭也在这组线程里做，并且护住：发送被取消时也照样关掉。
+        """
+        handle = await _stream_thread(open, self.path, "rb")
+        try:
+            yield _StreamFile(handle)
+        finally:
+            await asyncio.shield(asyncio.get_running_loop().run_in_executor(STREAM_EXECUTOR, handle.close))
+
+
+class _StreamFile:
+    def __init__(self, handle):
+        self._handle = handle
+
+    async def read(self, size: int) -> bytes:
+        return await _stream_thread(self._handle.read, size)
+
+    async def seek(self, offset: int) -> int:
+        return await _stream_thread(self._handle.seek, offset)
+
+
+#: 送流读块专用的线程。同步端点（`def` 路由）与 Starlette 的文件读取原先共用 anyio 默认的
+#: 40 个线程，几个卡在网盘上的慢请求占满之后，播放读块也排在它们后面。
+STREAM_THREADS = 16
+STREAM_EXECUTOR = ThreadPoolExecutor(max_workers=STREAM_THREADS, thread_name_prefix="PeachStream")
+
+
+async def _stream_thread(function, *args):
+    return await asyncio.get_running_loop().run_in_executor(STREAM_EXECUTOR, function, *args)
+
 
 class CancellableFileResponse(BufferedFileResponse):
     """能按会话取消正在发送任务的 FileResponse。"""
@@ -203,8 +240,9 @@ class CancellableFileResponse(BufferedFileResponse):
         session: str,
         registry: StreamSessionRegistry,
         media_type: str | None = None,
+        stat_result: os.stat_result | None = None,
     ) -> None:
-        super().__init__(path, media_type=media_type)
+        super().__init__(path, media_type=media_type, stat_result=stat_result)
         self.session = session
         self.registry = registry
 
@@ -358,13 +396,13 @@ class SplicedMp4Response(Response):
             yield chunk
 
     async def _source_chunks(self, begin: int, stop: int):
-        """整段共用一个句柄：挂载盘上每开一次文件都要多走一趟握手。"""
-        handle = await asyncio.to_thread(self.path.open, 'rb')
+        """整段共用一个句柄：挂载盘上每开一次文件都要多走一趟握手。读块走送流自己的线程配额。"""
+        handle = await _stream_thread(self.path.open, 'rb')
         try:
-            await asyncio.to_thread(handle.seek, self.header.payload_start + begin)
+            await _stream_thread(handle.seek, self.header.payload_start + begin)
             remaining = stop - begin
             while remaining > 0:
-                chunk = await asyncio.to_thread(handle.read, min(self.chunk_size, remaining))
+                chunk = await _stream_thread(handle.read, min(self.chunk_size, remaining))
                 if not chunk:
                     return
                 yield chunk

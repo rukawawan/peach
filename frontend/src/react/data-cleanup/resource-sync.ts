@@ -12,6 +12,7 @@
 import { apiGet, apiSend } from '../../api';
 import { MEDIA_SOURCES_KEY, SCANNABLE_LOCATIONS, type MediaSourcesData } from '../media-sources';
 import { queryClient } from '../query';
+import { t } from '../../i18n';
 
 export const RESOURCE_SCAN_URL = '/api/resource-sync/scan';
 export const RESOURCE_APPLY_URL = '/api/resource-sync/apply';
@@ -89,14 +90,11 @@ export const hasResourceRoots = (data: MediaSourcesData | undefined) =>
   (data?.sources ?? []).some((source) => SCANNABLE_LOCATIONS.includes(source.location)
     && Array.isArray(source.roots) && source.roots.length > 0);
 
-/** 首屏：来源可达性落进缓存之后，有根目录才取两份任务状态，取完才画。直达地址
- *  `/resource-sync` 进来要滚到这一块，结果区在滚动之后才接上的话，落点就停在它上面一屏。 */
+/** 来源可达性落进缓存之后，有根目录才独立预取检查与清理状态。 */
 export async function prefetchResourceSync(signal: AbortSignal): Promise<void> {
   if (!hasResourceRoots(queryClient.getQueryData<MediaSourcesData>(MEDIA_SOURCES_KEY))) return;
-  await Promise.all([
-    queryClient.fetchQuery({ queryKey: RESOURCE_SCAN_KEY, queryFn: () => fetchResourceScan(signal) }),
-    queryClient.fetchQuery({ queryKey: RESOURCE_APPLY_KEY, queryFn: () => fetchResourceApply(signal) }),
-  ]);
+  void queryClient.prefetchQuery({ queryKey: RESOURCE_SCAN_KEY, queryFn: () => fetchResourceScan(signal) });
+  void queryClient.prefetchQuery({ queryKey: RESOURCE_APPLY_KEY, queryFn: () => fetchResourceApply(signal) });
 }
 
 /** 这一趟有没有要清的东西。都没有时底栏换成一句「没有待清理的记录、空文件夹或缓存」。 */
@@ -110,8 +108,8 @@ const count = (value: number | undefined) => Number(value || 0).toLocaleString()
 
 /** 扫描推进到哪儿了。 */
 export const scanLine = (state: ResourceScanState) => (state.total_sources
-  ? `已扫描 ${state.completed_sources || 0}/${state.total_sources} 个来源`
-  : '正在扫描来源');
+  ? t('cleanup:resourceSync.scanProgress', { completed: state.completed_sources || 0, count: state.total_sources })
+  : t('cleanup:resourceSync.scanningStorage'));
 
 /** 永久删除那一档的条数：`missing` 减去标为已消失的。 */
 export const purgeCount = (scan: ResourceScanState) =>
@@ -119,28 +117,28 @@ export const purgeCount = (scan: ResourceScanState) =>
 
 /** 标为已消失那一档的那一句；没有这一档时是空串。 */
 const vanishText = (scan: ResourceScanState) => (scan.vanish
-  ? `${count(scan.vanish)} 条作品记录的文件已丢失，个人记录保留，可在「文件已丢失的记录」中转移个人记录或删除记录。`
+  ? t('cleanup:resourceSync.vanishNotice', { count: Number(scan.vanish || 0) })
   : '');
 
 /** 不可撤销那一句：有标为已消失那一档时，只说删除的这几样。 */
-const irreversible = (scan: ResourceScanState) => (scan.vanish ? '这几样不可撤销。' : '这一步不可撤销。');
+const irreversible = (scan: ResourceScanState) => (scan.vanish ? t('cleanup:resourceSync.irreversiblePart') : t('cleanup:resourceSync.irreversible'));
 
 /** 结果面板里那一句清理内容。 */
-export const applyPlanText = (scan: ResourceScanState) =>
-  `将永久删除文件已不在盘上的 ${count(purgeCount(scan))} 条记录和 ${count(scan.empty)} 个空文件夹，`
-  + `并清理 ${count(scan.cache?.files)} 个闲置缓存。${irreversible(scan)}${vanishText(scan)}`;
+export const applyPlanText = (scan: ResourceScanState) => [
+  t('cleanup:resourceSync.applyPlan', { count: Number(purgeCount(scan) || 0), empty: count(scan.empty), cache: count(scan.cache?.files) }),
+  irreversible(scan), vanishText(scan)].filter(Boolean).join(t('cleanup:shared.sentenceGap'));
 
 /** 确认弹层的正文：比结果面板多说回收站里的也算、来源根目录保留。 */
-export const applyConfirmText = (scan: ResourceScanState) =>
-  `将永久删除文件已不在盘上的 ${count(purgeCount(scan))} 条记录（含回收站里的）、${count(scan.empty)} 个空文件夹，`
-  + `并清理 ${count(scan.cache?.files)} 个闲置缓存。来源根目录保留。${irreversible(scan)}${vanishText(scan)}`;
+export const applyConfirmText = (scan: ResourceScanState) => [
+  t('cleanup:resourceSync.applyConfirm', { count: Number(purgeCount(scan) || 0), empty: count(scan.empty), cache: count(scan.cache?.files) }),
+  irreversible(scan), vanishText(scan)].filter(Boolean).join(t('cleanup:shared.sentenceGap'));
 
 /** 一个来源那张读数卡的脚注。 */
 export const sourceMeta = (source: ResourceSource) => (source.online
-  ? [`找不到文件 · 共 ${count(source.total)} 项`,
-    source.vanish ? `${count(source.vanish)} 项带个人记录` : '',
-    source.empty ? `空文件夹 ${count(source.empty)} 个` : ''].filter(Boolean).join(' · ')
-  : `馆藏中有 ${count(source.total)} 项`);
+  ? [t('cleanup:resourceSync.sourceMissing', { count: Number(source.total || 0) }),
+    source.vanish ? t('cleanup:resourceSync.sourceWithActivity', { count: Number(source.vanish || 0) }) : '',
+    source.empty ? t('cleanup:resourceSync.sourceEmptyDirs', { count: Number(source.empty || 0) }) : ''].filter(Boolean).join(' · ')
+  : t('cleanup:resourceSync.sourceInCollection', { count: Number(source.total || 0) }));
 
 /** 执行结束后留在原地的那几样：文件其实还在、目录这会儿读不了、缓存正被占用。 */
 export function applyLeftovers(out: ResourceApplyState) {
@@ -150,21 +148,24 @@ export function applyLeftovers(out: ResourceApplyState) {
   const done = Number(out.purged || 0) + Number(out.vanished || 0) + Number(out.reattached || 0)
     + Number(out.dirs_removed || 0) + Number(out.cache_removed || 0);
   const left = blocked.length + dirErrors + cacheBlocked.length;
-  const names = blocked.slice(0, 3).map((item) => `「${item.name}」`).join('、') + (blocked.length > 3 ? ' 等' : '');
+  const names = blocked.slice(0, 3).map((item) => t('cleanup:shared.quoted', { text: item.name })).join(t('cleanup:shared.listSeparator'))
+    + (blocked.length > 3 ? t('cleanup:resourceSync.namesMore') : '');
   const rest = [
-    blocked.length ? `${count(blocked.length)} 条记录没有删除（${names}）` : '',
-    dirErrors ? `${count(dirErrors)} 个文件夹没有删除` : '',
-    cacheBlocked.length ? `${count(cacheBlocked.length)} 个缓存没有清理` : '',
-  ].filter(Boolean).join('，');
+    blocked.length ? t('cleanup:resourceSync.recordsNotDeleted', { count: Number(blocked.length || 0), names }) : '',
+    dirErrors ? t('cleanup:resourceSync.dirsNotDeleted', { count: Number(dirErrors || 0) }) : '',
+    cacheBlocked.length ? t('cleanup:resourceSync.cacheNotCleaned', { count: Number(cacheBlocked.length || 0) }) : '',
+  ].filter(Boolean).join(t('cleanup:shared.clauseSeparator'));
   return { done, left, rest };
 }
 
 /** 执行结果那一句。有没处理的几样时接在后面，说重新检查后可再试。 */
 export const applyText = (out: ResourceApplyState, formatSize: (bytes: number) => string) => {
   const { rest } = applyLeftovers(out);
-  const summary = `已永久删除 ${count(out.purged)} 条失效记录和 ${count(out.dirs_removed)} 个空文件夹，`
-    + `清理 ${count(out.cache_removed)} 个缓存，释放 ${formatSize(out.bytes_reclaimed || 0)}。`
-    + (out.vanished ? `${count(out.vanished)} 条作品记录已标为文件丢失，可在「文件已丢失的记录」中处理。` : '')
-    + (out.reattached ? `${count(out.reattached)} 条的记录已接到库里的另一个版本。` : '');
-  return rest ? `${summary}${rest}，重新检查后可再试。` : summary;
+  const summary = [
+    t('cleanup:resourceSync.applyDone', { count: Number(out.purged || 0), dirs: count(out.dirs_removed),
+      cache: count(out.cache_removed), size: formatSize(out.bytes_reclaimed || 0) }),
+    ...(out.vanished ? [t('cleanup:resourceSync.vanishedNotice', { count: Number(out.vanished || 0) })] : []),
+    ...(out.reattached ? [t('cleanup:resourceSync.reattachedNotice', { count: Number(out.reattached || 0) })] : []),
+  ].join(t('cleanup:shared.sentenceGap'));
+  return rest ? t('cleanup:resourceSync.applyWithLeftovers', { summary, rest }) : summary;
 };

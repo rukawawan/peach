@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 from peach import downloads as dl
 from peach import push_discovery as push
@@ -402,6 +403,33 @@ class PollingTests(_Deployment):
 
 
 class LandingTests(_Deployment):
+    def test_metadata_subtrees_and_files_do_not_consume_the_landing_limit(self):
+        folder = self.cloud / '云下载' / 'package'
+        (folder / '.AppleDouble').mkdir(parents=True)
+        (folder / '.AppleDouble' / 'movie.mp4').write_bytes(b'metadata')
+        (folder / '._movie.mp4').write_bytes(b'metadata')
+        (folder / '@creator').mkdir()
+        (folder / '@creator' / '.hidden.mp4').write_bytes(b'media')
+        original = os.scandir
+        visited = []
+
+        def scandir(path):
+            visited.append(Path(path).name)
+            return original(path)
+
+        with patch.object(dl, 'MAX_LANDED_FILES', 1), patch('peach.scan.os.scandir', side_effect=scandir):
+            self.assertTrue(self.service.landing.ingest('115', self.ledger('云下载', 'package')))
+        self.assertNotIn('.AppleDouble', visited)
+        with closing(sqlite3.connect(self.db)) as connection:
+            self.assertEqual(connection.execute('SELECT path FROM asset').fetchall(),
+                             [(self.ledger('云下载', 'package', '@creator', '.hidden.mp4'),)])
+
+    def test_a_system_directory_download_target_is_not_traversed(self):
+        (self.cloud / '云下载' / '@eaDir').mkdir()
+        with patch('peach.scan._walk') as walk:
+            self.assertFalse(self.service.landing.ingest('115', self.ledger('云下载', '@eaDir')))
+        walk.assert_not_called()
+
     def finish(self):
         task_id = self.submit()["task"]["id"]
         self.provider.statuses = [dl.RemoteStatus(dl.DONE, "r1", "ABC-123", 1.0)]
@@ -425,6 +453,24 @@ class LandingTests(_Deployment):
             connection.close()
         self.assertEqual(paths, [self.ledger("云下载", "ABC-123", "ABC-123.mp4")])
         self.assertEqual(task.asset_id is not None, True)
+
+    def test_a_remote_refresh_exposes_the_folder_before_ingesting(self):
+        task_id = self.finish()
+        refreshed = []
+
+        def landed(task):
+            refreshed.append(task.id)
+            folder = self.cloud / '云下载' / 'ABC-123'
+            folder.mkdir()
+            (folder / 'ABC-123.mp4').write_bytes(b'main')
+            return True
+
+        self.provider.landed = landed
+        self.tick(dl.LANDING_GRACE)
+        task = self.service.store.get(task_id)
+        self.assertEqual(refreshed, [task_id])
+        self.assertEqual(task.state, dl.INGESTED)
+        self.assertIsNotNone(task.asset_id)
 
     def test_the_main_video_is_bound_instead_of_the_first_promo_file(self):
         task_id = self.submit(code="ABC-123")["task"]["id"]

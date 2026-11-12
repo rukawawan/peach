@@ -546,6 +546,29 @@ class FeedWebTest(FeedWebFixture):
         self.assertEqual({rows[source]["next_fetch_at"] for source in (first, *rest)}, {expected})
         self.assertTrue(all(rows[source]["last_fetched_at"] is None for source in rest))
 
+    def test_a_region_page_reads_as_the_exit_problem_not_an_empty_page(self):
+        """JavDB 对日本出口回 200 的版权说明页：整轮只记一条地区限制的原因，其余源顺延，不再各报
+        一条「这一页解不出任何条目」（2026-11-08，14 个演员页源一起这么报过）。"""
+        from peach.scraping_access import SourceTransport
+        first, *_ = self._sources_named("Smp2", "Smp3")
+        served = FakeTransport({})
+        transport = SourceTransport(self.contract.follow_secrets_root)
+
+        def blocked(request, timeout, max_bytes):
+            served.requests.append(request)
+            return HttpResponse(200, {}, "由於版權限制，本站禁止了你的網路所在國家的訪問。".encode("utf-8"),
+                                request.url)
+
+        transport.transports["javdb"] = blocked
+        self.transport = transport
+        result = self._check()
+        self.assertEqual(len(served.requests), 1)
+        self.assertEqual(result["deferred"], 2)
+        [row] = result["results"]
+        self.assertIn("JavDB 不对当前出口所在的地区开放", row["error"])
+        self.assertIn("其余 2 个源顺延到冷却结束后再拉", row["error"])
+        self.assertNotIn("解不出", self._rows()[first]["last_error"])
+
     def test_a_round_that_starts_in_cooldown_asks_nothing(self):
         """别的任务撞出来的冷却还没过：这一轮一个请求都不发，整轮只说一句。"""
         from peach import scraping_access
@@ -1233,13 +1256,13 @@ class PerformerFeedFixture(FeedWebFixture):
             "enabled": enabled})
 
     def _settled(self):
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            state = self.contract.feed_job.snapshot() or {}
-            if state.get("status") not in ("running", None):
-                return state
-            time.sleep(0.02)
-        self.fail("订阅拉取没有在 5 秒内跑完")
+        thread = self.contract.feed_job.thread
+        self.assertIsNotNone(thread, '订阅拉取未启动')
+        thread.join(15)
+        self.assertFalse(thread.is_alive(), '订阅拉取未结束')
+        state = self.contract.feed_job.snapshot() or {}
+        self.assertNotIn(state.get('status'), ('running', None))
+        return state
 
     def _sources(self):
         return dispatch_api_get(self.contract, "/api/feeds", {})["sources"]
@@ -1260,6 +1283,21 @@ class PerformerFeedSwitchTest(PerformerFeedFixture):
         mine = dispatch_api_get(self.contract, "/api/feeds/discoveries",
                                 {"entity": self.performer})
         self.assertEqual([item["code"] for item in mine["items"]], ["PBD-528", "BBSS-106"])
+
+    def test_a_name_matched_page_of_the_credited_record_is_not_subscribed(self):
+        """#271：按名字对上的同类演员页（旧艺名的空页）不进订阅，只订作品署名的那页。"""
+        with self.contract.database.write_transaction() as connection:
+            connection.execute(
+                "UPDATE entity_external_ref SET metadata_json=? WHERE entity_id=? AND external_id='pRMq'",
+                (json.dumps({"source": "javdb", "provider_id": "PBD-528", "uncensored": False}),
+                 self.performer))
+            connection.execute(
+                "INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id,metadata_json)"
+                " VALUES(?,'javdb','performer','MmbDR',?)",
+                (self.performer, json.dumps({"source": "backfill_performer_entry_ids", "uncensored": False})))
+        self._switch(True)
+        self.assertEqual([source["url"] for source in self._sources()], [self.page])
+        self._settled()
 
     def test_a_page_of_only_compilations_is_backfilled_from_her_solo_works(self):
         retired = self._performer("篠田ゆう", ["WE4e"])
@@ -1701,14 +1739,60 @@ class JavDiscoveryTest(FeedWebFixture):
                 {"browser_tags": [{"name": "中出内射", "score": 4}]})), \
                 patch("peach.javdb_public.PUBLIC_API.movie") as movie:
             result = web_jav_discovery.q_jav_discoveries(self.contract, {"sort": "source_score"})
-            metadata.job.thread.join(5)
         movie.assert_not_called()
+        self.assertIsNone(metadata.job.thread, "GET 只读，不起外网任务")
         self.assertEqual([row["source_score"] for row in result["items"]], [4.23, None])
         self.assertTrue(all(row["tags"] == ["中出内射"] for row in result["items"]))
         self.assertTrue(all(row["duration"] == 10800 for row in result["items"]))
         self.assertEqual(result["ranking_method"], "field-sort")
         self.assertEqual([row["rank"] for row in result["items"]], [1, 2])
         self.assertTrue(all(row["taste_score"] == row["score"] for row in result["items"]))
+
+    def test_discovery_scoring_is_cached_until_its_inputs_change(self):
+        """任务进行中页面会反复来取；打分只在账本、口味库或资料边车变了之后重算。"""
+        from peach import web_jav_discovery
+        from peach.jav_discovery_metadata import discovery_metadata
+        self._add()
+        self._check()
+        with self.contract.database.write_transaction() as connection:
+            connection.execute("UPDATE feed_discovery SET studio='示例厂牌'")
+        fixture = self._preference_fixture({"peach_studios": [{"name": "示例厂牌", "score": 4}]})
+        with patch.object(web_jav_discovery, "preference_profile", return_value=fixture) as profile:
+            first = web_jav_discovery.q_jav_discoveries(self.contract, {})
+            again = web_jav_discovery.q_jav_discoveries(self.contract, {})
+            self.assertEqual(profile.call_count, 1)
+            self.assertEqual([row["id"] for row in again["items"]], [row["id"] for row in first["items"]])
+            code = first["items"][0]["code"]
+            discovery_metadata(self.contract).remember(code, {"number": code, "tags": [{"name": "中出"}]})
+            web_jav_discovery.q_jav_discoveries(self.contract, {})
+            self.assertEqual(profile.call_count, 2, "资料边车变了要重算")
+
+    def test_metadata_reading_starts_from_post_and_progress_is_read_alone(self):
+        """GET 不起任务；页面用 POST 起、停，进度单独轮询，不再整页重取。"""
+        from peach import web_jav_discovery
+        self._add()
+        self._check()
+        with self.contract.database.write_transaction() as connection:
+            connection.execute("UPDATE feed_discovery SET studio='示例厂牌'")
+        fixture = self._preference_fixture({"peach_studios": [{"name": "示例厂牌", "score": 4}]})
+        started = {"job_id": "batch", "status": "running", "completed": 0, "total": 2, "failed": 0,
+                   "requests": 0, "bytes": 0, "codes": ["X"]}
+        with patch.object(web_jav_discovery, "preference_profile", return_value=fixture), \
+                patch("peach.jav_discovery_metadata.DiscoveryMetadata.ensure", return_value=started) as ensure:
+            listing = web_jav_discovery.q_jav_discoveries(self.contract, {})
+            ensure.assert_not_called()
+            response = web_jav_discovery.w_jav_discovery_metadata(self.contract, {"action": "refresh"})
+        self.assertEqual(sorted(ensure.call_args.args[0]), sorted(row["code"] for row in listing["items"]))
+        self.assertTrue(ensure.call_args.kwargs["refresh"])
+        self.assertEqual(response["metadata_job"]["status"], "running")
+        self.assertNotIn("codes", response["metadata_job"])
+        with patch("peach.jav_discovery_metadata.DiscoveryMetadata.current", return_value=started), \
+                patch.object(web_jav_discovery, "_ranked", side_effect=AssertionError("进度轮询不打分")):
+            progress = web_jav_discovery.q_jav_discovery_metadata(self.contract, {})
+        self.assertEqual(progress["metadata_job"]["job_id"], "batch")
+        self.assertEqual(progress["poll_after_ms"], 3000)
+        with self.assertRaises(ValueError):
+            web_jav_discovery.w_jav_discovery_metadata(self.contract, {"action": "delete"})
 
     def test_releases_page_by_date_and_facets_come_only_from_unowned_releases(self):
         from peach import web_jav_discovery
@@ -1724,15 +1808,18 @@ class JavDiscoveryTest(FeedWebFixture):
 
         reads = []
 
-        def releases(**args):
+        def releases(handler=web_jav_discovery.q_jav_releases, **args):
             with patch.object(web_jav_discovery, "_cached_movie", side_effect=lambda code, contract: movies.get(code, {})), \
                     patch("peach.jav_discovery_metadata.DiscoveryMetadata.ensure",
                           side_effect=lambda codes, **options: reads.append((codes, options))):
-                return web_jav_discovery.q_jav_releases(self.contract, args)
+                return handler(self.contract, args)
 
         every = releases()
-        self.assertEqual(reads[0], (["SSIS-950", "HMN-071"], {"refresh": True, "job_id": None}),
-                         "从没读过来源资料的新作当场起一轮读取，筛选项才完整")
+        self.assertEqual(reads, [], "列表只读，不起资料读取")
+        self.assertEqual(every["metadata_unread"], 2)
+        releases(web_jav_discovery.w_jav_release_metadata, action="start", performer="女优乙")
+        self.assertEqual(reads, [(["HMN-071"], {"refresh": True})],
+                         "「读取资料」只读当前筛选结果里从没读过来源资料的那几部")
         self.assertEqual(([row["code"] for row in every["items"]], every["total"]), (["SSIS-950", "HMN-071"], 2))
         self.assertEqual([(ref["name"], ref["count"]) for ref in every["facets"]["performers"]], [("女优乙", 1), ("女优甲", 1)])
         self.assertEqual([ref["name"] for ref in every["facets"]["studios"]], ["厂牌乙", "厂牌甲"])
@@ -1757,6 +1844,8 @@ class JavDiscoveryTest(FeedWebFixture):
 
     def _discover(self, scope="external", rankings=None, metadata=None, args=None):
         from peach import web_jav_discovery
+        # 口味与来源资料在这里是换掉的函数，不经它们的版本；每次从头算，不读上一次的打分缓存。
+        self.contract.cache.clear()
         with patch.object(web_jav_discovery, "preference_profile", return_value=self._preference_fixture(rankings or {})), \
                 patch.object(web_jav_discovery, "_cached_movie", return_value=metadata or {}), \
                 patch("peach.jav_discovery_metadata.DiscoveryMetadata.ensure", return_value=None):

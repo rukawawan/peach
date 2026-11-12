@@ -4,7 +4,8 @@
 asset、标签或反馈。只有 `save_asset()` 会写出真相，而它要求显式 `confirm=True`，
 并且只 INSERT 一条 `location='online'` 的新 asset，绝不改写既有真相字段。
 
-原始响应按来源存进 `peach-data/sources/follow/`，一次写死；条件请求游标存在
+原始响应按来源存进 `peach-data/sources/follow/`，写下就不改；和上一份相同就不再写，
+每个来源只留最近几份和被条目引用的（`follow_evidence`）。条件请求游标存在
 `follow_source` 行上，因为它可替换、且要参与界面查询。
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import follow_providers
+from . import follow_evidence, follow_providers
 from .follow import FollowSourceError, write_immutable
 from .follow_image_dims import positive_dims
 from .follow_sources import (
@@ -32,6 +33,18 @@ def _now_text(moment: datetime | None = None) -> str:
     if moment.tzinfo is None:
         raise FollowSourceError("追更时间戳必须带时区")
     return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _same_snapshot(raw: Path, fetch: SourceFetch, digest: str) -> bool:
+    """`raw` 那份快照的说明和这次抓取除时间外是否一致。说明读不了就当不一致，照常写新的。"""
+    try:
+        sidecar = json.loads(raw.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(sidecar, dict) and (
+        sidecar.get("sha256"), sidecar.get("provider"), sidecar.get("ref"),
+        sidecar.get("request_url"), sidecar.get("candidates"),
+    ) == (digest, fetch.provider, fetch.ref, fetch.request_url, len(fetch.candidates))
 
 
 #: 标签里跟在中点后面的服务名。`LazyProcrastinator · fanbox` 和 rule34video 上的
@@ -431,7 +444,8 @@ class FollowStore:
                 " last_error=NULL, updated_at=? WHERE id=?", (stamp, stamp, source_id))
             return RecordOutcome(source_id, not_modified=True)
 
-        evidence, evidence_error = self._persist_evidence(fetch, moment) if complete else (None, None)
+        evidence, evidence_error, fresh = (self._persist_evidence(fetch, moment) if complete
+                                           else (None, None, False))
         if complete:
             self._replace_candidate_profile_links(source_id, fetch, moment=moment, page=page)
         added = updated = 0
@@ -489,6 +503,11 @@ class FollowStore:
                 updated += 1
             else:
                 added += 1
+        if fresh:
+            # 新写了一份就在这个来源目录里删一份，抵消增长；条目都写完了再删，这一轮的新引用已算进去。
+            # 只删一份：这里在写事务里，升级前留下的存量等用户在「修复与迁移」里确认（`follow_evidence`）。
+            follow_evidence.prune(self._evidence_directory(fetch),
+                                  follow_evidence.referenced_names(connection, source_id), limit=1)
         if fetch.provider in _SITE_WIDE_CHARACTERS:
             self._promote_characters(fetch.provider, {
                 str(tag) for candidate in fetch.candidates if not candidate.partial
@@ -676,8 +695,8 @@ class FollowStore:
             " last_error=NULL, updated_at=? WHERE id=?", (stamp, stamp, source_id))
 
     def _persist_evidence(self, fetch: SourceFetch,
-                          moment: datetime | None) -> tuple[str | None, str | None]:
-        """存原始响应。存不下来不算检查失败。
+                          moment: datetime | None) -> tuple[str | None, str | None, bool]:
+        """存原始响应，返回（相对路径，未取得的原因，是否新写了一份）。存不下来不算检查失败。
 
         Mac 上 `peach-data/sources` 是指向外置盘的符号链接，盘不在时它是一条**断链**——
         `mkdir(exist_ok=True)` 在断链上会抛 `FileExistsError`（链接在、目标不在），
@@ -685,13 +704,19 @@ class FollowStore:
         所以这里降级：候选照常入库，证据标成未取得，原因往上报。
 
         这和「脱盘模式」是同一条边界——脱的是盘不是账本，不该让整个功能挂掉。
+
+        最新一份的正文、请求地址和候选数都和这次相同时不再写，返回那一份：定时检查大多
+        抓回同一页，照写的话每个来源每天多几十份一模一样的快照。条目的 `evidence_path`
+        只记首次引用（`COALESCE`），返回旧路径不会改掉已有引用。
         """
         if self.sources_root is None or fetch.raw_body is None:
-            return None, None
+            return None, None, False
         reference = moment or datetime.now(timezone.utc)
         digest = hashlib.sha256(fetch.raw_body).hexdigest()
-        key = hashlib.sha256(f"{fetch.provider}\n{fetch.ref}".encode()).hexdigest()[:20]
-        directory = self.sources_root / fetch.provider / key
+        directory = self._evidence_directory(fetch)
+        latest = follow_evidence.latest_snapshot(directory)
+        if latest is not None and _same_snapshot(latest, fetch, digest):
+            return str(latest.relative_to(self.sources_root.parent)), None, False
         stamp = reference.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         sidecar = (json.dumps({
             "provider": fetch.provider, "ref": fetch.ref,
@@ -707,8 +732,12 @@ class FollowStore:
             write_immutable(path, fetch.raw_body)
             write_immutable(path.with_suffix(".json"), sidecar)
         except OSError as error:
-            return None, f"证据未取得（{self.sources_root} 不可写：{error.strerror or error}）"
-        return str(path.relative_to(self.sources_root.parent)), None
+            return None, f"证据未取得（{self.sources_root} 不可写：{error.strerror or error}）", False
+        return str(path.relative_to(self.sources_root.parent)), None, True
+
+    def _evidence_directory(self, fetch: SourceFetch) -> Path:
+        key = hashlib.sha256(f"{fetch.provider}\n{fetch.ref}".encode()).hexdigest()[:20]
+        return self.sources_root / fetch.provider / key
 
     # ---- 读取与分组 -----------------------------------------------------
 

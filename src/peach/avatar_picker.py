@@ -37,6 +37,7 @@ from .entities import is_short_single_name
 from .entity_classification import work_portrait_predicate
 from .western_artwork import artwork_cast_size, artwork_key
 from .kanji import fold_glyphs
+from .social_links import is_lit_share_image
 from .avatar_provider import (
     AvatarCandidateCache, AvatarImageError, InspectedAvatar, POLICY_VERSION, inspect_avatar, prepare_avatar,
     install_entity_avatar, provenance_now,
@@ -212,6 +213,7 @@ class Choice:
     #: 预览地址带上它才不会显示旧图，交框时回递它，服务端才认得出框是在哪一张上画的。
     #: 图库与历史按内容寻址，九宫格从视频抽帧，都不会原地变，是空串。
     version: str = ""
+    user_cropped: bool = False
 
     def as_dict(self) -> dict:
         focus = (dict(zip(("x0", "y0", "x1", "y1"), self.focus))
@@ -221,7 +223,7 @@ class Choice:
                 "detail": self.detail, "found_by": self.found_by,
                 "current": self.current, "crop": self.crop,
                 "bases": list(self.bases), "focus": focus, "cast": self.cast,
-                "version": self.version}
+                "version": self.version, "user_cropped": self.user_cropped}
 
 
 def cover_version(cover: Path | None) -> str:
@@ -307,6 +309,71 @@ def _focus_face(face: dict | None, cast: int) -> dict | None:
     return face if cast <= 1 else None
 
 
+def _history_records(providers_root: Path, entity_id: int) -> dict[str, list[dict]]:
+    """按当前实体与完整内容哈希收齐来源证据。"""
+    records: dict[str, list[dict]] = {}
+    for path in sorted(providers_root.glob(f"*/evidence/performer-{int(entity_id)}-*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if record.get("entity_id") != entity_id:
+            continue
+        if (record.get("provider") == "social-web"
+                and is_lit_share_image(str(record.get("upstream_url") or ""))):
+            continue
+        digest = str(record.get("sha256") or "")
+        if digest:
+            records.setdefault(digest, []).append(record)
+    return records
+
+
+def _history_source_label(record: dict) -> str:
+    """标签只使用证据明确给出的站点、账号或图库分类。"""
+    provider = str(record.get("provider") or "")
+    external_id = str(record.get("external_id") or "")
+    url = str(record.get("upstream_url") or "")
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if provider == "social-web":
+        if host == "pbs.twimg.com":
+            return f"X @{external_id[2:]}" if external_id.startswith("x:") else "X"
+        page = urllib.parse.urlsplit(external_id)
+        if page.hostname == "lit.link" and page.path.strip("/"):
+            return f"lit.link @{page.path.strip('/')}"
+        if host in ("prd.storage.lit.link", "prd.resource-api.lit.link"):
+            return "lit.link"
+        return "来源未记录"
+    if provider == "gfriends":
+        category, _, _ = external_id.partition("/")
+        return f"图库 · {gfriends.category_label(category)}" if category else "图库"
+    if provider in ("history", "picker", ""):
+        return "来源未记录"
+    if provider == "url":
+        return f"图片地址 · {host}" if host else "来源未记录"
+    return SOURCE_NAMES.get(provider, "来源未记录")
+
+
+def _history_source(records: dict[str, list[dict]], digest: str) -> dict:
+    """旧裁片的短哈希只有在当前实体内唯一指向原图时才继承来源。"""
+    visited: set[str] = set()
+    record: dict = {}
+    while digest in records and digest not in visited:
+        visited.add(digest)
+        record = min(records[digest], key=lambda row: (
+            _history_source_label(row) == "来源未记录",
+            row.get("provider") in ("history", "picker")))
+        if record.get("provider") != "history":
+            return record
+        original = str(record.get("external_id") or "")
+        if len(original) not in (12, 64) or any(c not in "0123456789abcdef" for c in original):
+            return record
+        matches = [key for key in records if key.startswith(original) and key not in visited]
+        if len(matches) != 1:
+            return record
+        digest = matches[0]
+    return record
+
+
 def _history(providers_root: Path, entity_id: int, current: str,
              cover_root: Path | None = None,
              casts: dict[str, int] | None = None) -> list[Choice]:
@@ -323,28 +390,23 @@ def _history(providers_root: Path, entity_id: int, current: str,
     整张装进圆框只剩一块背景。它们同样先框再装，按证据里的番号在封面边车上取景。
     """
     out: list[Choice] = []
-    seen: set[str] = set()
-    for path in sorted(providers_root.glob(
-            f"*/evidence/performer-{int(entity_id)}-*.json")):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        digest = str(record.get("sha256") or "")
-        # 同一张图可能在几个来源目录里各留了一份证据——摆出来是两个一模一样的格子。
-        if not digest or digest in seen:
-            continue
-        seen.add(digest)
+    records = _history_records(providers_root, entity_id)
+    for digest, evidence in records.items():
         body = _object_bytes(providers_root, digest)
         if body is None or images.is_flat(body):
             continue
-        provider = str(record.get("provider") or "")
-        label = SOURCE_NAMES.get(provider, provider or "取过的图")
+        record = evidence[0]
+        source = _history_source(records, digest)
+        provider = str(source.get("provider") or "")
+        label = _history_source_label(source)
+        cropped = any(row.get("source_kind") == "user_cropped" for row in evidence)
+        if cropped:
+            label += " · 已裁剪"
         width, height = int(record.get("width") or 0), int(record.get("height") or 0)
-        whole = provider in WHOLE_COVER_PROVIDERS
+        whole = provider in WHOLE_COVER_PROVIDERS and not cropped
         focus, cast = None, 0
         if whole:
-            key = normalise_code_key(record.get("external_id"))
+            key = normalise_code_key(source.get("external_id"))
             label = f"{label} {key}".strip()
             cast = (casts or {}).get(key, 0)
             cover = Path(cover_root) / f"{key}.jpg" if cover_root is not None and key else None
@@ -352,11 +414,13 @@ def _history(providers_root: Path, entity_id: int, current: str,
                 focus = cover_focus(key, cover,
                                     _focus_face(read_sidecar(cover) if cover else None, cast),
                                     width, height)
+        source_url = str(source.get("upstream_url") or "")
         out.append(Choice(
             ref=f"sha256:{digest}", source="history", label=label,
             width=width, height=height,
-            detail=str(record.get("upstream_url") or ""),
-            current=digest == current, crop=whole, focus=focus, cast=cast))
+            detail=source_url if source_url.startswith(("https://", "http://")) else "",
+            current=digest == current, crop=whole, focus=focus, cast=cast,
+            user_cropped=cropped))
     return out
 
 
@@ -539,7 +603,8 @@ def uploaded(body: bytes, providers_root: Path, probe: Callable[[bytes], dict | 
 
 def choices(connection: sqlite3.Connection, providers_root: Path,
             avatar_root: Path, kind: str, entity_id: int,
-            cover_root: Path | None = None, *, deduplicate: bool = True) -> dict:
+            cover_root: Path | None = None, *, deduplicate: bool = True,
+            online: list[Choice] | None = None) -> dict:
     """页面要展示的一切：图库同名候选、取过的历史、当前装着的是哪一张。
 
     索引只读本地缓存，过期了由 `IndexRefresher` 在后台补——为一次点击同步拉 6 MB，
@@ -583,6 +648,7 @@ def choices(connection: sqlite3.Connection, providers_root: Path,
     listed = items[:MAX_CHOICES]
     if cover_root is not None:
         listed += asset_artwork(connection, cover_root, entity_id)
+    listed += online or []
     if deduplicate:
         listed = _distinct_choices(listed, providers_root, cover_root)
     age = gfriends.index_age(index_dir)
@@ -603,14 +669,14 @@ def _distinct_choices(items: list[Choice], providers_root: Path,
     图库的整图框选会重编 JPEG，所以它与来源原图的字节哈希可以不同。
     """
     groups: list[tuple[Choice, set[str]]] = []
-    rank = {"asset": 0, "gfriends": 1, "history": 2}
+    rank = {"asset": 0, "gfriends": 1, "social": 2, "history": 3}
     for choice in items:
         body = None
         if choice.source == "gfriends":
             category, _, filename = choice.ref.partition(":")[2].partition("/")
             body = AvatarCandidateCache(providers_root / GFRIENDS_CACHE).lookup(
                 gfriends.image_url(category, filename))
-        elif choice.source == "history":
+        elif choice.ref.startswith("sha256:"):
             body = _object_bytes(providers_root, choice.ref.partition(":")[2])
         elif choice.source == "asset" and cover_root is not None and choice.ref.endswith(":cover"):
             # 作品组已核对归属；文件名取列表中真实番号，不从客户端 ref 推断路径。
@@ -806,8 +872,15 @@ def resolve(ref: str, connection: sqlite3.Connection, providers_root: Path,
     if ref.startswith("sha256:"):
         digest = ref.split(":", 1)[1].strip().lower()
         body = _cached_object(providers_root, digest)
-        return body, {"source": "avatar picker", "provider": "history",
-                      "external_id": digest[:12]}
+        records = _history_records(providers_root, entity_id)
+        source = _history_source(records, digest)
+        origin = {"source": "avatar picker", "provider": "history", "external_id": digest}
+        if _history_source_label(source) != "来源未记录":
+            origin.update({key: source[key] for key in (
+                "provider", "external_id", "upstream_url", "matched_name", "name_source") if key in source})
+        if any(row.get("source_kind") == "user_cropped" for row in records.get(digest, ())):
+            origin["source_kind"] = "user_cropped"
+        return body, origin
     if ref.startswith("asset:"):
         return _asset_image(ref, connection, entity_id, artwork, version)
     if ref.startswith("cover:"):

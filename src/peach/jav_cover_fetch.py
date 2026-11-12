@@ -215,6 +215,11 @@ class HostLimitedTransport:
         self.limiter.wait(request.url)
         return self.inner(request, timeout, limit)
 
+    def exhausted(self) -> str:
+        """里层传输的本趟预算到顶时那一句说明；里层不设预算的返回空串。"""
+        check = getattr(self.inner, "exhausted", None)
+        return check() if check else ""
+
     def renew(self) -> None:
         if hasattr(self.inner, "renew"):
             self.inner.renew()

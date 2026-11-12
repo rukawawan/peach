@@ -1,0 +1,10 @@
+{
+  "interfaceLanguage": {
+    "auto": "Auto",
+    "help": "Auto follows your browser language, then the system language.",
+    "saveFailed": "Save language",
+    "saved": "Language saved",
+    "title": "Language",
+    "unavailable": "Couldn't read the language from the database. Reopen settings."
+  }
+}

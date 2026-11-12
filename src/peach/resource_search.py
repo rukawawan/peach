@@ -21,6 +21,7 @@ from xml.etree.ElementTree import ParseError, fromstring
 
 import bencode2
 import httpx
+from .task_retry import transient_delay
 from torznab.exceptions import TorznabAPIError
 from torznab.parser import parse_capabilities, parse_torznab
 
@@ -199,14 +200,14 @@ def _xml(client: httpx.Client, indexer: dict, params: dict, deadline: float) -> 
     params = {**params, "apikey": indexer.get("api_key", "")}
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise ValueError("索引器查询超时")
+        raise TimeoutError("索引器查询超时")
     with client.stream("GET", indexer["url"], params=params, timeout=min(10, remaining)) as response:
         if response.status_code != 200:
-            raise ValueError(f"索引器返回 HTTP {response.status_code}")
+            raise httpx.HTTPStatusError(f"索引器返回 HTTP {response.status_code}", request=response.request, response=response)
         content = bytearray()
         for chunk in response.iter_bytes(chunk_size=16384):
             if time.monotonic() > deadline:
-                raise ValueError("索引器查询超时")
+                raise TimeoutError("索引器查询超时")
             content.extend(chunk)
             if len(content) > MAX_BYTES:
                 raise ValueError("索引器响应超过 2 MiB")
@@ -268,7 +269,7 @@ class Search:
                     "error": "请在本机「配置 → 下载」中添加并启用索引器"}
         if not self.lock.acquire(blocking=False):
             return {"ok": False, "state": "busy", "items": [], "warnings": [],
-                    "error": "资源搜索正在进行，请稍后重试"}
+                    "error": "资源搜索正在进行，请稍后重试", "retry_after": 0.0}
         try:
             key = (json.dumps(active, sort_keys=True), code, filters)
             cached = self.cache.get(key)
@@ -288,6 +289,7 @@ class Search:
 
     def _search(self, indexers: list[dict], code: str, filters: Filters) -> dict:
         found: dict[str, dict] = {}
+        retry_delays = []
         warnings = []
         rejected: Counter = Counter()
         successful = 0
@@ -321,8 +323,10 @@ class Search:
                             prior["seeders"] = max(prior["seeders"], row["seeders"])
                         else:
                             found[row["info_hash"]] = row
-                except (httpx.HTTPError, UnicodeError, ParseError, TorznabAPIError):
+                except (httpx.HTTPError, TimeoutError, UnicodeError, ParseError, TorznabAPIError) as error:
                     warnings.append(f"{indexer['name']}：请求失败或响应格式不正确，请检查索引器")
+                    if (delay := transient_delay(error)) is not None:
+                        retry_delays.append(delay)
                 except ValueError as error:
                     warnings.append(f"{indexer['name']}：{error}")
         def rank(row):
@@ -333,6 +337,7 @@ class Search:
             counts = "、".join(f"{label} {rejected[key]} 条" for key, label in REJECT_REASONS.items() if rejected[key])
             warnings.append(f"索引器返回了 {sum(rejected.values())} 条结果，都没通过筛选：{counts}")
         return {"ok": successful > 0, "state": "ready" if successful else "error",
+                "retry_after": max(retry_delays) if retry_delays else None,
                 "items": sorted(found.values(), key=rank), "warnings": warnings,
                 "rejected": dict(rejected),
                 "error": "" if successful else "所有索引器都未能完成搜索"}

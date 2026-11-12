@@ -145,3 +145,29 @@ def one_person(cards: list[dict]) -> bool:
     """
     kinds = [card["record"] for card in cards]
     return bool(kinds) and len(kinds) == len(set(kinds))
+
+
+#: 無碼那条卡片上的标记。繁体界面写 `無碼`，简体界面写 `无码`。
+UNCENSORED = frozenset({"無碼", "无码"})
+
+
+def card_uncensored(card: dict) -> bool | None:
+    """这张卡是不是無碼那条记录。有碼那条不带标记；认不出的标记是 None，不猜。"""
+    record = str(card.get("record") or "")
+    if not record:
+        return False
+    return True if record in UNCENSORED else None
+
+
+def card_records(pages) -> dict[str, bool]:
+    """几张搜索页上的演员卡 → {站内 id: 是不是無碼那条}。
+
+    同一个 id 在不同页上标得不一样，或者标记认不出，就不收：记录类型是用来分辨同站两枚
+    入口的，标错了会把她真正的那页藏掉。
+    """
+    seen: dict[str, set] = {}
+    for html in pages:
+        for card in search_cards(html):
+            seen.setdefault(card["id"], set()).add(card_uncensored(card))
+    return {actor: kinds.pop() for actor, kinds in seen.items()
+            if len(kinds) == 1 and None not in kinds}

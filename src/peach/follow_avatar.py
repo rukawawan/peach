@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 
 from .follow import FollowSourceError
 from .http import HttpRequest, HttpTransport, HttpxTransport
+from .lit_link_avatar import parse_avatar_url as lit_link_avatar_url
 from .social_links import meta_content, twimg_tiers
 
 
@@ -22,6 +23,7 @@ _PROFILE_HANDLE_RES = {
     "twitter": re.compile(r"[A-Za-z0-9_]{1,15}"),
     "patreon": re.compile(r"[A-Za-z0-9_.-]{1,64}"),
     "pixiv": _USER_ID_RE,
+    "litlink": _CREATOR_ID_RE,
 }
 _PATREON_AVATAR_HOST_RE = re.compile(r"c\d+\.patreonusercontent\.com")
 #: 一个头像请求最多带几份社交资料。名片上同一个人通常一两个账号。
@@ -53,6 +55,7 @@ def profile_avatar_tiers(service: str, handle: str, *,
     campaigns 接口按 vanity 查，`avatar_photo_image_urls` 里 `original` 是上传原图；
     pixiv 数字 id 走 `resolve_official_profile` 换 FANBOX 头像。有 pixiv 不等于开了
     FANBOX（flim13 实测换不到），所以它和别家并排试，不单独占住这一格。
+    lit.link 读取本人 profile icon，使用页面同时声明的原图。
     主机写死在这里，返回的地址不会指向别处。
     """
     pattern = _PROFILE_HANDLE_RES.get(service)
@@ -63,6 +66,16 @@ def profile_avatar_tiers(service: str, handle: str, *,
         return _x_avatar_tiers(handle, request)
     if service == "pixiv":
         return [resolve_official_avatar("fanbox", handle, transport=request)]
+    if service == "litlink":
+        page = request(HttpRequest("GET", f"https://lit.link/{handle}", {
+            "Accept": "text/html", "User-Agent": USER_AGENT,
+        }), 15.0, MAX_PROFILE_BYTES)
+        if page.status != 200:
+            raise FollowSourceError(f"lit.link 资料页返回 HTTP {page.status}")
+        image = lit_link_avatar_url(page.body.decode("utf-8", "replace"))
+        if not image:
+            raise FollowSourceError("lit.link 资料页没有本人头像")
+        return [image]
     return _patreon_avatar_tiers(handle, request)
 
 

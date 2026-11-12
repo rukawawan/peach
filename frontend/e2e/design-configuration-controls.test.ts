@@ -177,6 +177,8 @@ describe('设计决定：配置控件', () => {
         const pane = await surface.boundingBox();
         assert.ok(selected && pane && Math.abs(selected.x - pane.x) <= 1 && Math.abs(selected.width - pane.width) <= 1);
         await tabs.getByRole('tab', { selected: true }).press('ArrowLeft');
+        await page.waitForURL((url) => url.pathname === '/series');
+        await tabs.getByRole('tab', { name: '系列', selected: true }).press('ArrowLeft');
         await page.waitForURL((url) => url.pathname === '/studios');
         await tabs.getByRole('tab', { name: '厂牌', selected: true }).waitFor();
         await page.emulateMedia({ reducedMotion: 'reduce' });

@@ -78,20 +78,24 @@ describe('配置中的系统诊断', () => {
         const { page } = opened;
         await page.route('**/api/diagnostics', async route => { await gate; await route.continue(); });
         await page.goto(new URL('/settings/diagnostics', page.url()).href);
-        const skeleton = page.locator('[data-skeleton="board/settings/diagnostics"]');
+        const panel = page.locator('.ui-board-group-active');
+        const skeleton = panel.locator('[data-skeleton="diagnostics"]');
         await skeleton.waitFor();
-        assert.equal(await skeleton.locator('.ui-board-local-nav [aria-selected="true"]').textContent(), '系统诊断');
-        assert.equal(await skeleton.locator('section[aria-label="媒体库与目录"]').count(), 0);
-        assert.equal(await skeleton.locator('[data-skeleton="diagnostics"]').count(), 1);
-        const pending = await skeleton.locator('.ui-configpage').evaluate(element => {
-          const body = element.lastElementChild!.getBoundingClientRect();
-          return { x: body.x, width: body.width };
+        await page.getByRole('tab', { name: '系统诊断', selected: true }).waitFor();
+        assert.equal(await panel.locator('section[aria-label="媒体库与目录"]').count(), 0);
+        assert.equal(await skeleton.getAttribute('aria-busy'), 'true');
+        assert.equal(await panel.locator('article[data-diagnostic-source]').count(), 0);
+        const pending = await panel.evaluate(element => {
+          const body = element.getBoundingClientRect();
+          return { x: body.x, width: body.width, height: body.height };
         });
+        assert.ok(pending.width > 0 && pending.height > 0, `诊断分区等待态不可见：${JSON.stringify(pending)}`);
         release();
         await page.getByRole('tab', { name: '系统诊断', selected: true }).waitFor();
         await page.locator('article[data-diagnostic-source]').first().waitFor();
         await settle(page);
-        const ready = await page.locator('.ui-board-group-active').boundingBox();
+        await skeleton.waitFor({ state: 'detached' });
+        const ready = await panel.boundingBox();
         assert.ok(Math.abs(ready!.x - pending.x) <= 1, JSON.stringify({ pending, ready }));
         assert.ok(Math.abs(ready!.width - pending.width) <= 1, JSON.stringify({ pending, ready }));
         assert.deepEqual(opened.problems, []);

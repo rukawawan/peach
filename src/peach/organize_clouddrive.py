@@ -19,10 +19,12 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.empty_pb2 import Empty
 
 from . import organize
+from .task_retry import TRANSIENT_STATUS, RetryableIOError, transient_delay
 from .downloads_clouddrive import CloudDriveClient, SERVICE, discover
 from .downloads import CLOUDDRIVE_CREDENTIAL, DownloadSettings
 from .follow_secrets import CredentialStore
 from .config import DATABASE_PATH, SECRETS_DIR, STATE_DIR
+from . import downloads_clouddrive_pb2 as pb
 from .peach_proxy import http_client
 from .scripting import open_readonly
 from .push_discovery import CloudPrefix, PushDiscoverySettings, map_cloud_path, normalise_prefix
@@ -69,12 +71,6 @@ def _messages():
     entry.field.add(name='value', number=2, type=9, label=1)
     reply.field.add(name='additionalHeaders', number=5, type=11, label=3,
                     type_name='.peach_organize_cloud.DownloadReply.HeadersEntry')
-    listing = proto.message_type.add(name='ListRequest')
-    listing.field.add(name='path', number=1, type=9, label=1)
-    listing.field.add(name='forceRefresh', number=2, type=8, label=1)
-    result = proto.message_type.add(name='ListReply')
-    result.field.add(name='subFiles', number=1, type=11, label=3,
-                     type_name='.clouddrive.CloudDriveFile')
     rename = proto.message_type.add(name='RenameRequest')
     rename.field.add(name='path', number=1, type=9, label=1)
     rename.field.add(name='newName', number=2, type=9, label=1)
@@ -95,10 +91,11 @@ def _messages():
     pool.AddSerializedFile(pb.DESCRIPTOR.serialized_pb)
     pool.Add(proto)
     return tuple(message_factory.GetMessageClass(pool.FindMessageTypeByName('peach_organize_cloud.' + name))
-                 for name in ('DownloadRequest', 'DownloadReply', 'ListRequest', 'ListReply', 'RenameRequest', 'MoveRequest'))
+                 for name in ('DownloadRequest', 'DownloadReply', 'RenameRequest', 'MoveRequest'))
 
 
-DownloadRequest, DownloadReply, ListRequest, ListReply, RenameRequest, MoveRequest = _messages()
+DownloadRequest, DownloadReply, RenameRequest, MoveRequest = _messages()
+ListRequest, ListReply = pb.FileRequest, pb.SubFilesReply
 
 
 @dataclass(frozen=True)
@@ -177,6 +174,11 @@ class PikPakDav:
     def request(self, method, path, **kwargs):
         try:
             with self.http.stream(method, self.url(path), **kwargs) as response:
+                if response.status_code in TRANSIENT_STATUS:
+                    error = httpx.HTTPStatusError('WebDAV 暂时不可用',
+                        request=httpx.Request(method, self.url(path)), response=response)
+                    raise RetryableIOError('WebDAV 暂时不可用：' + str(response.status_code),
+                                           after=transient_delay(error) or 0)
                 chunks, size = [], 0
                 for chunk in response.iter_bytes():
                     size += len(chunk)
@@ -184,7 +186,10 @@ class PikPakDav:
                         raise ValueError('WebDAV 响应超过预算')
                     chunks.append(chunk)
                 return response.status_code, b''.join(chunks)
-        except httpx.HTTPError:
+        except httpx.HTTPError as error:
+            delay = transient_delay(error)
+            if delay is not None:
+                raise RetryableIOError('WebDAV 网络应答未取得', after=delay) from None
             raise OSError('WebDAV 网络应答未取得') from None
 
     def list(self, path):
@@ -319,7 +324,9 @@ def _cloud_listing(cloud, path, mapping):
                 if len(rows) > MAX_FILES:
                     raise ValueError('官方目录成员超过预算')
         except grpc.RpcError as error:
-            raise OSError('官方完整目录未取得：' + error.code().name) from None
+            kind = RetryableIOError if error.code() in {
+                grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.ABORTED} else OSError
+            raise kind('官方完整目录未取得：' + error.code().name) from None
         finally:
             stream.cancel()
         previous = rows

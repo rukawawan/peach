@@ -6,7 +6,7 @@ import { PLAIN_STAT_STRIP, plainStatClass } from './react/components/stat-card';
 
 /* 「扫描与采集」「媒体修复」两张卡的正文。卡片本体由 React 画，骨架与遗留层的取数占位
    画的是同一段话：写两份的话，骨架上的那句会比真卡短一截，接管时整张卡跳一次。 */
-export const SCAN_CARD_TEXT = '发现新文件，补全新增及未完成影片的资料和预览。需要检查全部影片时，使用全库维护。';
+export const SCAN_CARD_TEXT = '发现新文件，补全新增及未完成影片的资料和预览。先选择媒体库，再选择同步范围。';
 export const REPAIR_CARD_TEXT = '部分视频文件可能播放卡顿、打不开，修复缺时间戳表和缺索引的问题。';
 
 const bar = '<span class="skeleton skeleton-text" aria-hidden="true"></span>';
@@ -19,16 +19,18 @@ const bar = '<span class="skeleton skeleton-text" aria-hidden="true"></span>';
 const waitingAction = 'disabled data-skeleton-action';
 const unavailable = 'aria-disabled="true"';
 const island = (card: string) => `<div class="peach-react"><div class="flex flex-col gap-4">${card}</div></div>`;
-const cardText = (title: string, text: string, layout: FieldsetLayout) => `<div class="${FIELDSET_BODY[layout]}"><div class="flex flex-col gap-2">
+const cardText = (title: string, text: string, layout: FieldsetLayout, controls = '') => `<div class="${FIELDSET_BODY[layout]}"><div class="flex flex-col gap-2">
           <h3 class="text-title-2-medium text-text-primary">${title}</h3>
-          <p class="text-body-2-regular text-text-secondary">${text}</p></div></div>`;
+          <p class="text-body-2-regular text-text-secondary">${text}</p>${controls}</div></div>`;
 
 /** 「扫描与采集」卡：与 React `LibraryProcessingCard` 同一副容器、同一段正文、同一组键。
  *  「复核资料」只在有候选时出现，这里不预画。 */
 export function scanCardSkeletonHtml(): string {
+  const links = [['/sources', '来源和凭证'], ['/settings/diagnostics', '诊断与日志']]
+    .map(([href, label]) => `<a href="${href}" class="inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans rounded-sm text-body-medium text-accent-600"><span>${label}</span>${islandGlyph('arrow-up', 'size-(--icon-inline) shrink-0 rotate-90')}</a>`).join('');
   return island(`<section aria-label="扫描与采集" class="${fieldsetClass('stack')}" data-cleanup-task data-cleanup-processing>
-        ${cardText('扫描与采集', SCAN_CARD_TEXT, 'stack')}
-        <footer class="${FIELDSET_FOOT.stack}"><a href="/sources" class="inline-flex items-center justify-center gap-1 whitespace-nowrap font-sans rounded-sm text-body-medium text-accent-600"><span>来源和凭证</span>${islandGlyph('arrow-up', 'size-(--icon-inline) shrink-0 rotate-90')}</a><span data-button-group data-split-button data-variant="primary">${islandButton({ label: '同步新增文件', attrs: waitingAction })}${islandButton({ glyph: 'chevron-down', attrs: `${waitingAction} aria-label="更多同步方式"` })}</span></footer>
+        ${cardText('扫描与采集', SCAN_CARD_TEXT, 'stack', `<div class="w-full max-w-80"><p class="mb-1 text-body-2-medium text-text-secondary">媒体库</p>${islandSelect(bar, { attrs: `${unavailable} aria-label="媒体库"` })}</div>`)}
+        <footer class="${FIELDSET_FOOT.stack}">${links}<span data-button-group data-split-button data-variant="primary">${islandButton({ label: '同步新增文件', attrs: waitingAction })}${islandButton({ glyph: 'chevron-down', attrs: `${waitingAction} aria-label="更多同步方式"` })}</span></footer>
       </section>`);
 }
 

@@ -447,6 +447,7 @@ def create_data_tree(config: PeachConfig) -> DataTree:
 def apply(
     config: PeachConfig, answers: Answers, *, windows: bool, force: bool = False,
     access_password: str = "", peach_proxy_values: dict | None = None,
+    require_tls: bool = False,
 ) -> Applied:
     """把答案变成一台可以直接起服务的机器：目录、账本、CA、口令、设置文件。
 
@@ -454,7 +455,11 @@ def apply(
     设置页都只调这一个函数，两条前端因此不可能在「首次运行到底做了什么」上分叉。
     """
     prepared = configure(config, answers, windows=windows)
+    if require_tls:
+        certs.require_openssl()
     tree = create_data_tree(prepared)
+    if require_tls and tree.ca_error:
+        raise RuntimeError(tree.ca_error)
     from . import access
     access_path = prepared.directory("secrets") / "access.json"
     if not config.present and not access_path.exists():

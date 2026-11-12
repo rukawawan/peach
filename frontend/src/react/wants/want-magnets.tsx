@@ -36,13 +36,14 @@ function ResourceFact({ icon: Icon, children, title }: { icon: ComponentType<{ c
   return <span title={title} className="inline-flex items-center gap-1"><Icon aria-hidden className="size-(--icon-inline) shrink-0" />{children}</span>;
 }
 
-export function WantMagnets({ want, readOnly, downloads, provider, toast, onSource, queryUrl }: {
+export function WantMagnets({ want, readOnly, downloads, provider, toast, onSource, queryUrl, eager = false }: {
   want: Pick<Want, 'id' | 'code' | 'title' | 'release_date'>; readOnly: boolean; downloads?: DownloadsSnapshot; provider: string; toast(message: string): void;
   onSource?(url: string): void;
   queryUrl?: string;
+  eager?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(typeof IntersectionObserver === 'undefined');
+  const [visible, setVisible] = useState(eager || typeof IntersectionObserver === 'undefined');
   const [submitted, setSubmitted] = useState<string[]>([]);
   const action = useAction();
   const client = useQueryClient();

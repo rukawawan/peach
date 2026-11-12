@@ -59,6 +59,8 @@ class CertificateFiles:
 
 def _openssl(*args: str, stdin: bytes | None = None) -> str:
     binary = shutil.which("openssl") or "/usr/bin/openssl"
+    if not Path(binary).is_file():
+        raise RuntimeError("未找到 OpenSSL，请安装并加入 PATH 后重试")
     result = subprocess.run(
         [binary, *args], input=stdin, capture_output=True,
         # 显式给 encoding：text=True 会用平台默认编码，中文输出会静默丢成空 stdout。
@@ -72,6 +74,11 @@ def _openssl(*args: str, stdin: bytes | None = None) -> str:
         raise RuntimeError(f"openssl {args[0]} 失败：{detail.strip()[:200]}")
     return result.stdout if isinstance(result.stdout, str) else result.stdout.decode(
         "utf-8", "replace")
+
+
+def require_openssl() -> None:
+    """在必须启用 TLS 的首次设置保存前，核对签发工具可执行。"""
+    _openssl("version")
 
 
 def subject_alt_names(cert: Path) -> tuple[set[str], set[str]]:

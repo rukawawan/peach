@@ -288,8 +288,11 @@ class TastePreferenceTests(unittest.TestCase):
                        "studio": {3}, "series": {4}}} for aid, tags in ((10, {2}), (11, {2}), (12, set()))]
         contract = SimpleNamespace(read_connection=lambda: nullcontext(self.db), taste_history_store=self.store,
                                    has_cover=lambda _: False, cover_frame=lambda _: None,
-                                   cover_version=lambda _: None, poster_box=lambda _: None)
+                                   cover_version=lambda _: None, poster_box=lambda _: None,
+                                   cached_until_changed=lambda key, compute, *inputs, **options: compute(),
+                                   ledger_tables_except=lambda excluded: ())
         with patch.object(web_jav_discovery, "_external", return_value=candidates), \
+             patch.object(web_jav_discovery, "_ranking_inputs", return_value=()), \
              patch.object(web_jav_discovery, "_metadata_response", return_value={}), \
              patch.object(web_jav_discovery.wants, "wanted_keys", return_value=set()), \
              patch.object(web_jav_discovery.feed_followup, "cover_states", return_value={}), \

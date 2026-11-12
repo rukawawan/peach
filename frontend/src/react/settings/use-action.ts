@@ -1,6 +1,6 @@
 /* 用户触发的请求：同一分区同一时刻只跑一个，离开页面取消等待，结果只交给仍挂载的组件。
  * 忙态落在触发它的那颗按钮上，同一分区里的几颗按 key 区分。 */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { errorMessage } from '../../api';
 
@@ -9,6 +9,10 @@ export function useAction(initialError = '') {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(initialError);
   useEffect(() => () => pending.current?.abort(), []);
+  const cancel = useCallback(() => {
+    pending.current?.abort(); pending.current = null;
+    setBusy(''); setError('');
+  }, []);
 
   async function run<T>(key: string, work: (signal: AbortSignal) => Promise<T>, done: (result: T) => void,
     failed?: (cause: unknown) => void) {
@@ -29,7 +33,7 @@ export function useAction(initialError = '') {
     }
   }
 
-  return { run, busy, error, setError };
+  return { run, busy, error, setError, cancel };
 }
 
 export { busyProps } from './busy-props';

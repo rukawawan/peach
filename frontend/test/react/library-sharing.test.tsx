@@ -30,12 +30,12 @@ describe('馆藏与口味分享的明确同意', () => {
     await click(switches(host)[0]);
     expect(fetcher).not.toHaveBeenCalled();
     expect(switches(host)[0]?.checked).toBe(false);
-    expect(host.textContent).not.toContain(initial.fields[0]);
+    expect(host.querySelector('details')?.open).toBe(false);
     expect(host.querySelector('input[type="checkbox"]:not([role="switch"])')).toBeNull();
     await click(buttonNamed('预览上传内容', host));
     await settle();
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(host.textContent).toContain('KiB。不含账号、设备、文件路径和浏览器历史记录等个人数据。');
+    expect(host.textContent).toContain('随机标识用于实例去重');
     expect((buttonNamed('同意并开启上传', host) as HTMLButtonElement).disabled).toBe(true);
     expect(actionOrder(buttonNamed('同意并开启上传', host)!.parentElement)).toEqual(['取消', '预览上传内容', '同意并开启上传']);
     await click(host.querySelector('input[type="checkbox"]:not([role="switch"])'));
@@ -45,7 +45,7 @@ describe('馆藏与口味分享的明确同意', () => {
     expect(JSON.parse(String(call[1].body))).toEqual({ enabled: true, schema: 4, consent: true, preview_token: 'preview-token' });
     expect(receipt).toHaveBeenCalledWith('已保存馆藏与口味上传选项');
     expect(switches(host)[0]?.checked).toBe(true);
-    expect(host.textContent).not.toContain(initial.fields[0]);
+    expect(host.querySelector('details')?.open).toBe(false);
     expect(host.querySelector('pre')).toBeNull();
     expect(host.querySelector('input[type="checkbox"]:not([role="switch"])')).toBeNull();
     expect(buttonNamed('预览上传内容', host)).not.toBeNull();
@@ -74,5 +74,16 @@ describe('馆藏与口味分享的明确同意', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('读取失败');
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(receipt).not.toHaveBeenCalled();
+  });
+
+  it('刷新未取得时保留原参与状态，不把缺失响应当作关闭或成功', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ section_errors: {} }) })));
+    const host = await mount(<LibrarySharingSettings initial={{ ...initial,
+      participation: { status: 'unknown', pending_state: null } }} receipt={vi.fn()} />);
+    await click(buttonNamed('刷新发送状态', host));
+    await settle();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('馆藏上传状态未取得');
+    expect(host.querySelector('[aria-label="参与状态"]')?.textContent).toBe('结果未取得');
+    expect(host.querySelector('[aria-label="参与状态"]')?.getAttribute('data-status-tone')).toBe('warning');
   });
 });

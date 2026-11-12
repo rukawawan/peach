@@ -1,4 +1,5 @@
 import { selectionSurface, selectionDock, setSelectionMode, toggleSelection as toggleSelected } from '../react/catalog-grid/selection-controller';
+import { JAV_SELECTION_EVENT, javCardPage } from '../jav-controls';
 import { selectSurface } from '../shell';
 /* selection 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { loadCatalog, pushGridPage } from './catalog.js';
@@ -154,7 +155,10 @@ export function installSelection11() {
 selectionState.batchDockProps = {count:0,context:'catalog',junkDismissed:false};
 selectionState.trashCount = null;
 selectionState.currentSelectSurface = ()=>selectionSurface(location.pathname);
-applicationEffects.handler($('#selectMode'), 'onclick', ()=>setSelectMode(!selectMode,!selectMode?false:true));
+applicationEffects.handler($('#selectMode'), 'onclick', ()=>{
+  if(javCardPage(location.pathname,location.search)){window.dispatchEvent(new Event(JAV_SELECTION_EVENT));return}
+  setSelectMode(!selectMode,!selectMode?false:true)
+});
 selectionState.REGION_CHOICES = [['jp','日本'],['kr','韩国'],['cn','国产'],['west','欧美'],
   ['other','其他'],['none','撤回判定']];
 selectionState.BATCH_RUNNERS = {batch:runCatalogBatch,region:pickBatchRegion,follow:runFollowBatch,junk:runJunkBatch,

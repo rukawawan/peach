@@ -1,6 +1,9 @@
 /** 升级补修与程序安装分别显示；复核和重试都由用户明确发起。 */
 import { useEffect, useState } from 'react';
+import { RiArrowRightLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
+import { LinkButton } from '@/components/base/buttons/link-button';
+import { REPAIR_CENTER_PATH } from '@peach/history';
 import { apiSend } from '../../api';
 import { useClientUpdates } from '../client-updates';
 import type { ClientUpdates } from '../client-updates';
@@ -31,7 +34,6 @@ export function UpgradeRepairs() {
     tone={state === 'failed' ? 'error' : state === 'running' ? 'progress' : state === 'review' ? 'warning'
       : state === 'complete' ? 'success' : 'neutral'}><span key={state}
         data-copy-key={`upgradeRepairs.${state}.status`}>{LABELS[state] || '未取得'}</span></StatusLabel>}>
-    <Stack><Help>升级后自动修正资料、更新缓存。</Help></Stack>
     <FactList>
       <Fact term="待完成"><span><AnimatedNumber value={pending} /> 项</span></Fact>
       <Fact term="失败"><span><AnimatedNumber value={failed} /> 项</span></Fact>
@@ -39,7 +41,8 @@ export function UpgradeRepairs() {
     </FactList>
     {data?.message || action.error ? <Stack><ErrorText>{action.error || data?.message}</ErrorText></Stack> : null}
     {state === 'running' ? <Stack><Help>资料与预览正在后台补全。</Help><TaskCenterLink /></Stack> : null}
-    <Footer status={review ? <ExternalLink href="/api/configuration/upgrade-repairs/review">下载复核记录</ExternalLink> : undefined}>
+    <Footer status={review ? <ExternalLink href="/api/configuration/upgrade-repairs/review">下载复核记录</ExternalLink> : null}>
+      <LinkButton href={REPAIR_CENTER_PATH} size="small" trailingIcon={RiArrowRightLine}>修复与迁移</LinkButton>
       <Button size="small" variant="secondary" disabled={!data?.available || state === 'running' || !!action.busy || (!failed && state !== 'failed')}
         onClick={retry}>重试失败项</Button>
     </Footer>

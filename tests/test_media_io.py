@@ -18,6 +18,9 @@ class MediaIoTests(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.config = Mock()
         self.config.directory.side_effect = lambda name: self.root / name
+        # 抽帧按目录的流量保护取舍：给一个免费的本地根，`cost_for` 才读得出这批条目可抽帧。
+        self.config.locations = {'local': (str(self.root),)}
+        self.config.media_costs = {}
 
     def test_worker_reads_unicode_nfo_and_directory_attributes(self):
         source = self.root / '影片.nfo'
@@ -157,9 +160,8 @@ class MediaIoTests(unittest.TestCase):
     def test_preview_frames_share_one_deadline(self):
         video = self.root / 'video.mp4'
         video.write_bytes(b'video')
-        row = dict(id=1, name=video.name, path=str(video), duration=30)
-        config = Mock()
-        config.directory.side_effect = lambda name: self.root / name
+        row = dict(id=1, name=video.name, path=str(video), duration=30, location='local')
+        config = self.config
         resolver = Mock()
         resolver.ffmpeg.return_value = SimpleNamespace(path=Path('ffmpeg'))
         now, budgets = [100.0], []

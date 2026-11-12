@@ -273,6 +273,17 @@
 @keyframes peach-skeleton-sweep {
   to { transform: translateX(-50%); }
 }
+
+/* 自动测量仅用于有限的只读读数，沿用 Peach 色彩和微光，不覆盖卡片布局。 */
+.peach-react [data-measured-reading] {
+  --skullet-base: var(--color-background-tertiary-default);
+  --skullet-highlight: var(--skeleton-sheen);
+  --skullet-animation: none;
+}
+/* 测量不依赖可见性，旧版 Safari 不支持上游的 @scope 时也不露出样本。 */
+.peach-react [data-measured-reading] :is([skullet-ghost], [skullet-snapshot]) {
+  visibility: hidden;
+}
 @utility skeleton-sheen {
   position: relative;
   overflow: hidden;

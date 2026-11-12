@@ -309,6 +309,27 @@ describe('侧栏岛', () => {
     }
   });
 
+  it('已被浮窗或弹层用掉的 Esc 不再收起侧栏，没人处理的 Esc 照常收起', { timeout: 60_000 }, async () => {
+    const opened = await visit(browser, '/', DESKTOP);
+    const { page } = opened;
+    try {
+      await settle(page);
+      const drawer = () => page.evaluate(() => document.body.classList.contains('drawer-open'));
+      assert.equal(await drawer(), true, '桌面宽度默认展开侧栏');
+      // 详情先于全局入口关完时，冒泡上来的就是这样一下已被 preventDefault 的 Esc。
+      await page.evaluate(() => document.body.addEventListener('keydown', event => {
+        if (event.key === 'Escape') event.preventDefault();
+      }, { capture: true, once: true }));
+      await page.keyboard.press('Escape');
+      assert.equal(await drawer(), true, '已被用掉的 Esc 收起了侧栏');
+      await page.keyboard.press('Escape');
+      assert.equal(await drawer(), false, '没人处理的 Esc 没有收起侧栏');
+      assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
   it('切页时当前项玻璃保留节点，完整播放动画并停在选中项', { timeout: 60_000 }, async () => {
     const opened = await visit(browser, '/', DESKTOP);
     const { page } = opened;

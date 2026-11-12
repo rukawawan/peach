@@ -17,6 +17,11 @@ from pathlib import Path
 VERSION_FILE = "src/peach/__init__.py"
 VERSION_PATTERN = re.compile(r'(__version__\s*=\s*")(\d+)\.(\d+)\.(\d+)(")')
 
+#: README 的下载直链带着版本号；靠人记得改，曾在 v0.50.0 停了六个版本。`--ship` 在 Release
+#: 制品齐了以后才把它们换到新版本，发布前后读者都拿得到能下载的链接。
+README_FILES = ("README.md", "README.zh-CN.md")
+DOWNLOAD_LINK = re.compile(r"releases/download/v(\d+\.\d+\.\d+)/Peach-(\d+\.\d+\.\d+)-([^)\s]+)")
+
 #: 版本标签的形状。`--match` 用它排除别的标签，免得把某个临时标签当成上一个发布点。
 TAG_GLOB = "v[0-9]*.[0-9]*.[0-9]*"
 
@@ -164,6 +169,54 @@ def read_version(root: Path) -> str:
     if match is None:
         raise VersionError(f"{VERSION_FILE} does not declare __version__")
     return f"{match.group(2)}.{match.group(3)}.{match.group(4)}"
+
+
+def point_downloads_at(text: str, version: str) -> str:
+    """把正文里每条 Release 下载直链换到 `version`，其余字节不动。"""
+    return DOWNLOAD_LINK.sub(
+        lambda match: f"releases/download/v{version}/Peach-{version}-{match.group(3)}", text)
+
+
+def readme_assets(root: Path, version: str) -> list[str]:
+    """README 直链要下载的制品文件名，按 `version` 拼出。"""
+    names = set()
+    for name in README_FILES:
+        text = (root / name).read_bytes().decode("utf-8")
+        names.update(f"Peach-{version}-{suffix}" for *_, suffix in DOWNLOAD_LINK.findall(text))
+    return sorted(names)
+
+
+def readme_link_problems(root: Path) -> list[str]:
+    """README 直链须指向当前版本或变更日志里紧挨着的上一版；更旧就是发布后漏换了。
+
+    `--ship` 等 Release 制品齐了才换，所以定版之后、换链之前指向上一版是正常状态。
+    """
+    current = read_version(root)
+    released = re.findall(r"^## \[(\d+\.\d+\.\d+)\]",
+                          (root / "CHANGELOG.md").read_bytes().decode("utf-8"), re.M)
+    allowed = released[released.index(current):][:2] if current in released else [current]
+    problems = []
+    for name in README_FILES:
+        links = DOWNLOAD_LINK.findall((root / name).read_bytes().decode("utf-8"))
+        versions = {version for tag, asset, _ in links for version in (tag, asset)}
+        if not links:
+            problems.append(f"{name}: 没有 Release 下载直链")
+        elif len(versions) != 1 or not versions <= set(allowed):
+            problems.append(f"{name}: 下载直链版本 {'、'.join(sorted(versions))} 不是 "
+                            f"{' 或 '.join(allowed)}；用 release_tag.py --point-readme --apply 换到当前版本")
+    return problems
+
+
+def point_readmes(root: Path, version: str) -> list[str]:
+    """把两份 README 的下载直链换到 `version`，返回实际改动的文件。不提交。"""
+    changed = []
+    for name in README_FILES:
+        readme = root / name
+        text = readme.read_bytes().decode("utf-8")
+        if (pointed := point_downloads_at(text, version)) != text:
+            readme.write_bytes(pointed.encode("utf-8"))
+            changed.append(name)
+    return changed
 
 
 def write_version(root: Path, part: str) -> str:

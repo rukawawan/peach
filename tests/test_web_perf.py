@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -336,6 +337,42 @@ class KeyedCacheTests(unittest.TestCase):
         self.assertEqual(self.contract.keyed_cache, {})
 
 
+class VersionedKeyedCacheTests(unittest.TestCase):
+    """`cached_lru(tables=...)`：后台任务每几秒提交一次时，按提交清空的缓存存不住。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        self.contract = WebContract(fresh_ledger(root))
+
+    def _write(self, table_sql):
+        with self.contract.write_transaction() as connection:
+            connection.execute(table_sql)
+
+    def test_a_commit_to_an_unread_table_keeps_the_result(self):
+        calls = []
+        compute = lambda: calls.append(1) or len(calls)  # noqa: E731
+        self.assertEqual(self.contract.cached_lru("k", compute, tables=("asset",)), 1)
+        self._write("INSERT INTO feed_source(kind,url,created_at) VALUES('t','u','2026-11-08')")
+        self.assertEqual(self.contract.cached_lru("k", compute, tables=("asset",)), 1)
+        self._write("INSERT INTO asset(location,path,name,medium) VALUES('local','/a.mp4','a.mp4','video')")
+        self.assertEqual(self.contract.cached_lru("k", compute, tables=("asset",)), 2)
+
+    def test_a_result_computed_across_a_commit_is_still_kept(self):
+        """算得比提交间隔慢的结果也要写得回去：版本在计算前读好，期间的写入下一次读自然重算。"""
+        calls = []
+
+        def slow():
+            calls.append(1)
+            self._write("INSERT INTO feed_source(kind,url,created_at) VALUES('t','u','2026-11-08')")
+            return len(calls)
+
+        self.contract.cached_lru("k", slow, tables=("asset",))
+        self.contract.cached_lru("k", slow, tables=("asset",))
+        self.assertEqual(len(calls), 1)
+
+
 @unittest.skipUnless(HAS_DEPS, "FastAPI/httpx 尚未安装")
 class RelatedEndpointCacheTests(unittest.IsolatedAsyncioTestCase):
     """`/api/related` 必须缓存，而写路径的 `cache_bust()` 必须让它作废。
@@ -382,10 +419,19 @@ class RelatedEndpointCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.json(), second.json())
         self.assertEqual(spy.call_count, 1)
 
-        self.app.state.web_contract.cache_bust()
+        contract = self.app.state.web_contract
+        # 后台任务写订阅新作那几张表时推荐不读它们，缓存留着。
+        with contract.write_transaction() as connection:
+            connection.execute("INSERT INTO feed_source(kind,url,created_at) VALUES('t','u','2026-11-08')")
         with patch("peach.web_router.q_related", side_effect=q_related) as spy:
             await self.client.get("/api/related?id=1")
-        self.assertEqual(spy.call_count, 1, "cache_bust 之后必须重算")
+        self.assertEqual(spy.call_count, 0, "没读到的表变了不重算")
+
+        with contract.write_transaction() as connection:
+            connection.execute("UPDATE asset SET feedback='like' WHERE id=1")
+        with patch("peach.web_router.q_related", side_effect=q_related) as spy:
+            await self.client.get("/api/related?id=1")
+        self.assertEqual(spy.call_count, 1, "读到的表写过之后必须重算")
 
     async def test_a_different_limit_is_a_different_result(self):
         """限流后的 limit 进了缓存键；不进的话第二次请求会拿到条数不对的列表。"""
@@ -453,6 +499,34 @@ class CoverIndexTests(unittest.TestCase):
             os.utime(self.covers, ns=(0, self.covers.stat().st_mtime_ns + 1_000_000))
             self.assertTrue(self.contract.has_cover("GHI-005"))
             self.assertEqual(scans, [1])
+
+    def test_concurrent_misses_share_one_rescan(self):
+        """一屏卡片的几个请求同时没命中时，后到的等先到的那一次扫完，不各扫一遍。"""
+        (self.covers / "ABC-006.jpg").write_bytes(b"jpg")
+        original = self.contract._scan_cover_root
+        entered, release = threading.Event(), threading.Event()
+        scans = []
+
+        def slow():
+            scans.append(1)
+            entered.set()
+            release.wait(5)
+            return original()
+
+        results = []
+        with patch.object(self.contract, "_scan_cover_root", side_effect=slow):
+            first = threading.Thread(target=lambda: results.append(self.contract.has_cover("ABC-006")))
+            first.start()
+            self.assertTrue(entered.wait(5))
+            others = [threading.Thread(target=lambda: results.append(self.contract.has_cover("ABC-006")))
+                      for _ in range(3)]
+            for thread in others:
+                thread.start()
+            release.set()
+            for thread in (first, *others):
+                thread.join(5)
+        self.assertEqual(results, [True] * 4)
+        self.assertEqual(scans, [1])
 
 
 if __name__ == "__main__":

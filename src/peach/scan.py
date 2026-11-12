@@ -50,6 +50,7 @@ from . import folder_rules, junk, record_rehome, subtitles, wants
 from .platform import is_windows_path, is_unmapped, resolve_location, resolve_root
 from .processing_control import checkpoint
 from .fsutil import atomic_write_text
+from .discovery_rules import system_directory, system_path
 from .catalog_rules import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, is_local_extra
 
 VIDEO = VIDEO_EXTENSIONS
@@ -155,16 +156,18 @@ def medium_of(name: str) -> str:
 def video_stems(names) -> frozenset[str]:
     """一个目录里视频文件的片名（casefold），`is_sidecar` 拿它判同目录有没有正片。"""
     return frozenset(os.path.splitext(name)[0].casefold() for name in names
-                     if medium_of(name) == "video" and not is_local_extra(name))
+                     if medium_of(name) == "video" and not system_path(name) and not is_local_extra(name))
 
 
 def is_sidecar(name: str, videos: frozenset[str], *, artwork_dir: bool = False,
                path: str | None = None, library_roots: tuple[str, ...] = ()) -> bool:
-    """`name` 是否为不登记的附属文件或工具隔离文件。
+    """`name` 是否为不登记的附属文件、系统元数据或工具隔离文件。
 
     `videos` 是同目录的 `video_stems`；`artwork_dir` 表示这个目录叫 `extrafanart` 之类、
     且上一层有视频。判据只看名字，不读文件内容。
     """
+    if system_path(path or name):
+        return True
     if re.fullmatch(r'peach-purge-[a-f0-9]{32}\.peach-quarantine', name, re.IGNORECASE):
         return True
     stem, suffix = os.path.splitext(name)
@@ -480,6 +483,8 @@ def _walk(top: Path, pending: list[str] | None = None, *, onerror=lambda error: 
     列表自带这两项，不必再对每个文件发一次 `os.stat`——网盘挂载上那一次就是一趟往返，
     几万个文件就是几万趟。读不了的目录跳过；符号链接指向的目录列出但不进入。
     """
+    if system_path(str(top)):
+        return
     from .smb_media import SmbResource
     if isinstance(top, SmbResource):
         yield from _walk_smb(top, pending, onerror)
@@ -488,6 +493,8 @@ def _walk(top: Path, pending: list[str] | None = None, *, onerror=lambda error: 
     while stack:
         checkpoint('scan')
         directory = stack.pop()
+        if system_path(directory):
+            continue
         try:
             if read_directory is not None:
                 entries = read_directory(directory)
@@ -506,7 +513,7 @@ def _walk(top: Path, pending: list[str] | None = None, *, onerror=lambda error: 
                 is_dir = False
             if is_dir:
                 try:
-                    if not entry.is_symlink() and entry.name.casefold() != "#recycle" and not entry.name.startswith("@"):
+                    if not entry.is_symlink() and not system_directory(entry.name):
                         subdirectories.append(entry.path)
                 except OSError:
                     pass
@@ -538,6 +545,8 @@ def _walk_smb(top, pending, onerror):
         while stack:
             checkpoint('scan')
             directory = stack.pop()
+            if system_path(directory):
+                continue
             resource = top.joinpath(*_relative_directory(directory, top))
             try:
                 try:
@@ -557,7 +566,7 @@ def _walk_smb(top, pending, onerror):
                     continue
                 path = str(resource / entry.name)
                 if entry.is_dir:
-                    if not entry.name.startswith('@') and entry.name.casefold() != '#recycle':
+                    if not system_directory(entry.name):
                         children.append(path)
                 else:
                     stat = SimpleNamespace(st_size=entry.size, st_mtime=entry.mtime, st_mtime_ns=entry.mtime_ns)
@@ -594,6 +603,12 @@ class _ScanProgress:
 
 def scan_location(db_path, location, root, **kwargs) -> ScanResult:
     """命令行按来源与根目录保存断点，组合任务可提供自己的持久检查点。"""
+    if system_path(root):
+        check_scan_target(location, root, declared_roots=kwargs['declared_roots'])
+        result = ScanResult(location, root, 0, 0, 0, 0)
+        kwargs.get('progress', lambda files, total: None)(0, 0)
+        kwargs.get('report', print)(result.summary())
+        return result
     if 'save_checkpoint' in kwargs or 'resume_state' in kwargs:
         return _scan_location(db_path, location, root, **kwargs)
     from .update_tasks import state_for
@@ -645,6 +660,39 @@ def _record_directory_subtitles(connection, location, directory, here, conflicts
     unambiguous = [sidecar for sidecar in sidecars if sidecar.path.casefold() not in conflicts
                    and (not sidecar.video or sidecar.video.casefold() not in conflicts)]
     return subtitles.record(connection, location, unambiguous, now)
+
+
+def _follow_case_rename(connection, registered, conflicts, location, ledger_root, walk_root, ledger_path, native,
+                        *, direct):
+    """文件或目录只改了大小写时，把账本路径改成磁盘上的实际写法（#487）。
+
+    账本按不区分大小写的键认旧行，区分大小写的文件系统上旧写法已经打不开。只在旧写法确实
+    不存在、或与新写法是同一个文件（不区分大小写的文件系统）时改；两种写法各是一个文件时不动，
+    交给 `conflicts`。身份、标签与观看记录都挂在资产 id 上，跟着走。只看本机直读的目录：
+    SMB 走协议读取，没有本机路径可比。
+    """
+    key = ledger_path.casefold()
+    stored = registered.get(key)
+    if not direct or stored is None or stored == ledger_path or key in conflicts:
+        return
+    # 根目录前缀的写法来自设置，不是磁盘；只跟随根以下文件与目录的改名，不批量改写整库前缀。
+    if not stored.startswith(str(ledger_root)):
+        return
+    try:
+        old_native = Path(walk_root).joinpath(*PureWindowsPath(stored).relative_to(ledger_root).parts)
+    except ValueError:
+        return
+    try:
+        old = os.stat(old_native)
+    except FileNotFoundError:
+        old = None
+    except OSError:
+        return
+    if old is not None and not os.path.samestat(old, os.stat(native)):
+        return
+    if connection.execute('UPDATE asset SET path=?, name=? WHERE location=? AND path=?',
+                          (ledger_path, native.name, location, stored)).rowcount:
+        registered[key] = ledger_path
 
 
 def _scan_file_stat(connection, identities, registered, observations, location, ledger_path, directory, entry, *,
@@ -769,6 +817,8 @@ def _scan_location(
                     seen += 1
                     progress(files, total, seen=seen)
                     continue
+                _follow_case_rename(connection, registered, conflicts, location, ledger_root, walk_root,
+                                    ledger_path, Path(directory) / name, direct=read_directory is None)
                 try:
                     stat = _scan_file_stat(connection, identities, registered, observations, location,
                                            ledger_path, directory, entry, direct=read_directory is None,

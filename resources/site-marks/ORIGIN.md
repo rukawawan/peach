@@ -1,6 +1,6 @@
 # 来源图标
 
-这些图标用于来源设置与诊断页的站点身份，归各站点所有，不用于 Peach 品牌。favicon 保留原色与画布，ICO 仅解码为 PNG。
+这些图标用于来源设置与诊断页的站点身份，归各站点所有，不用于 Peach 品牌。favicon 保留原色与画布，ICO 仅解码为 PNG；透明底单色字形例外，见 iwara.png。
 
 | 文件 | 来源 | 获取原因 |
 | --- | --- | --- |
@@ -24,5 +24,6 @@
 | r18dev.png | 已有 `https://r18.dev/` 站标缓存 | 复用 dev 字标；官方 favicon 核对为同一标识 |
 | fc2.png | 已有 FC2 站标缓存；原图来源见 `site_icons.HOST_OVERRIDES['fc2.com']` | 复用用户确认的纯红色独角兽 |
 | 1pondo.png | 已有 `https://www.1pondo.tv/` 站标缓存 | 复用现有一本道标识 |
+| iwara.png | `https://www.iwara.tv/logo.png`（首页唯一声明的 icon，540×540，25,990 B，SHA-256 `00E00534BCD49920E030536DD83652A7B74E3DAE3C5F8C88CB298CB0F9539F05`），经 `link_marks.render_mark` 合成 | 官方 logo、manifest 的 192/512 图标与 Google 图标缓存都是透明底纯白字形，原样显示在浅色主题下看不见；按外链圆标的单色字形规则换成中性深灰圆底白字，与 `/link-mark` 的 Iwara 圆标一致 |
 
-取证：javten、fc2ppvdb、avwikidb、github 为 2026-09-30，minnano-av 为 2026-10-01，其余为 2026-10-19。五个既有静态入口经 `/site-icon/{name}.png` 提供；`/site-mark?source=…` 优先提供本目录中对应的已核对资源。浏览器不向外部图标服务发请求。
+取证：javten、fc2ppvdb、avwikidb、github 为 2026-09-30，minnano-av 为 2026-10-01，iwara 为 2026-11-07，其余为 2026-10-19。五个既有静态入口经 `/site-icon/{name}.png` 提供；`/site-mark?source=…` 优先提供本目录中对应的已核对资源。浏览器不向外部图标服务发请求。

@@ -25,6 +25,7 @@ from .javdb_public import (_CACHE_ROOT, PUBLIC_API, PublicIdentityAmbiguous, Pub
 from .resource_search import qualities
 from .scraping_access import SourceTransport
 from .sources import FailureReason, Session, SourceFailure
+from .task_retry import transient_delay
 
 HIGH_QUALITY = 1080
 MAX_RESULTS = 8
@@ -279,7 +280,7 @@ def search(root: Path, code: str, *, transport=None, min_size: int = 0,
            max_size: int = 1024 ** 4, goal: str = "quality", stop_on_preferred: bool = True) -> dict:
     """有界查询三个可直连来源；直接添加允许在 manko 高清命中时结束。"""
     fetcher = Fetcher(root, transport=transport)
-    trace, warnings, found = [], [], []
+    trace, warnings, found, retry_delays = [], [], [], []
     try:
         for source, collect in ((CHAIN[0], fetcher.manko), (CHAIN[1], fetcher.javdb),
                                 (CHAIN[2], fetcher.sukebei)):
@@ -288,9 +289,13 @@ def search(root: Path, code: str, *, transport=None, min_size: int = 0,
             except SourceFailure as error:
                 items = []
                 warnings.append(f"{source.label}：{error}")
-            except Exception:
+                if (delay := transient_delay(error)) is not None:
+                    retry_delays.append(delay)
+            except Exception as error:
                 items = []
                 warnings.append(f"{source.label}：未取得")
+                if (delay := transient_delay(error)) is not None:
+                    retry_delays.append(delay)
             items = [item for item in items if min_size <= item["size"] <= max_size]
             found.extend(items)
             if stop_on_preferred and source.key == "manko" and any(item["resolution"] >= HIGH_QUALITY for item in items):
@@ -301,6 +306,7 @@ def search(root: Path, code: str, *, transport=None, min_size: int = 0,
         fetcher.close()
     incomplete = bool(warnings) and not found
     result = {"items": rank_candidates(found, goal), "warnings": warnings, "trace": trace,
+            'retry_after': max(retry_delays) if retry_delays else None,
             'state': 'error' if incomplete else 'ready',
             'error': '部分来源未取得，请稍后重试或检查来源连接。' if incomplete else '',
             "next_sources": [source.label for source in CHAIN[3:]],

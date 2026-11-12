@@ -8,10 +8,11 @@ import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as legacyUi from '@peach/legacy/ui';
 
-import { fetchItems, itemsParams, prefetchEntityPage, type EntityPageProps } from '../../src/react/entity-page/entity-page';
+import { entityOptions, fetchItems, itemsParams, prefetchEntityPage, type EntityPageProps } from '../../src/react/entity-page/entity-page';
+import { PENDING_REFETCH_MS } from '../../src/react/components/pending-work';
 import { EntityPage } from '../../src/react/entity-page/entity-page-view';
 import { queryClient } from '../../src/react/query';
-import { buttonNamed, click, mountRoot, settle } from './render';
+import { buttonNamed, click, mountRoot, pending, settle } from './render';
 
 afterEach(() => { queryClient.clear() });
 notifyManager.setScheduler((notify) => notify());
@@ -181,6 +182,17 @@ async function open(plan: Plan = {}, patch: Partial<EntityPageProps> = {}) {
 
 const cards = (props: EntityPageProps) =>
   [...props.hosts.body.querySelectorAll<HTMLElement>('[data-media-grid] > [data-media-card]')].map((card) => card.dataset.id);
+
+it('照片未返回时先显示人物身份并保留照片视图，响应后原位显示照片', async () => {
+  const delayed = pending<ReturnType<typeof photos>>();
+  const { host, props } = await open({ photos: () => delayed.answer }, { media: { media: 'photos', set: 0 } });
+  expect(host.textContent).toContain(NAME);
+  expect(props.hosts.body.querySelector('[data-photo-wall]')).not.toBeNull();
+  expect(props.hosts.body.querySelector('[data-media-card]')).toBeNull();
+  await delayed.release(photos(2));
+  await settle();
+  expect(props.hosts.body.querySelectorAll('[data-photo-cell]')).toHaveLength(2);
+});
 const pressedView = (props: EntityPageProps) =>
   props.hosts.filter.querySelector('[data-media-view][aria-pressed="true"]')?.getAttribute('data-media-view');
 const readout = (props: EntityPageProps) => props.hosts.filter.querySelector('[data-entity-readout]')?.textContent;
@@ -356,6 +368,33 @@ describe('换筛选与视图', () => {
     expect(page.props.hosts.filter.querySelector('[data-media-view]')).toBeNull();
   });
 
+  it('资料还在补全时定时重取，补完一项就重取作品与照片、换掉头像，不用刷新页面', async () => {
+    const work = [{ task_key: 'entity-avatar', label: '资料图片补全', status: 'running' },
+      { task_key: 'performer-profile', label: '女优资料补全', status: 'pending' }];
+    let left = work;
+    const page = await open({ entityFor: () => entity({ pending_work: left }) });
+    const interval = entityOptions('performer', NAME).refetchInterval;
+    expect(interval({ state: { data: entity({ pending_work: left }) } } as never)).toBe(PENDING_REFETCH_MS);
+    expect(page.host.querySelector('[data-pending-work]')?.textContent).toBe('正在补全：资料图片补全、女优资料补全');
+    left = work.slice(1);
+    await act(async () => { await queryClient.refetchQueries({ queryKey: ['entity', 'performer', NAME] }) });
+    await settle();
+    expect(page.calls('/api/items')).toHaveLength(2);
+    expect(page.calls('/api/photos')).toHaveLength(2);
+    expect(page.props.actions.avatarChanged).toHaveBeenCalledTimes(1);
+    expect(page.host.querySelector('[data-pending-work]')?.textContent).toBe('等待补全：女优资料补全');
+    left = [];
+    await act(async () => { await queryClient.refetchQueries({ queryKey: ['entity', 'performer', NAME] }) });
+    await settle();
+    expect(page.host.querySelector('[data-pending-work]')).toBeNull();
+    expect(interval({ state: { data: entity() } } as never)).toBe(false);
+    /* 补完之后再取一次，接住紧跟着落地的别名与外链；之后不再取。 */
+    const settled = page.calls('/api/entity').length;
+    await act(async () => { await new Promise((done) => setTimeout(done, PENDING_REFETCH_MS + 300)) });
+    await settle();
+    expect(page.calls('/api/entity')).toHaveLength(settled + 1);
+  }, 15000);
+
   it('批量操作后换代次：按同一份筛选重取作品', async () => {
     const page = await open();
     await push({ revision: 1 });
@@ -467,7 +506,10 @@ describe('写操作', () => {
     let version = 'old';
     const page = await open({
       entityFor: () => entity({ image_version: version }),
-      items: () => (version === 'old' ? items([1, 2, 3]) : items([4, 5, 6])),
+      items: () => ({ ...items([1, 2, 3]), items: items([1, 2, 3]).items.map(item => ({
+        ...item, performers: [NAME], performer_entities: [{ id: 7001, name: NAME,
+          has_image: true, image_version: version }],
+      })) }),
       picked: () => { version = 'new' },
     }, {
       helpers: {
@@ -478,6 +520,7 @@ describe('写操作', () => {
     const portrait = () => page.props.hosts.filter.ownerDocument.querySelector('[data-test-portrait]')?.getAttribute('src');
     expect(portrait()).toBe('/entity-image?v=old');
     expect(cards(page.props)).toEqual(['1', '2', '3']);
+    const feedBefore = page.calls('/api/feeds/discoveries').length;
     await click(document.querySelector(`button[aria-label="更换${NAME}的头像"]`));
     await settle();
     await click(document.querySelector('[data-avatar-choice]'));
@@ -487,7 +530,11 @@ describe('写操作', () => {
     expect(page.writes.map((one) => one.url)).toEqual(['/api/avatar-frame', '/api/avatar-pick']);
     expect(portrait()).toBe('/entity-image?v=new');
     // 网格把第一页当初值存进自己的状态：只重取不换键，卡片（连同署名里她的脸）停在旧的那一份。
-    expect(cards(page.props)).toEqual(['4', '5', '6']);
+    expect(cards(page.props)).toEqual(['1', '2', '3']);
+    const avatars = [...page.props.hosts.body.querySelectorAll<HTMLImageElement>('[data-media-avatar] img')];
+    expect(avatars).toHaveLength(3);
+    expect(avatars.every(image => new URL(image.src).searchParams.get('v') === 'new')).toBe(true);
+    expect(page.calls('/api/feeds/discoveries').length).toBeGreaterThan(feedBefore);
     // 首页顶栏那排头像是壳缓存着的，也得告诉它作废。
     expect(page.props.actions.avatarChanged).toHaveBeenCalledOnce();
   });

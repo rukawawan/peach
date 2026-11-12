@@ -320,30 +320,97 @@ class TestPlanningTests(unittest.TestCase):
             with self.subTest(paths=paths):
                 scopes, _ = runner.scopes_for_changes(paths)
                 plan = ci_plan.plan('push', paths)
-                windows = [row for row in plan['matrix']['include'] if row['os'] == 'windows-latest']
                 self.assertFalse(plan['wide'])
-                self.assertEqual(len(windows), 4)
-                self.assertEqual(len([row for row in plan['matrix']['include']
-                                      if row['os'] == 'macos-latest']), 1)
-                self.assertTrue(all(row['scope'] == 'auto' for row in windows))
-                with patch.dict(os.environ, CIFrontendOwnershipTests.CI):
-                    serial = list(CIFrontendOwnershipTests.ids(runner.build_suite(*scopes)))
-                    collected = [name for row in windows for name in CIFrontendOwnershipTests.ids(
-                        runner.build_suite(*scopes, shard_index=row['shard_index'],
-                                           shard_count=row['shard_count']))]
-                self.assertTrue(serial)
-                self.assertEqual(len(serial), len(set(serial)))
-                self.assertCountEqual(serial, collected)
+                for system, count, runner_os in (('windows-latest', 4, 'Windows'),
+                                                 ('macos-latest', 2, 'macOS')):
+                    with self.subTest(system=system):
+                        rows = [row for row in plan['matrix']['include'] if row['os'] == system]
+                        self.assertEqual(len(rows), count)
+                        self.assertTrue(all(row['scope'] == 'auto' for row in rows))
+                        with patch.dict(os.environ, {**CIFrontendOwnershipTests.CI, 'RUNNER_OS': runner_os}):
+                            serial = list(CIFrontendOwnershipTests.ids(runner.build_suite(*scopes)))
+                            collected = [name for row in rows for name in CIFrontendOwnershipTests.ids(
+                                runner.build_suite(*scopes, shard_index=row['shard_index'],
+                                                   shard_count=row['shard_count']))]
+                        self.assertTrue(serial)
+                        self.assertEqual(len(serial), len(set(serial)))
+                        self.assertCountEqual(serial, collected)
 
     def test_auto_partition_threshold_counts_unique_selected_files(self):
-        for count, expected in ((149, 1), (150, 4)):
+        for count, windows_count, macos_count in ((149, 1, 1), (150, 4, 2)):
             with self.subTest(count=count), patch.object(runner, 'selected_files', return_value=tuple(
                     runner.TESTS / f'test_selected_{index}.py' for index in range(count))):
                 plan = ci_plan.plan('pull_request', ['src/peach/web_catalog.py'])
-                windows = [row for row in plan['matrix']['include'] if row['os'] == 'windows-latest']
                 self.assertFalse(plan['wide'])
-                self.assertEqual(len(windows), expected)
-                self.assertTrue(all(row['scope'] == 'auto' for row in windows))
+                for system, expected in (('windows-latest', windows_count), ('macos-latest', macos_count)):
+                    with self.subTest(system=system):
+                        rows = [row for row in plan['matrix']['include'] if row['os'] == system]
+                        self.assertEqual(len(rows), expected)
+                        self.assertTrue(all(row['scope'] == 'auto' for row in rows))
+
+    def test_explicit_roots_use_their_own_browser_files_and_weights_for_full_and_auto(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, seconds in (('main', {'alpha': 7}), ('worker', {'beta': 40, 'gamma': 90})):
+                root = (Path(directory) / name).resolve()
+                (root / 'frontend/e2e').mkdir(parents=True)
+                (root / 'scripts').mkdir()
+                weights = {f'frontend/e2e/{name}.test.ts': value for name, value in seconds.items()}
+                for path in weights:
+                    (root / path).touch()
+                (root / 'scripts/ci-browser-timings.json').write_text(
+                    json.dumps({'seconds': weights}), encoding='utf-8')
+                for event, count, scope in (('pull_request', 2, 'auto'), ('workflow_dispatch', 6, 'full')):
+                    with self.subTest(root=root.name, event=event):
+                        planned = ci_plan.plan(event, [next(iter(weights))], root=root)
+                        rows = planned['matrix']['include']
+                        self.assertEqual(len(rows), count)
+                        self.assertTrue(all(row['scope'] == scope for row in rows))
+                        browsers = planned['browser_matrix']['include']
+                        self.assertCountEqual([path for row in browsers for path in json.loads(row['files'])], weights)
+                        self.assertCountEqual([row['estimated_seconds'] for row in browsers], seconds.values())
+
+    def test_explicit_roots_count_their_python_files_at_the_auto_partition_threshold(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, count, windows_count, macos_count in (('main', 149, 1, 1), ('worker', 150, 4, 2)):
+                root = (Path(directory) / name).resolve()
+                (root / 'tests').mkdir(parents=True)
+                (root / 'frontend/e2e').mkdir(parents=True)
+                (root / 'frontend/e2e/smoke.test.ts').touch()
+                for index in range(count):
+                    (root / f'tests/test_follow_generated_{index}.py').touch()
+                for scope in ('full', 'follow'):
+                    selected = runner.selected_files(scope, root=root)
+                    self.assertEqual(len(selected), count)
+                    self.assertTrue(all(path.parent == root / 'tests' for path in selected))
+                planned = ci_plan.plan('pull_request', ['src/peach/follow.py'], root=root)
+                self.assertFalse(planned['wide'])
+                for system, expected in (('windows-latest', windows_count), ('macos-latest', macos_count)):
+                    with self.subTest(root=root.name, system=system):
+                        rows = [row for row in planned['matrix']['include'] if row['os'] == system]
+                        self.assertEqual(len(rows), expected)
+                        self.assertTrue(all(row['scope'] == 'auto' for row in rows))
+
+    def test_explicit_roots_keep_separate_test_consumers_and_relative_source_importers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            roots = [(Path(directory) / name).resolve() for name in ('main', 'worker')]
+            files = ({'tests/test_follow_web.py': 'from peach import media\n',
+                      'src/peach/web_reader.py': 'from . import unmapped_hub\n'},
+                     {'tests/test_code_creators.py': 'from peach import media, unmapped_hub\n'})
+            for root, contents in zip(roots, files):
+                for name, source in contents.items():
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(source, encoding='utf-8')
+                (root / 'src/peach').mkdir(parents=True, exist_ok=True)
+                (root / 'src/peach/unmapped_hub.py').touch()
+            for index in (0, 1, 0):
+                root = roots[index]
+                with self.subTest(root=root.name):
+                    scopes = runner.scopes_for_changes(['src/peach/media.py'], root=root)[0]
+                    self.assertEqual(scopes, (('follow', 'media', 'web'), ('media', 'metadata'))[index])
+                    hub_scopes = runner.scopes_for_changes(['src/peach/unmapped_hub.py'], root=root)[0]
+                    self.assertEqual(hub_scopes, (('catalog',), ('metadata',))[index])
+                    self.assertEqual(ci_plan.browser_input('src/peach/media.py', root=root), index == 0)
 
     def test_document_changes_avoid_optional_jobs_and_unknown_changes_require_them(self):
         documents = ci_plan.plan('pull_request', ['docs/TESTING.md'])
@@ -466,6 +533,9 @@ class TestPlanningTests(unittest.TestCase):
     def test_actions_output_passes_a_git_revision_and_json_values_to_downstream_jobs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
+
+            (root / 'frontend/e2e').mkdir(parents=True)
+            (root / 'frontend/e2e/smoke.test.ts').touch()
 
             def git(*args):
                 return subprocess.check_output(

@@ -428,6 +428,17 @@ class SubtitleApiTests(unittest.TestCase):
                 _subtitle_rows(state, 1)
             discover.assert_not_called()
 
+    def test_opening_a_video_lists_its_directory_once(self):
+        """字幕列表一次、每条轨各一次：正片目录在网盘上时，每次列目录都是一趟网络往返。"""
+        (self.media / "ABP-758.srt").write_text("1\n00:00:00,000 --> 00:00:05,000\n旁挂\n", encoding="utf-8")
+        with self._client() as client, mock.patch(
+                "peach.routes_media.subtitles.discover_sidecars", wraps=subtitles.discover_sidecars) as discover:
+            tracks = client.get("/api/assets/1/subtitles").json()["subtitles"]
+            for track in tracks:
+                client.get(track["src"])
+        self.assertEqual(len(tracks), 4)
+        self.assertEqual(discover.call_count, 1)
+
     def test_discovered_identity_is_stable_when_the_file_is_registered(self):
         path = self.media / "ABP-758.srt"
         path.write_text("1\n00:00:00,000 --> 00:00:05,000\n旁挂字幕\n", encoding="utf-8")

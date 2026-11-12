@@ -8,7 +8,8 @@
  *   画好时记下的结构画：记的是行数与每行是否展开这类结构，不是高度。没有记录时按空集合或一行的最小结构画。 */
 import { esc } from '@peach/legacy/core';
 import { islandButton, islandGlyph, islandSelect } from './island-skeleton';
-import { CONFIGURATION_SECTIONS } from './history/settings-route';
+import { appSettingsStore } from './appearance/settings';
+import { NAVIGATION_GROUPS, normalizeNavigationOrder } from './navigation-order';
 import { diagnosticsSkeleton } from './diagnostics-skeleton';
 import { LIBRARY_FOLDER_HELP, POLICY_SUMMARY } from './react/settings/library-policy-copy';
 import { ENTRY_LINKS_HELP, ENTRY_LINKS_HINT } from './configuration-copy';
@@ -243,7 +244,7 @@ const media = () => {
   + (shape.cloud ? cloudProxySkeleton() : '')
   + discoverySkeleton()
   + section('番号识别规则', stack(`${text('90%')}${text('60%')}<span class="skeleton ui-configuration-skeleton-input" style="width:100%;height:88px"></span>`), button('保存配置'))
-  + section('视频预览', row('生成视频预览', '为本地视频生成九宫格与时间轴预览；关闭后仍按入库规则探测时长与分辨率。')
+  + section('视频预览', row('生成视频预览', '为本地视频生成九宫格与时间轴预览。')
     + row('时间轴预览', '按所选间隔抽帧，仅处理本机磁盘上的视频。', 'ui-configuration-skeleton-select')
     + row('抽帧解码方式', '用于生成封面、九宫格和时间轴。', 'ui-configuration-skeleton-select'));
 };
@@ -371,6 +372,8 @@ export function configurationContentSkeleton(chosen: string): string {
 }
 
 export function configurationSkeleton(chosen = '媒体库与入库'): string {
-  const nav = `<div class="ui-board-local-nav" data-section-nav data-section-items>${Object.values(CONFIGURATION_SECTIONS).map(title => `<button type="button" tabindex="-1" aria-selected="${title === chosen}">${title}</button>`).join('')}</div>`;
+  const titles = normalizeNavigationOrder('configuration', appSettingsStore().value.navigationOrders.configuration)
+    .map(key => NAVIGATION_GROUPS.configuration.items.find(([id]) => id === key)![1]);
+  const nav = `<div class="ui-board-local-nav" data-section-nav data-section-items>${titles.map(title => `<button type="button" tabindex="-1" aria-selected="${title === chosen}">${title}</button>`).join('')}</div>`;
   return `<div class="peach-react"><div class="ui-configpage">${nav}<div class="flex min-w-0 flex-col gap-6">${configurationContentSkeleton(chosen)}</div></div></div>`;
 }

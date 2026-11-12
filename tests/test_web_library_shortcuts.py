@@ -45,6 +45,18 @@ class LibraryShortcutsTests(unittest.TestCase):
         self.assertEqual([row['name'] for row in self.read()['favorites']], ['规范厂牌'])
         self.assertEqual(self.write(action="favorite", entity_id=1, on=False)['favorites'], [])
 
+    def test_saved_filters_reorder_atomically_and_reject_stale_members(self):
+        self.write(action="save_filter", name="筛选一", href="/?q=one")
+        before = self.write(action="save_filter", name="筛选二", href="/?q=two")['filters']
+        ids = [row['id'] for row in reversed(before)]
+        ordered = self.write(action="reorder_filters", ids=ids)['filters']
+        self.assertEqual(ordered, list(reversed(before)))
+        for invalid in ([ids[0], ids[0]], ids[:1], [*ids, 'removed'], [1, 2], None):
+            with self.assertRaises(ValueError):
+                self.write(action="reorder_filters", ids=invalid)
+            self.assertEqual(self.read()['filters'], ordered)
+        self.assertEqual(web_settings.q_settings(self.contract)['sidebarOrder'], ['tags'])
+
     def test_merge_collapses_favorites_and_cancel_accepts_old_id(self):
         self.write(action="favorite", entity_id=1, on=True)
         self.write(action="favorite", entity_id=2, on=True)

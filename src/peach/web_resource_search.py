@@ -48,4 +48,6 @@ def q_resource_search(contract, args) -> dict:
         "trace": direct["trace"] + (["索引器后备：已查询"] if indexed.get("state") != "unavailable" else []),
         "next_sources": direct["next_sources"], "reference_only": direct["reference_only"],
         "error": "" if direct["items"] or indexed.get("ok") else indexed.get("error", ""),
+        "retry_after": max((value for value in (direct.get('retry_after'), indexed.get('retry_after'))
+                            if value is not None), default=None),
     }

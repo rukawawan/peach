@@ -480,7 +480,7 @@ def w_feed_source(contract, body) -> dict:
 def subscribe_performer(connection, entity_id: int, canonical_name: str) -> list[int]:
     """这位的每个 JavDB 演员页与 DMM 片单各订一条，返回源 id。地址按账本里她的编号现拼。"""
     refs = [dict(ref) for ref in connection.execute(
-        "SELECT provider,external_kind,external_id FROM entity_external_ref"
+        "SELECT provider,external_kind,external_id,metadata_json FROM entity_external_ref"
         " WHERE entity_id=?", (int(entity_id),))]
     pages = [*entry_links.javdb_actor_pages(canonical_name, refs),
              *feeds.dmm_actress_pages(connection, entity_id)]
@@ -588,7 +588,8 @@ def subscribable(connection, row) -> bool:
     """这位不经搜索就能订：已有 JavDB 演员页或 DMM 女优编号。"""
     entity_id = int(row["id"])
     refs = [dict(ref) for ref in connection.execute(
-        "SELECT provider,external_kind,external_id FROM entity_external_ref WHERE entity_id=?",
+        "SELECT provider,external_kind,external_id,metadata_json FROM entity_external_ref"
+        " WHERE entity_id=?",
         (entity_id,))]
     return bool(entry_links.javdb_actor_pages(str(row["canonical_name"]), refs)
                 or feeds.dmm_actress_ids(connection, entity_id))

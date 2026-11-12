@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import logging
 import threading
 import time
 import uuid
@@ -13,7 +14,7 @@ from urllib.parse import urlsplit
 from . import __version__, remote_reporting
 from .fsutil import atomic_write_text
 
-SCHEMA = 4
+SCHEMA = 5
 MAX_BYTES = 18 * 1024 * 1024
 MAX_RAW_BYTES = 100 * 1024 * 1024
 FILENAME = "peach-library-taste.json.gz"
@@ -21,9 +22,12 @@ FIELDS = [
     "去重后的作品编号，以及评分、喜欢、不喜欢、已看、稍后看、播放次数、观看比例与手动添加的标签",
     "出演者、创作者、厂牌、系列、手动标签、年代与时长分组的收藏、喜欢、不喜欢、观看数量和评分分布（有编号作品与无编号条目分开），以及主动收藏的实体名称",
     "馆藏文件数量、有编号作品数量与无编号条目数量",
+    "近 7 天与 30 天已观测的容量天数、播放活跃天数及其记录覆盖天数；数据与缓存的当前占用、峰值、已观测正增长量、缓存清理量（自动与手动合计，不含备份和日志）。未取得的值为空，不补足 30 天记录",
+    "同意后随机生成的研究实例标识，用于关联本实例的馆藏、容量和参与状态；重新开启时更换，不使用机器指纹或诊断标识",
+    "启用及每日最多一次的联系状态、版本和最近联系时间；关闭时仍允许后台尝试一次仅含实例标识与关闭状态的最小记录，之后停止发送。离线、卸载和发送失败不视为关闭，实例数不等于人数",
     "Peach 版本、字段版本与 UTC 自然周",
 ]
-NOTICE = "匿名处理后上传馆藏与各类偏好明细。"
+NOTICE = "上传移除直接身份信息的馆藏、偏好和容量聚合，并使用随机研究实例标识关联参与状态。启用后每日最多联系一次；关闭时后台仅尝试一次最小关闭状态，之后停发。播放活跃天数不代表全部日常使用；容量和参与状态不含新增路径、作品或账号信息。"
 
 
 def _path(config):
@@ -52,12 +56,25 @@ def _used(value, period):
 
 def useful_payload(payload):
     """公共编号或任一偏好分组提供可分析内容。"""
-    return bool(payload["library"] or any(payload["preferences"].values()))
+    window = payload['capacity']['windows']['30d']
+    return bool(payload["library"] or any(payload["preferences"].values())
+                or window['observed_days'] or window['activity_observed_days'] or window['cleaned_bytes'] is not None)
 
 
 def consent(config):
+    from .research_participation import instance
     value = remote_reporting._read(_path(config))
-    return value if value.get("enabled") is True and value.get("schema") == SCHEMA else {}
+    return value if (value.get("enabled") is True and value.get("schema") == SCHEMA
+                     and instance(value.get('research_instance')) and instance(value.get('revision'))) else {}
+
+
+def consent_state(config):
+    value = remote_reporting._read(_path(config))
+    if value.get('enabled') is False:
+        return 'disabled'
+    if value.get('enabled') is True:
+        return 'enabled' if consent(config) else 'needs-consent'
+    return 'not-selected'
 
 
 def save_choice(config, enabled):
@@ -67,6 +84,15 @@ def save_choice(config, enabled):
     value = {"enabled": enabled, "schema": SCHEMA, "revision": uuid.uuid4().hex,
              "selected_at": datetime.now(timezone.utc).isoformat()}
     with _state_lock(config):
+        previous = remote_reporting._read(_path(config))
+        granted = consent(config)
+        if enabled:
+            value['research_instance'] = uuid.uuid4().hex
+        elif previous.get('enabled') is False and previous.get('schema') == SCHEMA:
+            value = previous
+        elif granted:
+            value['closing'] = {'research_instance': granted['research_instance'],
+                                'authorization': granted['revision'], 'event_id': uuid.uuid4().hex}
         atomic_write_text(_path(config), json.dumps(value))
         state = remote_reporting._read(_state_path(config))
         if state.get("status") == "queued":
@@ -85,22 +111,26 @@ def target():
 
 
 def snapshot(config):
+    from .research_participation import snapshot as participation_snapshot
     attempt = remote_reporting._read(config.directory("state") / "library-sharing-attempt.json")
     if attempt.get("status") == "attempted":
         attempt = {**attempt, "status": "unknown", "attempted": True}
-    return {"enabled": bool(consent(config)), "available": bool(target()),
+    return {"enabled": bool(consent(config)), 'consent_state': consent_state(config), "available": bool(target()),
             "schema": SCHEMA, "fields": FIELDS, "notice": NOTICE,
+            'participation': participation_snapshot(config),
+            'last_sent_at': attempt.get('last_sent_at'),
             "last_attempt": attempt if attempt.get("schema") == SCHEMA and attempt.get("period") == _period() else {}}
 
 
 def collect(contract):
     """在本机生成群体分析投影，不读取浏览历史或写入缓存。"""
     from .library_research import project
+    from .capacity_history import project as capacity_projection
     with contract.read_connection() as connection:
         connection.execute("BEGIN")
         projection = project(connection)
     payload = {"schema": SCHEMA, "peach": __version__, "period": datetime.now(timezone.utc).strftime("%G-W%V"),
-               **projection}
+               **projection, 'capacity': capacity_projection(getattr(contract, 'upgrade_config', None))}
     data = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
     if len(data) > MAX_RAW_BYTES:
         raise ValueError("馆藏与口味明细超过 100 MiB，整份未发送")
@@ -117,12 +147,13 @@ def compressed(data):
 
 def valid_payload(payload):
     from .library_research import valid_projection
-    if (not isinstance(payload, dict) or set(payload) != {"schema", "peach", "period", "library", "preferences", "coverage"}
+    from .capacity_history import valid_projection as valid_capacity
+    if (not isinstance(payload, dict) or set(payload) != {"schema", "peach", "period", "library", "preferences", "coverage", "capacity"}
             or payload["schema"] != SCHEMA or payload["peach"] != __version__
             or payload["period"] != datetime.now(timezone.utc).strftime("%G-W%V")
             or not isinstance(payload["library"], list) or not isinstance(payload["preferences"], dict)):
         return False
-    return valid_projection(payload)
+    return valid_projection(payload) and valid_capacity(payload['capacity'])
 
 
 class Service:
@@ -133,6 +164,8 @@ class Service:
         self._thread = None
         self._preview = None
         self._lock = threading.RLock()
+        from .research_participation import Service as ParticipationService
+        self.participation = ParticipationService(config, target=target, stopping=self._stop)
 
     def preview(self):
         payload, data = collect(self.contract)
@@ -184,6 +217,7 @@ class Service:
         metadata = remote_reporting.event_metadata("research")
         event.update(**metadata, message="Peach library and taste research", level="info")
         event["tags"].update(schema=str(SCHEMA), period=payload["period"])
+        event['tags']['research_instance'] = current['research_instance']
         for key in tuple(envelope.headers):
             if key not in {"event_id", "sent_at"}:
                 del envelope.headers[key]
@@ -217,6 +251,8 @@ class Service:
                 status = "failed"
             value = {key: value for key, value in state.items() if key not in {"reason", "status_code"}}
             value["status"] = status
+            if status == 'accepted':
+                value['last_sent_at'] = datetime.now(timezone.utc).isoformat()
             if type(result.get("status_code")) is int and 100 <= result["status_code"] <= 599:
                 value["status_code"] = result["status_code"]
             if result.get("reason") in {"network", "http_status", "rate_limit", "queue_full", "consent", "disabled", "unknown"}:
@@ -235,6 +271,8 @@ class Service:
                 return
         identity = {"schema": SCHEMA, "period": period, "revision": current["revision"], "attempt_id": uuid.uuid4().hex}
         value = {**identity, "attempted": False}
+        if previous.get('last_sent_at'):
+            value['last_sent_at'] = previous['last_sent_at']
         stage = "collection"
         try:
             payload, data = collect(self.contract)
@@ -280,6 +318,12 @@ class Service:
         def run():
             while not self._stop.is_set():
                 try:
+                    self.participation.attempt()
+                except Exception:
+                    # 参与状态失败与研究快照分别保留回执，不转交错误诊断通道。
+                    pass
+                self.sample_capacity()
+                try:
                     self.attempt()
                 except Exception:
                     # 分享失败不把数据或错误原文转交诊断通道。
@@ -288,6 +332,33 @@ class Service:
                 self._wake.clear()
         self._thread = threading.Thread(target=run, name="PeachLibrarySharing", daemon=True)
         self._thread.start()
+
+    def sample_capacity(self):
+        """研究日采样在分享后台运行，不让请求中的容量检查展开数据目录。"""
+        from . import storage_budget
+        current = consent(self.config)
+        if not current or self._stop.is_set() or not storage_budget._history_due(self.config):
+            return
+        next_check = 0.0
+        def active():
+            nonlocal next_check
+            if self._stop.is_set():
+                raise InterruptedError('研究容量采样已停止')
+            now = time.monotonic()
+            if now >= next_check:
+                next_check = now + 2
+                if consent(self.config).get('revision') != current['revision']:
+                    raise InterruptedError('研究容量采样的同意已变化')
+        try:
+            data_bytes = storage_budget.data_usage(self.config, check=active)
+            cache = storage_budget.cache_usage(self.config, check=active)
+            if self._stop.is_set() or consent(self.config).get('revision') != current['revision']:
+                return
+            storage_budget.record_history(self.config, data_bytes=data_bytes, cache_bytes=cache['managed_cache_bytes'])
+        except InterruptedError:
+            return
+        except (OSError, ValueError) as error:
+            logging.getLogger(__name__).warning('研究容量采样未取得（%s）', type(error).__name__)
 
     def stop(self):
         self._stop.set()

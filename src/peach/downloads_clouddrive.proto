@@ -14,12 +14,14 @@ import "google/protobuf/empty.proto";
 
 service CloudDriveFileSrv {
   rpc GetSystemInfo(google.protobuf.Empty) returns (CloudDriveSystemInfo) {}
+  rpc GetSystemSettings(google.protobuf.Empty) returns (SystemSettings) {}
   rpc GetApiTokenInfo(StringValue) returns (TokenInfo) {}
   rpc GetAllCloudApis(google.protobuf.Empty) returns (CloudAPIList) {}
   rpc GetCloudAPIConfig(GetCloudAPIConfigRequest) returns (CloudAPIConfig) {}
   rpc SetCloudAPIConfig(SetCloudAPIConfigRequest) returns (google.protobuf.Empty) {}
   rpc GetMountPoints(google.protobuf.Empty) returns (GetMountPointsResult) {}
   rpc FindFileByPath(FindFileByPathRequest) returns (CloudDriveFile) {}
+  rpc GetSubFiles(FileRequest) returns (stream SubFilesReply) {}
   rpc CreateFolder(CreateFolderRequest) returns (CreateFolderResult) {}
   rpc AddOfflineFiles(AddOfflineFileRequest) returns (FileOperationResult) {}
   rpc RemoveOfflineFiles(RemoveOfflineFilesRequest) returns (FileOperationResult) {}
@@ -32,6 +34,8 @@ message CloudDriveSystemInfo {
   string UserName = 2;
   bool SystemReady = 3;
 }
+
+message SystemSettings { optional string fileBufferDiskCacheLocation = 24; }
 
 message StringValue { string value = 1; }
 
@@ -51,6 +55,7 @@ message TokenPermissions {
   bool allow_get_mounts = 25;
   bool allow_get_cloud_apis = 29;
   bool allow_modify_cloud_apis = 30;
+  bool allow_get_system_settings = 31;
 }
 
 enum ProxyType { SYSTEM = 0; NOPROXY = 1; HTTP = 2; SOCKS5 = 3; }
@@ -139,6 +144,10 @@ message RemoveOfflineFilesRequest {
   bool deleteFiles = 3;
   repeated string infoHashes = 4;
   optional string path = 5;
+}
+
+message SubFilesReply {
+  repeated CloudDriveFile subFiles = 1;
 }
 
 message FileRequest {

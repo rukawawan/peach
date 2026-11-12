@@ -229,8 +229,12 @@ def search_keys(canonical: str, aliases) -> list[str]:
 def has_entry(connection: sqlite3.Connection, entity_id: int) -> bool:
     """有没有路进得去：账本里有 minnano-av 编号、名字链里有一个能拿去检索的写法，或她有 FC2 作品。"""
     names = _names(connection, entity_id)
-    return names is not None and bool(_refs(connection, entity_id) or search_keys(*names)
-                                      or fc2_codes(connection, entity_id))
+    return names is not None and _has_entry(names, _refs(connection, entity_id),
+                                            bool(fc2_codes(connection, entity_id)))
+
+
+def _has_entry(names, refs, fc2: bool) -> bool:
+    return bool(refs or search_keys(*names) or fc2)
 
 
 def fingerprint(connection: sqlite3.Connection, entity_id: int) -> str:
@@ -245,12 +249,38 @@ def fingerprint(connection: sqlite3.Connection, entity_id: int) -> str:
     跑过的都该按新入口再问一次。
     """
     names = _names(connection, entity_id, own=False) or ("", [])
+    return _fingerprint(names, _refs(connection, entity_id), bool(fc2_codes(connection, entity_id)))
+
+
+def _fingerprint(names, refs, fc2: bool) -> str:
     keys = sorted({match_key(name) for name in [names[0], *names[1]] if name})
-    parts: list = [keys, _refs(connection, entity_id), f"r{ENTRY_RULE}"]
-    if fc2_codes(connection, entity_id):
+    parts: list = [keys, list(refs), f"r{ENTRY_RULE}"]
+    if fc2:
         parts.append(FC2CMADB)
     raw = json.dumps(parts, ensure_ascii=False)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _stock_facts(connection: sqlite3.Connection):
+    """全部女优的别名、minnano-av 编号与有没有 FC2 作品，三条查询取齐。
+
+    存量规划每分钟跑一次（升级补修派发期间），逐人问 `_names`、`_refs`、`fc2_codes` 是一千多位女优
+    各三四条查询；这里取回的与逐人查的同口径、同顺序，`has_entry` 与 `fingerprint` 的判据不变。
+    """
+    aliases: dict[int, list[tuple[str, str]]] = {}
+    for entity_id, alias, source in connection.execute(
+            "SELECT al.entity_id,al.alias,al.source FROM entity_alias al JOIN entity e ON e.id=al.entity_id"
+            " WHERE e.kind='performer' ORDER BY al.entity_id,al.alias"):
+        aliases.setdefault(int(entity_id), []).append((str(alias), str(source)))
+    refs: dict[int, list[str]] = {}
+    for entity_id, external_id in connection.execute(
+            "SELECT entity_id,external_id FROM entity_external_ref WHERE provider=?"
+            " AND external_kind='performer' ORDER BY entity_id,external_id", (MINNANO,)):
+        refs.setdefault(int(entity_id), []).append(str(external_id))
+    fc2 = {int(row[0]) for row in connection.execute(
+        "SELECT DISTINCT ae.entity_id FROM asset_entity ae JOIN asset a ON a.id=ae.asset_id"
+        " WHERE ae.role='performer' AND a.code LIKE 'FC2%'")}
+    return aliases, refs, fc2
 
 
 def _label(name: str) -> str:
@@ -291,13 +321,17 @@ def stock(connection: sqlite3.Connection, attempts, *, limit: int, skip=(),
         taken = {int(row[0]) for row in lacking}
         rows = lacking + [row for row in rows if int(row[0]) not in taken]
     skip, found = set(skip), []
+    aliases, refs, fc2 = _stock_facts(connection)
     for row in rows:
         entity_id, key = int(row[0]), followup_key(int(row[0]))
-        if key in skip or not has_entry(connection, entity_id):
+        canonical, written = str(row[1] or ""), aliases.get(entity_id, [])
+        numbers, has_fc2 = refs.get(entity_id, []), entity_id in fc2
+        if key in skip or not _has_entry((canonical, [alias for alias, _source in written]), numbers, has_fc2):
             continue
-        if attempts.settled(key, fingerprint(connection, entity_id)):
+        others = [alias for alias, source in written if not _ours(source)]
+        if attempts.settled(key, _fingerprint((canonical, others), numbers, has_fc2)):
             continue
-        found.append(Followup(key=key, task_key=TASK_KEY, label=_label(str(row[1] or ""))))
+        found.append(Followup(key=key, task_key=TASK_KEY, label=_label(canonical)))
         if len(found) >= limit:
             break
     return found

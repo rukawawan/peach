@@ -298,7 +298,7 @@ body #stats [data-section-items]{gap:4px;border:0;overflow:visible}
 body #stats [data-section-items]>[aria-selected]{flex:none;min-height:var(--control-h);height:auto;padding:8px 12px;border:0;border-radius:var(--control-radius);background:none;box-shadow:none;text-align:left;font:var(--board-body-medium);color:var(--color-text-secondary)}
 body #stats [data-section-items]>[aria-selected]:hover{background:var(--color-background-primary-hover);color:var(--color-text-primary)}
 body #stats [data-section-items]>[aria-selected=true]{background:var(--color-background-tertiary-default);color:var(--color-text-primary)}
-body #stats :is([aria-label="配置分区"],[aria-labelledby="reviewcategories"])>[aria-selected=false]:hover{background:none;color:var(--color-text-primary)}
+body #stats :is([aria-label="配置分区"],[aria-label="复核分类"])>[aria-selected=false]:hover{background:none;color:var(--color-text-primary)}
 body #stats [data-section-items]>[aria-selected]:focus-visible{outline:2px solid var(--color-border-focus-ring);outline-offset:-2px}
 @media(max-width:900px){
  body #stats [data-section-items]{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain}

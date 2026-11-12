@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PureWindowsPath
+from stat import S_ISREG
 from time import monotonic
 from typing import Sequence
 
@@ -132,6 +133,14 @@ class FilesystemBackend:
         self.snapshot_root = normalized_path(snapshot_root)
 
     def file_for(self, asset: MediaAsset, thumbnail: bool = False) -> Path:
+        return self.located(asset, thumbnail=thumbnail)[0]
+
+    def located(self, asset: MediaAsset, thumbnail: bool = False) -> tuple[Path, os.stat_result | None]:
+        """`file_for` 外加确认存在时那一次 stat 的结果，供送流一路往下传。
+
+        片源在网盘上时每次 stat 都是一趟网络往返；一个 Range 请求原先在这里、头修复查询、
+        ffprobe 画像缓存和 `FileResponse` 各 stat 一次。SMB 资源与大小写兜底匹配到的路径给 None。
+        """
         raw = asset.snapshot_path if thumbnail else asset.path
         if not raw:
             raise MediaUnavailable(asset.id)
@@ -142,7 +151,7 @@ class FilesystemBackend:
                 raise MediaUnavailable(asset.id)
             try:
                 if remote.is_file():
-                    return remote
+                    return remote, None
             except OSError:
                 raise MediaOffline(asset.id, remote.root_id) from None
             raise MediaUnavailable(asset.id)
@@ -150,11 +159,15 @@ class FilesystemBackend:
         roots = (self.snapshot_root,) if thumbnail else self.allowed_roots
         if not any(within_root(path, root) for root in roots):
             self._raise_unavailable(asset.id, raw, thumbnail)
-        if path.is_file():
-            return path
+        try:
+            found = os.stat(path)
+        except (OSError, ValueError):
+            found = None
+        if found is not None and S_ISREG(found.st_mode):
+            return path, found
         matched = _case_insensitive_match(str(path.parent), path.name)
         if matched is not None:
-            return path.parent / matched
+            return path.parent / matched, None
         self._raise_unavailable(asset.id, raw, thumbnail)
 
     def _raise_unavailable(self, asset_id: int, raw: str, thumbnail: bool) -> None:

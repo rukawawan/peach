@@ -115,6 +115,8 @@ describe('我的收藏弹层', () => {
         await dialog.getByRole('tab', { name: '保存的筛选', exact: true }).press('Home');
         assert.equal(await dialog.getByRole('tab', { name: '全部', exact: true }).getAttribute('aria-selected'), 'true');
         await dialog.getByRole('tab', { name: '全部', exact: true }).press('End');
+        assert.equal(await dialog.getByRole('tab', { name: '事务所', exact: true }).getAttribute('aria-selected'), 'true');
+        await dialog.getByRole('tab', { name: '保存的筛选', exact: true }).click();
         assert.equal(await dialog.getByRole('tab', { name: '保存的筛选', exact: true }).getAttribute('aria-selected'), 'true');
         assert.equal(await dialog.getByRole('textbox', { name: '搜索收藏' }).count(), 0);
         await dialog.getByRole('textbox', { name: '筛选名称' }).fill('VR 待看');

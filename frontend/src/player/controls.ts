@@ -568,7 +568,7 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
 
 /** 进度条上的拖动预览：时间与那一秒的画面，取图与夹边见 `seek-preview.ts`。
  *
- *  鼠标悬停就显示；触屏没有悬停，按住拖动时显示、松手收起。关注条目没有本地图，只报时间。 */
+ *  有可用图时鼠标悬停显示；触屏按住拖动时显示、松手收起。没有可用图时不显示浮层。 */
 export function mountPlayerSeekPreview(player: VjsPlayer, item: PlayerItem | null, options: { thumbnail?: boolean } = {}): void {
   const progress = player.el().querySelector<HTMLElement>('.vjs-control-bar .vjs-progress-control');
   if (!progress || progress.querySelector('[data-player-seek-preview]')) return;

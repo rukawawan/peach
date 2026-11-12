@@ -25,9 +25,9 @@ describe('任务页云下载布局', () => {
       await page.route('**/api/downloads?*', route => route.fulfill({ json: { available: false, tasks: [], providers: [] } }));
       await page.route('**/api/tasks*', route => route.fulfill({ json: {
         available: true, running: [
-          { ...row(1, 'running'), resources: reading(true), control: { state: 'running', actions: ['pause', 'cancel'] } },
+          { ...row(1, 'running'), resources: reading(true), control: { state: 'running', actions: ['pause', 'cancel', 'set_speed'], speed_mode: 'standard' } },
           { ...row(90, 'running'), parent_run_id: 1, followup_key: 'child:90', resources: reading(false),
-            control: { state: 'running', actions: ['pause', 'cancel'] } },
+            control: { state: 'running', actions: ['pause', 'cancel', 'set_speed'], speed_mode: 'standard' } },
         ], skipped: [], finished: [row(3, 'cancelled'), row(4, 'succeeded'), row(5, 'succeeded')],
         followup_counts: { 4: { cancelled: 2 }, 5: { succeeded: 1, cancelled: 1 } },
       } }));
@@ -61,11 +61,13 @@ describe('任务页云下载布局', () => {
         const controls = card.querySelector('[data-task-controls="1"]')!.getBoundingClientRect();
         const title = card.querySelector('strong')!.getBoundingClientRect();
         return { fits: document.documentElement.scrollWidth <= innerWidth,
-          rightOfTitle: controls.left >= title.right, insideCard: controls.right <= card.getBoundingClientRect().right };
+          separate: controls.left >= title.right || controls.top >= title.bottom,
+          insideCard: controls.right <= card.getBoundingClientRect().right };
       });
       assert.equal(geometry.fits, true);
-      assert.equal(geometry.rightOfTitle, true);
+      assert.equal(geometry.separate, true);
       assert.equal(geometry.insideCard, true);
+      assert.equal(await page.locator('[data-task-controls="1"]').getByRole('button', { name: '处理速度：标准' }).count(), 1);
       assert.deepEqual(opened.problems, []);
     } finally { await opened.close() }
   });
@@ -220,7 +222,7 @@ describe('任务页云下载布局', () => {
       assert.equal(geometry.overflows, true, '长行在代码块内部横向滚动');
       assert.equal(geometry.pageFits, true);
       assert.ok(Math.abs(geometry.leftGap - geometry.bottomGap) <= 1,
-        '技术详情代码块的底部留白与卡片左右内边距一致');
+        `技术详情代码块的底部留白与卡片左右内边距一致：${JSON.stringify(geometry)}`);
       assert.equal(await card.getByRole('button', { name: '复制代码' }).count(), 1);
       assert.deepEqual(opened.problems, []);
     } finally { await opened.close(); }
@@ -338,10 +340,10 @@ describe('任务页云下载布局', () => {
       assert.equal(geometry.providerTop, geometry.metadataTop, '来源文字与目录、时间没有对齐');
       await page.screenshot({ path: `../build/agent-verification/browser/activity-${viewport.name}.png`, fullPage: true });
       await firstCard.getByRole('button', { name: '展开标题', exact: true }).click();
-      assert.equal(await page.locator('[data-download-title-full]').textContent(), `ABC-123 · ${title.trim()}`);
+      assert.equal(await firstCard.locator('[data-download-title-full]').textContent(), `ABC-123 · ${title.trim()}`);
       assert.equal(await firstCard.locator('[data-download-cover]').evaluate(cover => cover.getBoundingClientRect().height), geometry.coverHeight);
       await firstCard.getByRole('button', { name: '收起标题', exact: true }).click();
-      assert.equal(await page.locator('[data-download-title-full]').count(), 0);
+      await firstCard.locator('[data-download-title-full]').waitFor({ state: 'hidden' });
       for (const selector of ['[data-download-cover-link]', '[data-download-title-link]']) {
         await page.locator(selector).click();
         await page.waitForURL(`**/assets/${assetId}`);

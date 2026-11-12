@@ -128,7 +128,7 @@ describe('关注域地址与会话控制', () => {
     const calls: string[] = [];
     const ports = { view: () => current, adoptView: (next: FollowView) => { current = next },
       rememberReturn: (path: string) => { calls.push(path) }, close: () => { calls.push('close') },
-      open: vi.fn(), openAuthor: vi.fn(), drawer: vi.fn() };
+      open: vi.fn(), openAuthor: vi.fn(), drawer: vi.fn(), presented: vi.fn() };
     const actions = createFollowDetailActions(ports, { toast: vi.fn(), failure: vi.fn(), canFlip: () => false });
     actions.openTag('two'); actions.openTag('one');
     expect(calls).toEqual(['/follow?tag=one%2Ctwo', 'close', '/follow?tag=two', 'close']);
@@ -136,6 +136,9 @@ describe('关注域地址与会话控制', () => {
     expect(ports.open).toHaveBeenCalledWith(17, 2, true);
     actions.openAuthor('Kou');
     expect(ports.openAuthor).toHaveBeenCalledWith('Kou');
+    const item = { id: 3, title: '新作预告', tags: [] } as unknown as Parameters<typeof actions.present>[0];
+    actions.present(item, 'video');
+    expect(ports.presented).toHaveBeenCalledWith(item);
     expect(followWorkMark(['none', '甲乙丙', 1])).toBe('甲乙');
     const host = document.createElement('div'); host.innerHTML = followWorkMark(['a/b', '甲', 1, 11]);
     expect(new URL(host.querySelector('img')!.src).searchParams.get('work')).toBe('a/b');

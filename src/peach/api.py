@@ -375,6 +375,17 @@ class _LedgerActivation:
             await self.task
 
 
+def _configure_capacity_guard(settings, contract, services):
+    from .storage_budget import CapacityGuard
+    config = contract.upgrade_config
+    # 服务进程里这把闸门守的是播放、浏览与网络媒体缓存：总量超限只清理，不挡请求。
+    guard = (CapacityGuard(config, foreground=True)
+             if settings.transcode_root.parent.resolve() == config.directory('generated').resolve() else None)
+    contract.capacity_guard = guard
+    for service in services:
+        service.capacity_guard = guard
+
+
 def create_app(
     settings: PeachSettings | None = None,
     sync: LedgerSync | None = None,
@@ -417,7 +428,7 @@ def create_app(
     contract.network_reachability = network_reachability
     resolver = FFmpegResolver(settings.ffmpeg_root)
     http_transport = HttpxTransport()
-    follow_media_resolver = FollowMediaResolver(http_transport).with_credential_loader(
+    follow_media_resolver = FollowMediaResolver(http_transport, state_root=settings.follow_state_root).with_credential_loader(
         lambda provider: web_follow._credential_store(contract).load(provider))
     # 检查更新、浏览与画面签名的取图共用这一份按站冷却：同一个站被限流，几处都得停。
     contract.follow_media_resolver = follow_media_resolver
@@ -445,8 +456,10 @@ def create_app(
                                                     quality=COVER_SMALL_THUMB_QUALITY)
     transcode_service = TranscodeService(resolver, settings.transcode_root, state_root=settings.follow_state_root)
     header_repairs = HeaderRepairStore(settings.transcode_root, resolver, runs=contract.task_runs)
+    # 分片计划按会话记住（`SessionPlans`），这里只跑没记过的那一次；一次可能要等 ffprobe，
+    # 两个线程时两部探不动的片子就让所有会话的分片排队。
     hls_plan_executor = ThreadPoolExecutor(
-        max_workers=2, thread_name_prefix="PeachHlsPlan",
+        max_workers=8, thread_name_prefix="PeachHlsPlan",
     )
     hls_service = HlsSegmentService(
         resolver, settings.stream_root, prefer_hardware=transcode_service.prefer_hardware,
@@ -527,6 +540,8 @@ def create_app(
         available=managed_configuration() and bool(settings.configured),
     )
     upgrade_repairs = _configure_upgrade_repairs(settings, contract, sync)
+    _configure_capacity_guard(settings, contract,
+        (transcode_service, hls_service, entity_thumb_service, cover_thumb_service, cover_small_thumb_service))
 
     async def warm_startup_entries():
         """配置页首屏要的开机启动项状态，先在后台问一遍。
@@ -621,6 +636,8 @@ def create_app(
     app.state.media_engine = media_engine
     app.state.preview_service = preview_service
     app.state.photo_service = photo_service
+    from .subtitles import SidecarListings
+    app.state.sidecar_listings = SidecarListings()
     app.state.sample_cache = sample_cache
     app.state.entity_thumb_service = entity_thumb_service
     app.state.cover_thumb_service = cover_thumb_service
@@ -628,6 +645,8 @@ def create_app(
     app.state.transcode_service = transcode_service
     app.state.header_repairs = header_repairs
     app.state.hls_plan_executor = hls_plan_executor
+    from .segments import SessionPlans
+    app.state.hls_session_plans = SessionPlans()
     app.state.hls_service = hls_service
     app.state.mdns = mdns
     app.state.providers = providers
@@ -639,6 +658,10 @@ def create_app(
     app.state.follow_scheduler = follow_scheduler
     app.state.automatic_updates = automatic_updates
     app.state.upgrade_repairs = upgrade_repairs
+    from pathlib import Path
+    from .follow_evidence import Reclaim
+    app.state.follow_evidence = Reclaim(Path(contract.follow_sources_root) / "follow", contract,
+                                        runs=contract.task_runs)
     app.state.push_discovery = push_discovery
     app.state.downloads = downloads
     app.state.jav_browser = jav_browser

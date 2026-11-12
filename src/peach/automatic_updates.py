@@ -34,10 +34,12 @@ class AutomaticUpdates:
         data = self.read()
         result = data.get("result")
         if isinstance(result, dict):
-            if result.get("current_version") == release_updates.snapshot()["current_version"]:
+            if (data.get('listing_rule') == release_updates.LISTING_RULE
+                    and result.get("current_version") == release_updates.snapshot()["current_version"]):
                 data["result"] = dict(result, checked_at=data.get("checked_at"))
             else:
                 data.pop("result")
+        data.pop('listing_rule', None)
         return dict(data, available=self.available, download_available=distribution.in_app_update())
 
     def remember(self, result: dict) -> None:
@@ -47,7 +49,8 @@ class AutomaticUpdates:
             with FileLock(str(self.path) + ".lock", timeout=0):
                 data = self.read()
                 data.pop("error", None)
-                self.write(dict(data, checked_at=time.time(), result=result))
+                self.write(dict(data, checked_at=time.time(), result=result,
+                                listing_rule=release_updates.LISTING_RULE))
         except Timeout:
             pass
 
@@ -81,14 +84,18 @@ class AutomaticUpdates:
                 if data["mode"] == "off":
                     return
                 now = time.time()
-                last = data.get("checked_at", 0)
+                if data.get('listing_rule') != release_updates.LISTING_RULE:
+                    data.pop('result', None)
+                    last = 0
+                else:
+                    last = data.get("checked_at", 0)
                 if isinstance(last, (int, float)) and 0 <= now - last < data["interval_hours"] * 3600:
                     return
                 # 先落检查时间；进程中断后也按频率重试，多服务共用这一份记录。
-                self.write(dict(data, checked_at=now))
+                self.write(dict(data, checked_at=now, listing_rule=release_updates.LISTING_RULE))
                 result = release_updates.check()
                 data.pop("error", None)
-                data = dict(data, checked_at=now, result=result)
+                data = dict(data, checked_at=now, result=result, listing_rule=release_updates.LISTING_RULE)
                 self.write(data)
                 # 以前在 macOS 独立包上存下的「自动下载」只按检查处理：那里没有应用内安装。
                 if data["mode"] == "download" and distribution.in_app_update() and result["state"] == "available":

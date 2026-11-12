@@ -23,6 +23,8 @@ import { releaseHoverPreviews } from './../card-art/hover';
 import { loadStage, stageApi } from '../react/application-residents';
 import { disposeStage, mediaState, stageExit, urlResume } from './media.js';
 import { clearOverlayBackground, holdOverlayBackground, overlayState, takeOverlayReturn } from './../history/overlay';
+import { presentPost } from '../history/page-title';
+import { loadingState } from './loading.js';
 export const followState = { followFilter: undefined, followAuthors: undefined, followProviders: undefined, followTags: undefined, followWorks: undefined, followMediaView: undefined, FOLLOW_FEED_SORTS: undefined, FOLLOW_RANDOM_SORT: undefined, followSort: undefined, followDir: undefined, followSeed: undefined, followDurMin: undefined, followDurMax: undefined, followContentSkeletonHtml: undefined, followSkeletonHtml: undefined, followFeedHelpers: undefined, followFeedActions: undefined, followFeedProps: undefined, followFeedShell: undefined, followDetailActions: undefined, FOLLOW_MANAGE_TABS: undefined, followSidebarFilters: undefined };
 
 export function followCheckToast(report){
@@ -142,7 +144,8 @@ followState.followFeedShell = {
 followState.followDetailActions = createFollowDetailActions({view:followView,adoptView:adoptFollowView,
     rememberReturn:path=>writeShell({followDetailReturnPath:path}),close:()=>void closeFollowDetail(),
     open:(id,index,preserve)=>void openFollowDetail(id,true,index,preserve),drawer:renderFollowDrawer,
-    openAuthor:name=>navigationState.navigatePath(entityPath('creator',name))},
+    openAuthor:name=>navigationState.navigatePath(entityPath('creator',name)),
+    presented:item=>{presentPost(item.id,item.title,item.author);loadingState.syncPageTitle(location.href)}},
     {toast:(message,{undo}={})=>receiptsState.actionReceipt(message,{undo}),failure:receiptsState.actionFailure,
      canFlip:followState.followFeedActions.canFlip});
 }

@@ -1,8 +1,6 @@
 name: 项目看板同步
 
 on:
-  issues:
-    types: [opened, reopened, closed, labeled, unlabeled, edited]
   pull_request_target:
     types: [opened, reopened, closed, edited, ready_for_review, converted_to_draft]
   release:
@@ -11,7 +9,8 @@ on:
     branches: [master]
   workflow_dispatch:
   schedule:
-    - cron: '17 */6 * * *'
+    # Issue 的编辑、标签与开闭合并到小时同步，避免模板补齐期间逐事件移动。
+    - cron: '17 * * * *'
 
 permissions:
   contents: read

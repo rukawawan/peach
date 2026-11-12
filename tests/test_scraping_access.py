@@ -332,6 +332,81 @@ class ScrapingAccessTests(unittest.TestCase):
         self.assertEqual(round(json.loads(cooldown.read_text(encoding="utf-8"))["until"] - time.time()),
                          FIRST_BLOCKED_PAUSE)
 
+    def test_a_region_page_pauses_the_source_briefly_and_says_to_change_the_exit(self):
+        """地区限制页多半回 200，交给调用方只会被读成「解不出条目」或「站上没有」。
+
+        JavDB 对日本出口回 1.8 KB 的版权说明（2026-11-08 实测），DMM 系与日本站回英文或日文的
+        地区说明。三种都整站停下，而且只停最短的一档、连撞也不翻倍：要换出口才会变，用户改完
+        代理不该再等一整天。
+        """
+        from peach.scraping_access import FIRST_BLOCKED_PAUSE, SourcePaused, SourceRefused
+        pages = {
+            "javdb": ("https://javdb.com/actors/RJM8",
+                      "<html><body>\nDue to copyright restrictions, access to this site is prohibited in "
+                      "the country where your internet is located.\n<br /><br />\n"
+                      "由於版權限制，本站禁止了你的網路所在國家的訪問。\n</body></html>"),
+            "dmm": ("https://www.dmm.co.jp/digital/videoa/-/detail/=/cid=abw00358/",
+                    "<html><body><h1>Sorry! This content is not available in your region.</h1></body></html>"),
+            "mgstage": ("https://www.mgstage.com/product/product_detail/SIRO-5000/",
+                        "<html><body><p>申し訳ございません。お住まいの地域からはご利用になれません。</p></body></html>"),
+        }
+        for source, (url, page) in pages.items():
+            with self.subTest(source=source):
+                cooldown = self.root / f"scraping-{source}.cooldown.json"
+                waits = []
+                for _ in range(2):
+                    transport = SourceTransport(self.root)
+                    transport.transports[source] = lambda *args, page=page: HttpResponse(
+                        200, {}, page.encode("utf-8"))
+                    with self.assertRaises(SourceRefused) as refused:
+                        transport(HttpRequest("GET", url, {}), 1, 100000)
+                    self.assertEqual(refused.exception.reason, "geo_restricted")
+                    self.assertIn("换一个它接受的地区的出口", str(refused.exception))
+                    record = json.loads(cooldown.read_text(encoding="utf-8"))
+                    waits.append(round(record["until"] - time.time()))
+                    cooldown.write_text(json.dumps({"until": 0, "blocks": record["blocks"]}), encoding="utf-8")
+                self.assertEqual(waits, [FIRST_BLOCKED_PAUSE, FIRST_BLOCKED_PAUSE])
+                with self.assertRaises(SourcePaused):
+                    cooldown.write_text(json.dumps({"until": time.time() + 60, "blocks": 0}),
+                                        encoding="utf-8")
+                    SourceTransport(self.root)(HttpRequest("GET", url, {}), 1, 100)
+
+    def test_a_ban_page_doubles_like_a_refusal_and_ordinary_pages_pass(self):
+        """封禁说明页按 403 那一档翻倍；正文里没有这几句话的正常页原样交回。"""
+        from peach.scraping_access import FIRST_BLOCKED_PAUSE, SourceRefused
+        cooldown = self.root / "scraping-javbus.cooldown.json"
+        request = HttpRequest("GET", "https://www.javbus.com/ABW-358", {})
+        waits = []
+        for _ in range(2):
+            transport = SourceTransport(self.root)
+            transport.transports["javbus"] = lambda *args: HttpResponse(
+                200, {}, b"<html><body>The owner of this website has banned your access.</body></html>")
+            with self.assertRaises(SourceRefused) as refused:
+                transport(request, 1, 100000)
+            self.assertEqual(refused.exception.reason, "ip_banned")
+            record = json.loads(cooldown.read_text(encoding="utf-8"))
+            waits.append(round(record["until"] - time.time()))
+            cooldown.write_text(json.dumps({"until": 0, "blocks": record["blocks"]}), encoding="utf-8")
+        self.assertEqual(waits, [FIRST_BLOCKED_PAUSE, FIRST_BLOCKED_PAUSE * 2])
+        opened = SourceTransport(self.root)
+        opened.transports["javbus"] = lambda *args: HttpResponse(200, {}, b"<html>ABW-358 page</html>")
+        self.assertEqual(opened(request, 1, 100000).status, 200)
+        self.assertFalse(cooldown.exists())
+
+    def test_a_connection_check_names_the_region_refusal(self):
+        """来源检查撞上地区限制页：细档报 `geo_restricted`，话说到「换出口」，不是「稍后重试」。"""
+        from peach.scraping_access import source_checks
+        transport = SourceTransport(self.root)
+        transport.transports["javdb"] = lambda *args: HttpResponse(
+            200, {}, "由於版權限制，本站禁止了你的網路所在國家的訪問。".encode("utf-8"))
+        with patch("peach.source_checks.SourceTransport", return_value=transport):
+            result = w_scraping_check(SimpleNamespace(follow_secrets_root=self.root),
+                                      {"source": "javdb"})["results"][0]
+        self.assertFalse(result["ok"])
+        self.assertEqual((result["kind"], result["reason"]), ("auth", "geo_restricted"))
+        self.assertIn("换一个它接受的地区的出口", result["message"])
+        self.assertEqual(source_checks(self.root, "javdb")["connection"]["reason"], "geo_restricted")
+
     def test_community_sources_carry_the_pasted_cookie_on_public_requests(self):
         """JavBus 的年龄门和 javdb 的登录墙靠用户贴的 Cookie 过；别的来源公开采集不带会话。"""
         self.assertTrue(describe(self.root, "javdb")["accepts_cookie"])

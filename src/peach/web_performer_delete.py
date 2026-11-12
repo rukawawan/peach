@@ -6,9 +6,8 @@ import json
 
 from .task_runs import TaskRunHandle
 from .task_control import bind, Cancelled
-from .web_batch import _finish_purge, _restore_staged_media, purge_assets
+from .web_batch import _purge_outside_lock, _purge_receipt
 from .web_entity import _decorate_index
-from .web_resource_sync import clean_resource_orphans
 
 
 def _performer_ids(values):
@@ -82,25 +81,24 @@ def w_performer_delete(contract, body):
         raise ValueError("请先查看影片删除清单")
     run = contract.task_runs.start('batch', trigger='manual', label='按女优永久删除影片')
     handle = TaskRunHandle(contract.task_runs, run.id if run else None)
-    outcome = None
+
+    def reviewed(connection):
+        _people, rows, token = _selection(connection, ids)
+        if token != body['plan']:
+            raise ValueError("影片清单已变化，请关闭确认窗口后重新查看")
+        if not rows:
+            raise ValueError("没有可删除的影片")
+        return rows
     try:
         with bind(contract.task_runs, handle.run_id):
-            try:
-                with contract.write_transaction() as connection:
-                    connection.execute('BEGIN IMMEDIATE')
-                    _people, rows, token = _selection(connection, ids)
-                    if token != body['plan']:
-                        raise ValueError("影片清单已变化，请关闭确认窗口后重新查看")
-                    if not rows:
-                        raise ValueError("没有可删除的影片")
-                    outcome = purge_assets(connection, rows)
-            except BaseException:
-                if outcome is not None:
-                    _restore_staged_media(outcome['_staged'])
-                raise
+            # 清单先核一次再动文件；网盘上的隔离在写事务外做，事务里再核一次清单才删行，
+            # 这期间清单变了就整批放弃、文件放回原处。
+            with contract.read_connection() as connection:
+                rows = reviewed(connection)
+            outcome = _purge_outside_lock(
+                contract, rows, verify=lambda connection: (connection.execute('BEGIN IMMEDIATE'), reviewed(connection)))
             contract.cache_bust()
-            result = {'ok': True, 'entity_ids': ids, **_finish_purge(outcome)}
-            result.update(clean_resource_orphans(contract))
+            result = _purge_receipt(contract, outcome, entity_ids=ids)
     except Cancelled:
         handle.finish('cancelled', summary={'cancelled_by_user': True})
         raise

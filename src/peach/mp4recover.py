@@ -108,7 +108,9 @@ def _stream_durations(ffprobe: Path, path: Path) -> dict[str, float]:
 
 
 def _decode_errors(ffmpeg: Path, path: Path) -> int:
-    completed = _run([str(ffmpeg), "-v", "error", "-threads", "0", "-i", str(path), "-f", "null", "-"],
+    from .processing_control import ffmpeg_options
+    completed = _run([str(ffmpeg), "-v", "error", *(ffmpeg_options() or ['-threads', '0']),
+                      "-i", str(path), "-f", "null", "-"],
                      RUN_TIMEOUT_SECONDS)
     lines = completed.stderr.decode("utf-8", "replace").splitlines()
     return sum(1 for line in lines if "error while decoding" in line or "corrupt" in line)

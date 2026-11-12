@@ -1,5 +1,6 @@
 """外部入口 id 回填：一位对上几个 id 就登记几条，已登记的跳过，撞号的点名等人判。"""
 import argparse
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -68,6 +69,17 @@ class EntryIdBackfillTests(unittest.TestCase):
         self.assertEqual([row["verdict"] for row in rows], [OK, OK])
         self.assertEqual(apply_rows(self.connection, rows), (2, 2))
         self.assertEqual(self.saved(), [(10, "ZX5z7"), (10, "d45k9")])
+
+    def test_the_record_kind_from_the_cached_cards_is_written_with_the_id(self):
+        """搜索卡片认出的有碼／無碼一并记下；卡片上没有的 id 不猜（#271）。"""
+        self.page("释爱丽丝", "d45k9")
+        self.page("释爱丽丝", "ZX5z7")
+        apply_rows(self.connection, self.rows(), {"d45k9": True})
+        metadata = dict(self.connection.execute(
+            "SELECT external_id,metadata_json FROM entity_external_ref WHERE provider=?", (JAVDB,)).fetchall())
+        self.assertEqual(json.loads(metadata["d45k9"]),
+                         {"source": "backfill_performer_entry_ids", "uncensored": True})
+        self.assertEqual(json.loads(metadata["ZX5z7"]), {"source": "backfill_performer_entry_ids"})
 
     def test_a_row_already_in_the_ledger_is_skipped_and_the_rest_still_land(self):
         """同一批证据可以重复跑：已登记的那条不报错、不重写、也不算冲突。"""

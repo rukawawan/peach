@@ -254,7 +254,7 @@ function targetName(report: SourceReport, check: ReportedCheck): string {
 /** 全部来源一次检查完，与 `peach check-sources` 同一检查、同一报告口径。这一趟在后台跑，
  *  离开页面再回来，读到的是服务端留着的那一份结果。 */
 function CheckAllCard({ toast }: ScrapingProps) {
-  const { job, running, start } = useBackgroundJob<CheckAllJob>({
+  const { job, running, start, query: taskQuery } = useBackgroundJob<CheckAllJob>({
     queryKey: CHECK_ALL_KEY,
     queryFn: ({ signal }) => fetchCheckAllJob(signal),
     start: () => apiSend<CheckAllJob>(SCRAPING_CHECK_ALL_URL, {}),
@@ -266,7 +266,7 @@ function CheckAllCard({ toast }: ScrapingProps) {
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (running || start.isPending) return;
+    if (!taskQuery.data || running || start.isPending) return;
     start.mutate();
   };
 
@@ -280,6 +280,7 @@ function CheckAllCard({ toast }: ScrapingProps) {
   const problems = checks.filter(({ check }) => check.outcome !== 'ok').sort(
     (a, b) => OUTCOME_ORDER.indexOf(a.check.outcome) - OUTCOME_ORDER.indexOf(b.check.outcome));
   const problem = start.error ? errorMessage(start.error)
+    : taskQuery.error ? errorMessage(taskQuery.error)
     : job?.status === 'failed' ? (job.error || '检查未完成') : '';
   const finished = job?.status === 'complete' && job.completed_at
     ? [momentText(new Date(job.completed_at * 1000).toISOString()),
@@ -289,8 +290,9 @@ function CheckAllCard({ toast }: ScrapingProps) {
   return (
     <Section id="check-all" title="连接检查" onSubmit={submit}>
       <Stack>
+        {taskQuery.isPending ? <div role="status" aria-label="正在读取连接检查状态" data-skeleton="" className="skeleton-sheen h-6 rounded-md" /> : null}
         {/* 说明写在一行里：拆行的 JSX 文本渲染时多出空格，改字工具就对不上源码。 */}
-        <Help>检查各来源页面与 DMM 高清图片服务器，最多四个来源同时进行；正在冷却的来源不再请求。可连接只说明检查地址可达，不代表登录有效。</Help>
+        <Help>检查各来源页面与 DMM 高清图片服务器。可连接只说明检查地址可达，不代表登录有效。</Help>
         {running
           ? <div className="flex flex-col gap-2">
               <Progress label="连接检查进度" value={job?.checked ?? 0} max={job?.total ?? 0} />
@@ -336,7 +338,7 @@ function CheckAllCard({ toast }: ScrapingProps) {
           : null}
       </Stack>
       <Footer status={finished ? `上次检查 ${finished}` : undefined}>
-        <Button type="submit" {...busyProps(running || start.isPending)}>全部检查</Button>
+        <Button type="submit" disabled={!taskQuery.data} {...busyProps(running || start.isPending)}>全部检查</Button>
       </Footer>
     </Section>
   );
@@ -345,7 +347,7 @@ function CheckAllCard({ toast }: ScrapingProps) {
 /** 按番号补一张高清封面。这一趟在后台跑，页面上留状态。 */
 function CoverCard({ toast }: ScrapingProps) {
   const [code, setCode] = useState('');
-  const { running, outcome, start } = useBackgroundJob<CoverJob>({
+  const { running, outcome, start, query: taskQuery } = useBackgroundJob<CoverJob>({
     queryKey: COVER_JOB_KEY,
     queryFn: ({ signal }) => fetchCoverJob(signal),
     start: () => apiSend<CoverJob>(SCRAPING_COVER_URL, { code }),
@@ -356,21 +358,23 @@ function CoverCard({ toast }: ScrapingProps) {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (running || start.isPending || !code.trim()) return;
+    if (!taskQuery.data || running || start.isPending || !code.trim()) return;
     start.mutate();
   };
 
   const problem = start.error ? errorMessage(start.error)
+    : taskQuery.error ? errorMessage(taskQuery.error)
     : outcome?.status === 'failed' ? (outcome.error || '采集未取得') : '';
   return (
     <Section title="高清封面" onSubmit={submit}>
       <Stack>
+        {taskQuery.isPending ? <div role="status" aria-label="正在读取封面任务状态" data-skeleton="" className="skeleton-sheen h-6 rounded-md" /> : null}
         <div className="flex flex-wrap items-end gap-2">
           <div className="min-w-0 flex-1">
             <Input aria-label="馆藏番号" isRequired isDisabled={running} value={code} onChange={setCode}
               placeholder="输入馆藏番号，如 ABW-232" />
           </div>
-          <Button type="submit" disabled={!code.trim()} {...busyProps(running || start.isPending)}>
+            <Button type="submit" disabled={!taskQuery.data || !code.trim()} {...busyProps(running || start.isPending)}>
             抓取封面
           </Button>
         </div>

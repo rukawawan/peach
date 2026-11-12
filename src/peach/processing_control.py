@@ -103,14 +103,35 @@ def resume_fields(state, values):
 
 def checkpoint(kind='work'):
     from .task_control import checkpoint as task_checkpoint
-    task_checkpoint()
     control = CURRENT.get()
+    task_checkpoint(None if control is not None else kind)
     if control is not None:
         control.checkpoint(kind)
 
 
+def current_control():
+    from .task_control import CURRENT as TASK_CONTROL
+    return CURRENT.get() or TASK_CONTROL.get()
+
+
+def default_mode(database):
+    """从当前 profile 读取新任务默认档位。"""
+    from .profiles import read_settings
+    with database.read_connection() as connection:
+        return read_settings(connection).get('taskSpeedMode', 'standard')
+
+
+def execution_mode(database, requested=None, *, control):
+    """执行中的任务沿用本轮档位，独立调用选择显式档位或设置默认值。"""
+    if control is not None:
+        return control.mode
+    if requested is not None:
+        return valid_mode(requested)
+    return default_mode(database)
+
+
 def low_mode():
-    control = CURRENT.get()
+    control = current_control()
     return control is not None and control.mode == 'low'
 
 
@@ -119,8 +140,8 @@ def mode_ratio(target, previous='standard'):
 
 
 def ffmpeg_options(*, filter_option=None):
-    """当前馆藏任务的 FFmpeg 线程选项；高强度与独立调用使用工具默认值。"""
-    control = CURRENT.get()
+    """当前任务的 FFmpeg 线程选项；高强度与独立调用使用工具默认值。"""
+    control = current_control()
     threads = {'low': 1, 'standard': 2}.get(control.mode) if control is not None else None
     if threads is None:
         return []
@@ -172,6 +193,16 @@ def deadline_after(seconds):
 
 class ProcessingControl:
     @property
+    def mode(self):
+        from .task_control import CURRENT as TASK_CONTROL
+        control = TASK_CONTROL.get() if CURRENT.get() is self else None
+        return control.mode if control is not None else self._mode
+
+    @mode.setter
+    def mode(self, value):
+        self._mode = value
+
+    @property
     def paused_seconds(self):
         from .task_control import CURRENT as TASK_CONTROL
         control = TASK_CONTROL.get() if CURRENT.get() is self else None
@@ -186,6 +217,7 @@ class ProcessingControl:
         self.lock = threading.RLock()
         data = _read(path)
         self.mode = data.get('speed_mode') if data.get('speed_mode') in MODES else 'standard'
+        self.next_mode = data.get('next_speed_mode')
         self.job_id = data.get('job_id')
         self.paused = data.get('paused') is True
         self.cancelled = data.get('cancelled') is True
@@ -195,6 +227,7 @@ class ProcessingControl:
         self.active = lambda: True
         self.db_path = None
         self.next_work = {}
+        self._paced_mode = None
         self.paused_seconds = 0.0
         self.reloaded_at = 0.0
         self.current_asset_id = None
@@ -212,15 +245,22 @@ class ProcessingControl:
                 self.paused = data.get('paused', self.paused)
                 self.cancelled = data.get('cancelled', self.cancelled)
                 self.skip_asset_id = data.get('skip_asset_id')
+                self.next_mode = data.get('next_speed_mode')
                 mode = data.get('speed_mode', self.mode)
-                if mode in MODES and self.mode != mode:
+                if mode in MODES and self._mode != mode:
                     self.mode = mode
                     self.next_work.clear()
 
     def _save(self):
         atomic_write_text(self.path, json.dumps(dict(
             speed_mode=self.mode, job_id=self.job_id, paused=self.paused, cancelled=self.cancelled,
-            skip_asset_id=self.skip_asset_id)) + '\n')
+            skip_asset_id=self.skip_asset_id, next_speed_mode=self.next_mode)) + '\n')
+
+    def select_next_mode(self, mode):
+        with self.lock:
+            self.refresh(force=True)
+            self.next_mode = valid_mode(mode) if mode is not None else None
+            self._save()
 
     def skip_current(self, job_id, asset_id):
         with self.lock:
@@ -286,7 +326,7 @@ class ProcessingControl:
         generic_started = 0.0
         while True:
             from .task_control import checkpoint as task_checkpoint
-            task_checkpoint()
+            task_checkpoint(None)
             check_pause(self.db_path)
             self.refresh()
             self.check_item()
@@ -294,6 +334,9 @@ class ProcessingControl:
                 raise InterruptedError('处理任务已停止')
             with self.lock:
                 paused, mode = self.paused, self.mode
+                if mode != self._paced_mode:
+                    self.next_work.clear()
+                    self._paced_mode = mode
                 self.event.clear()
             if paused:
                 if started is None:
@@ -330,16 +373,23 @@ def user_cancelled(db_path, job_id):
     return bool(job_id) and data.get('job_id') == job_id and data.get('cancelled') is True
 
 
-def initial_estimate(config, db_path, stage, asset_ids=None, mode=None):
-    """仅使用账本统计，不在启动 HTTP 请求里遍历媒体目录。"""
-    mode = mode or control_for(config).mode
+def initial_estimate(config, db_path, stage, asset_ids=None, mode=None, *, allow_metered=False):
+    """仅使用账本统计，不在启动 HTTP 请求里遍历媒体目录。预览的范围同 `preview_readable`。"""
+    if mode is None:
+        from .repository import LedgerDatabase
+        mode = execution_mode(LedgerDatabase(db_path), control=current_control())
     query = "SELECT COUNT(*), COALESCE(SUM(size),0) FROM asset WHERE medium='video' AND disposal IS NULL"
     parameters = []
     if asset_ids is not None:
         query += ' AND id IN (SELECT value FROM json_each(?))'
         parameters.append(json.dumps(asset_ids))
     if stage == 'previews':
-        query += " AND location='local' AND (snapshot_path IS NULL OR snapshot_path='')"
+        query += " AND location != 'online' AND (snapshot_path IS NULL OR snapshot_path='')"
+        if not allow_metered:
+            from .media_sources import cost_sql
+            expression, values = cost_sql(config=config)
+            query += f" AND {expression}='free'"
+            parameters += list(values)
     if config.locations:
         query += ' AND location IN (' + ','.join('?' * len(config.locations)) + ')'
         parameters += list(config.locations)
@@ -370,6 +420,7 @@ def initial_estimate(config, db_path, stage, asset_ids=None, mode=None):
 
 class ProcessingEstimate:
     def __init__(self, config, state, control):
+        control = control or current_control()
         self.config, self.control = config, control
         self.started = time.monotonic()
         self.phase = None

@@ -50,8 +50,8 @@ import { SelectionDock } from '../components/selection-dock';
 import { busyProps } from '../settings/use-action';
 import {
   authorGroups, authorName, checkedText, checkEvidenceGap, checkFailures, checkReceipt, checkSummary,
-  COLUMN_SORT, dropSources, errorHeadline, fetchCheckJob, fetchPending, FOLLOW_CHECK_KEY, isBroken,
-  LAYOUTS, markItem, pageWindow, patchSource, removeSource,
+  COLUMN_SORT, dropSources, errorHeadline, fetchCheckJob, FOLLOW_CHECK_KEY, isBroken,
+  LAYOUTS, markAllPending, pageWindow, patchSource, removeSource,
   reloadFollowManage, selectionState, setSourceEnabled, SORT_DEFAULT_DIR, SORT_OPTIONS,
   sortLabel, startCheck, tableRows, toggleGroup,
   type CheckJob, type FollowData, type FollowSource, type Layout, type SortDir, type SortKey,
@@ -136,9 +136,6 @@ export interface SourceListProps {
   openFollow(): void;
   onAdd(): void;
 }
-
-/** 页码。上一页／下一页在两端，页码居中，页数多时两侧折成「…」。 */
-export { Pagination } from '../components/table-pagination';
 
 /** 一条来源在创作者卡里的那一行：勾选、站标与名字、状态、上次检查、动作。 */
 function SourceRow(
@@ -345,24 +342,17 @@ export function SourceList(props: SourceListProps) {
     onError: (cause) => setProblem(errorMessage(cause)),
   });
 
-  /** 未看条目的批量标记。先取一趟待处理清单，再逐条写。 */
+  /** 未看条目的批量标记：按 1000 条一批调批量接口，一页待处理之外的也接着标完（`markAllPending`）。 */
   const markAll = useMutation({
-    mutationFn: async (to: string) => {
-      const pending = await fetchPending();
-      const ids = (pending.groups || [])
-        .flatMap((group) => [group.primary, ...group.variants, ...group.duplicates])
-        .filter((item) => item.status === 'new').map((item) => item.id);
-      const results = await mapLimit(ids, 6, (id: number) => markItem(id, to));
-      return { ids, failed: results.filter((row) => !row.ok) };
-    },
+    mutationFn: markAllPending,
     onSuccess: (result) => {
       void reloadFollowManage();
-      if (result.failed.length) {
-        setProblem(`批量更新 ${result.failed.length}/${result.ids.length} 项未完成`);
+      if (result.failed) {
+        setProblem(`批量更新 ${result.failed}/${result.total} 项未完成：${errorMessage(result.error)}`);
         return;
       }
       setProblem('');
-      toast(`已批量标记 ${result.ids.length} 项`);
+      toast(`已批量标记 ${result.total} 项`);
     },
     onError: (cause) => setProblem(errorMessage(cause)),
   });

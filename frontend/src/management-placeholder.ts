@@ -11,6 +11,8 @@ import { boardPageSkeleton } from './board-skeleton';
 import { cleanupToolSkeletonHtml } from './cleanup-tool-skeletons';
 import { CLEANUP_TOOLS } from './cleanup-tools';
 import { cleanupSkeletonHtml } from './management';
+import { appSettingsStore } from './appearance/settings';
+import { NAVIGATION_GROUPS, normalizeNavigationOrder } from './navigation-order';
 
 export interface PageSkeletonOptions {
   cards?: boolean;
@@ -33,7 +35,8 @@ export const pageSkeletonHtml = (
 });
 
 /* 分类名是静态文案，骨架直接写出来；次序就是页签次序，与复核页那一份一致。 */
-const REVIEW_LABELS = ['元数据字段', '创作者标签', '厂牌 Logo', '女优头像', '西方身份回配', '番号目录存疑', 'FC2 评论标记', 'FC2 跨号相似', '片尾/出处证据'];
+const reviewLabels = () => normalizeNavigationOrder('review', appSettingsStore().value.navigationOrders.review)
+  .map(key => NAVIGATION_GROUPS.review.items.find(([id]) => id === key)![1]);
 /* 复核页是左边一列分类、右边工具条加一格一格 Fieldset，骨架就用最终容器的那几个类名，
    分栏、列宽和卡高全由页面自己那套规则给：读完数据只是把占位换成内容，版面一格不挪。
    分类名和「复核分类」这两样与数据无关，直接写出来；等的是每类多少条，所以只有计数
@@ -41,7 +44,7 @@ const REVIEW_LABELS = ['元数据字段', '创作者标签', '厂牌 Logo', '女
    选项和条数，三枚占位一件对一件。 */
 const reviewSkeletonHtml = (label = '正在读取复核队列'): string => `<div class="review review-workspace review-skeleton" data-skeleton="review" aria-busy="true" aria-label="${esc(label)}">
   <div class="reviewcontrols" data-section-nav><h2 class="review-category-title">复核分类</h2>
-    <div class="reviewtabs" data-section-items>${REVIEW_LABELS.map((text, i) =>
+    <div class="reviewtabs" data-section-items>${reviewLabels().map((text, i) =>
       `<button type="button" disabled aria-selected="${i === 0}">${esc(text)}<span class="skeleton reviewcountskeleton" aria-hidden="true"></span></button>`).join('')}</div></div>
   <div class="reviewbulkbar reviewbulktoolbar" aria-hidden="true">${'<span class="skeleton reviewtoolskeleton"></span>'.repeat(3)}</div>
   <section class="reviewsection"><div class="reviewlist">${

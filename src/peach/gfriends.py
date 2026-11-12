@@ -20,6 +20,7 @@ import re
 import time
 import urllib.parse
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from .fsutil import atomic_write_bytes
@@ -107,14 +108,23 @@ def index_revision(cache_dir: Path | None) -> str:
         return "missing"
 
 
+@lru_cache(maxsize=1)
+def _parsed_index(path: Path, identity: tuple[int, int, int, int]) -> dict[str, list[tuple[str, str]]]:
+    """仅保留当前文件身份的解析结果，供匹配端只读复用。"""
+    return parse_filetree(path.read_bytes())
+
+
 def load_index(cache_dir: Path) -> dict[str, list[tuple[str, str]]]:
     """只读本地缓存的索引。取不到或坏了都返回空。
 
     这里从不联网：页面这一侧宁可少列几个候选，也不该在一次点击里同步拉 6 MB。
     缓存由 `fetch_index` 补，服务在后台调它（`avatar_picker.IndexRefresher`）。
+    未变化的本地文件共用解析结果；文件被更新或原子替换后重新解析。
     """
     try:
-        return parse_filetree((cache_dir / INDEX_NAME).read_bytes())
+        path = (cache_dir / INDEX_NAME).resolve()
+        stat = path.stat()
+        return _parsed_index(path, (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
     except (OSError, KeyError, TypeError, ValueError):
         return {}
 

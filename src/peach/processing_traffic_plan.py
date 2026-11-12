@@ -51,9 +51,10 @@ def typical_size(directory, pattern, fallback):
 
 
 class TrafficPlan:
-    def __init__(self, config, stage, media_key):
+    def __init__(self, config, stage, media_key, *, allow_metered=False):
         from .library_processing import _MissCache, _RemoteSession, misses_path
         self.config, self.stage, self.media_key = config, stage, media_key
+        self.allow_metered = allow_metered
         self.remote = _RemoteSession(config, None, _MissCache(misses_path(config)), retrying=False)
         self.cover_root = config.directory('generated') / 'covers'
         self.cover_bytes = typical_size(self.cover_root, '*.jpg', MIB // 2)
@@ -114,12 +115,12 @@ class TrafficPlan:
         self.extend(rows)
 
     def extend(self, rows):
-        from .library_processing import _provider_code, _scrapes_as_jav, _missing_fields
+        from .library_processing import _provider_code, _scrapes_as_jav, _missing_fields, preview_readable
         from .catalog_rules import release_code_from_filename
         changed = set()
         for row in rows:
             self.assets.append(row)
-            if self.stage == 'previews' and row['location'] != 'local':
+            if self.stage == 'previews' and not preview_readable(row, self.config, allow_metered=self.allow_metered):
                 continue
             key = self.media_key(row['path'], row['location'])
             if key is None:
@@ -151,6 +152,7 @@ class TrafficPlan:
             self._downloads(code, self.titles[code])
 
     def _media(self, row, key):
+        from .library_processing import preview_readable
         from .media_processing_policy import metadata_only
         from .media_sources import cost_for
         from .strm import skip_background_read
@@ -161,7 +163,8 @@ class TrafficPlan:
         if (self.stage != 'metadata' and row.get('duration') is None
                 and cost_for(row['location'], path, self.config) == 'free'):
             self._add('media:' + path, key, min(size, self.history.average(key + ':probe', 8 * MIB)))
-        if (self.stage in ('all', 'collect', 'previews') and row['location'] == 'local'
+        if (self.stage in ('all', 'collect', 'previews')
+                and preview_readable(row, self.config, allow_metered=self.allow_metered)
                 and not row.get('snapshot_path') and not metadata_only(self.config.directory('state'))):
             self._add('media:' + path, key, min(size, 9 * self.history.average(key + ':frame', 8 * MIB)))
 

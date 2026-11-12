@@ -200,6 +200,8 @@
    倒过来写也能做到，代价是读屏和 Tab 顺序跟着倒过来。 */
 .peach-react [data-item-detail] [data-item-rating] { display: flex; align-items: center; gap: 8px; margin: -6px 0 10px; }
 .peach-react [data-item-detail] [data-rating-stars] { margin-left: -4px; }
+/* 「正在补全」排在标题工具与星级之间：星形在 26px 方块里上下各空约 4px，下边距少给这 4px，上下印出来都是 14px。 */
+.peach-react [data-item-detail] [data-pending-work] { margin: 0 0 12px; }
 .peach-react [data-item-detail] [data-rating-value] { color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 
 /* ── 规格行 ──

@@ -86,6 +86,29 @@ class OfficialPreviewTests(unittest.TestCase):
         self.assertEqual(javdb_preview('RCTD-764', None, Path('unused'), transport=transport), DMM_VIDEO)
         self.assertEqual(transport.call_count, 2)
 
+    def test_javdb_detail_page_waits_on_the_process_wide_javdb_interval(self):
+        """资料处理刚问过 javdb.com，点开预告这一页排在同一条 3 秒队里，不另起一份间隔。"""
+        from peach import library_processing
+        from peach.scripting import HostLimiter
+
+        now, slept = [50.0], []
+
+        def sleep(delay):
+            slept.append(delay)
+            now[0] += delay
+
+        shared = HostLimiter(library_processing.SOURCE_INTERVALS, default_interval=2.0,
+                             clock=lambda: now[0], sleeper=sleep)
+        html = ('<div class="panel-block"><strong>番號:</strong><span class="value">RCTD-764</span></div>'
+                f'<video><source src="{DMM_VIDEO}"></video>')
+        inner = Mock(return_value=HttpResponse(200, {}, html.encode()))
+        with patch.object(library_processing, 'SOURCE_LIMITER', shared), \
+                patch('peach.jav_official_preview.SourceTransport', return_value=inner):
+            shared.wait('https://javdb.com/v/Other')
+            self.assertEqual(javdb_preview('RCTD-764', 'ZN9Ad6', Path('unused')), DMM_VIDEO)
+        self.assertEqual(slept, [3.0])
+        inner.close.assert_called_once()
+
     def test_preview_source_order_and_webui_fallback(self):
         mirror = 'https://jdforrepam.com/api/v1/movies/ttm3u8/preview/sample/720p.m3u8'
         for dmm, javdb, expected in [(DMM_VIDEO, '', DMM_VIDEO), ('', DMM_VIDEO, DMM_VIDEO), ('', '', mirror),

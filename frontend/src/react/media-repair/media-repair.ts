@@ -4,6 +4,7 @@
  * 首屏两份一起取，卡片挂上去直接读缓存。 */
 import { apiGet } from '../../api';
 import { queryClient } from '../query';
+import { t } from '../../i18n';
 
 export const MEDIA_REPAIR_URL = '/api/media-repair';
 export const MEDIA_REPAIR_KEY = ['media-repair'] as const;
@@ -43,10 +44,8 @@ export const fetchRepairLibraries = async (signal?: AbortSignal) =>
   (await apiGet<{ libraries?: RepairLibrary[] }>('/api/libraries', signal)).libraries || [];
 
 export async function prefetchMediaRepair(signal: AbortSignal): Promise<void> {
-  await Promise.all([
-    queryClient.fetchQuery({ queryKey: MEDIA_REPAIR_KEY, queryFn: () => fetchMediaRepair(signal) }),
-    queryClient.fetchQuery({ queryKey: REPAIR_LIBRARIES_KEY, queryFn: () => fetchRepairLibraries(signal) }),
-  ]);
+  void queryClient.prefetchQuery({ queryKey: REPAIR_LIBRARIES_KEY, queryFn: () => fetchRepairLibraries(signal) });
+  await queryClient.fetchQuery({ queryKey: MEDIA_REPAIR_KEY, queryFn: () => fetchMediaRepair(signal) });
 }
 
 const count = (value: number) => Number(value).toLocaleString();
@@ -55,18 +54,18 @@ const count = (value: number) => Number(value).toLocaleString();
 export function statusLine(state: MediaRepairState): string {
   if (state.status === 'running') {
     // 服务端偶尔报出超过总数的已查数，按总数封顶。
-    const where = state.total ? `${count(Math.min(state.checked || 0, state.total))} / ${count(state.total)}` : '准备中';
+    const where = state.total ? `${count(Math.min(state.checked || 0, state.total))} / ${count(state.total)}` : t('cleanup:mediaRepair.preparing');
     return state.stage === '修复' && state.message
-      ? `修复 ${where} · ${state.message}`
-      : `${state.stage || '扫描'} ${where}`;
+      ? t('cleanup:mediaRepair.repairingProgress', { progress: where, name: state.message })
+      : `${state.stage || t('cleanup:mediaRepair.scanStage')} ${where}`;
   }
   if (state.status === 'complete' && (state.repaired || state.failed)) {
     return state.failed
-      ? `修好 ${count(state.repaired)} 部，${count(state.failed)} 部修不了`
-      : `修好 ${count(state.repaired)} 部`;
+      ? t('cleanup:mediaRepair.repairedWithFailures', { count: Number(state.repaired || 0), failed: count(state.failed) })
+      : t('cleanup:mediaRepair.repairedDone', { count: Number(state.repaired || 0) });
   }
   return '';
 }
 
 export const missingToolText = (state: MediaRepairState) =>
-  `${count(state.missing_tool)} 部缺索引的片子要装上 untrunc 才修得了，下载入口在配置页的「运行信息」里。`;
+  t('cleanup:mediaRepair.missingToolNotice', { count: Number(state.missing_tool || 0) });

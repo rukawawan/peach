@@ -13,6 +13,23 @@ from support.ledger import fresh_ledger
 
 
 class InventoryTests(unittest.TestCase):
+    def test_library_inventory_excludes_other_library_assets_and_roots(self):
+        from dataclasses import replace
+        from peach.media_libraries import libraries
+        from peach.library_processing_scope import scoped_config
+        config = replace(self.config, locations={'mounted': ('A:\\Cloud', 'B:\\Other')})
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            for location in ('A:\\Cloud', 'B:\\Other'):
+                connection.execute('INSERT INTO asset(location,path,name,medium) VALUES(?,?,?,?)',
+                                   ('mounted', location + '\\ABW-001.mp4', 'ABW-001.mp4', 'video'))
+        library_id = libraries(config)[0]['id']
+        selected = scoped_config(config, library_id)
+        result = preview(selected, self.db, 'collect', None, library_id=library_id)
+        self.assertEqual(result['workload']['video_files'], 1)
+        self.assertEqual(selected.locations, {'mounted': ('A:\\Cloud',)})
+        with self.assertRaisesRegex(ValueError, '媒体库'):
+            scoped_config(config, 'missing')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

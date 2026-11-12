@@ -1,10 +1,12 @@
 """媒体来源表单与配置映射；来源 ID 直接沿用扫描及流量策略。"""
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FuturesTimeout
 from pathlib import Path, PurePath, PureWindowsPath, PurePosixPath
 import hashlib
 import shutil
 import sys
+import threading
 from typing import Any
 
 from . import platform, media_identity
@@ -51,7 +53,12 @@ def mount_dependencies(*, system: str | None = None) -> list[dict[str, Any]]:
             {"name": driver, "available": installed, "download_url": url}]
 
 
-def rows(config, *, windows: bool, probe: bool = False) -> list[dict[str, Any]]:
+def rows(config, *, windows: bool, probe: bool = False, known: dict | None = None) -> list[dict[str, Any]]:
+    """设置页的媒体目录行。`known` 是挂载可达性快照（`reachability_states`）：
+
+    快照里有的根直接用快照，网盘卡住时页面不再跟着等；快照里没有的（刚保存、服务还没
+    重载）才现场探测，最多等 `PROBE_TIMEOUT` 秒，到时报未检测。
+    """
     result = []
     libraries, stored = media_identity.catalog(config)
     for location, roots in config.locations.items():
@@ -78,16 +85,63 @@ def rows(config, *, windows: bool, probe: bool = False) -> list[dict[str, Any]]:
                            "library_stages": library.get("stages", ""),
                            "cost": cost_for(location, root, config),
                            "transport": value.get('transport', 'filesystem'),
-                           "online": _online(root, mount, probe, config), **smb_fields})
+                           "online": _online(root, root_id, mount, probe, config, known), **smb_fields})
     return result
 
 
-def _online(root, mount, probe, config):
+def reachability_states(reachability) -> dict[str, bool | None]:
+    """可达性快照按根 ID 与路径键各记一份：True 在线、False 离线、None 探测未返回。
+
+    服务刚启动、快照还在检测的根不记，交给 `_online` 现场探测（有时限）；探测已经超时的
+    记 None，不再陪它等。
+    """
+    states: dict[str, bool | None] = {}
+    if reachability is None:
+        return states
+    for source in reachability.sources():
+        for root in source["roots"]:
+            if root["online"] is None and root.get("state") != "timeout":
+                continue
+            if root.get("root_id"):
+                states["id:" + root["root_id"]] = root["online"]
+            states["path:" + media_identity.path_key(root["declared"])] = root["online"]
+    return states
+
+
+def _online(root, root_id, mount, probe, config, known):
     if not probe or not mount:
         return False
+    for key in ("id:" + root_id if root_id else "", "path:" + media_identity.path_key(root)):
+        if known and key in known:
+            return known[key]
     from .smb_media import resolve
     resource = resolve(root, config)
-    return platform.root_online(resource if resource is not None else Path(mount))
+    return _bounded_online(resource if resource is not None else Path(mount))
+
+
+_PROBES: dict[str, Future] = {}
+_PROBES_LOCK = threading.Lock()
+
+
+def _bounded_online(target) -> bool | None:
+    """现场探测一个根，最多等 `PROBE_TIMEOUT` 秒；同一个根上一次还没返回时不另起线程。"""
+    from .mount_reachability import PROBE_TIMEOUT
+    key = str(target)
+    with _PROBES_LOCK:
+        future = _PROBES.get(key)
+        if future is None or future.done():
+            future = _PROBES[key] = Future()
+
+            def read(pending=future):
+                try:
+                    pending.set_result(platform.root_status(target) == "ok")
+                except Exception:  # noqa: BLE001 - 未知异常不当作离线证据，报未检测
+                    pending.set_result(None)
+            threading.Thread(target=read, name="PeachMountProbe", daemon=True).start()
+    try:
+        return future.result(timeout=PROBE_TIMEOUT)
+    except FuturesTimeout:
+        return None
 
 
 def _automatic_root(location: str, path: str, used: list[PureWindowsPath]) -> str:

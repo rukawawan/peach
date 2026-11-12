@@ -104,6 +104,28 @@ def challenge_page(html: str | bytes) -> bool:
     text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html)
     return bool(CHALLENGE_TITLE.search(text[:4096]))
 
+
+#: 站方把整个出口挡在门外时回的说明页，状态码常是 200，正文只有一两句话。
+#: - 地区限制：DMM 系的英文页 `not available in your region` 与日本站的日文页
+#:   `お住まいの地域からはご利用になれません`（两句与 amane `net/errors.py` 的判据一致）；JavDB 不对
+#:   日本出口开放，回的是一页 1.8 KB 的中英双语版权说明（2026-11-08 经日本出口实测）。
+#: - 出口封禁：`banned your access`（同取自 amane）。
+#: 说明页把这几句放在开头，正常页的正文不会这么写；只看开头 `REFUSAL_SCAN` 字节，大页不整页解码。
+REFUSAL_MARKS: tuple[tuple[re.Pattern[str], FailureReason], ...] = (
+    (re.compile(r"not available in your region|お住まいの地域からはご利用になれません"
+                r"|access to this site is prohibited in the country|本站禁止了你的網路所在國家的訪問",
+                re.I), FailureReason.GEO_RESTRICTED),
+    (re.compile(r"banned your access", re.I), FailureReason.IP_BANNED),
+)
+REFUSAL_SCAN = 32 * 1024
+
+
+def refusal_page(html: str | bytes) -> FailureReason | None:
+    """这一页是不是站方拒绝这个出口的说明页：地区限制交 `GEO_RESTRICTED`，出口封禁交 `IP_BANNED`。"""
+    head = html[:REFUSAL_SCAN]
+    text = head.decode("utf-8", "replace") if isinstance(head, bytes) else str(head)
+    return next((reason for pattern, reason in REFUSAL_MARKS if pattern.search(text)), None)
+
 #: 作品页的默认大小上限。javdb 详情页实测 90 KB、JavBus 作品页百余 KB，4 MiB 留的是改版余量。
 DEFAULT_PAGE_LIMIT = 4 * 1024 * 1024
 #: 主机间隔的默认值，与 `LibraryMetadataProvider` 给 `HostLimitedTransport` 的默认一致。

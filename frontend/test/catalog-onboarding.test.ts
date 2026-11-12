@@ -9,11 +9,21 @@ describe('当前馆藏推荐', () => {
     const request = vi.fn(async (url: string) => {
       const parsed = new URL(url, 'http://localhost');
       expect(parsed.searchParams.get('jav')).toBe('1');
-      if (parsed.pathname === '/api/facets') return { tags: [{ k: '本机标签' }, { k: '失效词' }] };
-      if (!parsed.searchParams.has('q')) return { items: [{ name: '本机视频.mp4' }] };
-      return { total: parsed.searchParams.get('q') === '失效词' ? 0 : 1 };
+      expect(parsed.searchParams.has('q')).toBe(false);
+      if (parsed.pathname === '/api/facets') return { tags: [{ k: '本机标签', n: 2 }, { k: '失效词', n: 0 }] };
+      return { items: [{ name: '本机视频.mp4' }] };
     });
     expect(await catalogSuggestions({ jav: '1', q: '不会带入' }, request)).toEqual(['本机标签', '本机视频.mp4']);
+  });
+  it('点开搜索框只发筛选项和样本两次请求，不逐词搜索计数', async () => {
+    const request = vi.fn(async (url: string) => url.startsWith('/api/facets')
+      ? { creators: Array.from({ length: 6 }, (_, n) => ({ k: `卖家${n}`, n: 1 })),
+          tags: Array.from({ length: 6 }, (_, n) => ({ k: `标签${n}`, n: 3 })) }
+      : { items: [{ code: 'ABC-001' }] });
+    expect(await catalogSuggestions({}, request)).toHaveLength(10);
+    expect(request).toHaveBeenCalledTimes(2);
+    const sample = new URL(request.mock.calls.map(([url]) => url).find(url => url.startsWith('/api/items'))!, 'http://localhost');
+    expect(sample.searchParams.get('count')).toBe('0');
   });
 });
 

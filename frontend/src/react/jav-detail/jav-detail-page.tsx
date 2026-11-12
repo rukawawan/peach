@@ -147,8 +147,8 @@ function JavIdentity({ item, navigate }: { item: JavDetail; navigate(path: strin
 function PreviewVideo({ src }: { src: string }) {
   const frame = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
   useLayoutEffect(() => {
+    if (failed) return;
     const node = frame.current!;
     const video = document.createElement('video');
     video.className = 'video-js vjs-big-play-centered';
@@ -157,8 +157,8 @@ function PreviewVideo({ src }: { src: string }) {
     video.setAttribute('aria-label', '视频预览');
     node.append(video);
     return mountPreviewPlayer(video, { src, type: /\.m3u8(?:\?|$)/i.test(src) ? 'application/x-mpegURL' : 'video/mp4' }, () => setFailed(true));
-  }, [src, attempt]);
-  return <div ref={frame} data-jav-video="">{failed ? <Note tone="neutral" action={<Button variant="secondary" onClick={() => { setFailed(false); setAttempt(value => value + 1) }}>立即重试</Button>}>视频预览未取得</Note> : null}</div>;
+  }, [src, failed]);
+  return <div ref={frame} data-jav-video="">{failed ? <Note tone="neutral" action={<Button variant="secondary" onClick={() => setFailed(false)}>立即重试</Button>}>视频预览未取得</Note> : null}</div>;
 }
 
 function Reviews({ code, count, released }: { code: string; count: number; released?: string }) {

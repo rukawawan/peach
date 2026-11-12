@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
+import math
 import re
 import threading
 import time
 import urllib.parse
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Callable, Mapping
 
 import httpx
@@ -18,6 +21,7 @@ from .follow import FollowSourceError
 from .follow_secrets import Credential
 from .follow_store import FollowItemRow
 from .http import HttpRequest, HttpResponse, HttpTransport, HttpxTransport, public_https_url, resolves_publicly
+from .fsutil import atomic_write_text
 
 LOGGER = logging.getLogger(__name__)
 
@@ -134,7 +138,8 @@ class FollowMediaResolver:
     def __init__(self, transport: HttpTransport, *, ttl: float = 300.0,
                  timeout: float = 20.0, max_bytes: int = 2_000_000,
                  max_cache_entries: int | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 state_root: Path | None = None, wall_clock: Callable[[], float] = time.time):
         self.transport = transport
         self._iwara_transport = (IwaraConnector().transport
                                  if isinstance(transport, HttpxTransport) else transport)
@@ -149,6 +154,27 @@ class FollowMediaResolver:
         self._cooldowns: dict[str, float] = {}
         self._item_locks: dict[int, threading.Lock] = {}
         self._lock = threading.Lock()
+        self._wall_clock = wall_clock
+        self._cooldown_path = Path(state_root) / 'follow-source-cooldowns.json' if state_root is not None else None
+        self._restore_cooldowns()
+
+    def _restore_cooldowns(self) -> None:
+        if self._cooldown_path is None:
+            return
+        try:
+            state = json.loads(self._cooldown_path.read_text(encoding='utf-8'))
+            if not isinstance(state, dict) or any(not isinstance(key, str)
+                    or type(value) not in (int, float) or not math.isfinite(value)
+                    for key, value in state.items()):
+                raise ValueError('来源冷却记录无效')
+            now, wall = self.clock(), self._wall_clock()
+            self._cooldowns = {key: now + min(value - wall, self.MAX_COOLDOWN)
+                               for key, value in state.items() if value > wall}
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, TypeError):
+            LOGGER.warning('follow source cooldown state unavailable at %s', self._cooldown_path,
+                           exc_info=True)
 
     def cooling(self, provider: str) -> float:
         """这个来源还要暂停回源多少秒；0 表示可以请求。"""
@@ -192,6 +218,10 @@ class FollowMediaResolver:
         with self._lock:
             self._cooldowns[provider] = max(self._cooldowns.get(provider, 0.0),
                                             self.clock() + seconds)
+            if self._cooldown_path is not None:
+                now, wall = self.clock(), self._wall_clock()
+                state = {key: wall + value - now for key, value in self._cooldowns.items() if value > now}
+                atomic_write_text(self._cooldown_path, json.dumps(state) + '\n')
         return seconds
 
     def _item_lock(self, item_id: int) -> threading.Lock:

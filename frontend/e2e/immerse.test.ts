@@ -247,7 +247,8 @@ describe('沉浸模式', () => {
       await page.evaluate((selector) => document.querySelector<HTMLVideoElement>(selector)!.pause(), currentVideo);
       const y = DESKTOP.height - 4, ratio = .65;
       await page.mouse.move(DESKTOP.width * ratio, y);
-      await page.waitForFunction(() => document.querySelector<HTMLImageElement>('[data-immerse-bar] [data-player-seek-preview] img')?.complete);
+      // 没设 src 的 img 的 `complete` 也是 true，所以等预览自己显出来：它只在拼图那一格加载好之后显示。
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-immerse-bar] [data-player-seek-preview]')?.hidden === false);
       const middle = await seekPreview(page);
       assert.equal(middle?.hidden, false, JSON.stringify(middle));
       assert.equal(middle.src, `/timeline?id=${wide.id}&s=0&source=peach`);
@@ -271,13 +272,14 @@ describe('沉浸模式', () => {
     }
   });
 
-  it('手机 390 宽：没有时间轴图时横划拖动照样出预览、抬手收起，不去取拼图', async () => {
+  it('手机 390 宽：没有预览图时横划仍可定位，不显示空预览或取拼图', async () => {
     const opened = await visit(browser, '/', MOBILE);
     const { page } = opened;
     try {
       const { tall } = await pickClips(page);
-      await pinQueue(page, [tall]);
+      await pinQueue(page, [{ ...tall, has_thumb: false }]);
       await muteVideos(page);
+      await page.route('**/api/timeline?*', route => route.fulfill({ json: null }));
       const sheets: string[] = [];
       page.on('request', (request) => { if (new URL(request.url()).pathname === '/timeline') sheets.push(request.url()) });
       await openImmerse(page, tall.id);
@@ -288,10 +290,11 @@ describe('沉浸模式', () => {
       await touch('touchStart', 100, 400);
       for (let step = 1; step <= 8; step += 1) await touch('touchMove', 100 + MOBILE.width / 2 * step / 8, 402);
       const dragging = (await seekPreview(page))!;
-      assert.equal(dragging.hidden, false, '横划拖动时预览没出来');
+      assert.equal(dragging.hidden, true, '无图时不显示空预览');
       assert.match(dragging.time, /^0:0[0-2]$/);
-      assert.ok(dragging.left >= 11.5 && dragging.right >= 11.5, JSON.stringify(dragging));
       await touch('touchEnd');
+      const time = await page.evaluate((selector) => document.querySelector<HTMLVideoElement>(selector)!.currentTime, currentVideo);
+      assert.ok(time > 0 && time <= Number(tall.duration), `横划仍然定位：${time}`);
       assert.equal((await seekPreview(page))?.hidden, true, '抬手预览没收起');
       assert.deepEqual(sheets, []);
       assert.deepEqual(opened.problems, [], JSON.stringify(opened.problems));

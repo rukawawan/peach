@@ -6,6 +6,7 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -357,6 +358,56 @@ class MediaConfigurationTests(unittest.TestCase):
         config = replace(settings_file.PeachConfig(Path('/unused'), Path('/unused/config.toml')), locations={"115": ("B:/",)}, mounts={"115": ("/Volumes/115",)})
         with patch("peach.platform.os.scandir", side_effect=OSError("Device not configured")):
             self.assertFalse(media_config.rows(config, windows=False, probe=True)[0]["online"])
+
+    def test_settings_read_mount_state_from_the_reachability_snapshot_without_listing_the_mount(self):
+        """所有设置页都等配置接口；网盘卡住时它不能跟着卡在列目录上。"""
+        from peach.mount_reachability import MountReachability, MountRoot
+        config = replace(settings_file.PeachConfig(Path('/unused'), Path('/unused/config.toml')),
+                         locations={"115": ("B:/",)}, mounts={"115": ("/Volumes/115",)})
+        monitor = MountReachability([MountRoot("115", "115", "B:/", Path("/Volumes/115"))],
+                                    probe=lambda path: "ok")
+        monitor.tick()
+        for _ in range(200):
+            monitor.tick()
+            if monitor.sources()[0]["online"] is not None:
+                break
+            threading.Event().wait(0.01)
+        with patch("peach.platform.os.scandir", side_effect=AssertionError("配置接口不该列举网盘根")):
+            row = media_config.rows(config, windows=False, probe=True,
+                                    known=media_config.reachability_states(monitor))[0]
+        self.assertTrue(row["online"])
+
+    def test_a_root_the_snapshot_is_still_checking_is_probed_on_the_spot(self):
+        """服务刚启动、快照还没探完时，不能把在线的根报成未检测。"""
+        from peach.mount_reachability import MountReachability, MountRoot
+        config = replace(settings_file.PeachConfig(Path('/unused'), Path('/unused/config.toml')),
+                         locations={"115": ("B:/",)}, mounts={"115": ("/Volumes/115",)})
+        monitor = MountReachability([MountRoot("115", "115", "B:/", Path("/Volumes/115"))])
+        self.assertIsNone(monitor.sources()[0]["online"])
+        with patch("peach.platform.root_status", return_value="ok"):
+            row = media_config.rows(config, windows=False, probe=True,
+                                    known=media_config.reachability_states(monitor))[0]
+        self.assertTrue(row["online"])
+
+    def test_a_root_missing_from_the_snapshot_is_probed_with_a_deadline(self):
+        """刚保存、服务还没重载的目录不在快照里：现场探测，网盘不回话时按时报未检测。"""
+        config = replace(settings_file.PeachConfig(Path('/unused'), Path('/unused/config.toml')),
+                         locations={"115": ("B:/",)}, mounts={"115": ("/Volumes/115",)})
+        release = threading.Event()
+        calls = []
+
+        def hung(path):
+            calls.append(path)
+            release.wait(5)
+            return "ok"
+        try:
+            with patch("peach.platform.root_status", hung), \
+                    patch("peach.mount_reachability.PROBE_TIMEOUT", 0.05):
+                self.assertIsNone(media_config.rows(config, windows=False, probe=True, known={})[0]["online"])
+                self.assertIsNone(media_config.rows(config, windows=False, probe=True, known={})[0]["online"])
+            self.assertEqual(len(calls), 1, "上一次探测还没返回时不另起线程")
+        finally:
+            release.set()
 
     def test_setup_answers_keep_the_cloud_source_and_its_windows_root(self):
         from peach.routes_pages import _read_answers

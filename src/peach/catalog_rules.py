@@ -747,7 +747,13 @@ def release_identity(code: str | None) -> str:
     认不出形态的值原样返回，只和自己相等：`20211103_JENNIFERMENDEZ` 这种关键词
     搜索结果不该和任何番号算成同一部。
     """
-    raw = _DMM_LABEL_PREFIX.sub("", str(code or "").upper().strip())
+    return _release_identity(str(code or "").upper().strip())
+
+
+#: 复核队列整页核对时同一批写法要比上万次；结果只取决于原文，按原文缓存。
+@lru_cache(maxsize=65536)
+def _release_identity(code: str) -> str:
+    raw = _DMM_LABEL_PREFIX.sub("", code)
     tokyo = tokyo_hot_code(raw)
     if tokyo:
         return tokyo
@@ -778,7 +784,7 @@ def release_identity(code: str | None) -> str:
         # HA 的这一组重制写法已有来源等价证据，其余尾字母均保留。
         if (prefix, letters, suffix) == ("49", "HA", "R"):
             suffix = ""
-        if (prefix, letters) in _RELEASE_PREFIX_ALIASES or str(code or "").upper().strip().startswith("H_"):
+        if (prefix, letters) in _RELEASE_PREFIX_ALIASES or code.startswith("H_"):
             prefix = ""
         return f"{prefix}{letters}-{code_serial(letters, number)}{suffix}"
     return value

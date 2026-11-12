@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+import sqlite3
 import time
 from collections.abc import Callable
 from functools import lru_cache
@@ -424,8 +425,32 @@ def seeded_order(seed) -> str:
     return f"((a.id * {sd}) % 99991), a.id"
 
 
-def q_items(contract: WebContract, args):
-    where, par = catalog_filter(contract, args)
+CATALOG_TOTAL_TABLES = GROUP_TABLES + (
+    'asset_tag', 'asset_tag_preference', 'asset_preference', 'watch_queue',
+    'entity_classification', 'entity_external_ref', 'entity_identity_link', 'profile',
+)
+
+
+def _catalog_totals(contract: WebContract, where, parameters, args):
+    """同一集合的总数、体积与作品数不随排序、种子和分页改变。"""
+    def read():
+        with contract.read_connection() as connection:
+            return tuple(connection.execute(
+                "SELECT count(*),COALESCE(sum(a.size),0),count(DISTINCT "
+                + video_work_key(contract, connection) + ") FROM asset a WHERE "
+                + " AND ".join(where), parameters).fetchone())
+    common = {'sort', 'seed', 'dir', 'limit', 'offset', 'count', 'state', 'jav',
+              'loc', 'len', 'orient', 'region', 'exclude_vertical', 'thumb', 'library', 'year', 'summary_only'}
+    if any(value and key not in common for key, value in args.items()):
+        return read()
+    return contract.cached_until_changed(
+        repr(('catalog-totals', tuple(where), tuple(parameters))), read,
+        tuple(contract.database.media_roots), *group_inputs(contract),
+        tables=CATALOG_TOTAL_TABLES, allow_stale=False)
+
+
+def _catalog_order(args):
+    """排序列、固定种子与每日轮换共用确定的目录顺序。"""
     sort_key = str(args.get("sort") or "")
     direction = "ASC" if str(args.get("dir") or "").lower() == "asc" else "DESC"
     column = SORT_COLUMNS.get(sort_key)
@@ -440,6 +465,15 @@ def q_items(contract: WebContract, args):
             order = f"((a.id * {seed}) % 99991), a.id"
         else:
             order = "a.id DESC"
+    return order
+
+
+def q_items(contract: WebContract, args):
+    where, par = catalog_filter(contract, args)
+    if args.get('summary_only') == '1':
+        count, size, works = _catalog_totals(contract, where, par, args)
+        return {'total': count, 'bytes': size, 'work_total': works}
+    order = _catalog_order(args)
     lim = max(1, min(int(args.get("limit", 60)), 200))
     off = max(0, int(args.get("offset", 0)))
     include_total = args.get("count", "1") != "0"
@@ -460,10 +494,7 @@ def q_items(contract: WebContract, args):
         # 条数和体积同一次聚合出来：回收站卡片要说的是「清空能腾出多少」，
         # 为它单独再发一次请求只是把同一条 WHERE 又跑一遍。
         cnt, total_bytes, work_total = (
-            c.execute("SELECT count(*),COALESCE(sum(a.size),0),count(DISTINCT "
-                      + video_work_key(contract, c) + ") FROM asset a WHERE "
-                      + " AND ".join(where), par).fetchone()
-            if include_total else (None, None, None))
+            _catalog_totals(contract, where, par, args) if include_total else (None, None, None))
     # 卡片要显示出镜者和高权重标签，不能只有番号 —— 一次批量取，别 N+1
     if rows:
         ids = [r["id"] for r in rows]
@@ -1007,6 +1038,51 @@ def label_makers(contract: WebContract, c, aid) -> dict[int, dict]:
     return chains
 
 
+#: 云下载落地后还没处理完的那几档：识别正片、采集资料与整理都在这一段里。
+DOWNLOAD_POSTPROCESS_ACTIVE = ("pending", "queued", "running")
+
+
+def processing_assets(contract: WebContract, connection) -> dict[int, str]:
+    """此刻还在补资料的作品，值是在补它的那类任务（`task_key`）。
+
+    三处来源：在跑的定向扫描与采集那一批（整库处理不算，它说明不了某一部缺什么，只算它此刻
+    正在处理的那一部）、云下载落地后还没处理完的正片。只读内存状态与任务表，不按缺哪些字段猜。
+    """
+    found: dict[int, str] = {}
+    job = getattr(contract, "library_processing_job", None)
+    state = job.snapshot() if job is not None else None
+    if state and state.get("status") in ("running", "pausing", "paused"):
+        scope = state.get("asset_ids")
+        current = state.get("current_asset_id")
+        for value in [*(scope if isinstance(scope, list) else []), current]:
+            if isinstance(value, int):
+                found[value] = "library-processing"
+    try:
+        rows = connection.execute(
+            "SELECT asset_id FROM download_task WHERE asset_id IS NOT NULL AND postprocess_state IN "
+            f"({','.join('?' for _ in DOWNLOAD_POSTPROCESS_ACTIVE)})", DOWNLOAD_POSTPROCESS_ACTIVE).fetchall()
+    except sqlite3.OperationalError:
+        # 迁移前的只读副本还没有下载任务表。
+        rows = []
+    for row in rows:
+        found.setdefault(int(row[0]), "download-postprocess")
+    return found
+
+
+def processing_work(task_keys) -> list[dict]:
+    """把在补资料的任务种类写成页面读的那一种形状，同一类只报一次。"""
+    from .task_runs import task_label
+    return [{"task_key": key, "label": task_label(key), "status": "running"}
+            for key in dict.fromkeys(task_keys)]
+
+
+def item_pending_work(contract: WebContract, asset_id: int) -> list[dict]:
+    """刚入库还在补资料的那一部：详情据此显示「补全中」并定时重取，补完就是空列表。"""
+    with contract.read_connection() as c:
+        busy = processing_assets(contract, c).get(asset_id)
+    return processing_work([busy] if busy else [])
+
+
 def q_item(contract: WebContract, aid):
     """按 id 直取。
     ⚠️ 没有这个接口时，前端只能用「带筛选条件再查一遍然后 find」的绕法：
@@ -1130,6 +1206,7 @@ def q_item(contract: WebContract, aid):
     d.pop("snapshot_path", None); d.pop("path", None)
     attach_multipart_groups(contract, [d])
     attach_edition_groups(contract, [d])
+    d["pending_work"] = item_pending_work(contract, d["id"])
     return d
 
 def _one_card_per_release(contract: WebContract, source_code, rows: list[dict]) -> list[dict]:

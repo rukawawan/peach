@@ -84,7 +84,7 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
             const css = getComputedStyle(part);
             return [css.display, css.padding, css.gap, css.borderTopWidth, css.borderRadius, css.backgroundColor];
           };
-          return { width: Math.round(card.getBoundingClientRect().width), face: style(card),
+          return { width: Math.round(card.getBoundingClientRect().width), height: Math.round(card.getBoundingClientRect().height), face: style(card),
             body: style(card.firstElementChild!), footer: style(card.querySelector('footer')!) };
         }));
         const waiting = await geometry();
@@ -281,14 +281,17 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
       const selected = page.locator('#index [role="tab"][aria-selected="true"]');
       const look = await selected.evaluate((element) => {
         const style = getComputedStyle(element);
-        return { background: style.backgroundColor, border: style.borderBottomWidth, weight: style.fontWeight };
+        const thumb = element.closest('[data-pill-nav]')!.querySelector('[data-pill-thumb]')!;
+        return { background: style.backgroundColor, selectedSurface: getComputedStyle(thumb).backgroundColor,
+          border: style.borderBottomWidth, weight: style.fontWeight };
       });
-      assert.notEqual(look.background, 'rgba(0, 0, 0, 0)');
+      assert.equal(look.background, 'rgba(0, 0, 0, 0)');
+      assert.notEqual(look.selectedSurface, 'rgba(0, 0, 0, 0)');
       assert.equal(look.border, '0px');
       assert.equal(look.weight, '400');
       await selected.focus();
       await page.keyboard.press('ArrowRight');
-      await page.locator('#index [role="tab"][aria-selected="true"][data-tab="agencies"]').waitFor({ timeout: 5_000 });
+      await page.locator('#index [role="tab"][aria-selected="true"][data-tab="series"]').waitFor({ timeout: 5_000 });
       assert.deepEqual(opened.problems, []);
     } finally {
       await opened.close();
@@ -960,12 +963,19 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
         ],
       });
       try {
+        await opened.page.waitForFunction(() => {
+          const card = document.querySelector('[data-measured-reading="updates"]');
+          const value = card?.querySelector('[skullet-pane]:not([skullet-exiting]) [data-follow-reading]');
+          return !!card && !card.querySelector('[aria-busy="true"]') && value?.textContent?.includes('1,284,000');
+        });
         const spill = await opened.page.evaluate(() => {
           const out = (node: Element, frame: Element) => node.getBoundingClientRect().right > frame.getBoundingClientRect().right + 1;
-          const readings = [...document.querySelectorAll('[data-follow-reading]')]
+          const values = [...document.querySelectorAll('[data-measured-reading] [data-follow-reading]')]
+            .filter(node => !node.closest('[aria-hidden="true"], [inert], [skullet-exiting]'));
+          const readings = values
             .filter((node) => [...node.children].some((part) => out(part, node.parentElement!)))
             .map((node) => node.textContent);
-          const wrapped = [...document.querySelectorAll('[data-follow-reading]')].filter((node) => {
+          const wrapped = values.filter((node) => {
             const [figure, unit] = [...node.children].map((part) => part.getBoundingClientRect());
             return unit!.top >= figure!.bottom - 1;
           }).map((node) => node.textContent);
@@ -981,10 +991,11 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
             const middle = (last.top + last.bottom) / 2;
             return middle < name.top - 1 || middle > name.bottom + 1;
           }).map((row) => row.textContent);
-          return { readings, wrapped, spilled, split, rows: rows.length,
-            text: document.querySelector('[data-follow-reading]')?.parentElement?.parentElement?.textContent };
+          return { readings, wrapped, spilled, split, rows: rows.length, values: values.length,
+            text: document.querySelector('[data-measured-reading="updates"] [skullet-pane]:not([skullet-exiting]) [data-follow-reading]')?.textContent };
         });
         assert.ok(spill.text?.includes('1,284,000'), `读数没有用上七位数：${spill.text}`);
+        assert.equal(spill.values, 6, '应测量六个已显示的真实读数，不包含隐藏样本');
         assert.equal(spill.rows, 5, '造的五条来源没有全部画出来');
         assert.deepEqual(spill.readings, [], '读数越出了卡片');
         assert.deepEqual(spill.wrapped, [], '七位数的读数把单位挤到了下一行');

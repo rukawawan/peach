@@ -7,6 +7,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from peach import web_settings
@@ -77,6 +78,10 @@ class SettingsRoundTripTests(unittest.TestCase):
         con.commit()
         con.close()
         self.contract = WebContract(self.db)
+        # 系统语言随跑测试的机器变，这里固定成「报不出」。
+        system = mock.patch.object(web_settings, "system_language", return_value=None)
+        system.start()
+        self.addCleanup(system.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -90,6 +95,40 @@ class SettingsRoundTripTests(unittest.TestCase):
             con.close()
         return json.loads(raw)
 
+    def test_manage_order_persists_independently_and_appends_missing_entries(self):
+        original_sidebar = q_settings(self.contract)['sidebarOrder']
+        saved = w_settings(self.contract, {'manageOrder': ['activity', 'stats', 'activity', 'invalid', 3]})
+        self.assertEqual(saved['manageOrder'], ['activity', 'stats', 'taste', 'cleanup', 'follow', 'configuration'])
+        self.assertEqual(q_settings(self.contract)['manageOrder'], saved['manageOrder'])
+        self.assertEqual(q_settings(self.contract)['sidebarOrder'], original_sidebar)
+        self.assertEqual(w_settings(self.contract, {'manageOrder': []})['manageOrder'],
+                         list(web_settings.DEFAULT_MANAGE_ORDER))
+
+    def test_navigation_groups_keep_independent_orders_and_fixed_first_item(self):
+        w_settings(self.contract, {'navigationOrders': {'review': ['studio_logos', 'metadata_fields']}})
+        saved = w_settings(self.contract, {'navigationOrders': {'favorites': ['tag', 'all', 'filters']}})
+        self.assertEqual(saved['navigationOrders']['review'][:2], ['studio_logos', 'metadata_fields'])
+        self.assertEqual(saved['navigationOrders']['favorites'][:3], ['all', 'tag', 'filters'])
+        self.assertEqual(q_settings(self.contract)['navigationOrders'], saved['navigationOrders'])
+        reset = w_settings(self.contract, {'navigationOrders': {'review': []}})
+        self.assertEqual(reset['navigationOrders']['review'], list(web_settings.NAVIGATION_ORDERS['review']))
+        self.assertEqual(reset['navigationOrders']['favorites'], saved['navigationOrders']['favorites'])
+
+    def test_navigation_order_rejects_unknown_groups_and_entries(self):
+        for value in ([], {'unknown': []}, {'review': ['unknown']}, {'review': [1]}, {'review': 'metadata_fields'}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                w_settings(self.contract, {'navigationOrders': value})
+        self.assertNotIn('navigationOrders', self._stored_json())
+
+    def test_library_order_preserves_stable_ids_and_rejects_invalid_values(self):
+        saved = w_settings(self.contract, {'libraryOrder': ['lib-b', 'lib-a']})
+        self.assertEqual(saved['libraryOrder'], ['lib-b', 'lib-a'])
+        for order in ([1], ['same', 'same'], [''], {}, None):
+            with self.subTest(order=order), self.assertRaises(ValueError):
+                w_settings(self.contract, {'libraryOrder': order})
+        self.assertEqual(q_settings(self.contract)['libraryOrder'], ['lib-b', 'lib-a'])
+        self.assertEqual(w_settings(self.contract, {'libraryOrder': []})['libraryOrder'], [])
+
     def test_an_unset_profile_reads_the_default_order(self):
         self.assertEqual(q_settings(self.contract),
                          {"sidebarOrder": list(DEFAULT_SIDEBAR_ORDER),
@@ -98,7 +137,8 @@ class SettingsRoundTripTests(unittest.TestCase):
                           "organizeTemplates": {}, "codePatterns": [],
                           "feedHideGroupCompilations": True,
                           "feedHideSoloCompilations": False, "feedHideExcerpts": True,
-                          "searchHistoryLimit": None, "performerNameLanguage": "zh-CN"})
+                          "searchHistoryLimit": None, "performerNameLanguage": "zh-CN", "taskSpeedMode": "standard",
+                          "interfaceLanguage": "auto", "systemLanguage": None})
 
     def test_code_patterns_are_checked_when_saved(self):
         """写错的规则在保存那一刻报出来；存下的规则去掉空行，读回来是同一份。"""
@@ -110,6 +150,18 @@ class SettingsRoundTripTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(broken)[:40]):
                 w_settings(self.contract, {"codePatterns": broken})
         self.assertEqual(self._stored_json()["codePatterns"], saved)
+
+    def test_default_task_speed_accepts_each_mode_and_rejects_unknown_values(self):
+        from peach.processing_control import default_mode
+        for mode in ('low', 'standard', 'high'):
+            with self.subTest(mode=mode):
+                saved = w_settings(self.contract, {'taskSpeedMode': mode})
+                self.assertEqual(saved['taskSpeedMode'], mode)
+                self.assertEqual(default_mode(self.contract), mode)
+        for value in (None, '', 'fast', 1, ['low']):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                w_settings(self.contract, {'taskSpeedMode': value})
+        self.assertEqual(q_settings(self.contract)['taskSpeedMode'], 'high')
 
     def test_name_language_is_shared_and_preserves_other_profile_settings(self):
         self.assertEqual(q_settings(self.contract)['performerNameLanguage'], 'zh-CN')
@@ -128,6 +180,23 @@ class SettingsRoundTripTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 w_settings(self.contract, {'performerNameLanguage': value})
             self.assertEqual(self._stored_json(), {'performerNameLanguage': 'ja'})
+
+    def test_interface_language_is_shared_and_rejects_languages_without_translations(self):
+        self.assertEqual(q_settings(self.contract)['interfaceLanguage'], 'auto')
+        w_settings(self.contract, {'interfaceLanguage': 'auto'})
+        self.assertEqual(q_settings(self.contract)['interfaceLanguage'], 'auto')
+        w_settings(self.contract, {'interfaceLanguage': 'en'})
+        self.assertEqual(q_settings(WebContract(self.db.resolve()))['interfaceLanguage'], 'en')
+        for value in ('fr', 'EN', '', None, 1, ['en']):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                w_settings(self.contract, {'interfaceLanguage': value})
+        self.assertEqual(self._stored_json(), {'interfaceLanguage': 'en'})
+
+    def test_interface_languages_match_the_shipped_locales(self):
+        """后端放行的语言必须有前端译文：多放一个，存进去以后整页回落成中文；少放一个，选了存不进去。"""
+        locales = Path(__file__).resolve().parents[1] / 'frontend' / 'src' / 'locales'
+        shipped = sorted(path.name for path in locales.iterdir() if path.is_dir() and path.name != 'glossary')
+        self.assertEqual(sorted(web_settings.INTERFACE_LANGUAGES), shipped)
 
     def test_a_hand_broken_rule_reads_as_unset(self):
         con = sqlite3.connect(self.db)
@@ -175,7 +244,8 @@ class SettingsRoundTripTests(unittest.TestCase):
                           "organizeTemplates": {}, "codePatterns": [],
                           "feedHideGroupCompilations": True,
                           "feedHideSoloCompilations": False, "feedHideExcerpts": True,
-                          "searchHistoryLimit": None, "performerNameLanguage": "zh-CN"})
+                          "searchHistoryLimit": None, "performerNameLanguage": "zh-CN", "taskSpeedMode": "standard",
+                          "interfaceLanguage": "auto", "systemLanguage": None})
         self.assertEqual(q_settings(self.contract)["sidebarOrder"], order)
         self.assertEqual(self._stored_json()["sidebarOrder"], order)
 

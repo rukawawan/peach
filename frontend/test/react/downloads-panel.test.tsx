@@ -8,6 +8,9 @@ import { DownloadsPanel, downloadPollInterval } from '../../src/react/activity/d
 import type { DownloadsSnapshot, DownloadTask } from '../../src/react/bundle';
 import { queryClient } from '../../src/react/query';
 import { buttonNamed, click, mount, settle } from './render';
+import { showToast } from '../../src/react/toaster';
+
+vi.mock('../../src/react/toaster', () => ({ showToast: vi.fn() }));
 
 afterEach(() => queryClient.clear());
 beforeEach(() => { registerNameWritings([]); setNameLanguage('zh-CN') });
@@ -208,26 +211,36 @@ it('有任务还在跟进时五秒查一次，全是终态三十秒一次', () =
   expect(downloadPollInterval(undefined)).toBe(30_000);
 });
 
-it('加载更多接上较早任务，失败保留列表并允许重试，刷新不丢已加载的任务', async () => {
+it('云下载分页失败保留列表，重试替换当前页并支持返回', async () => {
   let fail = true;
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
-    const earlier = input.includes('before_id=2');
-    if (earlier && fail) return { ok: false, status: 500, json: async () => ({ message: '读取失败' }) };
+    const current = input.includes('page=2') ? 2 : 1;
+    if (current === 2 && fail) return { ok: false, status: 500, json: async () => ({ message: '读取失败' }) };
     return { ok: true, status: 200, json: async () => snapshot({
-      tasks: earlier ? [task({ id: 1 })] : [task({ id: 3 }), task({ id: 2 })],
-      has_more: !earlier, next_before_id: earlier ? null : 2,
+      tasks: current === 2 ? [task({ id: 1 })] : [task({ id: 3 }), task({ id: 2 })],
+      page: current, total: 21,
     }) };
   }));
   const host = await show();
-  await click(buttonNamed('加载更多', host));
+  await click(buttonNamed('下一页', host));
   await vi.waitFor(() => expect(host.textContent).toContain('读取失败'));
   expect(host.querySelectorAll('[data-download-id]')).toHaveLength(2);
   fail = false;
-  await click(buttonNamed('加载更多', host));
-  await vi.waitFor(() => expect(host.querySelectorAll('[data-download-id]')).toHaveLength(3));
-  await queryClient.invalidateQueries({ queryKey: ['downloads'] });
-  await settle();
-  expect([...host.querySelectorAll('[data-download-id]')].map((node) => node.getAttribute('data-download-id')))
-    .toEqual(['3', '2', '1']);
-  expect(buttonNamed('加载更多', host)).toBeNull();
+  await click(buttonNamed('下一页', host));
+  await vi.waitFor(() => expect(host.querySelectorAll('[data-download-id]')).toHaveLength(1));
+  await act(async () => { await queryClient.invalidateQueries({ queryKey: ['downloads'] }); });
+  expect(host.querySelector('[data-download-id]')?.getAttribute('data-download-id')).toBe('1');
+  await click(buttonNamed('上一页', host));
+  await vi.waitFor(() => expect(host.querySelectorAll('[data-download-id]')).toHaveLength(2));
+});
+
+it('复制磁力成功显示 toast，按钮保留操作名称', async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  serve(snapshot({ tasks: [task()] }));
+  const host = await show();
+  await click(buttonNamed('复制磁力', host));
+  expect(writeText).toHaveBeenCalledWith(task().source_uri);
+  expect(showToast).toHaveBeenCalledWith('download-copy-1', expect.objectContaining({ html: '已复制磁力', alert: false }));
+  expect(buttonNamed('复制磁力', host)).not.toBeNull();
 });

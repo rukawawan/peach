@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import os
+import threading
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -84,14 +85,37 @@ def write_rows(
         else:
             writer.writerows(rows)
 
+    # 这份文件已有人按缓存读（`_parsed_rows`）时，写下的内容顺手记成它的解析结果：
+    # 处理任务每处理一部片就整份重写一次七十多 MB 的候选表，下一个读的人不必再整份重解析。
+    remember = atomic and str(target) in _PARSED
+    if remember:
+        rows = [_as_read_back(row, fields, fill_missing) for row in rows]
+
     if not atomic:
         with target.open("w", encoding=ENCODING, newline="") as handle:
             dump(handle)
+        with _PARSED_LOCK:
+            _PARSED.pop(str(target), None)
         return
 
     with atomic_path(target) as temporary:
         with temporary.open("w", encoding=ENCODING, newline="") as handle:
             dump(handle)
+        # 替换保留临时文件的 inode 与修改时间：在替换前取标识，替换后若又被别人换掉，标识对不上就重读。
+        written = temporary.stat() if remember else None
+    if written is not None:
+        _remember(target, written, rows)
+
+
+def _as_read_back(row: Mapping[str, object], fields: list[str], fill_missing: bool) -> dict[str, str]:
+    """这一行写进 CSV 再读回来的样子：只剩表头那几列，`None` 成空串，其余转成字符串。
+
+    多出的列照旧交给 `DictWriter` 去拒绝，这里不替它吞掉。
+    """
+    if not fill_missing and any(key not in fields for key in row):
+        return dict(row)  # 原样交下去，让写入照常抛错
+    return {field: "" if (value := row.get(field, "")) is None
+            else value if isinstance(value, str) else str(value) for field in fields}
 
 
 # 候选文件名带批次日期，代码里只认前缀并永远取目录里实际最后写完的一份；
@@ -219,7 +243,7 @@ def read_candidates(category: str, root: Path | None = None) -> tuple[list[dict]
     key_column = CANDIDATE_KEY[category]
     rows, skipped, seen = [], 0, set()
     for candidate_path in paths:
-        for row in read_rows(candidate_path):
+        for row in _parsed_rows(candidate_path):
             key = str(row.get(key_column) or "").strip()
             if not key:
                 skipped += 1
@@ -227,6 +251,40 @@ def read_candidates(category: str, root: Path | None = None) -> tuple[list[dict]
             if key in seen:
                 continue
             seen.add(key)
-            row["item_key"] = key
-            rows.append(row)
+            # 缓存里那一份是共用的：交出去的每一行都是副本，调用方往里添字段不会串到下一次。
+            rows.append({**row, "item_key": key})
     return rows, _candidate_source_label(paths), skipped
+
+
+#: 每份候选文件最近一次解析的结果，键是路径，值是（文件标识, 行）。元数据候选有七十多 MB、
+#: 三万多行，复核页每次重算都整份重解析要好几秒；文件只在处理任务写完一批时才换。
+_PARSED: dict[str, tuple[tuple[int, int, int], tuple[dict[str, str], ...]]] = {}
+_PARSED_LOCK = threading.Lock()
+
+
+def _parsed_rows(path: Path) -> tuple[dict[str, str], ...]:
+    """按文件标识（修改时间、大小、inode）缓存的 `read_rows`；文件一换就重读。"""
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+    key = str(path)
+    with _PARSED_LOCK:
+        cached = _PARSED.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    rows = tuple(read_rows(path))
+    with _PARSED_LOCK:
+        _PARSED[key] = (stamp, rows)
+    return rows
+
+
+def _remember(path: Path, stat: os.stat_result, rows: list[dict[str, str]]) -> None:
+    with _PARSED_LOCK:
+        _PARSED[str(path)] = ((stat.st_mtime_ns, stat.st_size, stat.st_ino), tuple(rows))
+
+
+def read_rows_shared(path: Path | str, *, missing_ok: bool = False) -> list[dict[str, str]]:
+    """同 `read_rows`，文件没换时复用上一次的解析结果；每行都是副本，调用方可以原地改。"""
+    target = Path(path)
+    if missing_ok and not target.is_file():
+        return []
+    return [dict(row) for row in _parsed_rows(target)]

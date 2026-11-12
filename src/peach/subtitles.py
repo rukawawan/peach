@@ -23,6 +23,9 @@ import hashlib
 import os
 import re
 import sqlite3
+import threading
+import time
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -288,6 +291,39 @@ def discover_sidecars(video: Path, video_suffixes: set[str]) -> list[dict]:
                       "name": name, "language": language_of(name), "format": fmt,
                       "size": None, "pairing": pairing})
     return found
+
+
+#: 同目录字幕的发现结果留这么久（`SidecarListings`）。新放进去的字幕最多晚这么久出现。
+SIDECAR_LISTING_TTL = 120.0
+
+
+class SidecarListings:
+    """`discover_sidecars` 按视频路径缓存一小段时间。
+
+    打开一部片子时，字幕列表一次、每条轨各一次，都要先列一遍正片目录；目录在网盘上时
+    每次都是一趟网络往返。只缓存目录列举，字幕正文照旧现读：删掉的字幕立即取不到。
+    """
+
+    def __init__(self, *, ttl: float = SIDECAR_LISTING_TTL, limit: int = 256, clock=time.monotonic):
+        self.ttl, self.limit, self.clock = ttl, limit, clock
+        self._rows: OrderedDict[str, tuple[float, list[dict]]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def discover(self, video: Path, video_suffixes: set[str]) -> list[dict]:
+        key = str(video)
+        now = self.clock()
+        with self._lock:
+            hit = self._rows.get(key)
+            if hit is not None and now - hit[0] < self.ttl:
+                self._rows.move_to_end(key)
+                return [dict(row) for row in hit[1]]
+        rows = discover_sidecars(video, video_suffixes)
+        with self._lock:
+            self._rows[key] = (now, rows)
+            self._rows.move_to_end(key)
+            while len(self._rows) > self.limit:
+                self._rows.popitem(last=False)
+        return [dict(row) for row in rows]
 
 
 class SubtitleUndecodable(ValueError):

@@ -12,23 +12,23 @@ export function clearCatalogAddress(address = typeof location === 'undefined' ? 
   return url.pathname + (url.search ? url.search : '') + url.hash;
 }
 
-/** 推荐与当前列表共用筛选，并以实际搜索命中作为展示条件。 */
+/** 推荐与当前列表共用筛选，只留在当前筛选里搜得出东西的词。
+ *
+ * 筛选项本来就是按当前筛选数出来的，`n` 大于零的名字搜索必然有命中（搜索认同一批实体名）；
+ * 样本里的番号和文件名取自当前列表本身。所以不再逐词发一次带总数的搜索：那是每次点开搜索框
+ * 十次不走缓存的全表计数。 */
 export async function catalogSuggestions(state: Record<string, string>, request: Request): Promise<string[]> {
   const params = new URLSearchParams();
   for (const key of FILTERS) if (state[key]) params.set(key, state[key]);
   const [facets, sample] = await Promise.all([
-    request('/api/facets?' + params), request('/api/items?' + params + '&limit=5'),
+    request('/api/facets?' + params), request('/api/items?' + params + '&limit=5&count=0'),
   ]);
-  const candidates: string[] = [...new Set<string>([
-    ...(facets.creators || []), ...(facets.tagperformers || []), ...(facets.tags || []),
-  ].map(row => String(row.k || '')).concat((sample.items || []).map((row: { code?: string; name?: string }) => row.code || row.name || '')))]
-    .filter(value => value.length > 1).slice(0, 10);
-  const hits = await Promise.all(candidates.map(async value => {
-    const query = new URLSearchParams(params); query.set('q', value); query.set('limit', '1');
-    const result = await request('/api/items?' + query);
-    return result.total > 0 ? value : '';
-  }));
-  return hits.filter(Boolean);
+  const counted = (rows: { k?: unknown; n?: unknown }[] | undefined) =>
+    (rows || []).filter(row => Number(row.n) > 0).map(row => String(row.k || ''));
+  return [...new Set<string>([
+    ...counted(facets.creators), ...counted(facets.tagperformers), ...counted(facets.tags),
+    ...(sample.items || []).map((row: { code?: string; name?: string }) => row.code || row.name || ''),
+  ])].filter(value => value.length > 1).slice(0, 10);
 }
 
 /** 空馆藏、筛选无结果与资料尚未建立分别给出可执行入口。 */

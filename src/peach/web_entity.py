@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 
 from urllib.parse import urlsplit
 
@@ -23,6 +24,8 @@ from .web_catalog import (
     JAV_ASSET_PREDICATE,
     VISIBLE_CATALOG_ASSET,
     attach_avatar_availability,
+    processing_assets,
+    processing_work,
     group_inputs,
     seeded_order,
     tag_is_not_a_performer_name,
@@ -226,6 +229,52 @@ def _entity_links(c, entity_id: int, kind: str) -> list[dict]:
     return links
 
 
+def _followup_keys(kind: str, entity_id: int) -> list[str]:
+    """这位实体名下各类补全后继的全名，与派发时写进 `task_run.followup_key` 的同一串。"""
+    from . import (avatar_followup, creator_identity_followup, performer_alias_followup,
+                   performer_profile_followup, studio_followup)
+    keys = [avatar_followup.followup_key(kind, entity_id)]
+    if kind == "performer":
+        keys += [performer_alias_followup.followup_key(entity_id),
+                 performer_profile_followup.followup_key(entity_id)]
+    elif kind == "studio":
+        keys.append(studio_followup.followup_key(entity_id))
+    elif kind == "creator":
+        keys.append(creator_identity_followup.followup_key(entity_id))
+    return keys
+
+
+def pending_work(contract: WebContract, connection, kind: str, entity_id: int) -> list[dict]:
+    """这位实体还在排队或正在跑的资料补全：页面据此显示「补全中」并定时重取。
+
+    只报任务表里真实存在的行，不按缺哪些字段猜：缺资料但没有任务在补，就不算补全中。
+    初始资料导入不按实体记键：它补的是声明它那一轮新登记的实体，所以那一轮开工早于这位
+    建档、导入还没跑完时也算——它常排在别名、资料后继后面，最后才写进别名与外链。
+    """
+    from .seed_followup import TASK_KEY as SEED_TASK_KEY
+    from .task_runs import ACTIVE_STATUSES, task_label
+    keys = _followup_keys(kind, entity_id)
+    try:
+        rows = connection.execute(
+            f"SELECT t.task_key,t.status FROM task_run t WHERE t.status IN ({','.join('?' for _ in ACTIVE_STATUSES)}) "
+            f"AND (t.followup_key IN ({','.join('?' for _ in keys)}) OR (t.task_key=? AND EXISTS ("
+            "SELECT 1 FROM task_run p JOIN entity e ON e.id=? WHERE p.id=t.parent_run_id "
+            "AND p.started_at<=e.created_at))) ORDER BY t.id",
+            (*ACTIVE_STATUSES, *keys, SEED_TASK_KEY, entity_id),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # 还没建任务表的账本（迁移前的只读副本）：没有任务可报。
+        rows = []
+    work = [{"task_key": row[0], "label": task_label(row[0]), "status": row[1]} for row in rows]
+    busy = processing_assets(contract, connection)
+    if busy:
+        mine = connection.execute(
+            "SELECT DISTINCT asset_id FROM asset_entity WHERE entity_id=? "
+            "AND asset_id IN (SELECT value FROM json_each(?))", (entity_id, json.dumps(sorted(busy)))).fetchall()
+        work = processing_work(busy[row[0]] for row in mine) + work
+    return work
+
+
 def q_entity(contract: WebContract, args):
     """女优、厂牌、事务所等实体的资料页。
 
@@ -287,6 +336,7 @@ def q_entity(contract: WebContract, args):
             d['company_profile'] = company_profiles.public_profile(metadata)
         # 创作者在关注里的那一面（ADR-0096）：绑在名下的来源和同名等确认的那几组。
         d["follow"] = web_follow.entity_follow(contract, c, d["id"]) if kind == "creator" else None
+        d["pending_work"] = pending_work(contract, c, kind, d["id"])
         scope = scope_predicate(kind, "ae.entity_id") + _tag_scope_visibility(kind, "ae.entity_id", "a.id")
         count, rep = c.execute(
             "SELECT count(DISTINCT " + video_work_key(contract, c) + "),"
@@ -408,21 +458,25 @@ def _entity_shape_parts(contract, connection, entity_id: int | None = None, *,
     scope = (entity_id,) if entity_id is not None else ()
     parts = {key: ["feed"] for key in (web_feeds.feed_row_entity_ids(contract, connection) if feed else ())
              if entity_id is None or key == entity_id}
+    # 全库按资产展开关联；深链沿实体索引只读当前人物的作品。
+    relations = (
+        "asset a CROSS JOIN asset_entity scope ON scope.asset_id=a.id"
+        " CROSS JOIN entity e ON e.id=scope.entity_id" if entity_id is None else
+        "asset_entity scope JOIN asset a ON a.id=scope.asset_id"
+        " JOIN entity e ON e.id=scope.entity_id")
     for row in connection.execute(
-            "SELECT DISTINCT scope.entity_id FROM asset_entity scope"
-            " JOIN entity e ON e.id=scope.entity_id AND e.kind<>'agency'"
-            " JOIN asset a ON a.id=scope.asset_id AND " + COUNTED_VIDEO +
-            " JOIN asset_entity co ON co.asset_id=scope.asset_id AND co.entity_id<>scope.entity_id"
-            " JOIN entity person ON person.id=co.entity_id AND person.kind='performer'"
-            + (" WHERE scope.entity_id=?" if scope else ""), scope):
+            "SELECT DISTINCT scope.entity_id FROM " + relations +
+            " WHERE " + COUNTED_VIDEO + " AND e.kind<>'agency'"
+            " AND EXISTS(SELECT 1 FROM asset_entity co JOIN entity person ON person.id=co.entity_id"
+            " AND person.kind='performer' WHERE co.asset_id=scope.asset_id AND co.entity_id<>scope.entity_id)"
+            + (" AND scope.entity_id=?" if scope else ""), scope):
         parts.setdefault(int(row[0]), []).append("costars")
     for key in performer_header.profiled(connection):
         if entity_id is None or key == entity_id:
             parts.setdefault(key, []).append("facts")
     for row in connection.execute(
-            "SELECT DISTINCT scope.entity_id FROM asset_entity scope"
-            " JOIN entity e ON e.id=scope.entity_id AND e.kind IN ('performer','studio')"
-            " JOIN asset a ON a.id=scope.asset_id WHERE " + COUNTED_VIDEO + " AND " + JAV_ASSET_PREDICATE
+            "SELECT DISTINCT scope.entity_id FROM " + relations +
+            " WHERE e.kind IN ('performer','studio') AND " + COUNTED_VIDEO + " AND " + JAV_ASSET_PREDICATE
             + (" AND scope.entity_id=?" if scope else ""), scope):
         parts.setdefault(int(row[0]), []).append("jav")
     return parts

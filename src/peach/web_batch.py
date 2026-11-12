@@ -8,8 +8,10 @@
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import logging
 import os
 import re
 import stat
@@ -33,7 +35,7 @@ from .task_runs import TaskRunHandle
 from .web_activity import DEFAULT_PROFILE_ID
 from .web_catalog import attach_card_performers
 from .media_sources import cost_for
-from .web_resource_sync import clean_resource_orphans
+from .web_resource_sync import _managed_cache_root, clean_purged_caches
 from .web_state import WebContract
 
 from .junk import (
@@ -56,6 +58,12 @@ from .junk import (
     has_sibling_original as has_sibling_original,
     promo_residue as promo_residue,
 )
+
+LOGGER = logging.getLogger(__name__)
+
+#: 垃圾评分读的账本表。不声明时任何一次提交（关注检查、任务记录）都让下一次打开当场重评
+#: 十万行；声明后后台任务的提交先回上一份、后台重算（ADR-0146），前台写入照旧当场重算。
+JUNK_SCORE_TABLES = ("asset", "review_decision", "download_task")
 
 # Linux 容器可从 mountinfo 识别媒体实际所在的 FUSE 文件系统。
 MOUNTINFO_PATH = Path("/proc/self/mountinfo")
@@ -114,7 +122,7 @@ def q_ads(contract: WebContract, limit=200, offset=0, kind="", status="pending")
     if status not in {"pending", "dismissed"}:
         raise ValueError("invalid junk status")
     out, dismissed_ids = contract.cached_until_changed(
-        "junk-scored", lambda: _scored_junk(contract))
+        "junk-scored", lambda: _scored_junk(contract), tables=JUNK_SCORE_TABLES)
     pending = [item for item in out if item["id"] not in dismissed_ids]
     dismissed = [item for item in out if item["id"] in dismissed_ids]
     pool = dismissed if status == "dismissed" else pending
@@ -310,19 +318,56 @@ def purge_vanished_rows(contract: WebContract, rows) -> dict:
     跳过进 `blocked`，媒体文件一个字节都不碰。这一批要删的只是账本行。
     """
     contract.cache_bust()
-    outcome = None
+    return _finish_purge(_purge_outside_lock(contract, rows, missing_only=True), contract)
+
+
+def _purge_outside_lock(contract: WebContract, rows, *, missing_only: bool = False,
+                        eligible=None, verify=None) -> dict:
+    """网盘上的 stat 与隔离在写事务外做（`stage_purge`），开事务复核后删行（`commit_purge`）。
+
+    `verify(connection)` 在同一事务里先跑，用来核对调用方的前提（删除清单的口令）；抛错就整批
+    放弃，隔离文件全部放回。返回已提交、尚未 `_finish_purge` 的回执。
+    """
+    outcome = stage_purge(rows, missing_only=missing_only)
     try:
         with contract.write_transaction() as connection:
-            outcome = purge_assets(connection, rows, missing_only=True)
+            if verify is not None:
+                verify(connection)
+            commit_purge(connection, outcome, eligible=eligible)
     except BaseException:
-        if outcome is not None:
-            _restore_staged_media(outcome["_staged"])
+        _restore_staged_media(outcome["_staged"])
         raise
-    return _finish_purge(outcome)
+    return outcome
 
 
-def _finish_purge(outcome):
-    """Delete committed quarantine files; report any residue for explicit cleanup."""
+def _purge_receipt(contract: WebContract, outcome: dict, **fields) -> dict:
+    """删完之后的回执：清隔离件、放回复核没过的、只清这几部的派生产物。"""
+    purged = outcome.get("_codes", [])
+    result = {"ok": True, **fields, **_finish_purge(outcome, contract)}
+    result.update(clean_purged_caches(contract, purged))
+    return result
+
+
+def _finish_purge(outcome, contract=None):
+    """Delete committed quarantine files; report any residue for explicit cleanup.
+
+    同时撤下钉着这些资产的资料候选（#486）。撤不成不影响删除结果：复核页按路径改挂或剔掉
+    悬空行；处理任务正拿着候选表时，它下一次写表也可能把这几行写回去。
+
+    事务里复核没过、没删的行（`commit_purge`），它们的隔离文件在这里放回原处。
+    """
+    _restore_staged_media(outcome.pop("_returned", []))
+    outcome.pop("_items", None)
+    outcome.pop("_codes", None)
+    ids = outcome.pop("_ids", [])
+    candidate_root = getattr(contract, "candidate_root", None)
+    # 只改这本账自己数据目录里的候选件：临时账本配上默认目录时，那是本机真实的候选表。
+    if ids and candidate_root is not None and _managed_cache_root(contract, candidate_root):
+        from .stale_candidates import withdraw_purged_rows
+        try:
+            withdraw_purged_rows(candidate_root, ids)
+        except (OSError, ValueError, csv.Error):
+            LOGGER.exception("撤下已删除资产的资料候选失败")
     cleanup_pending = []
     for _original, quarantine in outcome.pop("_staged"):
         try:
@@ -396,14 +441,33 @@ def _windows_long_path(path):
 
 
 def purge_assets(connection, rows, *, missing_only: bool = False):
-    """删除媒体和账本行，调用方提交后清理隔离文件。
+    """删除媒体和账本行，调用方提交后清理隔离文件：`stage_purge` 加 `commit_purge`。
+
+    服务里的删除不走这里：先在写事务外 `stage_purge`，再开事务 `commit_purge`，网盘上逐个
+    stat、改名不占着写锁（`_purge_outside_lock`）。
+    """
+    outcome = stage_purge(rows, missing_only=missing_only)
+    try:
+        commit_purge(connection, outcome)
+    except BaseException:
+        _restore_staged_media(outcome["_staged"])
+        raise
+    return outcome
+
+
+def stage_purge(rows, *, missing_only: bool = False) -> dict:
+    """在写事务外处理媒体文件：核对路径与来源、stat、同目录隔离。
 
     本地文件同目录隔离，账本事务失败时恢复。rclone FUSE 直接删除，避免远端改名
-    触发复制；账本事务失败时保留记录供重试，已经删除的远端媒体无法恢复。
+    触发复制；账本事务失败时保留记录供重试，已经删除的远端媒体无法恢复。先删文件再删行
+    的次序不变（`peach-ledger-write`「删除」）。
+
+    网盘上每次 stat 和改名都是网络往返，一批几百个能走上几分钟；放在写事务里，期间播放
+    计数、评分等所有写入都排在后面。这一步不碰账本，`commit_purge` 在事务里复核后再删行。
 
     ``missing_only`` 删的只是账本行：文件还在（或答不上在不在）的行进 ``blocked``。
     """
-    purged, blocked, staged, snapshots, parents = [], [], [], [], []
+    items, blocked = [], []
     online_roots = None
     for row in rows:
         media = row["path"]
@@ -432,7 +496,8 @@ def purge_assets(connection, rows, *, missing_only: bool = False):
             if media_stat is not None:
                 blocked.append({"id": row["id"], "path": media, "reason": "文件仍在盘上"})
                 continue
-        elif media:
+        staged = None
+        if media and not missing_only:
             original = local
             try:
                 if media_stat is not None and not stat.S_ISREG(media_stat.st_mode):
@@ -441,58 +506,84 @@ def purge_assets(connection, rows, *, missing_only: bool = False):
                     if _is_rclone_mount(original):
                         original.unlink()
                     else:
-                        quarantine = _quarantine_media(original, location=row['location'] if 'location' in row.keys() else None)
-                        staged.append((original, quarantine))
+                        staged = (original, _quarantine_media(
+                            original, location=row['location'] if 'location' in row.keys() else None))
             except OSError as error:
                 blocked.append({"id": row["id"], "path": media,
                                 "reason": error.strerror or str(error)})
                 continue
         snapshot = row["snapshot_path"]
-        if snapshot:
-            snapshots.append(Path(snapshot))
-        if media:
-            parents.append(translated.parent)
-        purged.append(row["id"])
-    try:
-        if purged:
-            marks = ",".join("?" * len(purged))
-            connection.execute(
-                f"UPDATE playlist SET current_asset_id=NULL WHERE current_asset_id IN ({marks})",
-                purged,
-            )
-            connection.execute(
-                f"UPDATE playlist SET source_seed_asset_id=NULL WHERE source_seed_asset_id IN ({marks})",
-                purged,
-            )
-            for table in ASSET_REFERENCE_TABLES:
-                connection.execute(f"DELETE FROM {table} WHERE asset_id IN ({marks})", purged)
-            connection.execute(f"DELETE FROM asset WHERE id IN ({marks})", purged)
-    except BaseException:
-        _restore_staged_media(staged)
-        raise
-    return {
-        "purged": len(purged), "blocked": blocked,
-        "_staged": staged, "_snapshots": snapshots, "_parents": parents,
-    }
+        items.append({"id": row["id"], "path": media, "staged": staged,
+                      "snapshot": Path(snapshot) if snapshot else None,
+                      "parent": translated.parent if media else None})
+    return {"purged": 0, "blocked": blocked, "_items": items,
+            "_staged": [item["staged"] for item in items if item["staged"]],
+            "_returned": [], "_snapshots": [], "_parents": [], "_ids": [], "_codes": []}
+
+
+def commit_purge(connection, outcome: dict, *, eligible=None) -> None:
+    """在写事务里删 `stage_purge` 处理过的行；先复核每一行。
+
+    隔离与删行之间不再持锁，这段时间里行可能被改：还原出回收站、换了路径、已被别处删掉。
+    `eligible(row)` 是调用方的删除条件（`row` 带 `id,path,disposal,code`），路径必须和隔离
+    时一致。复核不过的行不删，进 `blocked`，它的隔离文件留到提交后由 `_finish_purge` 放回原处。
+    异常时不改 `outcome`，调用方按 `_staged` 恢复全部隔离文件。
+    """
+    items = outcome["_items"]
+    current = {}
+    if items:
+        marks = ",".join("?" * len(items))
+        current = {row["id"]: row for row in connection.execute(
+            f"SELECT id,path,disposal,code FROM asset WHERE id IN ({marks})",
+            [item["id"] for item in items])}
+    kept, returned = [], []
+    for item in items:
+        row = current.get(item["id"])
+        if row is not None and row["path"] == item["path"] and (eligible is None or eligible(row)):
+            kept.append(item)
+        else:
+            returned.append(item)
+    purged = [item["id"] for item in kept]
+    if purged:
+        marks = ",".join("?" * len(purged))
+        connection.execute(
+            f"UPDATE playlist SET current_asset_id=NULL WHERE current_asset_id IN ({marks})",
+            purged,
+        )
+        connection.execute(
+            f"UPDATE playlist SET source_seed_asset_id=NULL WHERE source_seed_asset_id IN ({marks})",
+            purged,
+        )
+        connection.execute(f"UPDATE follow_item SET asset_id=NULL WHERE asset_id IN ({marks})", purged)
+        for table in ASSET_REFERENCE_TABLES:
+            connection.execute(f"DELETE FROM {table} WHERE asset_id IN ({marks})", purged)
+        # 按文件出的资料候选键是 `asset:<编号>:<字段>`；资产删了，这些决定就没有可指的东西（#486）。
+        connection.executemany(
+            "DELETE FROM review_decision WHERE category='metadata_fields' AND item_key GLOB ?",
+            [(f"asset:{asset_id}:*",) for asset_id in purged])
+        connection.execute(f"DELETE FROM asset WHERE id IN ({marks})", purged)
+    outcome["blocked"].extend({"id": item["id"], "path": item["path"], "reason": "删除期间这一条已经变了"}
+                              for item in returned)
+    outcome.update(
+        purged=len(purged), _ids=purged,
+        _codes=[(item["id"], current[item["id"]]["code"]) for item in kept],
+        _staged=[item["staged"] for item in kept if item["staged"]],
+        _returned=[item["staged"] for item in returned if item["staged"]],
+        _snapshots=[item["snapshot"] for item in kept if item["snapshot"]],
+        _parents=[item["parent"] for item in kept if item["parent"]],
+    )
 
 
 def w_empty_trash(contract: WebContract):
     """永久清空回收站：只处理 disposal='trash' 的资产，其余一律不碰。"""
     contract.cache_bust()
-    outcome = None
-    try:
-        with contract.write_transaction() as connection:
-            rows = connection.execute(
-                "SELECT id,location,path,snapshot_path FROM asset WHERE disposal='trash'",
-            ).fetchall()
-            outcome = purge_assets(connection, rows)
-    except BaseException:
-        if outcome is not None:
-            _restore_staged_media(outcome["_staged"])
-        raise
-    result = {"ok": True, "operation": "empty-trash", **_finish_purge(outcome)}
-    result.update(clean_resource_orphans(contract))
-    return result
+    with contract.read_connection() as connection:
+        rows = connection.execute(
+            "SELECT id,location,path,snapshot_path FROM asset WHERE disposal='trash'",
+        ).fetchall()
+    # 这期间被还原出回收站的，事务里复核时留下，文件放回原处。
+    outcome = _purge_outside_lock(contract, rows, eligible=lambda row: row["disposal"] == "trash")
+    return _purge_receipt(contract, outcome, operation="empty-trash")
 
 
 def _batch_region_value(body) -> str | None:
@@ -610,52 +701,47 @@ def w_batch(contract: WebContract, body):
     try:
         with bind(contract.task_runs, handle.run_id):
             try:
-                with contract.write_transaction() as connection:
-                    found = connection.execute(
-                        f"SELECT id,path,snapshot_path,disposal,disposal_reason,location FROM asset WHERE id IN ({marks})", ids,
-                    ).fetchall()
-                    valid_ids = [row["id"] for row in found]
-                    if not valid_ids:
-                        raise ValueError("assets not found")
-                    _reject_ineligible_targets(operation, found)
-                    now = time.time()
-                    if operation in {"restore", "seen", "dispose"}:
-                        state_receipt = _write_batch_state(connection, found, operation, now, disposal_reason)
-                    elif operation == "delete":
-                        # 已消失的行文件本来就不在了，只删账本行；文件又回到盘上的那几条留着，
-                        # 下一轮扫描会把它们接回在库。选中里有一条已消失的，整批都按这条口径删。
-                        purge_outcome = purge_assets(
-                            connection, found, missing_only=any(row["disposal"] == VANISHED for row in found))
-                    elif operation in REVIEW_MARKS:
-                        _write_review_mark(connection, operation, valid_ids, now)
-                    elif operation == "region":
-                        # 走 `write_owned_fields` 而不是直接 UPDATE：产地是真相字段，用户这一
-                        # 笔要压得住后面每一轮刮削与推断，归属列是它唯一的凭据。
-                        write_owned_fields(connection, valid_ids,
-                                           {"region": region_value}, USER_MANUAL)
-                    elif operation == "later":
-                        connection.executemany(
-                            "INSERT OR IGNORE INTO watch_queue(profile_id,asset_id,added_at,source) "
-                            f"VALUES('{DEFAULT_PROFILE_ID}',?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'web-batch')",
-                            [(asset_id,) for asset_id in valid_ids],
-                        )
-                    else:
-                        connection.executemany(
-                            "INSERT INTO asset_preference(profile_id,asset_id,liked,reason,source,updated_at) "
-                            f"VALUES('{DEFAULT_PROFILE_ID}',?,1,'','web-batch',strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
-                            "ON CONFLICT(profile_id,asset_id) DO UPDATE SET liked=1,source='web-batch',"
-                            "updated_at=excluded.updated_at",
-                            [(asset_id,) for asset_id in valid_ids],
-                        )
+                if operation == "delete":
+                    purge_outcome, valid_ids = _batch_purge(contract, ids)
+                else:
+                    with contract.write_transaction() as connection:
+                        found = connection.execute(
+                            f"SELECT id,path,snapshot_path,disposal,disposal_reason,location FROM asset WHERE id IN ({marks})", ids,
+                        ).fetchall()
+                        valid_ids = [row["id"] for row in found]
+                        if not valid_ids:
+                            raise ValueError("assets not found")
+                        _reject_ineligible_targets(operation, found)
+                        now = time.time()
+                        if operation in {"restore", "seen", "dispose"}:
+                            state_receipt = _write_batch_state(connection, found, operation, now, disposal_reason)
+                        elif operation in REVIEW_MARKS:
+                            _write_review_mark(connection, operation, valid_ids, now)
+                        elif operation == "region":
+                            # 走 `write_owned_fields` 而不是直接 UPDATE：产地是真相字段，用户这一
+                            # 笔要压得住后面每一轮刮削与推断，归属列是它唯一的凭据。
+                            write_owned_fields(connection, valid_ids,
+                                               {"region": region_value}, USER_MANUAL)
+                        elif operation == "later":
+                            connection.executemany(
+                                "INSERT OR IGNORE INTO watch_queue(profile_id,asset_id,added_at,source) "
+                                f"VALUES('{DEFAULT_PROFILE_ID}',?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'web-batch')",
+                                [(asset_id,) for asset_id in valid_ids],
+                            )
+                        else:
+                            connection.executemany(
+                                "INSERT INTO asset_preference(profile_id,asset_id,liked,reason,source,updated_at) "
+                                f"VALUES('{DEFAULT_PROFILE_ID}',?,1,'','web-batch',strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+                                "ON CONFLICT(profile_id,asset_id) DO UPDATE SET liked=1,source='web-batch',"
+                                "updated_at=excluded.updated_at",
+                                [(asset_id,) for asset_id in valid_ids],
+                            )
             except BaseException as error:
-                if purge_outcome is not None:
-                    _restore_staged_media(purge_outcome["_staged"])
                 handle.finish("cancelled" if isinstance(error, Cancelled) else "failed",
                               error="" if isinstance(error, Cancelled) else f"{type(error).__name__}: {error}")
                 raise
             if purge_outcome is not None:
-                result = {"ok": True, "operation": operation, **_finish_purge(purge_outcome)}
-                result.update(clean_resource_orphans(contract))
+                result = _purge_receipt(contract, purge_outcome, operation=operation)
                 handle.finish("succeeded", summary={"operation": operation,
                                                     "changed": len(valid_ids)})
                 return result
@@ -728,6 +814,24 @@ def w_junk_bulk(contract: WebContract, body):
     return {"ok": True, "operation": operation, "changed": changed}
 
 
+def _batch_purge(contract: WebContract, ids: list[int]):
+    """批量永久删除：选中的行先读出来，网盘操作在写事务外做，事务里复核仍在回收站或已消失。"""
+    marks = ",".join("?" * len(ids))
+    with contract.read_connection() as connection:
+        found = connection.execute(
+            f"SELECT id,path,snapshot_path,disposal,disposal_reason,location FROM asset WHERE id IN ({marks})", ids,
+        ).fetchall()
+    valid_ids = [row["id"] for row in found]
+    if not valid_ids:
+        raise ValueError("assets not found")
+    _reject_ineligible_targets("delete", found)
+    # 已消失的行文件本来就不在了，只删账本行；文件又回到盘上的那几条留着，
+    # 下一轮扫描会把它们接回在库。选中里有一条已消失的，整批都按这条口径删。
+    outcome = _purge_outside_lock(contract, found, missing_only=any(row["disposal"] == VANISHED for row in found),
+                                  eligible=lambda row: row["disposal"] in DISPOSED)
+    return outcome, valid_ids
+
+
 def _add_large_short_copy_cluster(items: list[dict], clusters: list[list[dict]]):
     """把同番号的大体积短版本并到完整版所在组，返回这个组。"""
     claimed = {item["id"] for cluster in clusters for item in cluster}
@@ -785,10 +889,31 @@ def _duplicate_groups(grouped: dict[str, list[dict]]):
     return groups
 
 
+#: 重复项分组读的账本表。整库十万条视频逐条判番号、按时长聚簇要一两秒，页面每翻一页、每次
+#: 轮询都重来一遍；声明后只在这两张表变了才重算，后台任务的提交先回上一份（ADR-0146）。
+DUPLICATE_TABLES = ("asset", "review_decision")
+
+
 def q_duplicates(contract: WebContract, args):
     """按番号 + 时长找真重复，也收同番号的大体积短版本。"""
     limit = min(max(int(args.get("limit", "60")), 1), 300)
     offset = max(int(args.get("offset", "0")), 0)
+    groups, found = contract.cached_until_changed(
+        "duplicate-groups", lambda: _duplicate_listing(contract), tables=DUPLICATE_TABLES)
+    window = groups[offset:offset + limit]
+    return {
+        "total": len(groups),
+        "files": sum(g["count"] for g in groups),
+        "reclaimable": sum(g["reclaimable"] for g in groups),
+        "groups": window,
+        "has_more": offset + limit < len(groups),
+        # 标过「都保留」、组员没变的组数；它们不进上面任何一项。
+        "kept": found - len(groups),
+    }
+
+
+def _duplicate_listing(contract: WebContract) -> tuple[list[dict], int]:
+    """没标过「都保留」的重复组（按可腾出空间从大到小）与找到的组数，各页共用这一份。"""
     with contract.read_connection() as connection:
         rows = connection.execute(
             "SELECT id,code,location,path,name,size,duration,hash,disposal "
@@ -811,13 +936,4 @@ def q_duplicates(contract: WebContract, args):
     found = _duplicate_groups(grouped)
     groups = [g for g in found if duplicate_group_key(f["id"] for f in g["files"]) not in kept]
     groups.sort(key=lambda g: -g["reclaimable"])
-    window = groups[offset:offset + limit]
-    return {
-        "total": len(groups),
-        "files": sum(g["count"] for g in groups),
-        "reclaimable": sum(g["reclaimable"] for g in groups),
-        "groups": window,
-        "has_more": offset + limit < len(groups),
-        # 标过「都保留」、组员没变的组数；它们不进上面任何一项。
-        "kept": len(found) - len(groups),
-    }
+    return groups, len(found)

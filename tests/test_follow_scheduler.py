@@ -31,6 +31,34 @@ class FollowScheduleStoreTests(unittest.TestCase):
 
 
 class FollowUpdateSchedulerTests(unittest.TestCase):
+    def test_restart_preserves_failed_checks_and_the_backoff_deadline(self):
+        failure = lambda: {'checked': 1, 'results': [{'ok': False}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            first = FollowUpdateScheduler(Path(temporary), failure, available=True)
+            first.start()
+            try:
+                first._run()
+                first._run()
+                previous = first.status()
+            finally:
+                first.stop()
+            second = FollowUpdateScheduler(Path(temporary), failure, available=True)
+            second.start()
+            try:
+                current = second.status()
+                self.assertEqual(current['consecutive_failures'], 2)
+                self.assertEqual(current['last_error'], previous['last_error'])
+                self.assertEqual(current['failing_since'], previous['failing_since'])
+                self.assertEqual(current['next_run_at'], previous['next_run_at'])
+                second.run_check = lambda: {'checked': 1, 'results': [{'ok': True}]}
+                second._run()
+            finally:
+                second.stop()
+            third = FollowUpdateScheduler(Path(temporary), failure, available=True)
+            self.assertEqual(third.status()['consecutive_failures'], 0)
+            self.assertIsNone(third.status()['last_error'])
+            self.assertIsNone(third.status()['failing_since'])
+
     def test_installation_reservation_skips_the_tick_without_recording_a_failure(self):
         from peach.update_tasks import UpdateBusy
         def blocked():

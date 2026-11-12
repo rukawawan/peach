@@ -13,6 +13,35 @@ describe('设计决定：人物与厂牌资料页', () => {
   let browser: Browser;
   installDesignBrowser((next) => { browser = next; });
 
+  it('取景前的懒加载头像保留可见性，加载后显示人像', { timeout: 60_000 }, async () => {
+    const opened = await openProfiledPerformer(browser, DESKTOP);
+    try {
+      const page = opened.page;
+      let release!: () => void;
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      await page.route('**/avatar-loading-probe', async route => {
+        await pending;
+        await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="green"/></svg>' });
+      });
+      const state = await page.evaluate(() => {
+        const ring = document.createElement('span');
+        ring.style.cssText = 'position:fixed;top:20px;left:20px;width:80px;height:80px';
+        ring.innerHTML = '<img id="avatar-loading-probe" loading="lazy" width="128" height="128" data-facebox="0.5 0.5 60 128 128" src="/avatar-loading-probe">';
+        document.body.append(ring);
+        const image = ring.querySelector('img')!;
+        return { visibility: getComputedStyle(image).visibility, opacity: getComputedStyle(image).opacity };
+      });
+      release();
+      assert.deepEqual(state, { visibility: 'visible', opacity: '0' });
+      await page.waitForFunction(() => {
+        const image = document.querySelector<HTMLImageElement>('#avatar-loading-probe')!;
+        return image.naturalWidth > 0 && getComputedStyle(image).opacity === '1';
+      });
+    } finally {
+      await opened.close();
+    }
+  });
+
   for (const [viewport, split] of [[WIDE, true], [MOBILE, false]] as const) {
     it(`搜索下拉按种类分页签；宽屏分两栏、人名带头像与近作、视频排成封面格，窄屏一栏（${viewport.name}）`, { timeout: 60_000 }, async () => {
       const opened = await visit(browser, '/', viewport);
@@ -679,9 +708,10 @@ describe('设计决定：人物与厂牌资料页', () => {
     }
   });
 
-  it('人物页骨架第一帧就带着这一位有的新作行与同台艺人，数据到了一次换齐、高度不变、封面不再等第二遍', { timeout: 60_000 }, async () => {
+  it('人物页首帧保留新作和同台艺人的高度，文字先呈现、封面独立加载', { timeout: 60_000 }, async () => {
     const name = '七沢みあ';
     const opened = await visit(browser, '/', DESKTOP);
+    let releaseCover = () => {};
     try {
       await opened.page.route(/\/api\/entity\/shapes/, (route) => route.fulfill({ json: {
         ok: true, entities: [{ id: 90_001, kind: 'performer', names: [name], parts: ['feed', 'costars'] }] } }));
@@ -729,9 +759,10 @@ describe('设计决定：人物与厂牌资料页', () => {
           has_cover: true, cover_frame: null, poster_box: null, release_date: '2026-09-01',
           studio: '厂牌', performers: name, source_name: '', read: false, ignored: false,
           scrape_error: null }] } }));
-      // 封面比数据晚到一截：整页要等它，而不是先换上真卡、再在封面格里微光一遍。
+      // 封面尚未返回时，身份、标题和操作仍应可见。
+      const coverWaiting = new Promise<void>(resolve => { releaseCover = resolve });
       await opened.page.route(/\/cover\?code=ABC-001/, async (route) => {
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await coverWaiting;
         await route.fulfill({ contentType: 'image/png', body: Buffer.from(PIXEL, 'base64') });
       });
       await opened.page.goto(new URL(`/performers/${encodeURIComponent(name)}`,
@@ -760,12 +791,13 @@ describe('设计决定：人物与厂牌资料页', () => {
       assert.equal(sheen, '1', '新作骨架卡的微光晚于骨架出现，中间露出封面格的黑底');
       assert.ok(before.footHeight > 0, '骨架的资料卡底没有同台艺人那一条');
       assert.equal(before.sheen, before.plain, '新作骨架的微光另起了一种颜色');
-      // 画好的页面上那一行一出现就得是真卡：再露一回它自己的骨架，就是同一行等了两遍。
+      // 身份就绪后新作可以独立等待；真卡出现后不能再退回骨架。
       await opened.page.evaluate(() => {
-        const seen = { second: false };
+        const seen = { ready: false, second: false };
         (window as unknown as { feedSeen: typeof seen }).feedSeen = seen;
         new MutationObserver(() => {
-          if (document.querySelector('[data-feed-new] .feednewskeleton')) seen.second = true;
+          if (document.querySelector('[data-feed-new] [data-feed-id]')) seen.ready = true;
+          if (seen.ready && document.querySelector('[data-feed-new] .feednewskeleton')) seen.second = true;
         }).observe(document.querySelector('#index')!, { childList: true, subtree: true });
       });
       release();
@@ -780,9 +812,14 @@ describe('设计决定：人物与厂牌资料页', () => {
       assert.equal(after.footHeight, before.footHeight, '同台艺人那一条占位和真的不一样高，资料卡会伸缩');
       assert.equal(after.busy, null);
       assert.equal(after.second, false, '整页画出来之后新作那一行又单独骨架了一轮');
-      assert.equal(after.waiting, 0, '骨架退场后封面格里又微光了一遍');
+      assert.equal(after.waiting, 1, '封面独立等待时保留卡片标题和操作');
+      releaseCover();
+      await opened.page.waitForFunction(() => !document.querySelector('[data-feed-id] .pic.imgwait'));
+      assert.equal(await row.locator('[data-feed-id] img').first().evaluate(image =>
+        (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0), true);
       assert.deepEqual(opened.problems, []);
     } finally {
+      releaseCover();
       await opened.close();
     }
   });

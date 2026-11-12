@@ -16,7 +16,7 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
-from . import (changelog, check_public_text, check_readme_impact, co_author, commit_subject,
+from . import (changelog, check_public_text, co_author, commit_subject,
                test_evidence, test_runner, version_bump)
 from .release_tag import MASTER_WRITER
 
@@ -133,12 +133,12 @@ def preflight(repo: Path, target_branch: str = "master") -> dict[str, object]:
             "metadata": "passed", "tests": "not_checked", "pull_request": "not_checked"}
 
 
-def ready(repo: Path, target_branch: str = "master") -> dict[str, object]:
+def ready(repo: Path, target_branch: str = "master", *, ci_run: int | None = None) -> dict[str, object]:
     report = _worker_delivery(repo, target_branch)
-    require_verified(repo, target_branch, set(report["files"]))
+    proof = require_verified(repo, target_branch, set(report["files"]), ci_run=ci_run)
     if _git(repo, "rev-parse", "HEAD").stdout.strip() != report["head"]:
         raise WorkspaceError("验证检查期间工作者分支改变，请重试")
-    return {"ok": True, "action": "ready", **report}
+    return {"ok": True, "action": "ready", **report, "verification": proof}
 
 
 def require_metadata(worker: Path, target_branch: str) -> str:
@@ -148,8 +148,7 @@ def require_metadata(worker: Path, target_branch: str) -> str:
         raise WorkspaceError("验证工作树必须干净")
     if _git(worker, "merge-base", "--is-ancestor", target_branch, "HEAD", check=False).returncode:
         raise WorkspaceError("目标分支已前进；请在工作树 rebase 后运行 auto 验证")
-    problems = (check_readme_impact.check(worker, target_branch)
-                + co_author.check(worker, target_branch)
+    problems = (co_author.check(worker, target_branch)
                 + commit_subject.check(worker, target_branch))
     if problems:
         raise WorkspaceError("; ".join(problems))
@@ -159,15 +158,33 @@ def require_metadata(worker: Path, target_branch: str) -> str:
     return head
 
 
-def require_verified(worker: Path, target_branch: str, paths: Iterable[str]) -> None:
+def require_verified(worker: Path, target_branch: str, paths: Iterable[str], *,
+                     ci_run: int | None = None) -> dict:
     head = require_metadata(worker, target_branch)
-    scopes, _ = test_runner.scopes_for_changes(paths, contents=test_runner.changed_contents(worker, target_branch, paths))
-    state = test_evidence.key(worker)
-    if not test_evidence.covers(test_evidence.read(worker, state), scopes):
-        raise WorkspaceError("缺少有效测试记录；请在工作树运行统一测试入口 auto")
+    scopes, _ = test_runner.scopes_for_changes(paths, contents=test_runner.changed_contents(worker, target_branch, paths),
+                                              root=worker)
+    from . import ci_test_evidence
+    proof, ci_error = None, None
+    try:
+        run_id = ci_run if ci_run is not None else ci_test_evidence.remembered(worker)
+        if run_id is not None:
+            proof = ci_test_evidence.verify(worker, run_id, scopes, target_branch)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        ci_error = error
+    if proof is None and ci_run is None:
+        state = test_evidence.key(worker)
+        if test_evidence.covers(test_evidence.read(worker, state), scopes):
+            proof = {"source": "local", "state": state, "scopes": list(scopes)}
+    if proof is None:
+        if ci_error is not None:
+            raise WorkspaceError(f"CI 测试证明未取得或无效：{ci_error}") from ci_error
+        raise WorkspaceError("缺少有效测试记录；请运行统一测试入口 auto，或 ready --ci-run 指定成功 Test")
     if _git(worker, "rev-parse", "HEAD").stdout.strip() != head or \
             _git(worker, "status", "--porcelain").stdout.strip():
         raise WorkspaceError("验证检查期间工作树改变，请重试")
+    if proof['source'] == 'github':
+        ci_test_evidence.remember(worker, proof)
+    return proof
 
 
 ISSUE_LINK = re.compile(
@@ -624,6 +641,8 @@ def main() -> int:
     for name in ("preflight", "ready"):
         inspect = sub.add_parser(name)
         inspect.add_argument("--target", default="master")
+        if name == 'ready':
+            inspect.add_argument('--ci-run', type=int, help='复用同一提交的受信 GitHub Test 运行')
     merge = sub.add_parser("integrate")
     merge.add_argument("--branch", required=True)
     merge.add_argument("--target", default="master")
@@ -639,7 +658,7 @@ def main() -> int:
         elif args.command == "preflight":
             result = preflight(args.repo, args.target)
         elif args.command == "ready":
-            result = ready(args.repo, args.target)
+            result = ready(args.repo, args.target, ci_run=args.ci_run)
         elif args.command == "prune":
             result = prune(args.repo, args.target, apply=args.apply)
         elif args.command == "processes":

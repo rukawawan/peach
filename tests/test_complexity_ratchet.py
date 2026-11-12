@@ -36,10 +36,10 @@ LIMIT = 30
 
 #: 键是 `<仓库相对路径>:<限定名>`，值是当前的分支数，只能往下改。
 BASELINE: dict[str, int] = {
-    "src/peach/junk.py:scored_candidates": 53,
+    "src/peach/junk.py:_scored_candidates": 52,
     "scripts/localize_performer_names.py:collect": 63,
     "src/peach/web_resource_sync.py:_resource_orphan_plan": 50,
-    "src/peach/web_review.py:_review_rows": 40,
+    "src/peach/web_review.py:_review_rows": 38,
     "src/peach/fanbox.py:normalize_fanbox_post": 59,
     "scripts/merge_duplicate_identities.py:collect": 50,
     "src/peach/web_review.py:_attach_review_asset_context": 46,
@@ -51,7 +51,6 @@ BASELINE: dict[str, int] = {
     "src/peach/taste_history.py:_taste_analysis": 40,
     "src/peach/web_catalog.py:catalog_filter": 40,
     "scripts/audit_domain_codes.py:collect": 39,
-    "src/peach/web_catalog.py:q_items": 37,
     "scripts/harvest_social_avatars.py:harvest_entity": 37,
     "scripts/merge_duplicate_identities.py:collect_repeated_projections": 34,
     "src/peach/fc2_similarity.py:media_evidence": 34,

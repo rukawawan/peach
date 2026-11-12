@@ -48,6 +48,10 @@ Peach 配置页通过同源桥接页检测脚本版本和是否已为当前地�
 
 `POST /api/jav-browser/postprocess` 接收 `{"code": "..."}`，重试这个番号入库后失败的整理，与任务中心的「重试整理」同一入口，返回状态接口同一结构；没有失败的整理时返回 400。
 
+资源搜索与入库后处理遇到可恢复的网络超时、暂时服务错误、挂载离线或文件占用时，由 Peach 后台自动重试，最多 3 次，间隔为 1、5、30 分钟；来源要求的 `Retry-After` 更长时按来源等待。计划和次数持久保存，关闭网页或重启服务不丢失。已经入库的影片只重跑幂等后处理，不重新提交云下载。凭据、配额、身份、文件冲突、路径超长、完整性与程序错误不自动重试。
+
+等待期间状态响应带 `retry_at`（ISO-8601 UTC）、`retry_attempt` 和 `retry_limit`，任务仍属于进行中；用户脚本显示「待自动重试」，进度页说明时间与次数。重试耗尽带 `retry_exhausted: true`，保留失败与手动入口。手动重试会开启一轮新的有限后处理重试。
+
 女优页的「订阅新作」走 `GET /api/jav-browser/performer?source_url=…&names=…` 与 `POST /api/jav-browser/performer`（正文 `{"source_url": "…", "names": [...], "enabled": true}`），两者都回 `{name, entity_id, following, avatar?}`。支持 JavDB 演员页 `/actors/<id>`、DMM 女优片单 `?actress=<编号>` 与旧版 `article=actress/id=<编号>`、MISSAV 女优页 `/actresses/<名字>`；`names` 是页面上的女优名，JavDB 标题栏的几种写法与 MISSAV 的「现名（旧名）」都会拆开。认人先看页面编号的持有者，再按名字认正名或唯一别名；编号没人持有时新建她并绑上编号，DMM 页没给名字时向 DMM 问。只有名字的页面，库里有编号的直接订，否则到 JavDB 搜，名字对得上又确认是同一个人才登记，同名不止一位、搜不到或 JavDB 冷却时返回 400 与原因。取舍见 [ADR-0143](adr/0143-userscript-performer-pages-subscribe.md)。
 
 脚本通过专用令牌向 `POST /api/jav-browser/errors` 写入请求超时、连接失败、HTTP 拒绝和无效响应记录。记录只含发生时间、事件标识、脚本版本、站点标识、番号、操作类型、耗时和 HTTP 状态，不含令牌、账号、完整来源地址、页面正文或原始异常。每批最多 10 条、16 KiB，服务端每分钟最多接收 20 条并按事件标识去重；仅写本机 `errors-*.log`，随导出诊断包提供。脚本管理器暂存最多 20 条、保留 7 天，后续请求成功时按一分钟限频向原 Peach 地址补报；记录失败不重试添加，也不递归生成错误。

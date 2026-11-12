@@ -1,9 +1,9 @@
 """外部 issue 的模板检查：让命令行和 API 提交的 issue 与网页模板提交的结果一致。
 
 网页「New issue」按模板提交时，即使删光模板文字也会带上模板的 Issue Type；用 `gh` 或 API
-提交则不经过模板。作者不是维护者、也没有 Issue Type 的新 issue 按下列规则处理：正文含有
-某个模板的章节，补上那个模板的 Issue Type；缺少模板章节，关闭；按模板补齐章节后重开并
-补上类型。GitHub 写操作由 `.github/workflows/issue-intake.yml` 完成，
+提交则不经过模板。作者不是维护者的新 issue 均检查正文：含有某个模板的章节时保留已有类型，
+没有类型则补上那个模板的 Issue Type；缺少模板章节则关闭；按模板补齐章节后重开并补上类型。
+GitHub 写操作由 `.github/workflows/issue-intake.yml` 完成，
 本脚本只输出 `keep`、`close`、`type <类型>` 或 `reopen <类型>`。
 """
 from __future__ import annotations
@@ -72,10 +72,10 @@ def verdict(payload: dict, templates: list[Template] | None = None) -> str:
     kind = matched_type(body, templates)
     if action == "edited" and issue.get("state") == "closed" and LABEL in labels:
         return f"reopen {kind}" if kind else "keep"
-    if action not in {"opened", "edited"} or issue.get("state") == "closed" or issue.get("type"):
+    if action not in {"opened", "edited"} or issue.get("state") == "closed":
         return "keep"
     if kind:
-        return f"type {kind}"
+        return "keep" if issue.get("type") else f"type {kind}"
     return "close" if action == "opened" else "keep"
 
 

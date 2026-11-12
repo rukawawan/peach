@@ -13,11 +13,11 @@ import { ErrorExcerpt } from '../../src/react/activity/error-excerpt';
 import {
   elapsedText, errorHeadline, followupDetail, hasResultProblems, isRoutine, prefetchTasks, progressText, summaryItems, summaryText, TASKS_URL,
 } from '../../src/react/activity/tasks';
-import type { ActivityData, FinishedPage, TaskResourcesPayload, TaskRunPayload } from '../../src/react/activity/tasks';
+import type { ActivityData, TaskResourcesPayload, TaskRunPayload } from '../../src/react/activity/tasks';
 import type { DownloadsSnapshot } from '../../src/react/bundle';
 import { queryClient } from '../../src/react/query';
 
-import { buttonNamed, click, mount, mountRoot, pending, settle } from './render';
+import { buttonNamed, choose, click, mount, mountRoot, pending, settle } from './render';
 
 vi.mock('@peach/legacy/ui', async (original) => ({
   ...await original<typeof import('@peach/legacy/ui')>(),
@@ -87,6 +87,16 @@ function stubFetch(tasks: (input: string, init?: RequestInit) => Promise<unknown
       issuePosts.push(input);
       issues = issues.filter((issue) => issue.retry !== input);
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ running: true }) });
+    }
+    if (/^\/api\/tasks\/\d+$/.test(input)) {
+      return tasks(input, init).then(async (value) => {
+        const response = value as { ok: boolean; status: number; json(): Promise<ActivityData> };
+        const body = await response.json();
+        const parent = Number(input.split('/').at(-1));
+        return { ...response, json: async () => ({
+          followups: [...(body.running || []), ...(body.finished || [])].filter((row) => row.parent_run_id === parent),
+        }) };
+      });
     }
     return tasks(input, init);
   });
@@ -241,10 +251,7 @@ it('活动主任务和后继持续显示各自的CPU、GPU与实测网速', asyn
   expect(main.querySelector('[data-task-resource="network"]')?.textContent).toBe('网络 2 MB/s');
   expect(nested.querySelector('[data-task-resource="cpu"]')?.textContent).toBe('CPU 3%');
   expect(nested.querySelector('[data-task-resource="network"]')?.textContent).toBe('网络 1 KB/s');
-  expect(main.querySelector('[data-task-resource="cpu"]')?.getAttribute('title')).toContain('容器按可见 CPU 配额计算');
-  expect(main.querySelector('[data-task-resource="gpu"]')?.getAttribute('title')).toContain('最忙的 GPU 引擎');
-  expect(main.querySelector('[data-task-resource="network"]')?.getAttribute('title')).toContain('该任务已观测的下载速度');
-  expect([...main.querySelectorAll('[data-task-resource]')].every(node => node.getAttribute('tabindex') === '0')).toBe(true);
+  expect([...main.querySelectorAll('[data-task-resource]')].every(node => !node.hasAttribute('title'))).toBe(true);
 });
 
 it('资源采样中和未取得分别显示，原因优先说明，不把null填成零', async () => {
@@ -291,13 +298,12 @@ it('真实零读数写成未使用，高占用由该指标的真实high状态强
 });
 
 it('父任务已结束而后继仍在活动时展示后端聚合读数，历史终态不展示旧采样', async () => {
-  const parent = run({ id: 1, status: 'succeeded', resources: resources({ detail: '统计这轮仍在活动的全部后继' }) });
+  const parent = run({ id: 1, status: 'succeeded', resources: resources() });
   const historical = run({ id: 2, status: 'cancelled', resources: resources() });
   const { host } = await open(payload({ running: [followup(1, { status: 'pending' })],
     finished: [parent, historical], followup_counts: { '1': { pending: 100 } } }));
   expect(host.querySelector('[data-task-resources="1"]')).not.toBeNull();
-  expect(host.querySelector('[data-task-resources="1"] [data-task-resource="cpu"]')?.getAttribute('title'))
-    .toContain('全部后继');
+  expect(host.querySelector('[data-task-resources="1"] [data-task-resource="cpu"]')?.textContent).toBe('CPU 12.5%');
   expect(host.querySelector('[data-task-resources="2"]')).toBeNull();
 });
 
@@ -650,6 +656,29 @@ it('服务端未给出控制能力时不按任务种类自行增加按钮', asyn
   expect(host.querySelector('[data-task-controls]')).toBeNull();
 });
 
+it('活动任务复用三档控件并将档位提交给当前任务', async () => {
+  const posts: unknown[] = [];
+  let current = run({ control: { state: 'running', actions: ['pause', 'cancel', 'set_speed'], speed_mode: 'standard' } });
+  stubFetch(async (_input, init) => {
+    if (init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      posts.push(body);
+      current = { ...current, control: { ...current.control!, speed_mode: body.speed_mode } };
+    }
+    return { ok: true, status: 200, json: async () => payload({ running: [current] }) };
+  });
+  await prefetchTasks(new AbortController().signal);
+  const host = await mount(page());
+  await click(controlButton('处理速度：标准', host));
+  const slider = document.querySelector('input[type="range"]')!;
+  await act(async () => {
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    slider.dispatchEvent(new KeyboardEvent('keyup', { key: 'Home', bubbles: true }));
+  });
+  await vi.waitFor(() => expect(controlButton('处理速度：低占用', host)).not.toBeNull());
+  expect(posts).toEqual([{ action: 'set_speed', speed_mode: 'low' }]);
+});
+
 it('被挡下的那一轮单独成段，不在最近完成里再出现一次', async () => {
   const blocked = run({
     id: 7, status: 'cancelled', trigger: 'scheduled', progress_total: null,
@@ -725,7 +754,7 @@ it('派出几十条后继的几批合成一张进行中的卡，进度按计数�
   expect(card.textContent).toContain('2 批');
   expect(card.textContent).toContain('已处理 62 / 128 项 · 其中 2 项失败');
   expect(card.querySelector('summary')?.textContent).toBe('任务明细 · 128 项');
-  expect(card.textContent).toContain('列出其中 2 项，正在处理的排在前面');
+  expect(card.textContent).toContain('列出其中 2 项');
   const rows = [...card.querySelectorAll('[data-followup-key]')];
   expect(rows.map((row) => row.getAttribute('data-status'))).toEqual(['running', 'pending']);
   expect(rows[0]!.textContent).toContain('ABC-001 · 采集缺失资料');
@@ -923,97 +952,75 @@ const done = (minute: number, overrides: Partial<TaskRunPayload> = {}) => run({
   finished_at: `2026-09-11T10:${String(minute).padStart(2, '0')}:00.000Z`, ...overrides,
 });
 
-/** 轮询与往前翻各有一串回话：地址里带游标的走 `pages`，其余走 `polls`。`null` 那一份回 500。 */
-function route(polls: ActivityData[], pages: (FinishedPage | null)[]) {
-  let polled = 0, paged = 0;
-  const fetcher = vi.fn(async (input: string, _init?: RequestInit) => {
-    if (!input.includes('before_id=')) {
-      const body = polls[Math.min(polled, polls.length - 1)];
-      polled += 1;
-      return { ok: true, status: 200, json: async () => body };
-    }
-    const body = pages[Math.min(paged, pages.length - 1)] ?? null;
-    paged += 1;
-    return body
-      ? { ok: true, status: 200, json: async () => body }
-      : { ok: false, status: 500, json: async () => ({ message: '数据库当前只能浏览' }) };
-  });
-  stubFetch(fetcher);
-  return fetcher;
-}
-
 const shownIds = (host: HTMLElement) =>
   [...host.querySelectorAll('[data-run-id]')].map((node) => Number(node.getAttribute('data-run-id')));
 
-const cursorOf = (fetcher: ReturnType<typeof route>, call: number) =>
-  new URL(fetcher.mock.calls[call]![0], 'http://peach').searchParams;
-
-it('「加载更早」以最旧那一行为游标往后接一页，到头就不再给这个键', async () => {
-  const fetcher = route(
-    [payload({ finished: [done(9), done(8)], finished_has_more: true })],
-    [{ finished: [done(7), done(6)], finished_has_more: true },
-     { finished: [done(5)], finished_has_more: false }]);
+it('最近完成按页替换任务，支持返回上一页，轮询保留当前页', async () => {
+  const calls: string[] = [];
+  stubFetch(async (input) => {
+    calls.push(input);
+    const current = Number(new URL(input, 'http://peach').searchParams.get('page') || 1);
+    return { ok: true, status: 200, json: async () => payload({
+      finished: current === 1 ? [done(9), done(8)] : [done(7)],
+      finished_page: current, finished_total: 21,
+    }) };
+  });
   await prefetchTasks(new AbortController().signal);
   const host = await mount(page());
   expect(shownIds(host)).toEqual([9, 8]);
-
-  await click(buttonNamed('加载更早', host));
-  await settle();
-  expect(cursorOf(fetcher, 1).get('before_id')).toBe('8');
-  expect(cursorOf(fetcher, 1).get('before_finished_at')).toBe('2026-09-11T10:08:00.000Z');
-  expect(shownIds(host)).toEqual([9, 8, 7, 6]);
-
-  await click(buttonNamed('加载更早', host));
-  await settle();
-  expect(cursorOf(fetcher, 2).get('before_id')).toBe('6');
-  expect(shownIds(host)).toEqual([9, 8, 7, 6, 5]);
-  expect(buttonNamed('加载更早', host), '已经到头还留着「加载更早」').toBeNull();
+  await click(buttonNamed('下一页', host));
+  await vi.waitFor(() => expect(shownIds(host)).toEqual([7]));
+  await act(async () => { await queryClient.invalidateQueries({ queryKey: ['tasks'] }); });
+  expect(shownIds(host)).toEqual([7]);
+  expect(calls.at(-1)).toContain('page=2');
+  await click(buttonNamed('上一页', host));
+  await vi.waitFor(() => expect(shownIds(host)).toEqual([9, 8]));
 });
 
-it('第一页之后没有更早的就不给「加载更早」', async () => {
-  const { host } = await open(payload({ finished: [done(9)], finished_has_more: false }));
-  expect(buttonNamed('加载更早', host)).toBeNull();
+it('最近完成只有一页时隐藏分页', async () => {
+  const { host } = await open(payload({ finished: [done(9)], finished_total: 1, finished_page: 1 }));
+  expect(host.querySelector('nav[aria-label="最近完成分页"]')).toBeNull();
 });
 
-it('轮询刷新之后翻过的行还在，被新完成挤出第一页的那一轮也不丢、不重复', async () => {
-  vi.useFakeTimers();
-  route(
-    [payload({ finished: [done(9), done(8)], finished_has_more: true }),
-     // 10:10 又结束了一轮，第一页末尾的 8 被挤了出去。
-     payload({ finished: [done(10), done(9)], finished_has_more: true }),
-     payload({ finished: [done(11), done(10)], finished_has_more: true }),
-     // 翻页之后才进第一页的 10 也要留住：它被挤出去时，哪一页的回话里都没有它。
-     payload({ finished: [done(12), done(11)], finished_has_more: true })],
-    [{ finished: [done(7), done(6)], finished_has_more: true }]);
+it('最近完成切换每页数量后从第一页读取所选条数', async () => {
+  const calls: string[] = [];
+  const rows = Array.from({ length: 40 }, (_, index) => done(index + 1));
+  stubFetch(async (input) => {
+    calls.push(input);
+    const query = new URL(input, 'http://peach').searchParams;
+    const limit = Number(query.get('limit') || 20);
+    const current = Number(query.get('page') || 1);
+    return { ok: true, status: 200, json: async () => payload({
+      finished: rows.slice((current - 1) * limit, current * limit), finished_total: 40, finished_page: current,
+    }) };
+  });
   await prefetchTasks(new AbortController().signal);
   const host = await mount(page());
-  await click(buttonNamed('加载更早', host));
-  await settle();
-  expect(shownIds(host)).toEqual([9, 8, 7, 6]);
-
-  await tick(10_000);
-  expect(shownIds(host)).toEqual([10, 9, 8, 7, 6]);
-  await tick(10_000);
-  await tick(10_000);
-  expect(shownIds(host)).toEqual([12, 11, 10, 9, 8, 7, 6]);
-  expect(buttonNamed('加载更早', host), '刷新一次就把往前翻的进度丢了').not.toBeNull();
+  await click(buttonNamed('下一页', host));
+  await vi.waitFor(() => expect(shownIds(host)[0]).toBe(21));
+  await choose(host.querySelector('[data-table-pagination] button[aria-haspopup="listbox"]'), '每页 10 轮');
+  await vi.waitFor(() => expect(shownIds(host)).toEqual(Array.from({ length: 10 }, (_, index) => index + 1)));
+  expect(calls.at(-1)).toBe('/api/tasks?page=1&limit=10');
 });
 
-it('往前翻失败时原位说原因，已有的行不动，再点一次照常接上', async () => {
-  route([payload({ finished: [done(9)], finished_has_more: true })],
-        [null, { finished: [done(7)], finished_has_more: false }]);
+it('翻页失败保留上一页，重试成功后显示所选页', async () => {
+  let failed = true;
+  stubFetch(async (input) => {
+    const current = input.includes('page=2') ? 2 : 1;
+    if (current === 2 && failed) return { ok: false, status: 500,
+      json: async () => ({ message: '数据库当前只能浏览' }) };
+    return { ok: true, status: 200, json: async () => payload({
+      finished: [done(current === 1 ? 9 : 7)], finished_page: current, finished_total: 21,
+    }) };
+  });
   await prefetchTasks(new AbortController().signal);
   const host = await mount(page());
-
-  await click(buttonNamed('加载更早', host));
-  await settle();
-  expect(host.querySelector('[role=alert]')?.textContent).toContain('数据库当前只能浏览');
+  await click(buttonNamed('下一页', host));
+  await vi.waitFor(() => expect(host.textContent).toContain('数据库当前只能浏览'));
   expect(shownIds(host)).toEqual([9]);
-
-  await click(buttonNamed('加载更早', host));
-  await settle();
-  expect(host.querySelector('[role=alert]')).toBeNull();
-  expect(shownIds(host)).toEqual([9, 7]);
+  failed = false;
+  await click(buttonNamed('下一页', host));
+  await vi.waitFor(() => expect(shownIds(host)).toEqual([7]));
 });
 
 it('时长与摘要的折算各自成立', () => {

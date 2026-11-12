@@ -4,6 +4,14 @@
 
 ## amane 桥
 
+### 稳定版 v0.26.0 暂不采用
+
+2026-11-09 复核官方 [v0.26.0](https://github.com/sqzw-x/amane/releases/tag/v0.26.0)，提交 `faa389707325a80e13ce85fe149be94eb0cb61bb`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...faa389707325a80e13ce85fe149be94eb0cb61bb)含 71 个提交，其中 v0.25.0 之后 20 个。v0.25.0 之后桥消费的站点类只有 makers（`official`）一处提交：旧图片目录按 `-pl.jpg` → `-ps.jpg` 推导竖版海报，属于字段增强。发版审阅报告的 `1177fc57ee75a35032b4c0306f617cc255862bb3` 是 main 分支头，没有任何标签包含它；官网剧情、导演、剧照与单图封面回退，mgstage 前导数字番号按尾号反查，jav321、giga、xcity 的字段补全都只在该分支头，不在稳定版里。运行依赖与 v0.25.0 相同：numpy、onnxruntime（macOS 以外）、tokenizers 与 macOS CoreML 仍为强制依赖，watchdog 限制为 `<7`，zhconv 改为随包字典。
+
+继续固定 v0.22.1；语义检索依赖改为可选，或桥接站点的修复进入稳定版后再升级。届时同批改 `scripts/amane_bridge.spec` 与 `scripts/build_amane_runtime.py` 中的 zhconv 收集和对应源码。桥环境的 watchdog 保持 6.0.0：上游自 [#560](https://github.com/sqzw-x/amane/pull/560) 起因 Windows 观察器依赖私有字段与 `stop()` 时序而声明 `<7`，现在升到 7.1.0，接入新版时必然退回；上游撤掉该上限后再升。桥不导入 watchdog。
+
+本次在约束内更新桥锁：fastapi 0.162.2、pydantic 2.14.3、pydantic-core 2.50.4、click 8.5.1、anthropic 2.6.0、openai 3.46.0、jiter 0.19.0、logfire-api 5.5.0、regex 2026.11.7、w3lib 2.6.0。w3lib 2.6.0 新增 Zyte 的 [frostwork](https://github.com/scrapy/frostwork) 0.2.2（Apache-2.0，abi3 二进制，覆盖 Windows、macOS、Linux glibc 与 musl），用于编码探测；parsel 只用 w3lib 的 `replace_entities` 与 `HTML5_WHITESPACE`，amane 不直接引用 w3lib。Windows 上用 `build_amane_runtime.py --kind executable` 按新锁构建独立可执行文件，frostwork 已随包，清空 PATH 后离线自检载入全部 20 个站点类通过；macOS 与 Docker 制品未在本机构建。
+
 ### 稳定版 v0.25.0 暂不采用
 
 2026-11-04 复核官方 [v0.25.0](https://github.com/sqzw-x/amane/releases/tag/v0.25.0)，提交 `f6c1cc9f54bca0fa5381a26d4b2e259df7f58a0a`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...f6c1cc9f54bca0fa5381a26d4b2e259df7f58a0a)含 51 个提交。桥消费的站点类中，`airav` 比对番号前先剥除 caribbeancom、1pondo 等来源名前缀；`avsox` 与 faleno、dahlia 共用的 `wp_works` 改用容忍 null 字段的 `ResponseModel`；makers（`official`）、prestige、mgstage、fc2club、freejavbt 没有提交。`amane.net` 新增出站通道与浏览器后端，桥不使用。运行依赖仍强制安装 numpy、onnxruntime（macOS 以外）、tokenizers 与 macOS CoreML，watchdog 限制为 `<7`，zhconv 改为随包字典。
@@ -67,6 +75,20 @@ PR #41、#43、#44、#45、#46、#47、#48 在隔离工作树按项目接管入�
 Motion 14.0.0 的大版本删除内部兼容 API。Peach 只通过 `motion` 公共入口使用，没有直接引用 `framer-motion`、`motion-dom`、`motion-utils` 或被移除的 timeline 内部 API；版本由其内部精确依赖保持一致，类型检查、组件与浏览器回归由项目完整测试入口核验。
 
 轮播箭头几何用例在图片就绪后等待渲染阶段，再读位置；`ResizeObserver` 的异步测量不能由图片 `complete` 代替。位置、尺寸、黑边中心和桌面／手机断言保持完整。
+
+## 依赖与参考来源判断（2026-11-09）
+
+0.57.0 发版前审阅覆盖 weekly、monthly、quarterly。依赖按约束内最新稳定版更新：Python 侧 fastapi 0.162.2、pydantic 2.14.3（pydantic-core 2.50.4）、sentry-sdk 2.74.0、watchdog 7.1.0、zeroconf 0.154.0、filelock 4.2.9（含 GitLab CI 三处 `--with`）、ruff 0.17.4，锁内 click 8.5.1、pycryptodome 4.4.0 跟随。watchdog 7.1.0 的修正集中在 inotify 与 fsevents，`BaseObserver` 改用 `on_thread_start()`；推送发现只实例化 `Observer()`，不继承。filelock 4.2.9 只收紧读写锁的 `blocking` 参数类型，Peach 不用读写锁。pycryptodome 只经 maintenance-115 进入。前端 Lucide 1.70.0（所用 127 个图形字节不变）、Tailwind CSS 4.3.5（产物样式除版本头外不变）、TanStack Query 5.107.1、Motion 14.10.1、Vite 8.3.6、Oxlint 1.92.0、Playwright Core 1.65.0、Sentry Vite 插件 11.11.0。amane 桥见上文 v0.26.0。
+
+| 来源 | 实测变化 | Peach 判断 |
+| --- | --- | --- |
+| amane 内容路由 | jav321 首图是竖版缩略、横版封面在快照序列；mgstage 前导数字番号按尾号反查；厂牌官网改述为有剧情与导演、旧目录可推导竖版、空导演写 `---`；xcity 需要站内 Referer；删去 giga 标签恒空的缺口说明 | 接受原文。描述的是上游 main 分支头的行为，桥仍固定 v0.22.1，运行时不受影响；Peach 来源链与 `docs/SOURCING.md` 没有引用被改写的断言 |
+| OpenAver README | 新增 Linux 伺服器版、韩文界面与 AI 安装指引，删去部分功能说明 | 同类产品信息，接受原文 |
+| SakuraMedia README | 加入 Star 链接 | 同类产品信息，接受原文 |
+| JavBoss README | 下载链接升到 v2.1.5，新增应用内检查更新 | 同类产品信息，接受原文 |
+| Atlas README | v1.6.0 新增统一通知中心、帮助中心与邮件队列，工作区改用 npm | 同类产品信息，接受原文 |
+
+OpenAver 从 `67c410ca4465d4d107f940d9f0a9ece8395f0ad8` 前移到 `32134b0ced66b4dbd8bf9da614a49900f73b7442`，95 个提交；`core/similar/` 没有变化，相似推荐只有前端 `showcase/state-similar.js` 在隐藏未连线硬盘时保留另一份可用副本，Peach 没有这个概念，本批不改代码。PixivUtil2 仍停在 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
 
 ## 依赖与参考来源判断（2026-11-05）
 

@@ -27,7 +27,7 @@ import { entityFaceImg, facePos, logoUrl } from './../card-art/markup';
 import { sidebarHasCatalogContent } from './../sidebar';
 import { rememberRepresentatives } from './../card-art/representatives';
 import { clearHomeFeed, isFeedNewPath, renderHomeFeed } from './feed.js';
-import { loadingState, renderCatalogLoading } from './loading.js';
+import { renderCatalogLoading } from './loading.js';
 import { releaseHoverPreviews } from './../card-art/hover';
 import { revealRoutedPage } from './follow.js';
 import { pageSkeletonHtml } from './../management-placeholder';
@@ -405,8 +405,6 @@ export async function loadCatalog(){
   showHomeSurfaces();
   const painting=paintCatalogGrid(surface);
   if(isFeedNewPath(location.pathname)&&state.browse!=='folders'){
-    await loadingState.entityShapesReady;
-    if(!navigationState.surfaceCurrent(surface))return;
     renderHomeFeed();
   }else clearHomeFeed();
   renderCombo();

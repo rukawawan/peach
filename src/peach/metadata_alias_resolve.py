@@ -77,6 +77,26 @@ def is_planning_alias(name: str) -> bool:
     return bool(_PERFORMER_INTRO.search(name)) or stage_name(name) is None
 
 
+def confirmed_performers(connection, people) -> bool:
+    """本机已确认的演员身份；不以名字长短或仅有 JavDB 编号作为依据。"""
+    from .entity_classification import trusted_sql
+    if not isinstance(people, list) or not people:
+        return False
+    for person in people:
+        known = resolve_entity(connection, 'performer', str(person.get('name') or ''))
+        if known is None or is_planning_alias(str(known['canonical_name'])):
+            return False
+        identity = int(known['id'])
+        if not connection.execute(
+                "SELECT 1 FROM entity_external_ref WHERE entity_id=? "
+                "AND provider IN ('r18','r18dev','minnano-av') UNION ALL "
+                "SELECT 1 FROM entity_classification ec WHERE entity_id=? "
+                f"AND facet='identity' AND value='person' AND {trusted_sql('ec')} LIMIT 1",
+                (identity, identity)).fetchone():
+            return False
+    return True
+
+
 #: 按番号写着正式出演者名的本机快照，按可信度排列。两家都是把作品与女优对起来的
 #: 名鑑，不是商品页——商品页那一栏正是企划名义的来源，拿它解它自己没有意义。
 WORK_NAME_SOURCES = ("sougouwiki", "avnamewiki")

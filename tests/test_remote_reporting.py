@@ -5,6 +5,7 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,17 @@ DSN = "https://public@o123.ingest.us.sentry.io/456"
 
 
 class RemoteReportingTests(unittest.TestCase):
+    def test_last_sent_date_survives_queued_and_failed_delivery(self):
+        from peach import reporting_delivery
+        reporting.save({'usage': True, 'errors': True}, self.config)
+        permit = reporting._permit('usage', self.config, reporting.consent(self.config))
+        reporting_delivery.record(permit, 'first', {'status': 'queued'})
+        reporting_delivery.record(permit, 'first', {'status': 'accepted'})
+        sent = reporting_delivery.snapshot(self.config)['usage']['last_sent_at']
+        reporting_delivery.record(permit, 'next', {'status': 'queued'})
+        reporting_delivery.record(permit, 'next', {'status': 'failed', 'reason': 'queue_full'})
+        self.assertEqual(reporting_delivery.snapshot(self.config)['usage']['last_sent_at'], sent)
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -148,7 +160,7 @@ class RemoteReportingTests(unittest.TestCase):
             reporting.usage()
         client.capture_event.assert_not_called()
         (kind, log), (session_kind, session) = self._telemetry(client)
-        self.assertEqual((kind, session_kind, log['body']), ('log', 'sessions', 'Peach started'))
+        self.assertEqual((kind, session_kind, log['body']), ('log', 'sessions', 'Peach daily activity'))
         attributes = {key: value['value'] for key, value in log['attributes'].items()}
         self.assertEqual(attributes["purpose"], "version-statistics")
         self.assertEqual(attributes["distribution"], "source")
@@ -311,21 +323,35 @@ class RemoteReportingTests(unittest.TestCase):
 
     def test_frequency_shared_file_serializes_independent_processes(self):
         from peach import diagnostic_frequency as frequency
+        from filelock import FileLock
         root = Path(__file__).resolve().parents[1]
         reporting.save({"usage": True, "errors": True})
-        program = ('from peach import diagnostic_frequency as f; '
+        program = ('import sys; from peach import diagnostic_frequency as f; '
                    'from peach.settings_file import active; '
                    'from peach.remote_reporting import consent; '
-                   'f.record(active(), consent()["revision"], {"release":"test", "tags":{"stage":"cli"}}, '
+                   'config=active(); revision=consent()["revision"]; '
+                   'print("ready", flush=True); sys.stdin.readline(); '
+                   'f.record(config, revision, {"release":"test", "tags":{"stage":"cli"}}, '
                    'lambda e: True, lambda c: True)')
         env = {**os.environ, 'PYTHONPATH': str(root / 'src'), 'PEACH_SENTRY_DSN': ''}
         processes = [subprocess.Popen([sys.executable, '-X', 'utf8', '-c', program], env=env,
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
-        for process in processes:
-            try:
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE) for _ in range(2)]
+        try:
+            for process in processes:
+                self.assertEqual(process.stdout.readline().strip(), b'ready')
+            with FileLock(str(frequency._path(self.config)) + '.lock'):
+                for process in processes:
+                    process.stdin.write(b'go\n')
+                    process.stdin.flush()
+                time.sleep(.25)
+                for process in processes:
+                    self.assertIsNone(process.poll(), '锁被短暂占用时诊断记录进程不能退出')
+            for process in processes:
                 stdout, stderr = process.communicate(timeout=30)
                 self.assertEqual(process.returncode, 0, (stdout, stderr))
-            finally:
+        finally:
+            for process in processes:
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
@@ -355,12 +381,12 @@ class RemoteReportingTests(unittest.TestCase):
 
     def test_frequency_timer_flushes_without_another_occurrence(self):
         from peach import diagnostic_frequency as frequency
-        reporting.save({"usage": True, "errors": True})
         now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
         client = mock.Mock()
         with mock.patch.object(reporting, '_new_client', return_value=client), \
                 mock.patch.object(reporting.threading, 'Timer') as timer, \
                 mock.patch.object(frequency, '_now', return_value=now) as clock:
+            reporting.save({"usage": True, "errors": True})
             for _ in range(4):
                 reporting.capture('unhandled-main', ValueError('private'))
             callback = timer.call_args.args[1]
@@ -368,6 +394,41 @@ class RemoteReportingTests(unittest.TestCase):
             callback()
             self.assertEqual(client.capture_event.call_count, 1)
             self.assertEqual([count['occurrence_count'] for count in self._counts(client)], [3])
+
+    def test_daily_activity_is_reported_after_midnight_without_restarting(self):
+        client = mock.Mock()
+        start = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        with mock.patch.object(reporting, '_new_client', return_value=client), \
+                mock.patch.object(reporting.threading, 'Timer'), \
+                mock.patch.object(reporting, 'datetime', wraps=datetime) as clock:
+            clock.now.return_value = start
+            reporting.save({'usage': True, 'errors': True})
+            reporting.usage(self.config)
+            reporting._frequency_tick()
+            self.assertEqual(client.transport.capture_envelope.call_count, 1)
+            clock.now.return_value = start + timedelta(days=1)
+            reporting._frequency_tick()
+            self.assertEqual(client.transport.capture_envelope.call_count, 2)
+            reporting.save({'usage': False, 'errors': False})
+            clock.now.return_value = start + timedelta(days=2)
+            reporting._frequency_tick()
+            self.assertEqual(client.transport.capture_envelope.call_count, 2)
+
+    def test_missing_transport_records_failure_instead_of_leaving_queued(self):
+        reporting.save({'usage': True, 'errors': True})
+        client = mock.Mock(transport=None)
+        with mock.patch.object(reporting, '_new_client', return_value=client):
+            reporting.usage(self.config)
+        self.assertEqual(reporting.snapshot(self.config)['delivery']['usage']['status'], 'failed')
+
+    def test_enabling_starts_background_reporting_without_restart_and_disable_cancels_it(self):
+        with mock.patch.object(reporting.threading, 'Timer') as timer:
+            reporting.save({'usage': True, 'errors': True})
+            timer.return_value.start.assert_called_once()
+            self.assertIn(str(self.config.directory('state')), reporting._frequency_configs)
+            reporting.save({'usage': False, 'errors': False})
+            timer.return_value.cancel.assert_called_once()
+            self.assertIsNone(reporting._frequency_timer)
 
     def test_actionable_faults_keep_codes_and_omit_private_text(self):
         with mock.patch.object(reporting, "send") as send:

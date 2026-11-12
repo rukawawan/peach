@@ -373,6 +373,21 @@ class ErrorReportingTests(unittest.TestCase):
                 zipfile.ZipFile(io.BytesIO(support_bundle.bundle_bytes())) as archive:
             self.assertEqual(json.loads(archive.read('processing/library-processing.json'))['status'], 'paused')
 
+    def test_processing_export_carries_interrupted_jobs_and_update_pause_markers(self):
+        """恢复服务卡住时要看的两处：启动时接回的中断任务与更新暂停标记。"""
+        state = self.root / 'state'
+        (state / 'job-recovery').mkdir(parents=True)
+        (state / 'update-tasks' / 'active').mkdir(parents=True)
+        (state / 'job-recovery' / 'library-processing.json').write_text(json.dumps({
+            'body': {'stage': 'all', 'asset_ids': [60, 952]}, 'path': r'D:\private\movie.mp4'}), encoding='utf-8')
+        (state / 'update-tasks' / 'active' / 'abc.json').write_text('{"kind": "scan"}', encoding='utf-8')
+        with mock.patch.object(error_reporting, 'log_directories', return_value=[]), \
+                zipfile.ZipFile(io.BytesIO(support_bundle.bundle_bytes())) as archive:
+            recovery = json.loads(archive.read('processing/job-recovery/library-processing.json'))
+            self.assertEqual(recovery['body']['asset_ids'], [60, 952])
+            self.assertEqual(recovery['path'], '<path>')
+            self.assertEqual(json.loads(archive.read('processing/update-tasks/active/abc.json')), {'kind': 'scan'})
+
     def test_processing_export_reports_invalid_empty_and_over_limit_json_without_empty_members(self):
         state = self.root / 'state'
         state.mkdir()
@@ -651,6 +666,18 @@ class ErrorReportingTests(unittest.TestCase):
                             "faulthandler.dump_traceback(file=e._fault_stream)")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any('line' in path.read_text(encoding="utf-8") for path in self.logs.glob("crash-*.log")))
+
+    def test_a_process_that_exits_cleanly_leaves_no_empty_logs_behind(self):
+        result = self.probe("from peach import error_reporting as e; e.install()")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(path.name for path in self.logs.glob("*-*.log")), [])
+
+    def test_a_process_that_logged_a_problem_keeps_its_event_log(self):
+        result = self.probe("import logging; from peach import error_reporting as e; e.install(); "
+                            "logging.getLogger('probe').warning('磁盘读不到')")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(list(self.logs.glob("errors-*.log"))), 1)
+        self.assertEqual(list(self.logs.glob("crash-*.log")), [])
 
     def test_exception_records_keep_codes_and_frames_without_source_lines_or_credentials(self):
         try:

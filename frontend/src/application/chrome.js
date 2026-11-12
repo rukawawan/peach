@@ -2,7 +2,8 @@
 import { applicationEffects } from './effects';
 import { MEDIA_SOURCE_ICONS, moveGlidePane, wireAnchoredMenu } from '../ui-kit';
 import { api, esc, icon } from '../core';
-import { publishLibraries } from '../library-catalog';
+import { publishLibraries, orderLibraries } from '../library-catalog';
+import { appSettingsStore } from '../appearance/settings';
 import { narrowShell, openDrawer, openSettings } from './layout.js';
 import { openConfigurationSection } from './playlists.js';
 import { transitionTheme } from './../theme-transition';
@@ -96,6 +97,15 @@ api('/api/libraries',{signal:effects.signal}).then(data=>{
   /* 委托在这一列上，不挂在每个按钮身上：菜单每次取回媒体库都整块重画。
      `pointerover`／`pointerout` 而不是 enter／leave，后两个不冒泡，委托接不到。 */
   const libraryRows=libraryPicker.querySelector('.board-library-rows');
+  const libraryButtons=[...libraryRows.querySelectorAll('[data-library]')];
+  const libraryStore=appSettingsStore();
+  const arrangeLibraries=()=>{
+    orderLibraries(libraryButtons,['',...libraryStore.value.libraryOrder],button=>button.dataset.library)
+      .forEach(button=>libraryRows.append(button));
+    syncLibraryGlide(false);
+  };
+  arrangeLibraries();
+  effects.own(libraryStore.subscribe(arrangeLibraries));
   effects.listen(libraryRows, 'pointerover', event=>{
     if(event.pointerType==='touch')return;
     const button=event.target.closest?.('button[data-library]');

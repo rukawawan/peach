@@ -271,8 +271,7 @@ class Monitor:
                     self.gpu = GpuCounters()
             gpu, state, reason = self.gpu.sample()
             stamp = datetime.now(timezone.utc).isoformat()
-            self.rows = {run.id: {**self._sample(run, now, gpu, state, reason), 'sampled_at': stamp,
-                         'detail': 'CPU 按已登记工作线程及子进程计量，占执行端可用容量（容器按可见 CPU 配额）；GPU 为所属子进程最忙引擎；网络为已观测下载速率。'}
+            self.rows = {run.id: {**self._sample(run, now, gpu, state, reason), 'sampled_at': stamp}
                          for run in runs}
             active = {run.id for run in runs}
             self.previous = {key: value for key, value in self.previous.items() if key in active}
@@ -283,13 +282,17 @@ class Monitor:
         if self.gpu is not None:
             self.gpu.close()
 
-    def for_run(self, run):
-        with self.store.database.read_connection() as connection:
-            family = connection.execute(
-                'WITH RECURSIVE family(id) AS (SELECT ? UNION ALL '
-                'SELECT t.id FROM task_run t JOIN family f ON t.parent_run_id=f.id) '
-                "SELECT id,status FROM task_run WHERE id IN (SELECT id FROM family) AND status IN ('pending','running')",
-                (run.id,)).fetchall()
+    def for_run(self, run, family=None):
+        """这一轮连同后代的资源占用。`family` 是 `TaskRunStore.active_families` 给这一轮的那份，
+        任务中心整页一次查齐时传进来；不传就当场查。"""
+        if family is None:
+            with self.store.database.read_connection() as connection:
+                family = connection.execute(
+                    'WITH RECURSIVE family(id) AS (SELECT ? UNION ALL '
+                    'SELECT t.id FROM task_run t JOIN family f ON t.parent_run_id=f.id) '
+                    "SELECT id,status FROM task_run WHERE id IN (SELECT id FROM family) AND status IN ('pending','running')",
+                    (run.id,)).fetchall()
+            family = [{'id': row[0], 'status': row[1]} for row in family]
         if not family:
             return None
         rows = self.snapshot()
@@ -300,8 +303,7 @@ class Monitor:
                    'gpu': _metric('unavailable', 'percent', reason='执行端的资源读数未取得'),
                    'network': _metric('unavailable', 'bytes_per_second', reason='执行端的传输读数未取得')}
         samples = [waiting if row['status'] == 'pending' else rows.get(row['id'], unknown) for row in family]
-        result = {'sampled_at': datetime.now(timezone.utc).isoformat(),
-                  'detail': 'CPU 为已登记工作线程及所属子进程占执行端可用容量（容器按可见 CPU 配额），未包含无法归属的共享原生线程；GPU 为所属子进程最忙引擎；网络为已观测下载速率，未取得时不报告零值。颜色加深阈值：CPU/GPU 50%，网络 10 MiB/s，仅作显示提示。'}
+        result = {'sampled_at': datetime.now(timezone.utc).isoformat()}
         for name, field, threshold in (('cpu', 'percent', CPU_HIGH), ('gpu', 'percent', GPU_HIGH),
                                        ('network', 'bytes_per_second', NETWORK_HIGH)):
             values = [sample[name] for sample in samples]

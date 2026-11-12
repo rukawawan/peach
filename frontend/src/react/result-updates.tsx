@@ -1,7 +1,7 @@
 /** 页面持续读取已提交结果；仅使发生变化的资料缓存失效。新到的入库通知弹 toast。 */
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { shellNavigate } from '@peach/history';
+import type { ShellActions } from './router/shell-actions';
 
 import {
   fetchResultUpdates, RESULT_UPDATES_KEY, RUNNING_POLL_MS, SETTLED_POLL_MS, type ActivityData, type IngestNotice,
@@ -62,7 +62,7 @@ const noticeText = (item: IngestNotice) => {
 
 /** 新到的入库通知弹成 toast，点「打开」进这部作品。首轮与服务重启后（`epoch` 变了）只记基线，不补弹。 */
 export function announceIngests(seen: { epoch: string; last: number } | null,
-  notices: ActivityData['ingest_notices']): { epoch: string; last: number } | null {
+  notices: ActivityData['ingest_notices'], openItem: ShellActions['openItem']): { epoch: string; last: number } | null {
   if (!notices) return seen;
   const last = notices.items.reduce((max, item) => Math.max(max, item.id), 0);
   if (!seen || seen.epoch !== notices.epoch) return { epoch: notices.epoch, last };
@@ -72,13 +72,13 @@ export function announceIngests(seen: { epoch: string; last: number } | null,
   } else {
     for (const item of fresh) {
       showToast(`ingest-${notices.epoch}-${item.id}`, { html: noticeText(item), alert: false, timeout: 8000,
-        action: { label: '打开', run: () => shellNavigate(`/assets/${item.asset_id}`) } });
+        action: { label: '打开', run: () => openItem(item.asset_id) } });
     }
   }
   return { epoch: notices.epoch, last: Math.max(seen.last, last) };
 }
 
-export function ResultUpdates() {
+export function ResultUpdates({ openItem }: Pick<ShellActions, 'openItem'>) {
   const query = useQuery({ queryKey: RESULT_UPDATES_KEY, queryFn: ({ signal }) => fetchResultUpdates(signal),
     refetchInterval: current => (current.state.data?.busy ? RUNNING_POLL_MS : SETTLED_POLL_MS) });
   const previous = useRef<Record<string, string> | undefined>(undefined);
@@ -91,6 +91,6 @@ export function ResultUpdates() {
     if (previous.current) void refresh(previous.current, versions);
     previous.current = versions;
   }, [versions, refresh]);
-  useEffect(() => { announced.current = announceIngests(announced.current, notices) }, [notices]);
+  useEffect(() => { announced.current = announceIngests(announced.current, notices, openItem) }, [notices, openItem]);
   return null;
 }

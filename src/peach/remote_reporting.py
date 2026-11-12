@@ -19,8 +19,8 @@ from .reporting_identity import event_metadata, machine_facts
 from .diagnostic_exceptions import media_details
 
 FIELDS = {
-    "usage": "Peach 版本、分发方式（Windows／macOS 应用、Docker、wheel 或源码）、操作系统类型与版本、CPU 架构与核数、内存档位、Python 版本、运行环境与公开构建编号；每天最多一条日志和一条会话汇总，不含安装标识。",
-    "errors": "Peach 版本、分发方式、运行环境与公开构建编号、系统类型、Python 版本、CPU 架构、故障环节、异常链、Peach 与白名单框架的代码文件名/函数名/行号、结构化错误码、媒体工具故障类别、浏览器白名单异常类型与正式脚本构建映射、HTTP 方法/路由模板/关联错误编号、同类故障次数与统计日期；同一版本的同类故障只上传一次完整诊断，每天最多 5 条，之后的次数每 6 小时或退出时合并为计数日志。",
+    "usage": "Peach 版本、分发方式（Windows／macOS 应用、Docker、wheel 或源码）、操作系统类型与版本、CPU 架构与核数、内存档位、Python 版本、运行环境与公开构建编号；每天最多一条活跃日志和一条会话汇总，不含安装标识。连续运行时也按 UTC 日统计，代表运行中的实例，不代表人数或当天有人操作。",
+    "errors": "诊断补充：故障环节、异常链、Peach 与白名单框架的代码文件名/函数名/行号、结构化错误码、媒体工具故障类别、浏览器白名单异常类型与正式脚本构建映射、HTTP 方法/路由模板/关联错误编号、同类故障次数与统计日期；同一版本的同类故障只上传一次完整诊断，每天最多 5 条，之后的次数每 6 小时或退出时合并为计数日志。",
 }
 NOTICE = "发送至 Sentry。不上报错误原文、完整日志、诊断 ZIP、媒体名称、路径、网址、观看记录或凭据。接收服务会接触连接 IP；关闭后停止新发送，已发送的信息无法撤回。"
 _lock = threading.RLock()
@@ -121,6 +121,19 @@ def save(body, config=None):
     atomic_write_text(config.directory("state") / "remote-reporting.json", json.dumps(payload))
     from . import diagnostic_frequency
     diagnostic_frequency.clear(config)
+    # 打开选项后无需重启；首次日统计交给既有后台检查，不阻塞设置请求。
+    if payload['usage'] and not _disabled and dsn():
+        try:
+            _schedule_frequency(config)
+        except Exception:
+            pass
+    elif not payload['usage']:
+        global _frequency_timer
+        with _lock:
+            _frequency_configs.pop(str(config.directory('state')), None)
+            if not _frequency_configs and _frequency_timer is not None:
+                _frequency_timer.cancel()
+                _frequency_timer = None
     return snapshot(config)
 
 
@@ -246,6 +259,7 @@ def _submit_telemetry(kind, items, config, current, target):
             envelope.add_item(Item(type="sessions", payload=PayloadRef(json=session)))
         record(permit, receipt, {"status": "queued"})
         if client.transport is None:
+            record(permit, receipt, {"status": "failed", "reason": "disabled"})
             return False
         client.transport.capture_envelope(envelope)
         return True
@@ -281,7 +295,8 @@ def _frequency_tick():
         _frequency_timer = None
         configs = list(_frequency_configs.values())
     for config in configs:
-        flush_counts(config)
+        # 常驻托盘与 NAS 不一定每天重启；沿用每日额度，不能只统计启动的那一天。
+        usage(config)
     with _lock:
         if _frequency_configs and not _disabled:
             _schedule_frequency(next(iter(_frequency_configs.values())))
@@ -345,7 +360,7 @@ def send(kind, event, config=None):
 
 
 def usage(config=None):
-    send("usage", {"message": "Peach started", "level": "info",
+    send("usage", {"message": "Peach daily activity", "level": "info",
                    "tags": {"os": platform.system(), **machine_facts()}}, config)
     flush_counts(config)
     try:

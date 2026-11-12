@@ -14,8 +14,14 @@ import tempfile
 from urllib.parse import quote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach import release_signing
 from peach.user_agent import USER_AGENT
 from peach.peach_proxy import http_client
+
+#: 索引里每一版的 `html_url`：版本在 GitHub 发布，镜像只转存同一份制品。
+RELEASE_PAGE = "https://github.com/peach-mitao/peach/releases/tag/"
+#: 镜像只为更新兜底：留最新几个版本，更老的版本目录在新版登记后删除，GitHub 上的制品仍在。
+KEEP = 3
 
 
 def inventory(root: Path, version: str) -> list[dict]:
@@ -35,6 +41,26 @@ def inventory(root: Path, version: str) -> list[dict]:
             checksum = hashlib.file_digest(source, "sha256").hexdigest()
         items.append({"name": path.name, "size": path.stat().st_size, "sha256": checksum})
     return items
+
+
+def describe(path: Path) -> dict:
+    with path.open("rb") as source:
+        return {"name": path.name, "size": path.stat().st_size, "sha256": hashlib.file_digest(source, "sha256").hexdigest()}
+
+
+def release_sums(root: Path, items: list[dict], scratch: Path) -> list[Path]:
+    """随版本上传的摘要文件。GitHub 发布作业生成并签过名的摘要与签名原样转存：`.sig` 签的是
+    这份字节（ADR-0137），且必须与制品逐项一致；目录里没有摘要时按制品清单在 `scratch` 生成一份。
+    """
+    sums = root / release_signing.SUMS
+    if not sums.is_file():
+        generated = scratch / release_signing.SUMS
+        generated.write_text("".join(f"{item['sha256']}  {item['name']}\n" for item in items), encoding="utf-8")
+        return [generated]
+    if release_signing.parse(sums.read_bytes()) != {item["name"]: item["sha256"] for item in items}:
+        raise ValueError("发布摘要与制品不一致")
+    signature = root / release_signing.SIGNATURE
+    return [sums, signature] if signature.is_file() else [sums]
 
 
 def verify_download(url: str, item: dict) -> None:
@@ -69,6 +95,24 @@ def rclone_environment() -> dict:
                         "RCLONE_CONFIG_PEACH_ENDPOINT": environment["PEACH_R2_ENDPOINT"],
                         "RCLONE_CONFIG_PEACH_REGION": "auto", "RCLONE_CONFIG_PEACH_NO_CHECK_BUCKET": "true"})
     return environment
+
+
+def _version(tag: object) -> tuple[int, ...] | None:
+    if not isinstance(tag, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        return None
+    return tuple(map(int, tag[1:].split(".")))
+
+
+def retention(existing: list[dict], releases: object, tag: str) -> tuple[list[str], list[str]]:
+    """本次发布后保留的版本（连同本次按版本号取最新 `KEEP` 个，新版在前）与要删除的版本目录。"""
+    if not isinstance(releases, list) or not all(isinstance(item, dict) and _version(item.get("tag_name"))
+                                                  for item in releases):
+        raise ValueError("公开版本索引格式无效")
+    kept = sorted({*(item["tag_name"] for item in releases), tag}, key=_version, reverse=True)[:KEEP]
+    if tag not in kept:
+        raise ValueError(f"{tag} 比镜像保留的 {KEEP} 个版本都旧，不上传")
+    folders = {item["Path"].split("/", 1)[0] for item in existing if "/" in item["Path"]}
+    return kept, sorted({name for name in folders if _version(name)} - set(kept), key=_version)
 
 
 def require_capacity(existing: list[dict], items: list[dict], tag: str, limit: int) -> int:
@@ -115,40 +159,42 @@ def publish(root: Path, version: str, *, apply: bool = False) -> dict:
                                            "--recursive", "--files-only", "--config", str(configuration)],
                                           env=environment, text=True, encoding="utf-8")
         existing = json.loads(listing)
-        result["projected_bucket_bytes"] = require_capacity(existing, items, tag,
-                                                            int(environment.get("PEACH_R2_MAX_BYTES", "8000000000")))
-        sums = temporary / "SHA256SUMS.txt"
-        sums.write_text("".join(f"{item['sha256']}  {item['name']}\n" for item in items), encoding="utf-8")
-        with sums.open("rb") as source:
-            manifest = {"name": sums.name, "size": sums.stat().st_size,
-                        "sha256": hashlib.file_digest(source, "sha256").hexdigest()}
-        for item in [*items, manifest]:
-            upload(sums if item is manifest else root / item["name"], f"{prefix}/{item['name']}")
-            item["browser_download_url"] = f"{base}/{tag}/{quote(item['name'])}"
-            verify_download(item["browser_download_url"], item)
-            item["state"] = "uploaded"
-            item["digest"] = "sha256:" + item["sha256"]
-        release = {"tag_name": tag, "commit_sha": sha, "name": f"Peach {version}", "draft": False, "prerelease": True,
-                   "html_url": f"https://gitgud.io/peach-mitao/peach/-/releases/{tag}",
-                   "published_at": published_at, "assets": [*items, manifest]}
-        release_file = temporary / "release.json"
-        release_file.write_text(json.dumps(release, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        upload(release_file, f"{prefix}/release.json")
         releases = []
         if any(item["Path"] == "releases.json" for item in existing):
             releases = json.loads(subprocess.check_output(
                 [executable, "cat", f"peach:{environment['PEACH_R2_BUCKET']}/releases.json",
                  "--config", str(configuration)], env=environment, text=True, encoding="utf-8"))
-        if not isinstance(releases, list):
-            raise ValueError("公开版本索引格式无效")
+        kept, stale = retention(existing, releases, tag)
+        result["projected_bucket_bytes"] = require_capacity(
+            [item for item in existing if item["Path"].split("/", 1)[0] not in stale], items, tag,
+            int(environment.get("PEACH_R2_MAX_BYTES", "8000000000")))
+        manifests = release_sums(root, items, temporary)
+        sources = {item["name"]: root / item["name"] for item in items}
+        sources.update((path.name, path) for path in manifests)
+        assets = [*items, *(describe(path) for path in manifests)]
+        for item in assets:
+            upload(sources[item["name"]], f"{prefix}/{item['name']}")
+            item["browser_download_url"] = f"{base}/{tag}/{quote(item['name'])}"
+            verify_download(item["browser_download_url"], item)
+            item["state"] = "uploaded"
+            item["digest"] = "sha256:" + item["sha256"]
+        release = {"tag_name": tag, "commit_sha": sha, "name": f"Peach {version}", "draft": False, "prerelease": True,
+                   "html_url": RELEASE_PAGE + tag, "published_at": published_at, "assets": assets}
+        release_file = temporary / "release.json"
+        release_file.write_text(json.dumps(release, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        upload(release_file, f"{prefix}/release.json")
+        rows = {item["tag_name"]: item for item in releases if item["tag_name"] in kept}
+        rows[tag] = release
         index = temporary / "releases.json"
-        index.write_text(json.dumps([release, *(item for item in releases if item["tag_name"] != tag)][:30],
-                                    ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        index.write_text(json.dumps([rows[name] for name in kept if name in rows], ensure_ascii=False, indent=2) + "\n",
+                         encoding="utf-8")
         upload(index, f"peach:{environment['PEACH_R2_BUCKET']}/releases.json", immutable=False)
-        with index.open("rb") as source:
-            index_info = {"name": index.name, "size": index.stat().st_size,
-                          "sha256": hashlib.file_digest(source, "sha256").hexdigest()}
-        verify_download(f"{base}/releases.json?release={tag}", index_info)
+        verify_download(f"{base}/releases.json?release={tag}", describe(index))
+        # 索引已不再指向这些版本，才删它们的目录；GitHub Release 上的同版本制品不受影响。
+        for name in stale:
+            subprocess.run([executable, "purge", f"peach:{environment['PEACH_R2_BUCKET']}/{name}",
+                            "--config", str(configuration)], env=environment, check=True)
+        result["pruned"] = stale
     return result
 
 

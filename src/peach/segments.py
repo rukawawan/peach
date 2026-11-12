@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import subprocess
+import threading
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ HLS_SEGMENT_SECONDS = 6
 # 片段缓存上限。超了按最后访问时间淘汰；片段可再生，丢了只是重跑一次 FFmpeg。
 DEFAULT_CACHE_BYTES = 2 << 30
 PLAN_CACHE_LIMIT = 256
+SESSION_PLAN_LIMIT = 64
 CODEC_CACHE_LIMIT = 256
 PROBE_TIMEOUT_SECONDS = 20
 GENERATION_TIMEOUT_SECONDS = 120
@@ -37,6 +39,39 @@ def _probe_video_codec(ffprobe: Path, source: Path) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return result.stdout.decode("utf-8", "replace").strip().lower() if result.returncode == 0 else ""
+
+
+class SessionPlans:
+    """一次播放（流会话 × 资产）解析好的分片计划，播放列表算一次，之后每个分片直接取用。
+
+    分片端点原先每片都重算一遍：读账本、找片源、问画像，片源要转码时还可能跑 ffprobe，而这一步
+    排在只有几个线程的执行器里。计划本来就要在整段会话里保持同一个形状（`_hls_plan`），按会话
+    记住它是同一个约束。会话取消时摘掉，总量有界。
+    """
+
+    def __init__(self, limit: int = SESSION_PLAN_LIMIT):
+        self._limit = limit
+        self._plans: OrderedDict[tuple[str, int], tuple] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, session: str, asset_id: int) -> tuple | None:
+        with self._lock:
+            plan = self._plans.get((session, asset_id))
+            if plan is not None:
+                self._plans.move_to_end((session, asset_id))
+            return plan
+
+    def put(self, session: str, asset_id: int, plan: tuple) -> None:
+        with self._lock:
+            self._plans[(session, asset_id)] = plan
+            self._plans.move_to_end((session, asset_id))
+            while len(self._plans) > self._limit:
+                self._plans.popitem(last=False)
+
+    def forget(self, session: str) -> None:
+        with self._lock:
+            for key in [key for key in self._plans if key[0] == session]:
+                del self._plans[key]
 
 
 class SegmentUnavailable(RuntimeError):
@@ -89,6 +124,7 @@ class HlsSegmentService:
     ):
         self.resolver = resolver
         self.work_root = work_root
+        self.capacity_guard = None
         self.segment_seconds = segment_seconds
         self.cache_bytes = cache_bytes
         self.prefer_hardware = prefer_hardware
@@ -101,6 +137,9 @@ class HlsSegmentService:
         # 同一分片常被并发请求：播放器预取、重连、多设备同看都会撞上同一个目标文件。
         # 同目标只放一个生成者，后到者等它完事后直接用缓存，不再各起一个 FFmpeg 重读网盘。
         self._generation_locks: dict[Path, _Generation] = {}
+        # 淘汰要把缓存目录整个列一遍：按新写入的字节攒够一截才跑一次，放在线程里，同一时刻只跑一次。
+        self._written_since_evict = 0
+        self._evicting = False
 
     def _gate(self) -> asyncio.Semaphore:
         if self._semaphore is None:
@@ -120,7 +159,7 @@ class HlsSegmentService:
         只有重编码路径问这一句，用来决定敢不敢把解码交给显卡。探测本身在线程里跑：
         片源在挂载网盘上时 ffprobe 要几百毫秒，占着事件循环会卡住同时在放的其它片。
         """
-        key = self.fingerprint(source)
+        key = await asyncio.to_thread(self.fingerprint, source)
         cached = self._codecs.get(key)
         if cached is not None:
             self._codecs.move_to_end(key)
@@ -180,6 +219,26 @@ class HlsSegmentService:
             if total <= self.cache_bytes:
                 return
 
+    async def _evict_after(self, written: int) -> None:
+        """记下新写入的字节，攒够缓存上限的十六分之一才在线程里淘汰一次。"""
+        self._written_since_evict += written
+        if self._evicting or self._written_since_evict < max(1, self.cache_bytes // 16):
+            return
+        self._evicting = True
+        self._written_since_evict = 0
+        try:
+            await asyncio.to_thread(self._evict)
+        finally:
+            self._evicting = False
+
+    def _cached_target(self, source: Path, asset_id: int, index: int, transcode: bool) -> tuple[Path, bool]:
+        """分片缓存的位置与是否已有；命中即续期。要 stat 片源（可能在网盘上），只在线程里调。"""
+        target = self.cached_path(source, asset_id, index, transcode=transcode)
+        if target.is_file() and target.stat().st_size:
+            os.utime(target, None)      # 命中即续期，淘汰按最后访问时间
+            return target, True
+        return target, False
+
     async def generate(
         self,
         source: Path,
@@ -192,9 +251,9 @@ class HlsSegmentService:
         registry: StreamSessionRegistry,
         transcode: bool = False,
     ) -> Path:
-        target = self.cached_path(source, asset_id, index, transcode=transcode)
-        if target.is_file() and target.stat().st_size:
-            os.utime(target, None)      # 命中即续期，淘汰按最后访问时间
+        # 缓存位置要 stat 片源：网盘忙时一次 stat 能卡几秒，放在事件循环上会停住整个服务的发送。
+        target, hit = await asyncio.to_thread(self._cached_target, source, asset_id, index, transcode)
+        if hit:
             return target
         consumer = asyncio.current_task()
         if consumer is None or not registry.register(session, consumer):
@@ -256,10 +315,10 @@ class HlsSegmentService:
                 temporary = target.with_name(f"{uuid.uuid4().hex}.tmp.ts")
                 try:
                     returncode, stderr = await self._run(build(temporary), session, registry)
-                    if returncode == 0 and temporary.is_file() and temporary.stat().st_size:
+                    if returncode == 0 and temporary.is_file() and (written := temporary.stat().st_size):
                         temporary.replace(target)
                         logger.info("HLS 分片完成：%s", name)
-                        self._evict()
+                        await self._evict_after(written)
                         return target
                     if registry.is_cancelled(session):
                         raise SegmentCancelled(session)
@@ -320,6 +379,12 @@ class HlsSegmentService:
 
     async def _run(self, command: list[str], session: str, registry: StreamSessionRegistry) -> tuple[int, bytes]:
         """跑一次 FFmpeg 并把进程登记到会话，取消时能被杀掉。返回 (退出码, stderr)。"""
+        from .jobs import DiskSpaceDenied
+        try:
+            if self.capacity_guard is not None:
+                await asyncio.to_thread(self.capacity_guard.check, force=True)
+        except DiskSpaceDenied as error:
+            raise SegmentUnavailable(str(error)) from error
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
             process = await asyncio.create_subprocess_exec(
@@ -337,7 +402,16 @@ class HlsSegmentService:
             raise SegmentCancelled(session)
         communication = asyncio.create_task(process.communicate())
         try:
-            _, stderr = await asyncio.shield(communication)
+            while not communication.done():
+                await asyncio.wait((communication,), timeout=0.5)
+                if self.capacity_guard is not None:
+                    try:
+                        await asyncio.to_thread(self.capacity_guard.check)
+                    except DiskSpaceDenied as error:
+                        _kill_process(process)
+                        await _wait_for_tasks(communication)
+                        raise SegmentUnavailable(str(error)) from error
+            _, stderr = await communication
         except asyncio.CancelledError:
             _kill_process(process)
             await _wait_for_tasks(communication)

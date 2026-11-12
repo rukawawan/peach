@@ -7,14 +7,15 @@
 .peach-react [data-jav-picture-wait] [class~="skeleton-sheen"] { width: 100%; min-height: 260px; }
 .peach-react [data-jav-info] { min-width: 0; }
 .peach-react [data-jav-info] > * { flex-shrink: 0; }
+.peach-react [data-jav-info] > [role="note"] { margin-bottom: 18px; }
 .peach-react [data-jav-info] p { overflow-wrap: anywhere; }
 .peach-react [data-jav-facts] { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: var(--fs-sm); margin-bottom: 18px; }
 .peach-react [data-jav-facts]:empty { display: none; }
 .peach-react [data-jav-facts] span { overflow-wrap: anywhere; }
 .peach-react [data-jav-detail] [data-jav-actions] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 18px; }
-.peach-react [data-jav-video] { width: 100%; position: relative; }
+.peach-react [data-jav-video] { width: 100%; position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .peach-react [data-jav-video] > [class~="video-js"] { width: 100%; height: auto; max-height: calc(76vh - 112px); aspect-ratio: 16 / 9; }
-.peach-react [data-jav-video] > [role="note"] { margin: 16px; }
+.peach-react [data-jav-video] > [role="note"] { box-sizing: border-box; width: calc(100% - 32px); max-width: 32rem; margin: 16px; }
 .peach-react [data-jav-preview-toggle] { box-sizing: border-box; position: absolute; z-index: 5; top: 11px; left: 11px; height: 40px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 0; border-radius: var(--pill-radius); background: rgba(0, 0, 0, .6); color: #fff; font-size: var(--fs-xs); line-height: 1; white-space: nowrap; cursor: pointer; }
 .peach-react [data-jav-preview-toggle]:hover { background: rgba(0, 0, 0, .78); }
 .peach-react [data-jav-preview-toggle] svg { width: var(--icon-inline); height: var(--icon-inline); stroke: currentColor; fill: none; stroke-width: 2; }

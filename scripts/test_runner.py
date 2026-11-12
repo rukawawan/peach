@@ -61,7 +61,7 @@ SCOPES: dict[str, tuple[str, ...]] = {
                 "test_web_perf.py", "test_web_resource_sync.py", "test_record_rehome.py", "test_wants.py",
                 "test_magnet_chain.py",
                 "test_web_orphan_records.py",
-                "test_web_review.py", "test_web_settings.py"),
+                "test_web_review.py", "test_web_settings.py", "test_system_language.py"),
     # 任务中心的两个文件跟着 `test_jobs.py` 走：`jobs.py` 与 `task_runs.py` 是同一条
     # 接线的两端，改哪一端都要两边一起验。
     "media": ("test_external_playback.py", "test_runtime_consistency.py", "test_endcard.py", "test_fastapi_api.py", "test_jobs.py",
@@ -113,7 +113,7 @@ SCOPES: dict[str, tuple[str, ...]] = {
                  "test_seed_pack.py", "test_seed_followup.py", "test_seed_corrections.py"),
     "tooling": ("test_scripts.py", "test_trash_junk.py", "test_auth.py", "test_access.py", "test_cli.py", "test_server.py", "test_diagnostics.py", "test_error_reporting.py", "test_remote_reporting.py", "test_reporting_*.py", "test_library_sharing.py", "test_library_diagnostics.py", "test_script_policy.py",
                 "test_scan.py", "test_record_rehome.py", "test_wants.py", "test_push_discovery.py", "test_media_probe.py", "test_subtitles.py", "test_onboarding.py", "test_configuration_sources.py", "test_clouddrive_proxy.py", "test_folder_picker.py", "test_ledger_backups.py", "test_clear_camera_filename_codes.py",
-                "test_agent_worktree.py", "test_check_public_text.py", "test_issue_intake.py", "test_star_history.py", "test_test_evidence.py", "test_test_history.py", "test_test_environment.py", "test_dependency_policy.py",
+                "test_agent_worktree.py", "test_ci_test_evidence.py", "test_check_public_text.py", "test_issue_intake.py", "test_star_history.py", "test_test_evidence.py", "test_test_history.py", "test_test_environment.py", "test_dependency_policy.py",
                 "test_version_bump.py", "test_changelog.py", "test_release_due.py", "test_release_candidate.py", "test_media_build_cache.py", "test_runner_launcher.py",
                 "test_restart_windows_tray.py", "test_deploy_windows_tray.py", "test_runtime_prepare.py",
                 "test_buildinfo.py", "test_versioning.py", "test_macos_standalone.py",
@@ -240,6 +240,7 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     # `test_stale_candidates.py` 在 metadata，`test_web_e2e.py` 在 web 里整条跑它。
     # 模块名与测试文件名对不上，按名字推不出来，不指明就退化成 full。
     "src/peach/library_processing.py": ("metadata", "web"),
+    "src/peach/library_processing_scope.py": ("metadata", "web"),
     "src/peach/local_poster.py": ("metadata", "web"),
     "src/peach/media_io.py": ("metadata", "media", "tooling"),
     "src/peach/processing_control.py": ("media", "metadata", "web"),
@@ -405,7 +406,7 @@ AUTO_SCOPE_PREFIXES: tuple[tuple[str, str | tuple[str, ...]], ...] = (
 FULL_ONLY_PREFIXES: tuple[str, ...] = (
     'frontend/node_modules/',
     "pyproject.toml",
-    "scripts/test_runner.py", "scripts/test_evidence.py", "scripts/test.ps1", "scripts/test.sh",
+    "scripts/test_runner.py", "scripts/test_evidence.py", "scripts/ci_test_evidence.py", "scripts/test.ps1", "scripts/test.sh",
     "scripts/ci_plan.py", "scripts/test_environment.py", "scripts/change_impact.py", "scripts/test_focus.py",
     "scripts/test_history.py", "uv.lock",
     "scripts/test_resume.py", "scripts/test_run_progress.py", "scripts/test_environment_identity.py",
@@ -419,12 +420,13 @@ FULL_ONLY_PREFIXES: tuple[str, ...] = (
 )
 
 
-def selected_files(scope: str) -> tuple[Path, ...]:
+def selected_files(scope: str, *, root: Path | None = None) -> tuple[Path, ...]:
+    tests = TESTS if root is None else root / "tests"
     if scope == "full":
-        return tuple(sorted(TESTS.glob("test_*.py")))
+        return tuple(sorted(tests.glob("test_*.py")))
     found: set[Path] = set()
     for pattern in (*COMMON_PATTERNS, *SCOPES[scope]):
-        found.update(TESTS.glob(pattern))
+        found.update(tests.glob(pattern))
     return tuple(sorted(found))
 
 
@@ -449,13 +451,13 @@ def scopes_of_module(stem: str) -> tuple[str, ...]:
                         for pattern in patterns))
 
 
-def _imported_modules(path: Path) -> frozenset[str]:
+def _imported_modules(path: Path, *, root: Path | None = None) -> frozenset[str]:
     """一个 Python 文件导入了 `peach` 下哪些顶层模块（含函数里的延迟导入）。"""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeError, ValueError):
         return frozenset()
-    source = ROOT / "src" / "peach"
+    source = (ROOT if root is None else root) / "src" / "peach"
     depth = len(path.relative_to(source).parts) if path.is_relative_to(source) else None
     found: set[str] = set()
     for node in ast.walk(tree):
@@ -475,17 +477,19 @@ def _imported_modules(path: Path) -> frozenset[str]:
     return frozenset(found)
 
 
-@lru_cache(maxsize=1)
-def _import_index() -> tuple[dict[str, frozenset[str]], dict[str, frozenset[str]], frozenset[str]]:
+@lru_cache(maxsize=None)
+def _import_index(root: Path = ROOT) -> tuple[dict[str, frozenset[str]], dict[str, frozenset[str]], frozenset[str]]:
     """测试文件、`src/peach` 下的文件与 `tests/support` 各自导入的 `peach` 模块。"""
-    tests = {path.name: _imported_modules(path) for path in TESTS.glob("test_*.py")}
-    sources = {path.relative_to(ROOT).as_posix(): _imported_modules(path)
-               for path in (ROOT / "src" / "peach").rglob("*.py")}
-    support = frozenset(name for path in (TESTS / "support").glob("*.py") for name in _imported_modules(path))
+    tests = {path.name: _imported_modules(path, root=root) for path in (root / "tests").glob("test_*.py")}
+    sources = {path.relative_to(root).as_posix(): _imported_modules(path, root=root)
+               for path in (root / "src" / "peach").rglob("*.py")}
+    support = frozenset(name for path in (root / "tests/support").glob("*.py")
+                        for name in _imported_modules(path, root=root))
     return tests, sources, support
 
 
-def scopes_of_importers(stem: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
+def scopes_of_importers(stem: str, seen: frozenset[str] = frozenset(), *,
+                        root: Path = ROOT) -> tuple[str, ...]:
     """按名字推不出测试的 `src/peach/<stem>.py`：取直接导入它的测试所在的域，加上直接导入它
     的源码文件按本表推出的域。
 
@@ -494,7 +498,7 @@ def scopes_of_importers(stem: str, seen: frozenset[str] = frozenset()) -> tuple[
     互相导入的一组模块合起来算。
     共享测试设施 `tests/support` 用到它、或者谁都不直接导入它，返回空，由调用方按未知面跑 full。
     """
-    tests, sources, support = _import_index()
+    tests, sources, support = _import_index(root)
     if stem in support:
         return ()
     found: set[str] = set()
@@ -508,7 +512,7 @@ def scopes_of_importers(stem: str, seen: frozenset[str] = frozenset()) -> tuple[
             if not nested and importer in seen:
                 # 互相导入的一组模块：正在求值的那一层已经在收它自己的导入者。
                 continue
-            scopes = mapped_scopes(path, seen | {stem}) if nested or importer != "__init__" else ()
+            scopes = mapped_scopes(path, seen | {stem}, root=root) if nested or importer != "__init__" else ()
             if not scopes:
                 return ()
             found.update(scopes)
@@ -575,7 +579,7 @@ def special_scopes(path: str, kind: str) -> tuple[str, ...] | None:
     return None
 
 
-def mapped_scopes(path: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
+def mapped_scopes(path: str, seen: frozenset[str] = frozenset(), *, root: Path = ROOT) -> tuple[str, ...]:
     """按显式映射、测试归属、模块测试名和直接导入者定位功能域。"""
     name = path.rsplit("/", 1)[-1]
     if path in AUTO_SCOPE_FILES:
@@ -590,13 +594,14 @@ def mapped_scopes(path: str, seen: frozenset[str] = frozenset()) -> tuple[str, .
         by_name = scopes_of_module(stem)
         if by_name or "/" in path.removeprefix("src/peach/") or stem == "__init__":
             return by_name
-        return scopes_of_importers(stem, seen)
+        return scopes_of_importers(stem, seen, root=root)
     return ()
 
 
 def scopes_for_changes(paths: Iterable[str], *, contents: dict | None = None,
-                       kinds: dict | None = None) -> tuple[tuple[str, ...], str]:
-    """纯函数：改动清单与可选内容差异 → 验证范围和原因。"""
+                       kinds: dict | None = None, root: Path | None = None) -> tuple[tuple[str, ...], str]:
+    """由目标源码树、改动清单与可选内容差异选择验证范围。"""
+    root = ROOT if root is None else root
     picked: dict[str, list[str]] = {}
     full_reasons = []
     for raw in paths:
@@ -608,11 +613,11 @@ def scopes_for_changes(paths: Iterable[str], *, contents: dict | None = None,
             kind = change_impact.kind(path, *contents[path])
         scopes = special_scopes(path, kind)
         if scopes is None:
-            scopes = mapped_scopes(path)
+            scopes = mapped_scopes(path, root=root)
         if kind not in {"unsafe", "prose"} and path.startswith("src/peach/") and path.endswith(".py") \
                 and scopes and "full" not in scopes:
             stem = path.removeprefix("src/peach/").split("/", 1)[0].removesuffix(".py")
-            tests, _, _ = _import_index()
+            tests, _, _ = _import_index(root)
             consumers = {scope for name, modules in tests.items() if stem in modules
                          for scope in scopes_of_test_file(name)}
             scopes = tuple(scope for scope in SCOPES if scope in {*scopes, *consumers})
@@ -937,7 +942,7 @@ def run_shards(scopes: tuple[str, ...], *, jobs: int, shard_count: int,
         plan_path.write_text(json.dumps(plan), encoding="utf-8")
     pending = list(range(shard_count))
     running = {}
-    completed_at = {}
+    completed_at, forced = {}, set()
     passed, count, timings = True, 0, []
     try:
         while pending or running:
@@ -952,7 +957,8 @@ def run_shards(scopes: tuple[str, ...], *, jobs: int, shard_count: int,
                     log.close()
                     raise
                 running[index] = (process, log)
-            finished = test_shard_results.completed_processes(running, folder, completed_at, now=time.monotonic())
+            finished = test_shard_results.completed_processes(running, folder, completed_at,
+                                                               now=time.monotonic(), forced=forced)
             if not finished:
                 time.sleep(0.2)
                 continue
@@ -965,9 +971,10 @@ def run_shards(scopes: tuple[str, ...], *, jobs: int, shard_count: int,
                 report_path = folder / f"{index}.json"
                 report = test_shard_results.read_report(report_path)
                 ok = process.returncode == 0 and bool(report.get("success"))
+                assigned = plan[index] if plan is not None else sorted({path.name for scope in scopes
+                           for path in selected_files(scope)})[index::shard_count]
+                complete = None
                 if checkpoint is not None:
-                    assigned = plan[index] if plan is not None else sorted({path.name for scope in scopes
-                               for path in selected_files(scope)})[index::shard_count]
                     complete = checkpoint(assigned, report, process.returncode == (0 if report.get('success') else 1))
                     ok = ok and complete
                 passed = passed and ok
@@ -978,7 +985,15 @@ def run_shards(scopes: tuple[str, ...], *, jobs: int, shard_count: int,
                 if outcomes is not None:
                     outcomes.extend(report.get("results", []))
                 print(f"分片 {index + 1}/{shard_count} {'通过' if ok else '失败'}"
-                      f"（{report.get('count', 0)} 个用例）", flush=True)
+                      f"（{report.get('count', 0)} 个用例；退出码 {process.returncode}；"
+                      f"完成报告 {'有' if report.get('complete') else '无'}；"
+                      f"补验覆盖 {'完整' if complete else '未完整' if complete is False else '未请求'}）", flush=True)
+                if not ok:
+                    details = {'files': assigned, 'exit_code': process.returncode,
+                               'forced_cleanup': index in forced, 'report_error': report.get('report_error'),
+                               'reported_success': report.get('success'), 'coverage_complete': complete,
+                               'reported_results': len(report.get('results', []))}
+                    print('分片失败明细：' + json.dumps(details, ensure_ascii=False), flush=True)
     finally:
         for process, log in running.values():
             if process.poll() is None:

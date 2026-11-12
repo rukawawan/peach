@@ -37,6 +37,7 @@ import {
 import { PushDiscoveryForm } from './push-discovery-settings';
 import { rememberShape } from '../../configuration-skeleton';
 import { useLibraryTints } from '../components/library-tint';
+import { useOrderedLibraries } from '../components/library-order';
 import { LIBRARY_FOLDER_HELP } from './library-policy-copy';
 import {
   ErrorText, ExternalLink, Fact, FactList, Footer, Help, Section, SourceMark, Stack,
@@ -151,8 +152,8 @@ function MediaForm({ data, receipt }: ConfigurationGroupProps) {
     rows.forEach((row, i) => { if (row.library_id === rows[index]!.library_id) edit(i, patch); });
   };
   // 每个媒体库取它的第一行作代表：新加的空文件夹排在后面，不改动这一库的图标与来源。
-  const libraries = [...rows.reduce((found, row) => found.has(row.library_id) ? found : found.set(row.library_id, row),
-    new Map<string, MediaRow>()).values()];
+  const libraries = useOrderedLibraries([...rows.reduce((found, row) => found.has(row.library_id) ? found : found.set(row.library_id, row),
+    new Map<string, MediaRow>()).values()], row => row.library_id);
   // 「新建媒体库」把这个文件夹拆成新的一组，焦点交给新组的名称框，接着就能起名。
   const [named, setNamed] = useState<string | null>(null);
   useEffect(() => {
@@ -375,7 +376,8 @@ function MediaForm({ data, receipt }: ConfigurationGroupProps) {
   );
 }
 
-function MountBadge({ online }: { online: boolean | undefined }) {
+/** 挂载可达性：快照里 `null` 是检测超时或还没检测，显示「未检测」，不当离线。 */
+function MountBadge({ online }: { online: boolean | null | undefined }) {
   return <ConnectionStatus online={online} />;
 }
 

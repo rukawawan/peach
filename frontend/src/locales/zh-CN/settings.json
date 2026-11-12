@@ -1,0 +1,10 @@
+{
+  "interfaceLanguage": {
+    "auto": "自动",
+    "help": "自动时先看浏览器语言，再看系统语言。",
+    "saveFailed": "保存界面语言",
+    "saved": "已保存界面语言",
+    "title": "界面语言",
+    "unavailable": "未取得数据库中的界面语言，请重新打开设置。"
+  }
+}

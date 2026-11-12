@@ -8,10 +8,10 @@ from . import seed_validation as validation
 from .performer_profiles import read_profile
 
 
-def check_history(connection: sqlite3.Connection, pack: dict) -> None:
-    """同版绑定内容，旧格式与较低修订不得穿过已导入的水位。"""
+def check_history(connection: sqlite3.Connection, pack: dict, *, content_digest: str | None = None) -> None:
+    """同版绑定内容，旧格式与较低修订不得穿过已导入的水位。`content_digest` 是调用方已算好的包摘要。"""
     revision = pack.get("revision", 0)
-    content_digest = validation.digest(pack)
+    content_digest = content_digest or validation.digest(pack)
     rows = connection.execute("SELECT version,revision,content_sha256,withdrawals_json FROM seed_pack_history").fetchall()
     incoming = {row["id"]: validation.canonical(row) for row in pack.get("withdrawals", [])}
     for version, previous_revision, digest, withdrawals in rows:

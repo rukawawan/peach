@@ -154,7 +154,7 @@ it('首屏读 prefetch 落进缓存的那一份，两套证据是页签不是并
   expect(tasteGets(fetcher)).toHaveLength(1);
   expect(tasteGets(fetcher)[0]?.[0]).toBe(`${TASTE_URL}?window=all`);
   expect([...host.querySelectorAll('[role=tab]')].map((tab) => tab.textContent).slice(0, 2))
-    .toEqual(['浏览器记录', 'Peach 观看与评价']);
+    .toEqual(['Peach 观看与评价', '浏览器记录']);
   expect(host.textContent).toContain('900');
   expect(host.textContent).not.toContain('个作品有内部行为证据');
 });

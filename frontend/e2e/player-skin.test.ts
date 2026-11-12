@@ -13,11 +13,15 @@ describe('播放器皮肤', () => {
 
   it('首次加载模块期间保留海报，控制条从完整皮肤开始显示', { timeout: 60_000 }, async () => {
     let release!: () => void;
+    let moduleRequested!: Promise<unknown>;
     const gate = new Promise<void>(resolve => { release = resolve });
     const opened = await visit(browser, `/assets/${requiredEnv('PEACH_E2E_ITEM')}`, VIEWPORTS[0]!, async page => {
-      await page.route('**/vendor/videojs/10.1.0/video-player.js', async route => { await gate; await route.continue() });
+      const modulePath = '**/vendor/videojs/*/video-player.js';
+      moduleRequested = page.waitForRequest(modulePath);
+      await page.route(modulePath, async route => { await gate; await route.continue() });
     });
     try {
+      await moduleRequested;
       const video = opened.page.locator('#stage video.video-js');
       await video.waitFor();
       assert.equal(await video.evaluate((node: HTMLVideoElement) => node.controls), false, '模块加载期间不显示浏览器控制条');

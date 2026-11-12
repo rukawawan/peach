@@ -3,6 +3,7 @@ import json
 import gzip
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,6 +17,19 @@ from peach.remote_media_cache import AVATAR_REFRESH_SECONDS, FAVICON_REFRESH_SEC
 
 
 class RemoteMediaCacheTests(unittest.IsolatedAsyncioTestCase):
+    def test_capacity_denial_after_fetch_does_not_write_or_enter_upstream_cooldown(self):
+        from peach.jobs import DiskSpaceDenied
+        from peach.remote_media_cache import RemoteMediaUnavailable
+        guard = mock.Mock()
+        guard.check.side_effect = [None, DiskSpaceDenied('capacity')]
+        self.cache.capacity_guard = guard
+        with self.assertRaises(RemoteMediaUnavailable):
+            self.cache.bytes('new-image', lambda: b'image')
+        self.assertFalse(list(self.root.rglob('*.data')))
+        self.assertFalse(list(self.root.rglob('*.failed')))
+        guard.check.side_effect = None
+        self.assertEqual(self.cache.bytes('new-image', lambda: b'image'), b'image')
+
     async def test_active_documents_are_rejected_without_forwarding_or_caching_bytes(self):
         self.payload=b'<svg><script>active()</script></svg>'
         for kind in ('image/svg+xml','text/html','application/xhtml+xml','application/xml',''):
@@ -105,6 +119,39 @@ class RemoteMediaCacheTests(unittest.IsolatedAsyncioTestCase):
         responses = await asyncio.gather(self.client.get("/media"), self.client.get("/media"))
         self.assertEqual([response.content for response in responses], [self.payload] * 2)
         self.assertEqual(self.calls, 1)
+
+    async def test_another_range_is_not_queued_behind_a_playing_download(self):
+        """在线播放时整段还在送，拖动或读尾部 moov 的另一个 Range 当场取上游，不排在它后面。"""
+        started, release = threading.Event(), threading.Event()
+
+        class Held(httpx.SyncByteStream):
+            def __iter__(self):
+                yield b"01"
+                started.set()
+                release.wait(10)
+                yield b"23456789"
+
+        def fetch(request):
+            self.calls += 1
+            if "range" not in request.headers:
+                return httpx.Response(200, headers=self.headers, stream=Held())
+            return httpx.Response(206, headers={"content-type": "video/mp4", "content-length": "4",
+                                               "content-range": "bytes 2-5/10"}, stream=httpx.ByteStream(b"2345"))
+
+        def endpoint(request):
+            return self.cache.stream("follow:1:media:0", request, lambda: fetch(request))
+        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=Starlette(routes=[Route("/media", endpoint)])),
+                                   base_url="http://test")
+        self.addAsyncCleanup(client.aclose)
+        playing = asyncio.create_task(client.get("/media"))
+        try:
+            await asyncio.to_thread(started.wait, 5)
+            seek = await asyncio.wait_for(client.get("/media", headers={"Range": "bytes=2-5"}), 5)
+            self.assertEqual((seek.status_code, seek.content), (206, b"2345"))
+        finally:
+            release.set()
+        self.assertEqual((await playing).content, self.payload)
+        self.assertEqual(self.calls, 2)
 
     async def test_a_complete_range_can_serve_other_ranges(self):
         self.status = 206

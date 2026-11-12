@@ -135,7 +135,6 @@ export function IdentityEvidence(
         </Button>
       </div>
       <SourceImage url={row.preview_url} />
-      <p className="text-body-2-regular text-text-secondary">通过后记录身份判断。</p>
       {samples.length ? <>
         <h5 className="text-body-medium text-text-primary">本地作品样本</h5>
         <ul className="flex flex-col gap-1">

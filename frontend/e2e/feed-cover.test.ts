@@ -75,7 +75,7 @@ describe('新作封面显示时机',()=>{
     assert.equal(await avatar.getAttribute('href'),'/performers/42');
     assert.equal(await avatar.evaluate(el=>getComputedStyle(el).pointerEvents),'auto');
     const names=await card.locator('.feednewperformers').boundingBox();
-    const date=await card.locator('.meta .s>span').last().boundingBox();
+    const date=await card.locator('.feednewdate').boundingBox();
     assert.ok(names&&date&&names.width>=30&&date.y>=names.y+names.height-1,'姓名和完整日期各有可见的一行');
     assert.equal(await page.locator('#feedNew [data-feed-id="2"] .mav .ini').textContent(),'未');
     const geometry=await layout(page);

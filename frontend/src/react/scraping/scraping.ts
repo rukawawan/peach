@@ -122,17 +122,15 @@ export const fetchAmaneBridge = (signal?: AbortSignal) => apiGet<AmaneBridge>(AM
 
 /** 首屏来源与任务快照并发取回，同一份缓存交给页面各分区。
  *
- * 抓封面的状态也算首屏——页面一上来就得知道有没有一趟正在跑，才接得上它的进度；amane 桥
- * 那张卡同理，重建可能正在后台跑。中止时 `fetchQuery` 把 `AbortError` 抛回给挂载方，它据此
+ * 抓封面与检查任务的状态用于确认操作是否可执行；amane 和自定义来源独立读取。
+ * 中止时 `fetchQuery` 把 `AbortError` 抛回给挂载方，它据此
  * 放弃这一次。 */
 export async function prefetchScraping(signal: AbortSignal): Promise<void> {
-  await Promise.all([
-    queryClient.fetchQuery({ queryKey: SCRAPING_KEY, queryFn: () => fetchSources(signal) }),
-    queryClient.fetchQuery({ queryKey: COVER_JOB_KEY, queryFn: () => fetchCoverJob(signal) }),
-    queryClient.fetchQuery({ queryKey: CHECK_ALL_KEY, queryFn: () => fetchCheckAllJob(signal) }),
-    queryClient.fetchQuery({ queryKey: AMANE_BRIDGE_KEY, queryFn: () => fetchAmaneBridge(signal) }),
-    queryClient.fetchQuery({ queryKey: CUSTOM_SOURCES_KEY, queryFn: () => fetchCustomSources(signal) }),
-  ]);
+  void queryClient.prefetchQuery({ queryKey: AMANE_BRIDGE_KEY, queryFn: () => fetchAmaneBridge(signal) });
+  void queryClient.prefetchQuery({ queryKey: CUSTOM_SOURCES_KEY, queryFn: () => fetchCustomSources(signal) });
+  void queryClient.prefetchQuery({ queryKey: COVER_JOB_KEY, queryFn: () => fetchCoverJob(signal) });
+  void queryClient.prefetchQuery({ queryKey: CHECK_ALL_KEY, queryFn: () => fetchCheckAllJob(signal) });
+  await queryClient.fetchQuery({ queryKey: SCRAPING_KEY, queryFn: () => fetchSources(signal) });
 }
 
 /** 一条检查结果说成一句话：谁、通不通、图有多大、服务端补充了什么。

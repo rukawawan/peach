@@ -209,10 +209,14 @@ class FollowupRunner:
 
         测试与命令行用这一条：它们要的是「跑完了再往下走」，而不是一个后台线程。
         """
+        from .update_tasks import GateBusy
         done = 0
         for keys in lanes().values():
             while True:
-                run = self.store.claim_followup(keys, first=_ahead(keys))
+                try:
+                    run = self.store.claim_followup(keys, first=_ahead(keys))
+                except GateBusy:
+                    break
                 if run is None:
                     break
                 deferred = self._execute(run)
@@ -225,8 +229,14 @@ class FollowupRunner:
     # -- 执行 --------------------------------------------------------------
 
     def _work(self, keys: tuple[str, ...]) -> None:
+        from .update_tasks import GateBusy
         while not self._stopping:
-            run = self.store.claim_followup(keys, first=_ahead(keys))
+            try:
+                run = self.store.claim_followup(keys, first=_ahead(keys))
+            except GateBusy:
+                # 闸门锁被别人拿着不是「队列空了」：退出线程就没人再叫醒这条通道。
+                time.sleep(DEFER_POLL_SECONDS)
+                continue
             if run is None:
                 from .update_tasks import is_pausing
                 db = getattr(getattr(self.store, 'database', None), 'db_path', None)
@@ -246,6 +256,12 @@ class FollowupRunner:
                 time.sleep(DEFER_POLL_SECONDS)
 
     def _execute(self, run):
+        try:
+            return self._execute_one(run)
+        finally:
+            self.store.prune(run.task_key, keep_errors=True)
+
+    def _execute_one(self, run):
         """跑一条后继；它给别的任务让路时返回那个 `JobDeferred`，否则返回 None。"""
         from .jobs import JobDeferred, JobPaused
         followup_type = REGISTRY.get(run.task_key)
@@ -279,4 +295,9 @@ class FollowupRunner:
         handle.finish("succeeded", summary=summary)
         # 处理器说还没做完：原地接一条，不加深（ADR-0084）。先结算再接，互斥键才空得出来。
         if summary.get("continue"):
-            self.store.continue_followup(run, followup_type.label)
+            from .update_tasks import UpdateBusy
+            try:
+                self.store.continue_followup(run, followup_type.label)
+            except UpdateBusy as error:
+                # 接续没排上只是少接一轮，存量规划下次会再派；异常不能打死通道线程。
+                LOGGER.warning("followup continuation skipped: %s: %s", run.followup_key, error)

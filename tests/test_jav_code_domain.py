@@ -27,7 +27,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from peach.catalog_rules import (
@@ -1122,6 +1122,27 @@ _identity_spec.loader.exec_module(identity)
 
 class ScrapedIdentityAuditTests(unittest.TestCase):
     """已落库的刮削归属按来源交回的编号重判身份，分错配、前缀未证实、来源无编号三档。"""
+
+    def test_date_code_review_keys_compare_the_release_not_the_key_namespace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / 'ledger.db'
+            upgrade(database, MIGRATIONS)
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("INSERT INTO asset(id,location,path,name,medium,code) "
+                                   "VALUES(1,'local','sample.mp4','sample.mp4','video','010101_001')")
+                connection.execute("INSERT INTO entity(id,kind,canonical_name,normalized_name,created_at,updated_at) "
+                                   "VALUES(1,'tag','sample','sample','now','now')")
+                metadata = {'review_item': 'date-code:1:tags', 'provider_id': '010101_001'}
+                connection.execute("INSERT INTO asset_entity(asset_id,entity_id,role,source,metadata_json) "
+                                   "VALUES(1,1,'tag','javinizer:test:tag',?)", (json.dumps(metadata),))
+                rows, tiers = identity.collect(connection)
+                self.assertEqual(rows, [])
+                self.assertEqual(dict(tiers), {})
+                metadata['provider_id'] = '010101_002'
+                connection.execute('UPDATE asset_entity SET metadata_json=?', (json.dumps(metadata),))
+                rows, tiers = identity.collect(connection)
+                self.assertEqual(tiers[identity.MISMATCH], 1)
+                self.assertEqual(rows[0]['review_code'], '010101_001')
 
     def test_each_tier_is_told_apart(self):
         self.assertIsNone(identity.classify("ABW-123", {"id": "ABW-123"}))

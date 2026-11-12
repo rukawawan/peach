@@ -208,7 +208,7 @@ class MediaResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.app.state.hls_service = self.service
         self.children = []
         self.tasks = []
-        self.spawned = asyncio.Event()
+        self.ready = asyncio.Event()
         self.original_spawn = asyncio.create_subprocess_exec
         self.addAsyncCleanup(self.stop_owned_work)
 
@@ -228,12 +228,14 @@ class MediaResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def owned_spawn(self, *args, **kwargs):
         child = await self.original_spawn(*args, **kwargs)
         self.children.append(child)
-        self.spawned.set()
+        self.assertEqual((await child.stderr.readline()).rstrip(b'\r\n'), b'ready')
+        self.ready.set()
         return child
 
     def attempts(self, delay):
         return [("owned output", lambda out: [getattr(sys, '_base_executable', sys.executable), "-c",
-            "import sys,time; from pathlib import Path; time.sleep(float(sys.argv[1])); "
+            "import sys,time; from pathlib import Path; print('ready',file=sys.stderr,flush=True); "
+            "time.sleep(float(sys.argv[1])); "
             "Path(sys.argv[2]).write_bytes(b'segment')", str(delay), str(out)])]
 
     def request(self, path, query=b""):
@@ -270,7 +272,7 @@ class MediaResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(self.service, "_attempts", return_value=self.attempts(60)), \
                 mock.patch("peach.segments.asyncio.create_subprocess_exec", self.owned_spawn):
             task, messages, sent = self.request("/stream/hls/1/0.ts", b"session=one&t=secret")
-            await asyncio.wait_for(self.spawned.wait(), 2)
+            await asyncio.wait_for(self.ready.wait(), 10)
             messages.put_nowait({"type": "http.disconnect"})
             self.assertTrue(await self.finished(task), "断连请求仍占着生成槽")
         self.assertIsNotNone(self.children[0].returncode)
@@ -288,27 +290,31 @@ class MediaResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def shared_client_leaves(self, *, explicit):
         joined = asyncio.Event()
-        generate = self.service.generate
+        sessions = self.app.state.stream_sessions
+        register = sessions.register
         release = self.root / "release-segment"
         attempts = [("controlled output", lambda out: [
             getattr(sys, '_base_executable', sys.executable), "-c",
             "import sys,time\nfrom pathlib import Path\n"
+            "print('ready',file=sys.stderr,flush=True)\n"
             "while not Path(sys.argv[1]).exists(): time.sleep(0.01)\n"
             "Path(sys.argv[2]).write_bytes(b'segment')",
             str(release), str(out)])]
 
-        async def observed(*args, **kwargs):
-            if kwargs["session"] == "two":
+        # 第二个客户端登记后、下一次让出之前就挂到了共享生成上；刚进 generate 时还没有。
+        def observed(session, task):
+            registered = register(session, task)
+            if session == "two":
                 joined.set()
-            return await generate(*args, **kwargs)
+            return registered
 
         with mock.patch.object(routes_media, "_hls_plan", return_value=(
                 None, self.source, [(0, 6)], False)), \
                 mock.patch.object(self.service, "_attempts", return_value=attempts), \
-                mock.patch.object(self.service, "generate", observed), \
+                mock.patch.object(sessions, "register", observed), \
                 mock.patch("peach.segments.asyncio.create_subprocess_exec", self.owned_spawn):
             first, messages, _ = self.request("/stream/hls/1/0.ts", b"session=one&t=secret")
-            await asyncio.wait_for(self.spawned.wait(), 2)
+            await asyncio.wait_for(self.ready.wait(), 10)
             second, _, sent = self.request("/stream/hls/1/0.ts", b"session=two&t=secret")
             await asyncio.wait_for(joined.wait(), 1)
             if explicit:
@@ -435,16 +441,22 @@ class MediaResponseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.app.state.stream_sessions.active_count("owned"), 0)
 
     async def test_file_runtime_errors_reach_the_application_error_handler(self):
+        entered, fail = asyncio.Event(), asyncio.Event()
+
         @self.app.get("/owned-stream")
         async def stream():
             return BufferedFileResponse(self.source)
 
         async def broken_headers(response, scope, receive, send):
+            entered.set()
+            await fail.wait()
             raise RuntimeError("owned response failure")
 
         with mock.patch.object(FileResponse, "__call__", broken_headers), \
                 mock.patch("peach.api._server_error_headers", return_value={"X-Peach-Error-ID": "test"}) as errors:
             task, _, sent = self.request("/owned-stream")
+            await asyncio.wait_for(entered.wait(), 10)
+            fail.set()
             observed = None
             try:
                 await asyncio.wait_for(task, 1)

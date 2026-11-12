@@ -119,7 +119,8 @@ export function FollowFeedPage(props: FollowFeedProps) {
     .filter((provider) => provider.present).map((provider) => provider.provider)), [credentialsResult.data]);
   const context = useMemo<FollowContext>(() => ({
     sources: data?.sources || [], aliases: data?.author_aliases || [], credentials,
-  }), [data, credentials]);
+    credentialsReady: credentialsResult.data !== undefined,
+  }), [data, credentials, credentialsResult.data]);
   const facets = useFacets(data, view, seed);
   const listPending = result.isPending || result.isPlaceholderData;
 
@@ -171,6 +172,7 @@ export function FollowFeedPage(props: FollowFeedProps) {
     <>
       {/* 进度那一格归 `followJobProgress`：它自己往里插面板、自己开合，React 只给一个空节点。 */}
       <div key={job.generation} ref={job.host} data-follow-progress="" />
+      {credentialsResult.isError ? <RetryNote message="凭据状态未取得" onRetry={() => { void credentialsResult.refetch() }} /> : null}
       {!job.busy && job.report ? <Note tone="neutral" title="检查结果">{job.report}</Note> : null}
       <div data-follow-feed="" data-select-mode={props.selectMode ? '' : undefined}>
         <Head>

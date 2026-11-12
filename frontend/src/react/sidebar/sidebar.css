@@ -263,17 +263,10 @@ body :is([data-sidebar-range] input)::-moz-range-thumb{width:18px;height:18px;bo
 }
 
 /* 原帖的插入波纹：近邻先让开，位移和延迟由导航按落点距离计算。 */
-[data-sidebar-nav] button{touch-action:none;user-select:none;translate:0 var(--sidebar-nudge,0px);transition:translate calc(var(--sidebar-reorder-ms)*1ms) var(--spring-press) var(--sidebar-delay,0ms),scale calc(var(--spring-press-ms)*1ms) var(--spring-press)}
-[data-sidebar-nav][data-reordering] button{cursor:grabbing}
-[data-sidebar-nav] button[data-dragging]{position:absolute;top:var(--sidebar-picked-top);left:0;width:100%;z-index:3;scale:.9;transform:translate3d(var(--sidebar-drag-x,18px),var(--sidebar-drag-y,0px),0);background:var(--ground)!important;box-shadow:var(--glass-pick-shadow);cursor:grabbing;will-change:transform}
+[data-sidebar-nav] button{--navigation-nudge-y:var(--sidebar-nudge,0px)}
+[data-sidebar-nav] button[data-dragging]{top:var(--sidebar-picked-top);left:0;width:100%}
 [data-sidebar-drawer]:has([data-sidebar-nav][data-reordering])>[data-sidebar-glide]{opacity:0}
-[data-sidebar-drop-line]{position:absolute;top:0;transform:translateY(var(--sidebar-line-top));left:10px;right:10px;height:2px;z-index:2;pointer-events:none;transition:transform calc(var(--sidebar-reorder-ms)*1ms) var(--spring-press)}
-[data-sidebar-drop-line]>span{display:block;height:100%;border-radius:var(--pill-radius);background:color-mix(in srgb,var(--ink) 15%,transparent);transform:scaleX(1);transform-origin:center;transition:transform var(--motion-swap)}
+[data-sidebar-drop-line]{top:0;transform:translateY(var(--sidebar-line-top));left:10px;right:10px;height:2px}
+[data-sidebar-drop-line]>span{transform:scaleX(1)}
 @starting-style{[data-sidebar-drop-line]>span{transform:scaleX(0)}}
 [data-sidebar-order-status]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-@media(prefers-reduced-motion:reduce){
-  [data-sidebar-nav] button{translate:none;transition:none}
-  [data-sidebar-nav][data-reordering] button[data-dragging]{position:static;width:auto;scale:1;transform:none;background:none!important;box-shadow:none}
-  [data-sidebar-drop-line],[data-sidebar-drop-line]>span{transition:none}
-  @starting-style{[data-sidebar-drop-line]>span{transform:none}}
-}

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import junk, ledger_backups, organize, settings_file
 from .catalog_rules import same_release_code
-from .downloads import (INGESTED, POSTPROCESS_COMPLETE, POSTPROCESS_FAILED,
+from .downloads import (INGESTED, POSTPROCESS_COMPLETE,
                         POSTPROCESS_PENDING, POSTPROCESS_QUEUED, POSTPROCESS_RUNNING,
                         DownloadStore, iso)
 from .field_owners import SCAN_FILENAME, write_owned_fields
@@ -17,6 +17,7 @@ from .jobs import JobDeferred
 from .library_processing import COLLECT_STAGE, _ffprobe_path, process_library
 from .media_probe import probe_unmeasured
 from .task_runs import declared_rows
+from .task_retry import RetryableTaskError
 
 TASK_KEY = "download-postprocess"
 TASK_LABEL = "云下载后处理"
@@ -37,6 +38,9 @@ def enqueue(contract, task) -> int | None:
     """由下载对账线程声明一个父任务，再按 ADR-0040 派发持久后继。"""
     fresh = DownloadStore(contract.database).get(task.id)
     if fresh is None or fresh.state != INGESTED or fresh.postprocess_state != POSTPROCESS_PENDING:
+        return None
+    from .downloads import parse_iso
+    if fresh.next_check_at and parse_iso(fresh.next_check_at) > contract.downloads.clock():
         return None
     parent = contract.task_runs.start(
         TASK_KEY, trigger="scheduled", mutex_key=f"download-ingest:{task.id}",
@@ -122,9 +126,39 @@ def _collect(contract, main: int, handle) -> dict:
         # 不为一项暂缺的资料把整条下载卡在云下载目录里。
         issues, paused = int(state.get("issue_count") or 0), int(state.get("paused_count") or 0)
         if not issues or paused < issues:
-            raise RuntimeError(str(state.get("error") or "资料采集失败"))
+            message = str(state.get("error") or "资料采集失败")
+            delay = _collection_retry_delay(state, main)
+            if delay is not None:
+                raise RetryableTaskError(message, after=delay)
+            raise RuntimeError(message)
         state = {**state, "paused_pending": [str(row.get("message") or "") for row in state.get("issue_preview") or ()]}
     return state
+
+
+def _collection_retry_delay(state: dict, main: int) -> float | None:
+    """只重试采集器明确记录的暂时故障；登录、解析和手动跳过不进入自动队列。"""
+    path = state.get('issues_log')
+    if not path or not state.get('issue_count'):
+        return None
+    delays = []
+    with Path(path).open(encoding='utf-8') as stream:
+        for line in stream:
+            issue = json.loads(line)
+            if issue.get('asset_id') != main or issue.get('severity') == 'info':
+                continue
+            if not issue.get('retryable') or issue.get('failed_action') == 'skipped':
+                return None
+            if issue.get('failed_action') == 'network_offline':
+                delays.append(0.0)
+                continue
+            diagnostics = issue.get('diagnostics') or {}
+            failures = diagnostics.get('failures') or [diagnostics]
+            transient = [row['automatic_retry_delay'] for row in failures
+                         if row.get('automatic_retry_delay') is not None]
+            if not transient:
+                return None
+            delays.append(max(transient))
+    return max(delays) if delays else None
 
 
 def _organize(contract, task, main: int) -> dict:
@@ -141,7 +175,10 @@ def _organize(contract, task, main: int) -> dict:
     blocked = [row for row in plan['rows'] if row.get('reason') in {
         organize.SKIP_TARGET_EXISTS, organize.SKIP_OFFLINE, organize.SKIP_TOO_LONG}]
     if blocked:
-        raise RuntimeError('文件整理未完成：' + '；'.join(str(row['reason']) for row in blocked))
+        message = '文件整理未完成：' + '；'.join(str(row['reason']) for row in blocked)
+        if all(row['reason'] == organize.SKIP_OFFLINE for row in blocked):
+            raise RetryableTaskError(message)
+        raise RuntimeError(message)
     if not movable:
         return {"moved": 0, "skipped": next(iter(plan["reasons"]), "无需整理")}
     name = f"ledger.pre-download-{task.id}-{time.strftime('%Y%m%d-%H%M%S')}.db"
@@ -159,6 +196,9 @@ def _organize(contract, task, main: int) -> dict:
             raise RuntimeError(f'整理后 ledger 校验失败：integrity={integrity} new_foreign_keys={len(introduced)}')
     if result.get('failed'):
         reasons = '；'.join(str(row['reason']) for row in result.get('failures', ()))
+        if all(row.get('retryable') for row in result.get('failures', ())):
+            raise RetryableTaskError(f'文件整理未完成：{reasons}',
+                                     after=max(row.get('retry_after') or 0 for row in result['failures']))
         raise RuntimeError(f'文件整理未完成：{reasons}')
     return {**result, 'backup': str(backup), 'existing_foreign_keys': len(baseline)}
 
@@ -196,8 +236,8 @@ def run(contract, key: str, handle) -> dict:
         store.postprocess(task_id, POSTPROCESS_QUEUED, detail=str(error))
         raise
     except Exception as error:
-        store.postprocess(task_id, POSTPROCESS_FAILED,
-                          detail=f"{type(error).__name__}: {error}")
+        store.fail_postprocess(task_id, error, now=contract.downloads.clock())
+        contract.downloads.wake()
         raise
     detail = (f"正片已绑定，资料已采集；整理跳过：{organized['skipped']}"
               if organized.get('skipped') else "正片已绑定，资料已采集并完成整理")

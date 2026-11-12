@@ -6,6 +6,21 @@ import re
 RULE = 2
 
 
+def fanza_regular_id(rows: list[dict]) -> str | None:
+    """只识别原题仅相差 FANZA 生写真特典标记的两条发行记录。"""
+    if len(rows) != 2:
+        return None
+    for special, regular in (rows, rows[::-1]):
+        title = special.get('origin_title')
+        ordinary = regular.get('origin_title')
+        if not isinstance(title, str) or not isinstance(ordinary, str) or not ordinary:
+            continue
+        match = re.fullmatch(r'【FANZA限定】(.+) 生写真[1-9]\d?枚付き', title)
+        if match and match[1] == ordinary and not ordinary.startswith('【FANZA限定】'):
+            return regular['id']
+    return None
+
+
 def current_evidence(payload: object) -> bool:
     return (isinstance(payload, dict) and type(payload.get('javdb_rule')) is int
             and payload['javdb_rule'] == RULE)

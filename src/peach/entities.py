@@ -807,13 +807,21 @@ def upsert_asset_entity(
     )
     if external_provider and external_id is not None and _ref_is_free(
             connection, entity_id, external_provider, kind, str(external_id)):
+        # 作品页署名带不出这个 id 是有碼还是無碼那条记录，之前记下的 `uncensored` 留着：
+        # 同站几枚入口靠它分辨（`entry_links.provider_ids`），重采一次不能把它冲掉。
         connection.execute(
             """INSERT INTO entity_external_ref(
                  entity_id,provider,external_kind,external_id,metadata_json,last_synced_at)
                VALUES(?,?,?,?,?,?)
                ON CONFLICT(provider,external_kind,external_id) DO UPDATE SET
                  entity_id=excluded.entity_id,
-                 metadata_json=excluded.metadata_json,
+                 metadata_json=CASE
+                   WHEN json_valid(excluded.metadata_json)
+                    AND json_valid(entity_external_ref.metadata_json)
+                    AND json_type(entity_external_ref.metadata_json,'$.uncensored') IN ('true','false')
+                   THEN json_set(excluded.metadata_json,'$.uncensored',
+                                 json(json_type(entity_external_ref.metadata_json,'$.uncensored')))
+                   ELSE excluded.metadata_json END,
                  last_synced_at=excluded.last_synced_at""",
             (entity_id, external_provider, kind, str(external_id), payload, stamp),
         )

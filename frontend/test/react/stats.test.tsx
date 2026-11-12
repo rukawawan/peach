@@ -103,11 +103,6 @@ it('整页一个请求：四张卡和下面三个面板读的是同一份快照'
     .toEqual(['4', '2', '50%', '1 个卷']);
 });
 
-it('抬头那一句用遗留层同一套体积口径', async () => {
-  const { host } = await open();
-  expect(host.querySelector('p')?.textContent).toBe('数据库中的当前统计 · 4 个视频 · 4.0 GB');
-});
-
 it('四张卡就是页签：点「看过」换到看过那一层，其余的收起来', async () => {
   const { host } = await open();
   await click(tabNamed(host, '看过'));
@@ -443,7 +438,7 @@ it('重新进这一页会重取：这一页的刷新就是重新进来一次，�
   const host = await mount(
     <QueryClientProvider client={queryClient}><StatsPage {...legacyProps()} /></QueryClientProvider>);
   expect(first.fetcher).toHaveBeenCalledTimes(2);
-  expect(host.textContent).toContain('数据库中的当前统计');
+  expect(host.querySelector('[role=tablist]')).not.toBeNull();
 });
 
 it('卸载之后不再敲库：这一页没有轮询，也不该留下别的定时器', async () => {

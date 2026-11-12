@@ -904,19 +904,18 @@ def cover_alternatives(contract, item_id: int) -> tuple[str, ...]:
 
 def _cover_alternative_index(contract) -> dict[int, tuple[str, ...]]:
     """每条 Rule34Video 条目 → 同组其他 Rule34Video 版本的 poster 地址，整库分组一次建好。"""
-    with contract.database.read_connection() as connection:
-        inputs = _follow_inputs(contract, connection)
-        everything = _enabled_items(contract, inputs, None)
-        index: dict[int, tuple[str, ...]] = {}
-        for group in inputs.store.group(everything, group_authors(inputs.sources, inputs.alias_map)):
-            members = [member for member in (group.primary, *group.variants, *group.duplicates)
-                       if member.provider == "rule34video"]
-            for member in members:
-                others = tuple(dict.fromkeys(other.thumb_url for other in members
-                                             if other.id != member.id and other.thumb_url))
-                if others:
-                    index[member.id] = others
-        return index
+    with _own_inputs(contract) as inputs:
+        grouping = group_authors(inputs.sources, inputs.alias_map)
+    index: dict[int, tuple[str, ...]] = {}
+    for group in FollowStore.group(_enabled_items(contract, None), grouping):
+        members = [member for member in (group.primary, *group.variants, *group.duplicates)
+                   if member.provider == "rule34video"]
+        for member in members:
+            others = tuple(dict.fromkeys(other.thumb_url for other in members
+                                         if other.id != member.id and other.thumb_url))
+            if others:
+                index[member.id] = others
+    return index
 
 
 def _fanbox_card_thumb(item) -> str | None:
@@ -1346,7 +1345,7 @@ def _follow_facets(store, items, by_source, alias_map, icon_root=None, tag_polic
     }
 
 
-def _author_facets(contract, inputs, everything, by_source, args, scope) -> dict:
+def _author_facets(contract, scope, args) -> dict:
     """只按一位作者算的筛选项，创作者资料页的在线视图读它（ADR-0096）。
 
     `facets` 按全库算，摆到一位创作者的资料页上就混进了别人的标签与来源。这一份只看这位
@@ -1357,12 +1356,16 @@ def _author_facets(contract, inputs, everything, by_source, args, scope) -> dict
     authors = _csv_values(args.get("author"))
     if summary or len(authors) != 1:
         return {}
-    matches = _follow_matcher({"author": authors[0]}, by_source, inputs.alias_map)
+
+    def build():
+        with _own_inputs(contract) as own:
+            by_source = {int(row["id"]): row for row in own.sources}
+            matches = _follow_matcher({"author": authors[0]}, by_source, own.alias_map)
+            return _follow_facets(own.store, tuple(item for item in _browsable_items(contract, source_id)
+                                                   if matches(item)),
+                                  by_source, own.alias_map, tag_policy=own.tag_policy)
     return contract.cached_until_changed(
-        f"follow-author-facets:{source_id}:{authors[0]}",
-        lambda: _follow_facets(inputs.store, tuple(item for item in everything if matches(item)),
-                               by_source, inputs.alias_map, tag_policy=inputs.tag_policy),
-        inputs.revision, tables=FOLLOW_GROUP_TABLES)
+        f"follow-author-facets:{source_id}:{authors[0]}", build, tables=FOLLOW_GROUP_TABLES)
 
 
 def _follow_tag_index(store, items, tag_policy=None, *, evidence=False) -> list[dict]:
@@ -1763,39 +1766,43 @@ FOLLOW_GROUP_TABLES = ("follow_item", "follow_source", "follow_author_alias", "e
 
 
 class _FollowInputs(NamedTuple):
-    """关注页几份缓存共用的输入，以及读它们之前取的 `FOLLOW_GROUP_TABLES` 版本号。"""
+    """来源、作者别名与标签归类：关注页的请求与各份缓存的计算都从这一组出发。"""
 
     store: FollowStore
     sources: list
     alias_map: dict
     author_aliases: list
     tag_policy: OnlineTagPolicy
-    revision: int | None
 
 
 def _follow_inputs(contract, connection) -> _FollowInputs:
-    """来源、作者别名与标签归类先于缓存从库里取出，再被闭包带进各份缓存的计算。
-
-    缓存自己的版本号在计算前才读，比这几样输入晚。两次读之间有写入的话，旧输入算出的
-    结果会记在新版本下一直命中。所以版本号在读输入之前先取一次，作为这几份缓存的额外
-    输入：期间有写入，两个版本号对不上，下一次请求照样重算。
-    """
-    revision = contract.ledger_revision(FOLLOW_GROUP_TABLES)
     store = _store(contract, connection)
     sources = store.sources()
     alias_map, author_aliases = store.author_aliases()
-    return _FollowInputs(store, sources, alias_map, author_aliases,
-                         OnlineTagPolicy(connection), revision)
+    return _FollowInputs(store, sources, alias_map, author_aliases, OnlineTagPolicy(connection))
 
 
-def _enabled_items(contract, inputs, source_id) -> tuple:
+@contextlib.contextmanager
+def _own_inputs(contract):
+    """缓存的计算在自己的连接上重读一份输入，算完才关。
+
+    后台任务写过账本之后，页面先拿上一份、交给后台线程重算（ADR-0146）。重算跑起来时请求
+    早已关掉它那条连接；就算连接还在，请求那一刻读到的条目也是旧的，拿它算出的结果记在新
+    版本下就一直是旧的。所以每份缓存都从账本现读，不借请求手上的连接和数据。
+    """
+    with contract.database.read_connection() as connection:
+        yield _follow_inputs(contract, connection)
+
+
+def _enabled_items(contract, source_id) -> tuple:
     """启用来源下的全部条目（可限定一个来源），关注页与封面候选共用这一份缓存。"""
-    enabled = {int(row["id"]) for row in inputs.sources if row["enabled"]}
-    return contract.cached_until_changed(
-        f"follow-items:{source_id}",
-        lambda: tuple(inputs.tag_policy.with_custom_tags(item) for item in inputs.store.items(source_id=source_id, limit=_ALL_ITEMS)
-                      if item.source_id in enabled and not _excluded_item(item)),
-        inputs.revision, tables=FOLLOW_GROUP_TABLES)
+    def build():
+        with _own_inputs(contract) as inputs:
+            enabled = {int(row["id"]) for row in inputs.sources if row["enabled"]}
+            return tuple(inputs.tag_policy.with_custom_tags(item)
+                         for item in inputs.store.items(source_id=source_id, limit=_ALL_ITEMS)
+                         if item.source_id in enabled and not _excluded_item(item))
+    return contract.cached_until_changed(f"follow-items:{source_id}", build, tables=FOLLOW_GROUP_TABLES)
 
 
 def _unblocked_items(store, items, policy, by_author=None) -> tuple:
@@ -1809,26 +1816,30 @@ def _unblocked_items(store, items, policy, by_author=None) -> tuple:
     return tuple(item for item in items if item.id not in blocked_ids)
 
 
-def _browsable_items(contract, inputs, source_id, by_author):
+def _browsable_items(contract, source_id):
     """在完整作品组的屏蔽结果中选择来源，供列表、数量和筛选项共用。"""
     def build():
-        visible = _unblocked_items(inputs.store, _enabled_items(contract, inputs, None), inputs.tag_policy, by_author)
+        with _own_inputs(contract) as inputs:
+            by_author = group_authors(inputs.sources, inputs.alias_map)
+            visible = _unblocked_items(inputs.store, _enabled_items(contract, None),
+                                       inputs.tag_policy, by_author)
         return tuple(item for item in visible if source_id is None or item.source_id == source_id)
-    return contract.cached_until_changed(f'follow-unblocked:{source_id}', build,
-                                         inputs.revision, tables=FOLLOW_GROUP_TABLES)
+    return contract.cached_until_changed(f'follow-unblocked:{source_id}', build, tables=FOLLOW_GROUP_TABLES)
 
 
-def _item_groups(contract, inputs, everything, by_author, source_id) -> dict:
+def _item_groups(contract, source_id) -> dict:
     """条目 id → 它所在的整组。直达详情查这一份，整库只分一次组，按账本版本缓存。
 
     组是读时拼的（剥作者名、相似标题），只按库里同键去捞会漏掉别的站上那几份，详情
     就比列表里的卡片少，所以还是整库分组。
     """
     def build():
-        return {member.id: group for group in inputs.store.group(everything, by_author)
+        with _own_inputs(contract) as inputs:
+            by_author = group_authors(inputs.sources, inputs.alias_map)
+        return {member.id: group
+                for group in FollowStore.group(_enabled_items(contract, source_id), by_author)
                 for member in (group.primary, *group.variants, *group.duplicates)}
-    return contract.cached_until_changed(
-        f"follow-item-groups:{source_id}", build, inputs.revision, tables=FOLLOW_GROUP_TABLES)
+    return contract.cached_until_changed(f"follow-item-groups:{source_id}", build, tables=FOLLOW_GROUP_TABLES)
 
 
 def _item_page(group, payload, sources, author_aliases) -> dict:
@@ -1845,7 +1856,7 @@ def _ranked_cache_key(args, source_id, statuses, sort, direction) -> str | None:
     return f"follow-ranked:{source_id}:{','.join(statuses)}:{sort}:{direction}"
 
 
-def _page_facets(contract, inputs, everything, by_source, args, scope, offset) -> dict:
+def _page_facets(contract, args, scope, offset) -> dict:
     """筛选项按全库算，只随首页下发：页面把几页并成一份时缺的键沿用首页那份
     （`mergedPage`），每翻一页再带一遍就是几十 KB 的重复。"""
     if offset:
@@ -1854,31 +1865,40 @@ def _page_facets(contract, inputs, everything, by_source, args, scope, offset) -
     # 题材圆标的有无与取景读题材图目录。图与 `.face.json` 落在 `works/` 子目录
     # （`follow_assets.cache_path`），子目录里新增文件不改上一级的修改时间，所以进键的是它。
     icon_root = work_icon_root(contract)
+
+    def build():
+        with _own_inputs(contract) as own:
+            by_own_source = {int(row["id"]): row for row in own.sources}
+            return _follow_facets(own.store, _browsable_items(contract, source_id), by_own_source,
+                                  own.alias_map, icon_root, own.tag_policy)
     facets = {} if summary else contract.cached_until_changed(
-        f"follow-facets:{source_id}",
-        lambda: _follow_facets(inputs.store, everything, by_source, inputs.alias_map, icon_root,
-                               inputs.tag_policy),
-        path_version(icon_root / "works"), inputs.revision, tables=FOLLOW_GROUP_TABLES)
-    return {"facets": facets, "author_facets": _author_facets(
-        contract, inputs, everything, by_source, args, scope)}
+        f"follow-facets:{source_id}", build, path_version(icon_root / "works"), tables=FOLLOW_GROUP_TABLES)
+    return {"facets": facets, "author_facets": _author_facets(contract, scope, args)}
 
 
-def _page_groups(contract, inputs, everything, counted, by_author, *, statuses, order, window, summary, cache_key):
+def _page_groups(contract, everything, counted, by_author, *, source_id, statuses, order, window, summary, cache_key):
     """这一次要回的作品组，以及后面还有没有。管理页的摘要请求不分组。
 
     `cache_key` 不为空时整批排好的组按账本版本缓存，翻页、回到列表都不再重新分组；
-    带作者、来源、标签等筛选或随机排序的请求传空，现算。
+    带作者、来源、标签等筛选或随机排序的请求传空，现算。缓存的那一份只有在无筛选时才有，
+    这时 `counted` 就是 `everything` 排好序的全集，重算从账本现读的全集出发，结果相同。
     """
     if summary:
         return (), False
     # 分页在筛选与分组之后：SQL 先分页、前端再筛的话，选个冷门作者会看到一页里
     # 只剩两三条，得反复点「加载更多」才凑出一屏；按条目切页再分组的话，同一作品
     # 的几份上传落在相邻两页，页面上就是两张卡。所以整批分组，`limit` 数的是组。
-    def rank():
-        page = tuple(item for item in counted if not statuses or item.status in statuses)
-        return _sorted_groups(inputs.store.group(page, by_author, everything), *order)
-    ranked = (contract.cached_until_changed(cache_key, rank, inputs.revision, tables=FOLLOW_GROUP_TABLES)
-              if cache_key else rank())
+    def rank(population, ordered, grouping):
+        page = tuple(item for item in ordered if not statuses or item.status in statuses)
+        return _sorted_groups(FollowStore.group(page, grouping, population), *order)
+
+    def ranked_fresh():
+        with _own_inputs(contract) as own:
+            grouping = group_authors(own.sources, own.alias_map)
+        population = _browsable_items(contract, source_id)
+        return rank(population, _sorted_items(population, *order), grouping)
+    ranked = (contract.cached_until_changed(cache_key, ranked_fresh, tables=FOLLOW_GROUP_TABLES)
+              if cache_key else rank(everything, counted, by_author))
     offset, limit = window
     return ranked[offset:offset + limit], len(ranked) > offset + limit
 
@@ -1982,7 +2002,6 @@ def q_follow(contract, args) -> dict:
 
         # 全部条目和筛选项只随账本与来源参数变，与筛选、排序、分页无关，按账本版本号
         # 缓存：一次请求省下解析上万条 metadata 与整库分组的好几秒。
-        everything = _enabled_items(contract, inputs, source_id)
         by_author = group_authors(source_rows, alias_map)
         # 翻卡与封面计数要知道组里哪几张是同一个画面，判据与缓存见 `follow_faces`。
         faces = getattr(contract, "follow_faces", None)
@@ -1992,18 +2011,17 @@ def q_follow(contract, args) -> dict:
                                   _content_hashes(group))
 
         if item_id is not None:
-            return _item_page(_item_groups(contract, inputs, everything, by_author, source_id).get(item_id),
+            return _item_page(_item_groups(contract, source_id).get(item_id),
                               payload, sources, author_aliases)
-        everything = _browsable_items(contract, inputs, source_id, by_author)
+        everything = _browsable_items(contract, source_id)
         counted = _sorted_items(
             tuple(item for item in everything if _matches(item)), sort, direction, seed)
         ranked, has_more = _page_groups(
-            contract, inputs, everything, counted, by_author, statuses=statuses,
+            contract, everything, counted, by_author, source_id=source_id, statuses=statuses,
             order=(sort, direction, seed), window=(offset, limit), summary=summary,
             cache_key=_ranked_cache_key(args, source_id, statuses, sort, direction))
         groups = [payload(group) for group in ranked]
-        facet_args = _page_facets(contract, inputs, everything, by_source, args,
-                                  (source_id, summary), offset)
+        facet_args = _page_facets(contract, args, (source_id, summary), offset)
         # counts 与列表同源，两边都从 `counted` 出发：筛选怎么变，数字就怎么变，
         # 扣减逻辑也只写一份。写成一句全库 SQL 再逐条减掉被隐藏的 rule34video 和
         # 无资源的 f95zone 的话，同一套排除规则要维护两份，而且它不看作者、来源和
@@ -2176,6 +2194,8 @@ def w_follow_play(contract, body) -> dict:
     contract.cache_bust()
     with contract.database.write_transaction() as connection:
         status = _store(contract, connection).record_playback(item_id)
+    from .capacity_history import record_playback
+    record_playback(contract)
     return {"ok": True, "item": item_id, "status": status}
 
 

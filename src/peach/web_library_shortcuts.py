@@ -91,6 +91,14 @@ def favorite_ids(connection):
     return {row["entity_id"] for row in favorite_entities(connection)}
 
 
+def _reorder_filters(rows, ids):
+    by_id = {row["id"]: row for row in rows}
+    if (not isinstance(ids, list) or any(not isinstance(key, str) for key in ids)
+            or len(ids) != len(by_id) or set(ids) != set(by_id)):
+        raise ValueError("筛选列表已变化，请重新打开后排序")
+    return [by_id[key] for key in ids]
+
+
 def w_library_shortcuts(contract, body):
     action = body.get("action")
     with contract.write_transaction() as c:
@@ -120,6 +128,8 @@ def w_library_shortcuts(contract, body):
             data["filters"].append({"id": uuid.uuid4().hex, "name": name.strip(), "href": clean_href(body.get("href"))})
         elif action == "delete_filter":
             data["filters"] = [row for row in data["filters"] if row["id"] != body.get("id")]
+        elif action == "reorder_filters":
+            data["filters"] = _reorder_filters(data["filters"], body.get("ids"))
         else:
             raise ValueError("不支持的收藏操作")
         settings[KEY] = data

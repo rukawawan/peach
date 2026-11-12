@@ -203,6 +203,11 @@ def dump(pack: dict) -> str:
 
 
 def load(path) -> dict:
+    return parse(path.read_text(encoding="utf-8"))
+
+
+def parse(text: str) -> dict:
+    """种子 JSON 文本 → 校验过的包；重复字段直接拒收。"""
     def unique_fields(pairs):
         result = {}
         for key, value in pairs:
@@ -211,7 +216,7 @@ def load(path) -> dict:
             result[key] = value
         return result
 
-    pack = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_fields)
+    pack = json.loads(text, object_pairs_hook=unique_fields)
     return seed_validation.validate(pack)
 
 

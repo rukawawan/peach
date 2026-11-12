@@ -38,6 +38,7 @@ import { LibraryProcessingDock } from '../library-processing/library-processing-
 import { NetworkBanner } from '../network-banner';
 import { TutorialCenter } from '../onboarding/tutorial-center';
 import { ClientUpdateBanner } from '../client-updates';
+import { ReleaseNotice } from '../release-notice';
 import { SettingsMatch } from './pages/settings';
 import { CatalogChrome } from './pages/catalog';
 import {
@@ -234,6 +235,7 @@ export function RouterRoot({ children, actions = null, background, processing = 
           {processing && actions ? <NetworkBanner /> : null}
           {processing && actions ? <ClientUpdateBanner navigate={actions.navigate} /> : null}
           {processing && actions ? <TutorialCenter actions={actions} /> : null}
+          {processing && actions ? <ReleaseNotice navigate={actions.navigate} /> : null}
           <RouteGroups>{children}</RouteGroups>
         </PeachRouter>
       </ShellActionsContext.Provider>

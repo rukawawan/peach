@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -241,23 +242,28 @@ def plan(connection: sqlite3.Connection, args: argparse.Namespace) -> list[dict]
     return rows
 
 
-def apply_rows(connection: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]:
+def apply_rows(connection: sqlite3.Connection, rows: list[dict],
+               records: dict[str, bool] | None = None) -> tuple[int, int]:
     """写入 `ok` 的那些，返回（打算写的条数，真的写进去的条数）。
 
     两个数不相等就是判定和账本对不上——`OR IGNORE` 留着只为让这一趟跑完，不是让它
-    安静地少写几条：数量报出来，差值由人去看。
+    安静地少写几条：数量报出来，差值由人去看。`records` 是缓存卡片上认出的有碼／無碼
+    （`javdb.card_records`），javdb 的 id 在里面就一并记下：同站几枚入口按它分辨（#271）。
     """
     planned = written = 0
     for row in rows:
         if row["verdict"] != OK or not row["external_id"]:
             continue
         planned += 1
+        metadata = {"source": "backfill_performer_entry_ids"}
+        if row["provider"] == JAVDB and row["external_id"] in (records or {}):
+            metadata["uncensored"] = records[row["external_id"]]
         connection.execute(
             "INSERT OR IGNORE INTO entity_external_ref"
             "(entity_id,provider,external_kind,external_id,metadata_json)"
             " VALUES(?,?,?,?,?)",
             (row["entity_id"], row["provider"], EXTERNAL_KIND, row["external_id"],
-             '{"source": "backfill_performer_entry_ids"}'))
+             json.dumps(metadata, ensure_ascii=False)))
         written += connection.execute("SELECT changes()").fetchone()[0]
     connection.commit()
     return planned, written
@@ -288,7 +294,9 @@ def run(args: argparse.Namespace) -> int:
         print("  判定分布：", dict(counts))
         print("  可补的引用：", dict(by_site))
         if args.apply:
-            planned, written = apply_rows(connection, rows)
+            records = (javdb.card_records(_cached_pages(args.javdb_cache))
+                       if args.javdb_cache and Path(args.javdb_cache).is_dir() else {})
+            planned, written = apply_rows(connection, rows, records)
             integrity, violations = verify_after_write(connection)
             print(f"打算写 {planned} 条、实际写入 {written} 条 entity_external_ref；"
                   f"integrity_check={integrity}、外键违规 {violations} 条")

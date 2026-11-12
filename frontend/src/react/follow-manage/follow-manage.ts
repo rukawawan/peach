@@ -474,13 +474,46 @@ export const renameAliasGroup = (key: string, name: string, signal?: AbortSignal
 export const saveCredential = (provider: string, values: Record<string, string>) =>
   apiSend<{ note?: string }>(FOLLOW_CREDENTIAL_URL, { provider, values });
 
-export const markItem = (item: number, to: string) =>
-  apiSend<{ ok: boolean }>(FOLLOW_STATUS_URL, { item, to });
+/** 一次批量写最多几条，与 `w_follow_status` 收 `items` 的上限相同；一页待处理也最多这么多组。 */
+export const MARK_BATCH = 1000;
+/** 「全部标为」最多取几轮待处理清单：一轮最多标 `MARK_BATCH` 组，十万条以上的积压不在一次点击里收完。 */
+const MARK_ROUNDS = 100;
 
-/** 待处理的未看条目。批量标记要先知道有哪些，取一趟再逐条写。 */
+export const markItems = (items: number[], to: string) =>
+  apiSend<{ ok: boolean; items: number[] }>(FOLLOW_STATUS_URL, { items, to });
+
+type PendingRow = { id: number; status: string };
+/** 待处理的未看条目，最多 `MARK_BATCH` 组；`has_more` 说后面还有。 */
 export const fetchPending = () =>
-  apiGet<{ groups?: { primary: { id: number; status: string }; variants: { id: number; status: string }[];
-    duplicates: { id: number; status: string }[] }[] }>(`${FOLLOW_URL}?status=new&limit=1000`);
+  apiGet<{ groups?: { primary: PendingRow; variants: PendingRow[]; duplicates: PendingRow[] }[]; has_more?: boolean }>(
+    `${FOLLOW_URL}?status=new&limit=${MARK_BATCH}`);
+
+/** 把未看条目全部标成 `to`：取一页待处理、按 `MARK_BATCH` 条一批写，写完再从第一页取，直到取不到为止。
+ *  标过的离开 `status=new`，所以不按偏移翻页；写失败的那批不再重取，免得一直撞同一个错。 */
+export async function markAllPending(to: string): Promise<{ total: number; failed: number; error?: unknown }> {
+  const tried = new Set<number>();
+  let failed = 0;
+  let error: unknown;
+  for (let round = 0; round < MARK_ROUNDS; round += 1) {
+    const pending = await fetchPending();
+    const ids = [...new Set((pending.groups || [])
+      .flatMap((group) => [group.primary, ...group.variants, ...group.duplicates])
+      .filter((item) => item.status === 'new' && !tried.has(item.id)).map((item) => item.id))];
+    if (!ids.length) break;
+    for (let start = 0; start < ids.length; start += MARK_BATCH) {
+      const batch = ids.slice(start, start + MARK_BATCH);
+      for (const id of batch) tried.add(id);
+      try {
+        await markItems(batch, to);
+      } catch (cause) {
+        failed += batch.length;
+        error ??= cause;
+      }
+    }
+    if (!pending.has_more) break;
+  }
+  return { total: tried.size, failed, error };
+}
 
 /** 一条订阅源。字段以 `feeds.sources`（`src/peach/feeds.py`）为准。 */
 export interface FeedSource {
@@ -577,16 +610,14 @@ export const followFeedEntity = (entityId: number, signal?: AbortSignal) =>
   apiSend<{ entity_id: number; following: boolean; sources: number[] }>(
     FEED_SOURCE_URL, { action: 'follow', entity_id: entityId, enabled: true }, 'POST', signal);
 
-/** 首屏：创作者来源、JAV 订阅与凭据状态取回来才画。
+/** 创作者来源、JAV 订阅与凭据分别读取，页面按各区域的状态显示。
  *
  * 两趟后台任务不在首屏里：它们的快照常年躺着上一趟的回执，等它们只会让首屏多等一个
  * 往返，而它们自己的键挂上去就会读。中止时 `fetchQuery` 把 `AbortError` 抛回挂载方。 */
 export async function prefetchFollowManage(signal: AbortSignal): Promise<void> {
-  await Promise.all([
-    queryClient.fetchQuery({ queryKey: FOLLOW_MANAGE_KEY, queryFn: () => fetchFollow(signal) }),
-    queryClient.fetchQuery({ queryKey: FOLLOW_CREDENTIALS_KEY, queryFn: () => fetchCredentials(signal) }),
-    queryClient.fetchQuery({ queryKey: FEEDS_KEY, queryFn: () => fetchFeeds(signal) }),
-  ]);
+  void queryClient.prefetchQuery({ queryKey: FOLLOW_CREDENTIALS_KEY, queryFn: () => fetchCredentials(signal) });
+  void queryClient.prefetchQuery({ queryKey: FEEDS_KEY, queryFn: () => fetchFeeds(signal) });
+  void queryClient.prefetchQuery({ queryKey: FOLLOW_MANAGE_KEY, queryFn: () => fetchFollow(signal) });
 }
 
 /** 把改动的那一条换进缓存。整页重取会把用户正在填的表单一起重画，也会让正在读这一屏的

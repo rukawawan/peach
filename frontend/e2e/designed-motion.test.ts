@@ -56,7 +56,13 @@ describe('已设计动效的实际触发', () => {
           duration: getComputedStyle(node.querySelector('[data-icon]')!).transitionDuration }), handle);
         assert.equal(state.stable, true); assert.notEqual(state.duration, '0s');
         await button.click(); await button.click();
-        await page.waitForTimeout(320);
+        await page.waitForFunction(marker => {
+          if (!marker) return false;
+          const opacity = [...marker.querySelectorAll('[data-icon]')].map(node => getComputedStyle(node).opacity);
+          return opacity.filter(value => value === '1').length === 1
+            && opacity.every(value => value === '0' || value === '1')
+            && marker.getAnimations({ subtree: true }).length === 0;
+        }, handle, { timeout: 5000 });
         assert.equal(await icon.locator('[data-icon]').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).opacity === '1').length), 1);
         await page.emulateMedia({ reducedMotion: 'reduce' });
         assert.equal(await icon.locator('[data-icon]').first().evaluate(node => getComputedStyle(node).transitionDuration), '0s');

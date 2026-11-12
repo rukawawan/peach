@@ -4,6 +4,8 @@ import os
 import re
 import subprocess
 import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from .smb_media import input_url, SmbResource
 from contextlib import nullcontext
@@ -383,6 +385,11 @@ class PreviewService:
 
 #: 图片墙一列大约 300 CSS px，二倍屏取 640 够用；再大只是白付云盘流量。
 PHOTO_THUMB_WIDTH = 640
+#: 图片墙缩略图核对过源文件之后，这么久之内命中不再回源（`PhotoThumbnailService.cached`）。
+#: 原图在网盘上原地被替换时，缩略图最多晚这么久跟上。
+PHOTO_SOURCE_RECHECK = 600.0
+#: 记住「已核对」的资产条数上限。
+PHOTO_VERIFIED_LIMIT = 4096
 
 
 class PhotoThumbnailService:
@@ -393,21 +400,59 @@ class PhotoThumbnailService:
     授权由调用方的 MediaEngine 负责，这里只认已解析好的源文件路径。
     """
 
-    def __init__(self, root: Path, width: int = PHOTO_THUMB_WIDTH):
+    def __init__(self, root: Path, width: int = PHOTO_THUMB_WIDTH, *, clock=time.monotonic):
         self.root = root.resolve()
         self.width = width
+        self.clock = clock
+        #: 资产 → (核对过源文件的时刻, 缩略图与签名两份文件的本地代际)，见 `cached`。
+        self._verified: OrderedDict[int, tuple[float, tuple]] = OrderedDict()
+        self._verified_lock = threading.Lock()
+
+    def _local_state(self, destination: Path) -> tuple | None:
+        try:
+            return (artifact_rules.fingerprint(destination),
+                    artifact_rules.fingerprint(Path(str(destination) + '.rule')))
+        except OSError:
+            return None
+
+    def _remember_verified(self, asset_id: int, destination: Path) -> None:
+        state = self._local_state(destination)
+        if state is None:
+            return
+        with self._verified_lock:
+            self._verified[asset_id] = (self.clock(), state)
+            self._verified.move_to_end(asset_id)
+            while len(self._verified) > PHOTO_VERIFIED_LIMIT:
+                self._verified.popitem(last=False)
 
     def cached(self, asset_id: int, *, offline: bool = False) -> Path | None:
         """已经缩好的那一份，没有就是 None。
 
         以签名记录的本地源路径复验文件代际，不读取图像正文。
         SMB 源需要调用方解析资源后，再由 `thumbnail` 核对来源。
+
+        核对过源文件之后 `PHOTO_SOURCE_RECHECK` 秒内，缩略图与签名两份本地文件没变就直接命中，
+        不再回源：图片墙一屏几十张，每张都 stat 一次网盘原图就是几十趟网络往返。
         """
         destination = self.root / f"{asset_id}.jpg"
-        return destination if artifact_rules.current(destination, source_required=True,
-                                                      allow_unavailable_source=True, check_source=not offline) else None
+        with self._verified_lock:
+            seen = self._verified.get(asset_id)
+        if (seen is not None and self.clock() - seen[0] < PHOTO_SOURCE_RECHECK
+                and self._local_state(destination) == seen[1]):
+            return destination
+        if not artifact_rules.current(destination, source_required=True,
+                                      allow_unavailable_source=True, check_source=not offline):
+            return None
+        if not offline:
+            self._remember_verified(asset_id, destination)
+        return destination
 
     def thumbnail(self, asset_id: int, source: Path) -> Path:
+        destination = self._thumbnail(asset_id, source)
+        self._remember_verified(asset_id, destination)
+        return destination
+
+    def _thumbnail(self, asset_id: int, source: Path) -> Path:
         destination = self.root / f"{asset_id}.jpg"
         if artifact_rules.current(destination, source=source):
             return destination
@@ -500,6 +545,7 @@ class DerivedImageService:
         self.root = root.resolve()
         self.edge = edge
         self.quality = quality
+        self.capacity_guard = None
 
     def path_for(self, key: str) -> Path:
         from .upgrade_rules import PREVIEWS
@@ -514,6 +560,12 @@ class DerivedImageService:
         destination = self.path_for(key)
         if artifact_rules.current(destination, source=source):
             return destination
+        if self.capacity_guard is not None:
+            from .jobs import DiskSpaceDenied
+            try:
+                self.capacity_guard.check()
+            except DiskSpaceDenied:
+                return None
         self.root.mkdir(parents=True, exist_ok=True)
         try:
             with _generate_lock(destination):

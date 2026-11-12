@@ -442,7 +442,7 @@ class DependencyPolicyTests(unittest.TestCase):
             log = git(repo, "log", "--format=%B", "-2")
             for number in (1, 2):
                 self.assertIn(f"Dependabot PR #{number} 没有派生产物", log)
-            self.assertIn("README-Impact: none; ", log)
+            self.assertIn(f"Co-Authored-By: {signature}", log)
             self.assertIn("git commit -F build/adopt-pr-3.txt", stopped["next"])
 
             (repo / ".github/workflows/test.yml").write_bytes(workflow(2, 2))
@@ -475,22 +475,16 @@ class DependencyPolicyTests(unittest.TestCase):
             self.assertTrue(adopt.adopted(133, branch, root=repo))
             self.assertEqual((repo / ".github/workflows/test.yml").read_bytes(), b"a: 2\n")
 
-    def test_the_takeover_commit_message_passes_the_readme_impact_gate(self):
-        """`README-Impact` 与 `Co-Authored-By` 必须同一个 trailer 块、中间不空行。
-
-        隔一个空行 `git interpret-trailers` 就只认后一个，`ready` 会报「交付提交须有唯一
-        README-Impact」——这条我在 0.29.0 那次亲手踩过。
-        """
+    def test_takeover_message_includes_source_rebuild_steps_and_the_supplied_author(self):
         signature = "Claude Code (Opus 5) <noreply@anthropic.com>"
         message = adopt.commit_message("web", ["lucide-static 1.38.0 → 1.40.0"],
                                        "4", signature)
-        self.assertIn("\nREADME-Impact: none; ", message)
         self.assertIn("\nRefs #4\n", message)
-        self.assertRegex(message, r"README-Impact: none; [^\n]+\nCo-Authored-By: ")
         self.assertIn("PR #4", message)
         self.assertIn("npm run vendor:web", message)
         self.assertIn("lucide-static 1.38.0 → 1.40.0", message)
         self.assertIn(f"Co-Authored-By: {signature}", message)
+        self.assertNotIn("README-Impact:", message)
         # 署名由调用方给：跑接管的可能是任一个智能体，写死一个工具名就是记错人。
         with self.assertRaisesRegex(ValueError, "--co-author"):
             adopt.commit_message("web", [], "4", "Claude Code")

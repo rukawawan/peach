@@ -382,6 +382,20 @@ class EntityThumbnailTests(unittest.TestCase):
 
     KEY = "performer-11"
 
+    def test_capacity_denial_keeps_existing_thumbnail_and_original_without_regeneration(self):
+        from types import SimpleNamespace
+        from peach.jobs import DiskSpaceDenied
+        destination = self.service.thumbnail(self.KEY, self.source)
+        original = self.source.read_bytes()
+        def deny():
+            raise DiskSpaceDenied('capacity')
+        self.service.capacity_guard = SimpleNamespace(check=deny)
+        self.assertEqual(self.service.thumbnail(self.KEY, self.source), destination)
+        destination.unlink()
+        self.assertIsNone(self.service.thumbnail(self.KEY, self.source))
+        self.assertFalse(destination.exists())
+        self.assertEqual(self.source.read_bytes(), original)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name).resolve()
@@ -563,14 +577,28 @@ class ImageSourceGenerationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_photo_cached_lookup_validates_the_saved_local_source(self):
-        service = previews.PhotoThumbnailService(self.root / 'photos')
+        now = [0.0]
+        service = previews.PhotoThumbnailService(self.root / 'photos', clock=lambda: now[0])
         destination = service.thumbnail(1, self.source)
         self.assertEqual(service.cached(1), destination)
         first = destination.read_bytes()
         Image.new('RGB', (24, 24), 'blue').save(self.source)
+        now[0] += previews.PHOTO_SOURCE_RECHECK
         self.assertIsNone(service.cached(1))
         self.assertNotEqual(service.thumbnail(1, self.source).read_bytes(), first)
         self.assertEqual(service.cached(1), destination)
+
+    def test_a_recent_hit_does_not_go_back_to_the_source(self):
+        """图片墙一屏几十张：核对过源文件之后一段时间内命中只看本地两份文件，不再 stat 网盘原图。"""
+        now = [0.0]
+        service = previews.PhotoThumbnailService(self.root / 'photos', clock=lambda: now[0])
+        destination = service.thumbnail(1, self.source)
+        with mock.patch.object(artifact_rules, 'fingerprint', wraps=artifact_rules.fingerprint) as stamp:
+            self.assertEqual(service.cached(1), destination)
+            self.assertEqual(service.cached(1), destination)
+        self.assertNotIn(self.source, [call.args[0] for call in stamp.call_args_list])
+        destination.write_bytes(b'changed')
+        self.assertIsNone(service.cached(1), '缓存文件本身变了要重新核对')
 
     def test_photo_cached_lookup_requires_a_recorded_source(self):
         service = previews.PhotoThumbnailService(self.root / 'photos')
@@ -584,11 +612,14 @@ class ImageSourceGenerationTests(unittest.TestCase):
         self.assertEqual(service.cached(1), destination)
 
     def test_signed_photo_cache_remains_available_while_source_is_offline(self):
-        service = previews.PhotoThumbnailService(self.root / 'photos')
+        now = [0.0]
+        service = previews.PhotoThumbnailService(self.root / 'photos', clock=lambda: now[0])
         destination = service.thumbnail(1, self.source)
         self.source.unlink()
+        now[0] += previews.PHOTO_SOURCE_RECHECK
         self.assertEqual(service.cached(1), destination)
         Image.new('RGB', (24, 24), 'blue').save(self.source)
+        now[0] += previews.PHOTO_SOURCE_RECHECK
         self.assertIsNone(service.cached(1))
 
     def test_network_photo_cache_is_checked_online_and_preserved_for_offline_use(self):

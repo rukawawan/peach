@@ -72,7 +72,6 @@ class CaptureFrameTests(unittest.TestCase):
         self.assertTrue(ok)
         command = self.commands[0]
         self.assertLess(command.index("-ss"), command.index("-i"))
-        self.assertIn("scale=320:-1", command)
         self.assertNotIn("bt709", command)
 
     def test_a_frame_too_small_to_be_a_picture_does_not_count_as_taken(self):
@@ -202,6 +201,32 @@ class TileFramesTests(unittest.TestCase):
 
 
 class FFmpegCaptureIntegrationTests(unittest.TestCase):
+    def test_anamorphic_video_probe_frames_and_grid_use_display_geometry(self):
+        from peach import media_probe
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            resolver = FFmpegResolver(root)
+            ffmpeg, ffprobe = resolver.ffmpeg(), resolver.ffprobe()
+            if ffmpeg is None or ffprobe is None:
+                missing_prerequisite('非方形像素回归需要 FFmpeg 与 ffprobe')
+            source = root / 'anamorphic.mp4'
+            subprocess.run([str(ffmpeg.path), '-y', '-v', 'error', '-f', 'lavfi', '-i',
+                'color=c=green:s=720x1280:r=5:d=1', '-vf', 'setsar=256/81:max=1000',
+                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)],
+                capture_output=True, check=True, timeout=20)
+            measured = media_probe.measure(str(ffprobe.path), 1, str(source))
+            self.assertEqual(measured[1:3], (2276, 1280))
+            self.assertEqual(measured[7:9], ('横屏', '2K'))
+            for index in range(9):
+                self.assertTrue(frame_capture.capture_with_retry(str(ffmpeg.path), str(source), .1,
+                    root / f's{index:02d}.jpg', width=480, decode_options=()))
+            with Image.open(root / 's00.jpg') as frame:
+                self.assertEqual(frame.size, (480, 270))
+            target = root / 'grid.jpg'
+            self.assertTrue(frame_capture.tile_frames(str(ffmpeg.path), str(root / 's%02d.jpg'), 3, 3, target))
+            with Image.open(target) as grid:
+                self.assertEqual(grid.size, (1440, 810))
+
     def test_av1_software_decode_uses_the_desktop_release_gate(self):
         from scripts.smoke_desktop import assert_av1_decoder
         with tempfile.TemporaryDirectory() as temporary:

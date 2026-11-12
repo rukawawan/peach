@@ -16,6 +16,7 @@ import { LibraryProcessingCard } from '../../src/react/library-processing/librar
 import { LibraryProcessingNotice } from '../../src/react/library-processing/library-processing-notice';
 import { setProcessingNoticeVisible } from '../../src/react/library-processing/processing-notice-visibility';
 import type { LibraryProcessingProps } from '../../src/react/bundle';
+import { publishLibraries } from '../../src/library-catalog';
 
 import { actionOrder, buttonNamed as textButtonNamed, click, mount, mountRoot, submit } from './render';
 
@@ -33,6 +34,7 @@ const buttonNamed = (name: string, root: ParentNode = document) =>
 // 报过的任务号记在 `localStorage` 里，也要清，否则下一条用例的通知被当成重复的。
 afterEach(() => {
   queryClient.clear();
+  publishLibraries([]);
   localStorage.clear();
   sessionStorage.clear();
 });
@@ -108,6 +110,7 @@ function serve(reply: Reply) {
 /** 走完真实的首屏路径：先 prefetch 把 `first` 落进缓存，再换上用例自己的应答。
  *  首屏那一趟不进 `calls`，断言数的就是页面挂上去之后的来往。 */
 async function open(first: LibraryProcessingData, reply: Reply = () => first) {
+  publishLibraries([{ id: 'library-one', name: '媒体库一', icon: 'database', color: 'blue' }]);
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => first })));
   await prefetchLibraryProcessing(new AbortController().signal);
   return serve(reply);
@@ -116,6 +119,22 @@ async function open(first: LibraryProcessingData, reply: Reply = () => first) {
 const card = (props: LibraryProcessingProps) => (
   <QueryClientProvider client={queryClient}><LibraryProcessingCard {...props} /></QueryClientProvider>
 );
+
+it('媒体库下拉显示图标并将选中范围传入估算与同步', async () => {
+  const { fetcher, posts } = await open({ status: 'idle' });
+  const host = await mount(card({ toast: vi.fn() }));
+  const select = host.querySelector('select')!;
+  await act(async () => { select.value = 'library-one'; select.dispatchEvent(new Event('change', { bubbles: true })) });
+  const selected = host.querySelector('button[aria-labelledby*="processingLibraryLabel"]')!;
+  expect(selected.textContent).toContain('媒体库一');
+  expect(selected.querySelector('[data-library="library-one"] svg')).not.toBeNull();
+  await click(buttonNamed('同步新增文件', host));
+  expect(document.querySelector('[data-processing-scope]')?.textContent).toContain('媒体库一');
+  const request = fetcher.mock.calls.find(([url]) => String(url).startsWith('/api/library-processing?'))!;
+  expect(new URL(String(request[0]), 'https://peach.test').searchParams.get('library_id')).toBe('library-one');
+  await submit(document.querySelector('dialog form'));
+  expect(posts()).toEqual([{ incremental: true, library_id: 'library-one' }]);
+});
 const notice = (props: LibraryProcessingProps) => (
   <QueryClientProvider client={queryClient}><LibraryProcessingNotice {...props} /></QueryClientProvider>
 );
@@ -144,11 +163,11 @@ it.each([
   ['同步新增文件', '同步新增文件', '新增文件与待补全影片', {incremental:true}, {stage:'all',incremental:'1'}],
   ['仅发现新增文件', '发现新增文件', '尚未登记的新增文件', {stage:'scan',incremental:true}, {stage:'scan',incremental:'1'}],
   ['补全待处理影片', '补全待处理影片', '已登记的待补全影片', {stage:'collect',scope:'new'}, {stage:'collect',scope:'new'}],
-  ['同步整个媒体库', '同步整个媒体库', '整个媒体库', {}, {stage:'all'}],
-  ['仅扫描文件', '扫描全部文件', '整个媒体库', {stage:'scan'}, {stage:'scan'}],
-  ['补全资料与预览', '补全已入库影片', '整个媒体库', {stage:'collect'}, {stage:'collect'}],
-  ['仅补全影片资料', '仅补全影片资料', '整个媒体库', {stage:'metadata'}, {stage:'metadata'}],
-  ['仅补全预览图', '仅补全预览图', '已入库的本地视频', {stage:'previews'}, {stage:'previews'}],
+  ['同步所有媒体库', '同步所有媒体库', '全部文件与影片', {}, {stage:'all'}],
+  ['仅扫描文件', '扫描全部文件', '全部文件与影片', {stage:'scan'}, {stage:'scan'}],
+  ['补全资料与预览', '补全已入库影片', '全部文件与影片', {stage:'collect'}, {stage:'collect'}],
+  ['仅补全影片资料', '仅补全影片资料', '全部文件与影片', {stage:'metadata'}, {stage:'metadata'}],
+  ['仅补全预览图', '仅补全预览图', '已入库的视频（跳过流量保护目录）', {stage:'previews'}, {stage:'previews'}],
 ] as const)('%s 的确认范围、预估请求与提交保持一致', async (label, title, scope, command, estimate) => {
   const {fetcher, posts} = await open({status:'idle',new_asset_count:2});
   const host = await mount(card({toast:vi.fn()}));
@@ -158,7 +177,7 @@ it.each([
     await click(menuItem(label));
   }
   expect(document.querySelector('dialog')?.textContent).toContain(title);
-  expect(document.querySelector('[data-processing-scope]')?.textContent).toBe(`处理范围：${scope}`);
+  expect(document.querySelector('[data-processing-scope]')?.textContent).toBe(`处理范围：所有媒体库 · ${scope}`);
   const requested = fetcher.mock.calls.map(([path]) => String(path)).find(path => path.includes('estimate=1'))!;
   const params = new URL(requested, 'https://peach.test').searchParams;
   expect(Object.fromEntries(params)).toEqual({estimate:'1',...estimate});
@@ -220,7 +239,7 @@ it('扫描与补全方式共用一颗主键加一个下拉，各自交自己的�
   await startFrom(buttonNamed('同步新增文件', host));
   await click(host.querySelector('[data-split-button] [aria-haspopup="dialog"]'));
   expect(document.querySelector('[role="group"][aria-label="全库维护"]')).not.toBeNull();
-  await startFrom(menuItem('同步整个媒体库'));
+  await startFrom(menuItem('同步所有媒体库'));
   await click(host.querySelector('[data-split-button] [aria-haspopup="dialog"]'));
   await startFrom(menuItem('仅扫描文件'));
   await click(host.querySelector('[data-split-button] [aria-haspopup="dialog"]'));

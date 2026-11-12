@@ -258,6 +258,7 @@ it('旧直达地址 `/resource-sync` 改写成资源同步工具页，不加历�
   await until(() => location.pathname === '/data-cleanup/resource-sync', '改写到资源同步');
   await until(() => vi.mocked(actions.surfaceChanged).mock.calls.length > 0, '数据管理页打开');
   expect([location.hash, window.history.length - length]).toEqual(['', 0]);
+  expect(r.peachHistory.navigation.claimed).toBe(false);
   expect(vi.mocked(actions.surfaceChanged).mock.calls).toEqual([['management', '/data-cleanup/resource-sync']]);
 });
 
@@ -272,6 +273,20 @@ it('配置页带 `#libraryProcessing` 进来：画上之后改写到数据管理
   expect(vi.mocked(actions.surfaceChanged).mock.calls.map(([, path]) => path)).toEqual(['/settings/library', '/data-cleanup']);
   expect(stats.hidden).toBe(false);
 });
+
+for (const [tab, target] of [['wants', '/jav'], ['source', '/settings/subscriptions']] as const) {
+  it(`关注管理的旧 ${tab} 入口打开目标页面并替换历史条目`, async () => {
+    const r = await load(`/subscriptions?tab=${tab}`);
+    surface(r, '/subscriptions');
+    serve({ '/healthz': {}, '/api/configuration': configuration });
+    const length = window.history.length;
+    const { actions } = await boot(r);
+    await until(() => vi.mocked(actions.surfaceChanged).mock.calls.some(([, path]) => path === target), '目标正文打开');
+    expect(location.pathname).toBe(target);
+    expect(window.history.length).toBe(length);
+    expect(r.peachHistory.navigation.claimed).toBe(false);
+  });
+}
 
 it('诊断页的标题、管理区身份与换一批由路由元数据登记', async () => {
   const r = await load();

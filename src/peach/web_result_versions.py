@@ -12,7 +12,7 @@ RESULT_TABLES = {
                 'asset_tag_preference', 'entity', 'entity_alias', 'entity_redirect',
                 'entity_classification', 'entity_identity_link', 'entity_link', 'entity_external_ref',
                 'entity_membership', 'label_maker', 'performer_profile', 'asset_quality_goal',
-                'playlist', 'playlist_item'),
+                'playlist', 'playlist_item', 'watch_queue'),
     'follow': ('follow_item', 'follow_source', 'follow_author_alias', 'entity', 'profile'),
     'discoveries': ('feed_source', 'feed_item', 'feed_discovery', 'feed_discovery_entity', 'watch_queue'),
     'review': ('review_decision', 'genre_decision'),
@@ -23,10 +23,13 @@ def result_versions(contract):
     """复用账本触发器和文件版本，跨线程、CLI 写入和进程重启均可比较。
 
     后台任务写账本后，按表缓存的那几页先回旧值、另起重算（ADR-0146）；重算写回时版本已经
-    不会再变，所以每个账本键都带上写回次数，页面看到它变了再取一次新值。
+    不会再变，所以每个账本键带上自己那几张表的写回次数，页面看到它变了再取一次新值。
+    写回按表记：一份只读关注表的结果写回，不让馆藏那一组页面也跟着重取。
     """
-    landed = f":{contract.cache_landed}"
-    result = {key: str(contract.ledger_revision(tables)) + landed for key, tables in RESULT_TABLES.items()}
+    with contract.cache_lock:
+        landed = dict(contract.cache_landed)
+    result = {key: f"{contract.ledger_revision(tables)}:{sum(landed.get(table, 0) for table in tables)}"
+              for key, tables in RESULT_TABLES.items()}
     result['review'] += ':' + str(candidate_root_version(contract.candidate_root))
     result['artwork'] = ':'.join(str(path_version(root)) for root in (
         contract.cover_root, contract.avatar_root, contract.logo_root, contract.poster_root,

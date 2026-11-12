@@ -125,6 +125,27 @@ class ProfileAvatarTests(unittest.TestCase):
             profile_avatar_tiers("twitter", "Rekin3D", transport=_Transport([
                 self._page("https://abs.twimg.com/rich_link_card.png")]))
 
+    def test_litlink_avatar_uses_the_profile_icon_original(self):
+        original = "https://prd.storage.lit.link/images/creator/example/profile.jpeg"
+        body = ('<img alt="profile icon" src="https://prd.resource-api.lit.link/v1/images/resized'
+                '?image_url=images/creator/example/profile.jpeg&amp;width=240">'
+                f'<script>{json.dumps({"pictureUrl": original})}</script>')
+        transport = _Transport([HttpResponse(200, {}, body.encode())])
+        self.assertEqual(profile_avatar_tiers("litlink", "example", transport=transport), [original])
+        self.assertEqual(transport.requests[0].url, "https://lit.link/example")
+        self.assertEqual(profile_identities("litlink:example"), (("litlink", "example"),))
+
+    def test_litlink_share_posters_and_foreign_hosts_are_not_profile_avatars(self):
+        bodies = [
+            '<meta property="og:image" content="https://prd.storage.lit.link/images/creators/a/ogp/ogp_image.jpg">',
+            '<img alt="profile icon" src="https://example.test/avatar.jpg">',
+            '<img alt="profile icon" src="https://prd.resource-api.lit.link/v1/images/resized?image_url=images/creators/a/ogp/ogp_image.jpg">',
+        ]
+        for body in bodies:
+            with self.subTest(body=body), self.assertRaises(FollowSourceError):
+                profile_avatar_tiers("litlink", "example", transport=_Transport([
+                    HttpResponse(200, {}, body.encode())]))
+
     def test_patreon_avatar_starts_from_the_uploaded_original(self):
         transport = _Transport([self._campaigns()])
         tiers = profile_avatar_tiers("patreon", "sharkarts", transport=transport)

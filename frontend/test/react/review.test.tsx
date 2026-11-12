@@ -226,6 +226,19 @@ it('筛掉一个分组之后回到第一页', async () => {
   expect(buttonIn(host, '下一页')).toBeNull();
 });
 
+it('切换每页数量回到第一页并保留已选候选', async () => {
+  const { host } = await open();
+  await click(boxOf(host, 0));
+  await click(buttonIn(host, '下一页'));
+  await choose(host.querySelector('[data-table-pagination] button[aria-haspopup="listbox"]'), '每页 10 条');
+  expect(cards(host)).toHaveLength(10);
+  expect(keys(host)[0]).toBe('row-0');
+  expect(statusText(host)).toContain('已选 1 项');
+  await choose(host.querySelector('[data-table-pagination] button[aria-haspopup="listbox"]'), '每页 50 条');
+  expect(cards(host)).toHaveLength(QUEUE.length);
+  expect(buttonIn(host, '下一页')).toBeNull();
+});
+
 it('分类进地址栏，换一条队列就把手里的选择放下', async () => {
   const { host, props } = await open();
   expect(host.querySelector('[data-selection-dock]')).toBeNull();

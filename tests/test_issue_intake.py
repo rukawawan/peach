@@ -42,12 +42,22 @@ class IssueIntakeTests(unittest.TestCase):
                 self.assertEqual(issue_intake.verdict(event(body=body)), "close")
         self.assertEqual(issue_intake.verdict(event("edited")), "keep")
 
-    def test_web_form_issues_keep_their_text_even_without_sections(self):
-        for payload in (event(type={"name": "Feature"}),
-                        event(body=FEATURE_BODY, type={"name": "Feature"}),
-                        event(body="希望垃圾文件可以批量删除", type={"name": "Feature"})):
-            with self.subTest(body=payload["issue"]["body"][:12]):
-                self.assertEqual(issue_intake.verdict(payload), "keep")
+    def test_已有类型的新问题缺少模板章节时关闭(self):
+        for kind in ("Bug", "Feature"):
+            for body in (JARGON_BODY, "nas中docker无法自动更新，是不是因为版本号是edge的原因，能不能优化一下", ""):
+                with self.subTest(kind=kind, body=body[:12]):
+                    self.assertEqual(issue_intake.verdict(event(body=body, type={"name": kind})), "close")
+
+    def test_已有类型且符合模板的问题保留类型(self):
+        for action in ("opened", "edited"):
+            for kind, body in (("Bug", BUG_BODY), ("Feature", FEATURE_BODY)):
+                with self.subTest(action=action, kind=kind):
+                    self.assertEqual(issue_intake.verdict(event(action, body, type={"name": kind})), "keep")
+
+    def test_已有类型的待补模板问题补齐后按正文类型重开(self):
+        closed = {"state": "closed", "labels": [{"name": issue_intake.LABEL}], "type": {"name": "Feature"}}
+        self.assertEqual(issue_intake.verdict(event("edited", BUG_BODY, **closed)), "reopen Bug")
+        self.assertEqual(issue_intake.verdict(event("edited", JARGON_BODY, **closed)), "keep")
 
     def test_maintainers_bots_and_pull_requests_are_exempt(self):
         for issue in ({"author_association": "MEMBER"}, {"author_association": "OWNER"},

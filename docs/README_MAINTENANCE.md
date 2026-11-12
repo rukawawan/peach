@@ -1,16 +1,18 @@
 # README 维护
 
-默认入口 `README.md` 使用英文，简体中文版为 `README.zh-CN.md`；两种语言同批核对。
+默认入口 `README.md` 使用英文，简体中文版为 `README.zh-CN.md`。README 展示项目定位、核心能力、安装入口与必要限制。具体功能、参数和交互更新进入变更日志或专题文档。
 
-1. 按下表核对本次涉及的能力、安装方式与限制。
-2. 同批核对中英文 README，修改需要调整的内容，保留使用入口和安全说明。
+维护范围依据 2026-11-06 用户确认的取舍。只有现有核心能力概括、安装入口、平台支持或必要限制需要修正时，才修改 README，并核对对应的中英文说明。
+
+1. 先判断本次改动是否影响 README 的核心介绍；需要修改时，再按下表核对事实。
+2. 修改需要调整的中英文说明，保留使用入口和安全说明。
 3. 用 documd 提供当前稿的可视化预览，取得用户明确确认后才能推送 README；继续修改时确认对应的新稿。
 4. 按 [文档与界面文案](WRITING.md#检查与复核) 检查，再运行 [正式测试入口](TESTING.md#正式入口)。
 
 README 面向初次访问项目的人，依次讲它是什么、界面导览与截图、能做什么、怎么装、常见问题、
 问题反馈和文档入口。用使用者的话写：说能做什么、会不会动文件，不写账本、候选、实体这类内部
 概念，内部机制与开发流程只留链接。中英文同批维护，平台支持、安装方式和能力限制保持一致。主线能力、已安装运行态和发行制品分别
-以实现、本机健康检查和 Releases 为准，README 不填写本机 IP、端口归属、真实馆藏数字或动态版本号。
+以实现、本机健康检查和 Releases 为准，README 不填写本机 IP、端口归属、真实馆藏数字或动态版本号；下载直链的版本号由 `scripts/release_tag.py --ship` 在 Release 制品上传完后改写并单独提交，中断时用 `--point-readme --apply` 补做；`tests/test_readme_contracts.py` 核对直链指向当前版本或上一版。
 
 | 内容 | 核验入口 |
 | --- | --- |
@@ -20,36 +22,9 @@ README 面向初次访问项目的人，依次讲它是什么、界面导览与�
 | 当前行为与已部署范围 | 实现与测试、[运行与配置](OPERATIONS.md)、[公开路线图](https://github.com/orgs/peach-mitao/projects/7) |
 | 来源、配置与数据边界 | [docs/SOURCING.md](SOURCING.md)、[docs/OPERATIONS.md](OPERATIONS.md)、[docs/CLOUDDRIVE.md](CLOUDDRIVE.md) |
 
-README 迭代绑定 Codex 与 Claude 共用的工作树交付流程。每次提交前核对暂存差异，
-涉及用户可见能力、安装、平台或构建要求时，同批更新中英文。只改变内部实现时保留 README，
-在交付分支最后一个提交的 Git trailer 写明原因：
+README 改动沿用项目工作树、PR 与验证流程。修改内容时核对中英文的项目定位、核心能力和安装事实，需要修正的部分随改动更新。README 的 Python 下限、语言入口、链接和文案由现有检查验证。
 
-| 判断 | 提交消息末尾的独立字段 |
-| --- | --- |
-| 已更新两份 README | `README-Impact: updated; 同步了哪些用户说明` |
-| 只需修改中文 README | `README-Impact: updated; 中文修改原因`，另加 `README-Reviewed: README.md; 英文无需修改的原因` |
-| 只需修改英文 README | `README-Impact: updated; 英文修改原因`，另加 `README-Reviewed: README.zh-CN.md; 中文无需修改的原因` |
-| 不影响 README | `README-Impact: none; 具体原因` |
-
-声明与 `Co-Authored-By` 等其它 trailer 连续写在提交消息末尾的同一块里，彼此之间不留空行。
-同一块里的署名形态见 `.claude/skills/peach-worktree/SKILL.md`「暂存与提交」。
-`git interpret-trailers --parse` 只解析末尾那一块，被空行隔开的 `README-Impact` 属于正文段落，
-`commit-msg` 会指出不在末尾同一块的字段，`ready` 也会拒绝未取得唯一声明的交付。
-
-`scripts/check_readme_impact.py` 读取目标分支到交付 HEAD 的实际差异，并使用
-`git interpret-trailers --parse` 读取最后提交的声明。涉及运行时代码、前端、迁移、资源、
-依赖或安装说明时必须声明；纯测试和其他内部文档不触发。触发清单由脚本统一维护。
-README 改动必须核对两种语言；`updated` 至少对应一份实际差异，`none` 不得伴随 README 改动。
-仅一份需要调整时，用唯一 `README-Reviewed` 写明未改文件及原因，不能为了满足检查改动正确的译文。
-提交后的暂存内容不能满足要求。原因的真实性仍由代码审阅负责，脚本不代替语义判断。
-
-`agent_worktree.py preflight` 在耗时验证前核对这一门槛；`ready/integrate` 在接受测试记录前复用同一检查。检查覆盖本次分支交付，
-允许在最后交付提交统一核对整批差异。仓库 `scripts/githooks/commit-msg` 在 `agent/*`
-分支提交时检查署名，以及消息中已有 README 声明的格式与分段；中间提交可以不写 README 声明。
-合并消息免除署名检查，amend 使用同一套字段判据；钩子只读消息。README 声明与整个分支差异
-的一致性由交付门槛检查，未通过的分支不能经项目入口集成。
-无需定时任务、账号专属 hook 或额外模型调用。Python 下限、文案和快照校验继续复用现有测试。
-结构或品牌调整时重读已登记的参考快照，上游变化只作为参考，计划功能不得写成已实现。
+结构或品牌调整时重读已登记的参考快照，上游变化作为参考，能力说明以实际实现为准。
 
 ## 演示数据集
 

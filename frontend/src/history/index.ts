@@ -1,7 +1,7 @@
 /* 全站唯一的浏览器历史（`@peach/history`）。
  *
  * Application 与 React 路由树直接引用本模块，随 peach-app.js 发出同一个历史实例。
- * 启动地址清理与重定向使用 shellNavigate，Router 的 navigator 也读这一份。
+ * 已由壳处理的地址同步使用 shellNavigate，Router 的 navigator 也读这一份。
  *
  * 实现是 React Router 自己的 `createBrowserHistory`（`v5Compat` 档：push / replace 也通知监听者），
  * 和它的 `<Router>` 读写的是同一种 `{usr, key, idx}` 历史条目，不另引一份 history 库。它只收一个
@@ -91,7 +91,8 @@ export interface ShellNavigateOptions {
   state?: unknown;
 }
 
-/** 壳写地址：push 或 replace 一条，当场认领。
+/** 壳写地址：push 或 replace 一条，当场认领。调用方须已处理正文或提交打开请求；
+ * 页面重定向由 peachHistory.push / replace 交路由打开，不能只认领地址。
  *
  * 路径先按当前地址解析成绝对的：壳传进来的有相对路径、有只带查询串的，也有整条 href，
  * `history.pushState` 本来就是这样解析的；React Router 的 `To` 只认路径，`#x` 这种会丢掉查询串。 */

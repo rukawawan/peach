@@ -28,7 +28,7 @@ r"""社媒存在感扩张：从已核实的 X 账号走到集链页，扩张全�
 
 头像源（登出可取；取不到的只记链接，不产头像）：
   X          profile_images 原图（无尺寸后缀），失败退 _400x400 / _200x200
-  lit.link   creators/<uuid>/icons/<uuid>.jpe
+  lit.link   本人 profile icon 节点与页面声明的头像原图
   babepedia  /pics/<Babe>.jpg —— creator 实体走 babepedia-candidates.csv 的命中行
   jae        Japan Adult Expo 名录里片商自己交的人像 —— 走
              harvest_directory_links.py 产的 jae-performer-links-portraits.csv 命中行
@@ -67,12 +67,13 @@ from peach.config import (   # noqa: E402
     DATABASE_PATH, GENERATED_DIR, REVIEW_DIR, STATE_DIR, COVER_DIR,
 )
 from peach.entities import resolve_entity_id  # noqa: E402
+from peach.lit_link_avatar import parse_avatar_url  # noqa: E402
 from peach.http import HttpRequest, HttpTransport, HttpxTransport   # noqa: E402
 from peach.review_csv import read_rows, write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     USER_AGENT, HostLimiter, host_under, hostname_of, open_readonly,
 )
-from peach.social_links import twimg_tiers   # noqa: E402
+from peach.social_links import is_lit_share_image, twimg_tiers   # noqa: E402
 
 
 X_HOSTS = ("x.com", "twitter.com", "mobile.twitter.com")
@@ -119,9 +120,6 @@ PBS_URL = re.compile(
 ANCHOR_HREF = re.compile(r'<a\s[^>]*href=["\']([^"\']+)["\']', re.I)
 PAGE_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
 OG_IMAGE = re.compile(r'property="og:image"\s+content="([^"]+)"')
-LIT_ICON = re.compile(
-    r"https://prd\.storage\.lit\.link/images/creators/[0-9a-f-]+/icons/[0-9a-f-]+\.jpe",
-    re.I)
 TAG = re.compile(r"<[^>]+>")
 
 HANDLE = re.compile(r"^[A-Za-z0-9_]{1,20}$")
@@ -290,14 +288,14 @@ def parse_link_page(url: str, body: str) -> dict:
     title_match = PAGE_TITLE.search(body)
     title = html_mod.unescape(title_match.group(1)).strip() if title_match else ""
     icon = ""
-    icon_match = LIT_ICON.search(body)
-    if icon_match:
-        icon = icon_match.group(0)
+    self_host = hostname_of(url)
+    if host_under(self_host, ("lit.link",)):
+        # og:image 是分享海报；本人头像未取得时只采链接。
+        icon = parse_avatar_url(body)
     else:
         og = OG_IMAGE.search(body)
         if og:
             icon = html_mod.unescape(og.group(1))
-    self_host = hostname_of(url)
     anchors: list[str] = []
     for href in ANCHOR_HREF.findall(body):
         href = html_mod.unescape(href).strip()
@@ -829,6 +827,9 @@ def merge_prior_pending(db_path: Path, new_path: Path, rows: list[dict]) -> None
     fresh_keys = {str(row["entity_id"]) for row in rows}
     carried = 0
     for old in read_rows(prior[-1]):
+        if (old.get("provider") == "social-web"
+                and is_lit_share_image(str(old.get("source_url") or ""))):
+            continue
         key = str(old.get("entity_id") or "")
         if not key or key in fresh_keys or key in decided:
             continue

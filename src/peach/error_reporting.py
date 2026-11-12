@@ -210,6 +210,30 @@ class ErrorHandler(logging.Handler):
             pass
 
 
+def _tidy_process_logs() -> None:
+    """正常退出时收走本进程没写进任何问题的日志（#485）：空的崩溃日志、只有启动记录的事件日志。
+
+    崩溃时解释器来不及跑 `atexit`，崩溃日志自然留下；写过事件的日志也留下。"""
+    global _fault_stream
+    if _fault_stream is not None:
+        try:
+            faulthandler.disable()
+            _fault_stream.close()
+        except (OSError, ValueError):
+            pass
+        _fault_stream = None
+    from .log_retention import idle_process_log
+    with _write_lock:
+        for directory in log_directories():
+            for name in (f"crash-{os.getpid()}.log", f"errors-{os.getpid()}.log"):
+                path = directory / name
+                if idle_process_log(path):
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+
+
 def install(log_dir: Path | None = None) -> None:
     global _hooks_installed, _log_dir, _fault_stream
     if log_dir is not None:
@@ -250,6 +274,8 @@ def install(log_dir: Path | None = None) -> None:
                 _fault_stream.close()
                 _fault_stream = None
     event("entry")
+    import atexit
+    atexit.register(_tidy_process_logs)
     try:
         from . import remote_reporting
         remote_reporting.usage()

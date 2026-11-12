@@ -46,21 +46,10 @@ export function requiredEnv(name: string): string {
 }
 
 export async function launch(): Promise<Browser> {
-  const args: string[] = [];
-  if (process.platform === 'win32') {
-    // 仅隔离 E2E：Chromium 572515601 的回环随机端口缺陷会返回 WSAENOBUFS 10055。
-    // 重复 --disable-features 会覆盖默认值；保留锁定 Playwright 1.64.1 的全部条目。
-    // browser-launch.test.ts 从真实 Chrome 对照默认参数，依赖升级时检查此表漂移。
-    const disabled = [
-      'AvoidUnnecessaryBeforeUnloadCheckSync', 'DestroyProfileOnBrowserClose', 'DialMediaRouteProvider',
-      'GlobalMediaControls', 'HttpsUpgrades', 'LensOverlay', 'MediaRouter', 'PaintHolding',
-      'ThirdPartyStoragePartitioning', 'BlockOriginHeaderModificationOnRedirect',
-      'AvoidCorsURLLoaderRestartOnRedirect', 'Translate', 'AutoDeElevate', 'OptimizationHints',
-      'NetworkTimeServiceQuerying', 'AimEnabled', 'msForceBrowserSignIn', 'msEdgeUpdateLaunchServicesPreferredVersion',
-      'TcpPortRandomizationWin',
-    ];
-    args.push('--disable-features=' + disabled.join(','));
-  }
+  // 界面语言默认跟浏览器语言走（ADR-0156）；用例断言的是中文文案，浏览器语言固定成简体中文，CI 上的 en-US 不影响结果。
+  // Chromium 572515601 的回环随机端口缺陷（WSAENOBUFS 10055）由 Playwright 默认禁用的
+  // `TcpPortRandomizationWin` 规避；这里不另传 --disable-features，否则会整串覆盖默认值。
+  const args: string[] = ['--lang=zh-CN'];
   const networkLogs = process.env.PEACH_E2E_NET_LOG_DIR;
   if (networkLogs) {
     mkdirSync(networkLogs, { recursive: true });

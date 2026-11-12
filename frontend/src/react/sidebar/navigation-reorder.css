@@ -1,0 +1,12 @@
+/* 侧栏与管理菜单共用拾起、插入波纹和放下的动效，方向由各自布局定义。 */
+:is([data-sidebar-nav],[data-manage-menu],[data-navigation-order])>:is(button,[data-tab]){touch-action:none;user-select:none;translate:var(--navigation-nudge-x,0px) var(--navigation-nudge-y,0px);transition:translate calc(var(--sidebar-reorder-ms)*1ms) var(--spring-press) var(--sidebar-delay,0ms),scale calc(var(--spring-press-ms)*1ms) var(--spring-press)}
+:is([data-sidebar-nav],[data-manage-menu],[data-navigation-order])[data-reordering]>:is(button,[data-tab]){cursor:grabbing}
+:is([data-sidebar-nav],[data-manage-menu],[data-navigation-order])>:is(button,[data-tab])[data-dragging]{position:absolute;z-index:3;scale:.9;transform:translate3d(var(--sidebar-drag-x,0px),var(--sidebar-drag-y,0px),0);background:var(--ground)!important;box-shadow:var(--glass-pick-shadow);cursor:grabbing;will-change:transform}
+:is([data-sidebar-drop-line],[data-manage-drop-line],[data-navigation-drop-line]){position:absolute;z-index:2;pointer-events:none;transition:transform calc(var(--sidebar-reorder-ms)*1ms) var(--spring-press)}
+:is([data-sidebar-drop-line],[data-manage-drop-line],[data-navigation-drop-line])>span{display:block;width:100%;height:100%;border-radius:var(--pill-radius);background:color-mix(in srgb,var(--ink) 15%,transparent);transform-origin:center;transition:transform var(--motion-swap)}
+@media(prefers-reduced-motion:reduce){
+  :is([data-sidebar-nav],[data-manage-menu],[data-navigation-order])>:is(button,[data-tab]){translate:none;transition:none}
+  :is([data-sidebar-nav],[data-manage-menu],[data-navigation-order])[data-reordering]>:is(button,[data-tab])[data-dragging]{position:static;width:auto;scale:1;transform:none;background:none!important;box-shadow:none}
+  :is([data-sidebar-drop-line],[data-manage-drop-line],[data-navigation-drop-line]),:is([data-sidebar-drop-line],[data-manage-drop-line],[data-navigation-drop-line])>span{transition:none}
+  @starting-style{:is([data-sidebar-drop-line],[data-manage-drop-line],[data-navigation-drop-line])[aria-hidden]>span{transform:none}}
+}

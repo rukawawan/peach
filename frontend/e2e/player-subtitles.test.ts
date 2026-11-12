@@ -87,8 +87,9 @@ describe('播放器字幕', () => {
         assert.equal(await spinner.count(), 0);
         assert.equal(await panel.getAttribute('aria-busy'), null);
         await page.screenshot({ path: join(process.cwd(), `../build/subtitles-search-empty-${viewport.name}.png`) });
-        await page.locator('[data-subtitle-back]').click();
-        await page.locator('[data-subtitle-search]').click();
+        // 字幕面切到搜索面的动画收尾前，退场的那一面（inert，也有返回键）还在菜单里，只点当前这一面里的键。
+        await panel.locator('[data-subtitle-back]').click();
+        await panel.locator('[data-subtitle-search]').click();
         await status.filter({ hasText: '没有找到当前作品的中文字幕' }).waitFor();
         assert.equal(searches, 1);
         assert.deepEqual(problems, []);

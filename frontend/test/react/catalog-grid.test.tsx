@@ -2,19 +2,27 @@
  * 画出什么、点哪里去哪里。 */
 import { act, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MediaCard, cardRatio, type MediaCardVariant } from '../../src/react/components/media-card';
 import { CatalogGridPage, LoadMore } from '../../src/react/catalog-grid/catalog-grid-page';
 import type { CatalogGridProps } from '../../src/react/catalog-grid/types';
 import {
-  MIX_SLOT, SHORTS_BATCH, arrangeTiles, catalogParams, collapseGroups, fetchCatalogPage, latestCatalogPages, mixSeed, nextOffset,
+  MIX_SLOT, SHORTS_BATCH, arrangeTiles, catalogParams, catalogSummary, collapseGroups, fetchCatalogPage, latestCatalogPages, mixSeed, nextOffset, visibleCatalogBatch,
   shortsBoundaries, shortsParams, replaceCatalogItem, type GridPage,
 } from '../../src/react/catalog-grid/catalog-grid';
 import type { MediaCardActions, MediaCardHelpers, MediaCardLayout, MediaItem } from '../../src/react/catalog-grid/types';
 
-import { click, mount, settle } from './render';
+import { buttonNamed, click, fetchMock, mount, sentBody, settle } from './render';
+import { missingArtwork } from '../../src/react/components/artwork-gap';
 import { queryClient } from '../../src/react/query';
+import { peachHistory } from '../../src/history';
+import { PLAYBACK_PROGRESS_EVENT } from '../../src/player/telemetry';
+
+vi.mock('@peach/legacy/ui', async (original) => ({
+  ...await original<typeof import('@peach/legacy/ui')>(),
+  confirmModal: (await import('../../src/ui-kit/modal')).confirmModal,
+}));
 
 const SMALL: MediaCardLayout = { active: false, size: 'small', portrait: false, javImage: 'cover' };
 
@@ -73,6 +81,20 @@ describe('目录取数', () => {
     fetcher.mockClear();
     await fetchCatalogPage('state=trash', 0, 60, true, new AbortController().signal);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('首批按视口截短后，下一页紧接实际条数，不跳过中间作品', () => {
+    expect(visibleCatalogBatch(6, 450, 200, 16, 60)).toBe(18);
+    expect(nextOffset(60)({ ...page([item(1)], 0, { has_more: true }), batch: 18 })).toBe(18);
+  });
+
+  it('聚合统计保持主列表筛选，独立读取不请求卡片', async () => {
+    const fetcher = vi.fn(async (_url: string) => ({ ok: true, status: 200,
+      json: async () => ({ total: 12, bytes: 240, work_total: 10 }) }));
+    vi.stubGlobal('fetch', fetcher);
+    expect(await catalogSummary('loc=115&tag=example', new AbortController().signal)).toEqual({ total: 12, bytes: 240, work_total: 10 });
+    const query = new URL(String(fetcher.mock.calls[0]![0]), 'http://peach.test').searchParams;
+    expect(Object.fromEntries(query)).toEqual({ loc: '115', tag: 'example', summary_only: '1' });
   });
 
   it('下一页从哪儿取：第一页看总数，往后看 has_more', () => {
@@ -173,6 +195,71 @@ describe('续页', () => {
     queryClient.removeQueries({ queryKey: ['catalog-grid'] });
   });
 
+  it('详情压在网格上时结果版本变了不重取；关掉详情才把被失效的那一份取一次', async () => {
+    vi.stubGlobal('IntersectionObserver', FakeObserver);
+    const server = catalogServer();
+    const filters = { sort: 'seed', q: '详情覆盖停订' };
+    const host = await mount(<QueryClientProvider client={queryClient}><CatalogGridPage {...props(filters)} /></QueryClientProvider>);
+    await until(() => cards(host) === 3, '第一页');
+    const reads = () => server.offsets().filter((offset) => offset === '0').length;
+    expect(reads()).toBe(1);
+    await act(async () => { peachHistory.push('/assets/1') });
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['catalog-grid'] }, { cancelRefetch: false }) });
+    await settle();
+    expect(reads(), '被详情盖住的网格不在背后重取').toBe(1);
+    await act(async () => { peachHistory.push('/') });
+    await until(() => reads() === 2, '揭开后重取被失效的那一份');
+    await settle();
+    expect(reads()).toBe(2);
+    await act(async () => { peachHistory.push('/assets/1') });
+    await act(async () => { peachHistory.push('/') });
+    await settle();
+    expect(reads(), '期间没有失效就不重取').toBe(2);
+    queryClient.removeQueries({ queryKey: ['catalog-grid'] });
+  });
+
+  it('心跳回执广播的观看进度改写缓存里那张卡', async () => {
+    vi.stubGlobal('IntersectionObserver', FakeObserver);
+    catalogServer();
+    const host = await mount(<QueryClientProvider client={queryClient}><CatalogGridPage {...props({ sort: 'seed', q: '进度广播' })} /></QueryClientProvider>);
+    await until(() => cards(host) === 3, '第一页');
+    await act(async () => {
+      document.dispatchEvent(new CustomEvent(PLAYBACK_PROGRESS_EVENT, { detail: { id: 2, play_seconds: 30, leave_ratio: 0.5 } }));
+    });
+    const cached = queryClient.getQueriesData<{ pages: GridPage[] }>({ queryKey: ['catalog-grid'] })
+      .flatMap(([, data]) => data?.pages?.flatMap((one) => one.items) || []);
+    expect(cached.find((one) => one.id === 2)).toMatchObject({ play_seconds: 30, leave_ratio: 0.5 });
+    expect(cached.find((one) => one.id === 1)?.play_seconds).toBeUndefined();
+    queryClient.removeQueries({ queryKey: ['catalog-grid'] });
+  });
+
+  it('补全状态条连竖屏带里的缺图卡一起数：竖屏格按视频帧判断，有封面没帧的番号作品也算缺图', async () => {
+    vi.stubGlobal('IntersectionObserver', FakeObserver);
+    const strip = [
+      item(51, { location: 'local', has_thumb: false }),
+      item(52, { location: 'pikpak', cost: 'metered', has_thumb: false }),
+      item(53, { location: 'local', is_jav: true, code: 'ABC-053', has_cover: true, cover_key: 'ABC-053', has_thumb: false }),
+    ];
+    const posts: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push(JSON.parse(String(init.body)));
+      const url = new URL(String(input), 'http://peach.test');
+      const body = url.pathname === '/api/library-processing' ? { status: 'idle' }
+        : url.searchParams.get('orient') === '竖屏' ? { items: strip, total: strip.length, has_more: false }
+          : { items: [1, 2, 3].map((n) => item(n)), total: 3, has_more: false };
+      return Promise.resolve(reply(body));
+    }));
+    const host = await mount(<QueryClientProvider client={queryClient}>
+      <CatalogGridPage {...props({ sort: 'seed', q: '竖屏带缺图' })} shorts />
+    </QueryClientProvider>);
+    await until(() => !!host.querySelector('[data-library-completion]'), '状态条出现');
+    expect(host.querySelector('[data-library-completion]')?.textContent).toContain('这批影片中有 3 部暂无预览，其中 1 部在流量保护目录');
+    await click(buttonNamed('同步这些影片', host));
+    await until(() => posts.length > 0, '提交补全');
+    expect(posts[0]).toEqual({ stage: 'collect', asset_ids: [51, 53] });
+    queryClient.removeQueries({ queryKey: ['catalog-grid'] });
+  });
+
   it('竖屏带与主网格同一个「合并分卷与版本」：开着一组分卷只出一张整组卡，关着各卷各自成卡、不标卷数', async () => {
     vi.stubGlobal('IntersectionObserver', FakeObserver);
     const group = { key: 'FC2-PPV-3189161', seed_id: 41, count: 2, title: 'FC2-PPV-3189161', total_duration: 1200 };
@@ -235,11 +322,11 @@ describe('续页', () => {
       await until(() => shorts(host).length > 0, '竖屏带插进网格');
       if (collapse) {
         expect(groupBadges(shorts(host))).toEqual([
-          ['4', '2 卷', '25:00', true], ['43', '', '尚未探查', false], ['9', '', '5:00', false],
+          ['4', '2 卷', '25:00', true], ['43', '', '', false], ['9', '', '5:00', false],
         ]);
       } else {
         expect(groupBadges(shorts(host)), '合并关着各竖屏卷各自成卡').toEqual([
-          ['4', '', '10:00', false], ['43', '', '尚未探查', false], ['5', '', '15:00', false], ['9', '', '5:00', false],
+          ['4', '', '10:00', false], ['43', '', '', false], ['5', '', '15:00', false], ['9', '', '5:00', false],
         ]);
       }
     }
@@ -321,6 +408,8 @@ describe('比例', () => {
 });
 
 describe('作品卡', () => {
+  /* 缺图卡上的「补全预览」挂载时会查一次处理任务状态；没单独设请求的用例给一份空闲的。 */
+  beforeEach(() => { vi.stubGlobal('fetch', fetchMock(200, { status: 'idle' })) });
   const helpers: MediaCardHelpers = {
     badgeHtml: (location) => `<span>${location}</span>`,
     titleHtml: (_it, raw) => raw,
@@ -345,18 +434,14 @@ describe('作品卡', () => {
   };
 
   it.each([
-    [{ duration: null }, '尚未探查'],
-    [{ duration: -1 }, '探查错误'],
-    [{ duration: 0 }, '时长未取得'],
-    [{ duration: null, cost: 'metered' }, '流量保护 · 未探查'],
-    [{ duration: -1, cost: 'metered' }, '探查错误'],
-    [{ duration: null, is_strm: true }, 'STRM 不自动探查'],
-    [{ duration: null, name: '作品.ISO' }, 'ISO 不自动探查'],
-    [{ duration: null, location: 'online' }, '来源未提供时长'],
+    [{ duration: null }, null],
+    [{ duration: -1 }, null],
+    [{ duration: 0 }, null],
+    [{ duration: null, is_strm: true }, null],
     [{ duration: 60 }, '1:00'],
-  ] as [Partial<MediaItem>, string][])('时长角标按已有记录区分缺失原因 %j', async (fields, expected) => {
+  ] as [Partial<MediaItem>, string | null][])('时长角标只显示已取得的时长 %j', async (fields, expected) => {
     const { host } = await render(item(7, fields));
-    expect(host.querySelector('[data-media-duration]')?.textContent).toBe(expected);
+    expect(host.querySelector('[data-media-duration]')?.textContent ?? null).toBe(expected);
   });
 
   it('点标题打开，点署名进资料页，点「未归属」进那一批，点标签在这一屏筛它', async () => {
@@ -459,6 +544,83 @@ describe('作品卡', () => {
     expect(pictureOf((await render(item(23, { ...cover, has_thumb: true }), { variant: 'short' })).host),
       '封面设置为官方封面时竖屏格照样用帧图').toBe('/poster?id=23&c=4');
     expect(pictureOf((await render(item(22, cover))).host)).toMatch(/^\/cover\?code=FC2-PPV-3189161/);
+  });
+
+  it.each([
+    [{ is_jav: true, code: 'ABC-001' }, false, '无封面', '还没取到官方封面', 'cover'],
+    [{ is_jav: true, code: 'ABC-001', location: 'local' }, true, '无预览', '还没抽帧', 'previews'],
+    [{ location: 'local', duration: -1 }, false, '无预览', '探查失败，没能抽帧', 'previews'],
+    [{ location: '115' }, false, '无预览', '还没抽帧', 'previews'],
+    [{ location: 'pikpak', cost: 'metered' }, false, '无预览', '流量保护 · 同步时不抽帧', 'previews'],
+    [{ location: 'online' }, false, '无预览', '在线来源不抽帧', ''],
+    [{ location: 'local', name: 'a.strm' }, false, '无预览', 'STRM 不抽帧', ''],
+    [{ location: 'local', name: 'a.ISO' }, false, '无预览', 'ISO 不抽帧', ''],
+  ] as [Partial<MediaItem>, boolean, string, string, string][])('没有图时按条目写缺什么、为什么缺、能不能补 %j', (fields, frameOnly, title, reason, fix) => {
+    expect(missingArtwork({ name: 'a.mp4', ...fields } as MediaItem, frameOnly)).toMatchObject({ title, reason, fix });
+  });
+
+  it('番号作品没有封面时当场抓取：按钮不打开详情，取到后卡片换上封面', async () => {
+    const fetcher = fetchMock(200, { has_cover: true, cover_version: 'v2', message: '' });
+    vi.stubGlobal('fetch', fetcher);
+    const target = item(30, { is_jav: true, code: 'ABC-001', has_cover: false, has_thumb: false });
+    const key = ['catalog-grid', 'catalog', 'gap-test', 0];
+    queryClient.setQueryData(key, { pages: [page([target])], pageParams: [0] });
+    const { host, onOpen } = await render(target);
+    expect(host.querySelector('[data-media-nopic]')?.textContent).toBe('无封面');
+    expect(host.querySelector('[data-artwork-gap]')?.textContent).toContain('还没取到官方封面');
+    await click(buttonNamed('抓取封面', host));
+    await settle();
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/jav/cover');
+    expect(sentBody(fetcher)).toEqual({ code: 'ABC-001' });
+    expect(onOpen).not.toHaveBeenCalled();
+    const cached = queryClient.getQueryData<{ pages: GridPage[] }>(key)!.pages[0]!.items[0]!;
+    expect(cached).toMatchObject({ has_cover: true, cover_version: 'v2' });
+    queryClient.removeQueries({ queryKey: key });
+  });
+
+  it('有图却取失败时不留坏图：问服务端卡在哪一步，缺印相的本地影片给「补全预览」', async () => {
+    vi.stubGlobal('fetch', fetchMock(404, { error: 'unavailable', reason: 'snapshot unavailable' }));
+    const { host } = await render(item(31, { location: 'local', has_thumb: true }));
+    const img = host.querySelector('[data-media-art] img')!;
+    await act(async () => { img.dispatchEvent(new Event('error')) });
+    await settle();
+    expect(host.querySelector('[data-media-art] img')).toBeNull();
+    expect(host.querySelector('[data-media-nopic]')?.textContent).toBe('预览未取得');
+    expect(host.querySelector('[data-artwork-gap]')?.textContent).toContain('预览帧文件缺失');
+    expect(buttonNamed('补全预览', host)).not.toBeNull();
+  });
+
+  it('取失败后「重试」换一个地址重新取图', async () => {
+    vi.stubGlobal('fetch', fetchMock(404, { error: 'unavailable', reason: 'ffmpeg generation failed' }));
+    const { host } = await render(item(32, { location: '115', has_thumb: true }));
+    await act(async () => { host.querySelector('[data-media-art] img')!.dispatchEvent(new Event('error')) });
+    await settle();
+    expect(host.querySelector('[data-artwork-gap]')?.textContent).toContain('生成预览图失败');
+    await click(buttonNamed('重试', host));
+    expect(host.querySelector('[data-media-art] img')?.getAttribute('src')).toBe('/poster?id=32&c=4&r=1');
+  });
+
+  it('流量保护的影片补全预览先确认：取消不发请求，确认后这一部带着授权抽帧', async () => {
+    queryClient.removeQueries({ queryKey: ['library-processing'] });
+    const fetcher = vi.fn(async (_url: string, init?: RequestInit) => ({ ok: true, status: 200,
+      json: async () => init?.method === 'POST' ? { job_id: 'new', status: 'running' } : { job_id: 'old', status: 'complete' } }));
+    vi.stubGlobal('fetch', fetcher);
+    const { host } = await render(item(33, { location: 'pikpak', cost: 'metered', has_thumb: false }));
+    await settle();
+    expect(host.querySelector('[data-artwork-gap]')?.textContent).toContain('流量保护');
+    const posts = () => fetcher.mock.calls.filter(([, init]) => init?.method === 'POST');
+
+    await click(buttonNamed('补全预览', host));
+    await vi.waitFor(() => expect(document.querySelector('dialog')?.open).toBe(true));
+    await click(document.querySelector('dialog [data-modal-cancel]'));
+    expect(posts()).toEqual([]);
+
+    await click(buttonNamed('补全预览', host));
+    await vi.waitFor(() => expect(document.querySelector('dialog')?.open).toBe(true));
+    await click(document.querySelector('dialog [data-modal-confirm]'));
+    await vi.waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(String(posts()[0]![1]!.body))).toEqual({ stage: 'previews', asset_ids: [33], allow_metered: true });
+    queryClient.removeQueries({ queryKey: ['library-processing'] });
   });
 
   it('不合并分卷时一卷一张卡：名字、时长写这一卷自己的，不叠纸边、不标卷数，打开时条目原样交出', async () => {

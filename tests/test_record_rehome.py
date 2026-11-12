@@ -22,6 +22,23 @@ DECLARED = {"local": ("R:\\media",)}
 
 
 class RecordRehomeTests(unittest.TestCase):
+    def test_follow_reference_moves_with_the_asset_and_reverts_with_its_batch(self):
+        self.add_vanished(7, r'R:\media\old\EXM-001.mp4', code='EXM-001', records=False)
+        with closing(sqlite3.connect(self.db)) as connection:
+            connection.execute("INSERT INTO asset(id,location,path,name,medium) "
+                               "VALUES(8,'local','new.mp4','new.mp4','video')")
+            connection.execute("INSERT INTO follow_source(id,provider,ref,label,url,created_at,updated_at) "
+                               "VALUES(1,'test','sample','sample','https://example.test/','now','now')")
+            connection.execute("INSERT INTO follow_item(id,source_id,external_id,title,release_key,asset_id,"
+                               "first_seen_at,last_seen_at) VALUES(1,1,'item','item','item',7,'now','now')")
+            baseline = connection.execute('PRAGMA foreign_key_check').fetchall()
+            batch = record_rehome.move(connection, 7, 8, source='test', rule='same-release')
+            self.assertEqual(connection.execute('SELECT asset_id FROM follow_item').fetchall(), [(8,)])
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), baseline)
+            record_rehome.revert_one(connection, batch)
+            self.assertEqual(connection.execute('SELECT asset_id FROM follow_item').fetchall(), [(7,)])
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), baseline)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

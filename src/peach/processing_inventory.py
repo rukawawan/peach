@@ -9,6 +9,7 @@ from pathlib import PureWindowsPath
 from uuid import uuid4
 
 from .processing_traffic import ProcessingTraffic
+from .library_processing_scope import scoped_assets
 
 _SESSIONS = {}
 _LATEST = {}
@@ -26,12 +27,12 @@ def recent_rows(config, db_path, stage, asset_ids):
 
 
 class InventoryPreview:
-    def __init__(self, config, db_path, stage, asset_ids, incremental=False):
+    def __init__(self, config, db_path, stage, asset_ids, incremental=False, library_id=None):
         self.identity = _identity(config, db_path, stage, asset_ids, incremental)
         if incremental:
             from .library_new_assets import pending
             asset_ids = pending(db_path)
-        self.meter = ProcessingTraffic(config, db_path, stage, asset_ids)
+        self.meter = ProcessingTraffic(config, db_path, stage, scoped_assets(config, db_path, library_id, asset_ids))
         with closing(sqlite3.connect(db_path)) as connection:
             self.known = {(location, str(PureWindowsPath(path)).casefold()) for location, path
                           in connection.execute('SELECT location,path FROM asset WHERE path IS NOT NULL')}
@@ -102,7 +103,7 @@ class InventoryPreview:
             return result
 
 
-def preview(config, db_path, stage, asset_ids, token=None, *, incremental=False):
+def preview(config, db_path, stage, asset_ids, token=None, *, incremental=False, library_id=None):
     with _LOCK:
         expired = [key for key, value in _SESSIONS.items() if time.monotonic() - value.at > 300]
         for key in expired:
@@ -115,7 +116,7 @@ def preview(config, db_path, stage, asset_ids, token=None, *, incremental=False)
             if session is None or session.identity != _identity(config, db_path, stage, asset_ids, incremental):
                 raise ValueError('目录预检已结束，请重新打开同步弹窗')
         else:
-            session = InventoryPreview(config, db_path, stage, asset_ids, incremental)
+            session = InventoryPreview(config, db_path, stage, asset_ids, incremental, library_id)
             token = uuid4().hex
             _SESSIONS[token] = session
     result = session.advance()

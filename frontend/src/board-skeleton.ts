@@ -3,8 +3,8 @@ import { islandButton, islandSelect } from './island-skeleton';
 import { configurationSkeleton } from './configuration-skeleton';
 import { javPageSkeleton } from './jav-skeleton';
 import { javTab } from './react/jav/jav-navigation';
-import { duplicatesSkeleton, qualityGoalsSkeleton, statsSkeleton, tasteSkeleton } from './management-skeletons';
-import { CONFIGURATION_SECTIONS } from './history/settings-route';
+import { duplicatesSkeleton, qualityGoalsSkeleton, repairCenterSkeleton, statsSkeleton, tasteSkeleton } from './management-skeletons';
+import { CONFIGURATION_SECTIONS, isSettingsSectionPath } from './history/settings-route';
 import { FOLLOW_MANAGE_NAV as FOLLOW_TABS } from './react/follow-manage/manage-route';
 
 /** 等待态复用页面容器，只有异步内容使用占位。 */
@@ -101,10 +101,12 @@ export function boardPageSkeleton(
     body = tasteSkeleton();
   } else if (path === '/subscriptions') {
     body = followList(options);
-  } else if (path.startsWith('/settings/') && path.split('/')[2]! in CONFIGURATION_SECTIONS) {
+  } else if (isSettingsSectionPath(path) && path.split('/')[2]! in CONFIGURATION_SECTIONS) {
     body = configurationSkeleton(CONFIGURATION_SECTIONS[path.split('/')[2] as keyof typeof CONFIGURATION_SECTIONS]);
   } else if (path === '/tasks') {
     body = `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">${['正在进行', '本次未执行', '最近完成'].map(title => `<section class="activitysection flex min-w-0 flex-col gap-3"><h3 class="text-title-2-medium text-text-primary">${title}</h3><div class="min-w-0 rounded-2xl shadow-card bg-background-secondary-default"><div class="flex flex-col gap-1.5 px-5 pt-5 pb-4"><span class="text-title-1-medium">${text('8em')}</span><span class="text-caption-1-regular">${text('14em')}</span>${text('60%')}${text('40%')}</div><div class="border-t border-separator-border px-5 py-2.5">${text('6em')}</div></div></section>`).join('')}</div></div>`;
+  } else if (path === '/settings/maintenance/repairs') {
+    body = repairCenterSkeleton();
   } else if (path === '/duplicates') {
     body = duplicatesSkeleton();
   } else if (path === '/quality-goals') {

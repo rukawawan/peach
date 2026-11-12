@@ -33,6 +33,14 @@ function stubImages() {
   return loaded;
 }
 
+function loadPreviewImage(host: ParentNode) {
+  const image = host.querySelector('img')!;
+  Object.defineProperty(image, 'complete', { configurable: true, value: true });
+  Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 320 });
+  Object.defineProperty(image, 'naturalHeight', { configurable: true, value: 180 });
+  image.dispatchEvent(new Event('load'));
+}
+
 describe('时间到雪碧图坐标', () => {
   it('固定间隔按页与格换算，末张按自身帧数算行数', () => {
     const sheet = { frames: 250, interval: 10, columns: 10, rows: 10 };
@@ -70,9 +78,11 @@ describe('边缘对齐', () => {
   it('按显出来之后的实测宽度夹边，不按估算宽度', async () => {
     stubTimeline({});
     const { host, measured } = seekHost(600, 244);
-    const preview = createSeekPreview(host, { id: 7, width: 1920, height: 1080 });
+    const preview = createSeekPreview(host, { id: 7, width: 1920, height: 1080, has_thumb: true });
     const element = measured();
     preview.show(0, 100);
+    expect(element.hidden).toBe(true);
+    loadPreviewImage(host);
     expect(element.style.left).toBe('122px');
     preview.show(1, 100);
     expect(element.style.left).toBe('478px');
@@ -82,7 +92,7 @@ describe('边缘对齐', () => {
 });
 
 describe('无时间轴图降级', () => {
-  it('没有索引也没有快照：只报时间，不取任何图', async () => {
+  it('没有索引也没有快照时收起整块预览，不取任何图', async () => {
     const fetch = stubTimeline({});
     const { host, measured } = seekHost(900, 160);
     const preview = createSeekPreview(host, { id: 7, has_thumb: false });
@@ -91,11 +101,11 @@ describe('无时间轴图降级', () => {
     preview.show(.5, 600);
     expect(host.querySelector('img')!.hasAttribute('src')).toBe(false);
     expect(host.querySelector<HTMLElement>('.vjs-peach-seek-frame')!.hidden).toBe(true);
-    expect(element.hidden).toBe(false);
+    expect(element.hidden).toBe(true);
     expect(element.querySelector('span')!.textContent).toBe('5:00');
     expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/timeline?id=7']);
   });
-  it('没有索引时退回已有九宫格，九宫格也取不到就只报时间且不再请求', async () => {
+  it('已有九宫格成功后显示，取不到则收起且不再请求', async () => {
     const fetch = stubTimeline({});
     const { host, measured } = seekHost(900, 160);
     const preview = createSeekPreview(host, { id: 7, has_thumb: true });
@@ -105,19 +115,27 @@ describe('无时间轴图降级', () => {
     preview.show(.05, 600);
     const frame = host.querySelector<HTMLElement>('.vjs-peach-seek-frame')!, image = host.querySelector('img')!;
     expect(image.getAttribute('src')).toBe('/poster?id=7&c=0');
+    expect(element.hidden).toBe(true);
+    loadPreviewImage(host);
+    expect(element.hidden).toBe(false);
+    preview.hide();
+    loadPreviewImage(host);
+    expect(element.hidden).toBe(true);
+    preview.show(.05, 600);
     image.dispatchEvent(new Event('error'));
     preview.show(.95, 600);
     expect(image.getAttribute('src')).toBe('/poster?id=7&c=0');
     expect(frame.hidden).toBe(true);
-    expect(element.hidden).toBe(false);
+    expect(element.hidden).toBe(true);
     expect(element.querySelector('span')!.textContent).toBe('9:30');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
-  it('关注条目不取图、不查索引，只报时间', () => {
+  it('关注条目不取图、不查索引，也不显示空预览', () => {
     const fetch = stubTimeline({});
     const { host } = seekHost(600);
     createSeekPreview(host, null).show(.5, 120);
     expect(host.querySelector('.vjs-peach-seek-frame')).toBeNull();
+    expect(host.querySelector<HTMLElement>('[data-player-seek-preview]')!.hidden).toBe(true);
     expect(host.querySelector('[data-player-seek-preview] span')!.textContent).toBe('1:00');
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -156,10 +174,12 @@ describe('Video.js 进度条接线', () => {
     const progress = root.querySelector<HTMLElement>('.vjs-progress-control')!;
     progress.getBoundingClientRect = () => ({ width: 300, left: 0 } as DOMRect);
     const player = { el: () => root, duration: () => 30, on: () => {} } as unknown as VjsPlayer;
-    mountPlayerSeekPreview(player, { id: 42, duration: 30 }, { thumbnail: false });
+    mountPlayerSeekPreview(player, { id: 42, duration: 30, has_thumb: true });
     const preview = progress.querySelector<HTMLElement>('[data-player-seek-preview]')!;
-    const fire = (type: string, x: number, pointerType: string) =>
+    const fire = (type: string, x: number, pointerType: string) => {
       progress.dispatchEvent(new PointerEvent(type, { clientX: x, pointerType, bubbles: true }));
+      loadPreviewImage(progress);
+    };
     return { preview, fire };
   }
   it('触屏按住拖动时显示，松手收起', () => {
@@ -179,6 +199,33 @@ describe('Video.js 进度条接线', () => {
     expect(preview.hidden).toBe(false);
     fire('pointerleave', 30, 'mouse');
     expect(preview.hidden).toBe(true);
+  });
+});
+
+describe('索引晚于悬停到达', () => {
+  it('指针停着不动也换成拼图那一格，图到了就显示；已离开则不显示', async () => {
+    stubTimeline({ source: 'peach', frames: 20, interval: 1, columns: 10, rows: 10 });
+    const { host, measured } = seekHost(900, 160);
+    const preview = createSeekPreview(host, { id: 7, width: 1920, height: 1080, has_thumb: false });
+    const element = measured(), image = host.querySelector('img')!;
+    preview.show(.65, 20);
+    expect(image.hasAttribute('src')).toBe(false);
+    expect(element.hidden).toBe(true);
+    await settle();
+    expect(image.getAttribute('src')).toBe('/timeline?id=7&s=0&source=peach');
+    expect([image.style.left, image.style.top]).toEqual(['-300%', '-100%']);
+    loadPreviewImage(host);
+    expect(element.hidden).toBe(false);
+
+    stubTimeline({ source: 'peach', frames: 20, interval: 1, columns: 10, rows: 10 });
+    const late = seekHost(900, 160);
+    const left = createSeekPreview(late.host, { id: 8, has_thumb: false });
+    const leftElement = late.measured();
+    left.show(.65, 20);
+    left.hide();
+    await settle();
+    expect(late.host.querySelector('img')!.hasAttribute('src')).toBe(false);
+    expect(leftElement.hidden).toBe(true);
   });
 });
 

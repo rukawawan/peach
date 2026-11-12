@@ -30,6 +30,15 @@ describe('页头判据', () => {
     expect(manageHeaderView(props('trash', '/trash'))).toMatchObject({ title: '回收站', crumb: '回收站' });
   });
 
+  it('修复与迁移挂在应用与维护之下：标题取子页名字，面包屑回到应用与维护，管理条按下配置', () => {
+    const view = manageHeaderView(props('configuration', '/settings/maintenance/repairs'))!;
+    expect(view).toMatchObject({ title: '修复与迁移', crumb: '修复与迁移', pressed: 'configuration',
+      parent: { label: '应用与维护', href: '/settings/maintenance' } });
+    const node = document.createElement('div');
+    node.innerHTML = manageHeaderSkeletonHtml(props('configuration', '/settings/maintenance/repairs'));
+    expect(node.querySelector('[data-manage-crumb] a')!.getAttribute('href')).toBe('/settings/maintenance');
+  });
+
   it('窄屏标题收一档的只有数据管理 hub、来源和凭证与配置', () => {
     const compact = (section: string, path: string) => manageHeaderView(props(section, path))!.compact;
     expect([compact('cleanup', '/data-cleanup'), compact('cleanup', '/sources'), compact('configuration', '/settings/library')])

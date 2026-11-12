@@ -57,7 +57,7 @@ export function Application() {
       queueMicrotask(() => finalizeResources(current));
     };
   }, []);
-  return <RouterRoot actions={actions} processing background={actions ? <ResultUpdates /> : null} />;
+  return <RouterRoot actions={actions} processing background={actions ? <ResultUpdates openItem={actions.openItem} /> : null} />;
 }
 const roots = new WeakMap<Element, Root>();
 export function mountApplication(host: Element): Root {

@@ -649,12 +649,17 @@ describe('手势', () => {
   });
 
   it('进度条上方的画面预览：鼠标悬停显示，横划拖动显示，离开或抬手收起', async () => {
+    serve({ draws: [[row(1, { has_thumb: true })]], details: { 1: { has_thumb: true } } });
     await open();
     const bar = q('[data-immerse-bar]')!;
     bar.getBoundingClientRect = () => ({ left: 0, width: 1000, top: 0, height: 20, right: 1000, bottom: 20, x: 0, y: 0, toJSON() {} });
     const preview = () => q('[data-immerse-bar] [data-player-seek-preview]')!;
     expect(preview().hidden).toBe(true);
     await act(async () => { bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 300, pointerType: 'mouse' })) });
+    const image = preview().querySelector('img')!;
+    expect(preview().hidden).toBe(true);
+    Object.defineProperties(image, { complete: { configurable: true, value: true }, naturalWidth: { configurable: true, value: 320 } });
+    await act(async () => image.dispatchEvent(new Event('load')));
     expect(preview().hidden).toBe(false);
     expect(preview().querySelector('span')!.textContent).toBe('0:30');
     // React 的 onPointerLeave 由 pointerout 合成。

@@ -140,24 +140,23 @@ def upgrade(db_path: Path, directory: Path, backup_path: Path | None = None) -> 
                 + reconcile
                 + "\nINSERT INTO schema_migration(version,name,checksum,applied_at) VALUES("
                 + ",".join(_quote(x) for x in (migration.version, migration.name, migration.checksum, stamp))
-                + ");\nCOMMIT;"
+                + ");\n"
             )
             try:
                 connection.executescript(script)
-            except Exception:
+                if keys_off:
+                    broken = connection.execute("PRAGMA foreign_key_check").fetchall()
+                    if broken:
+                        raise RuntimeError(
+                            f"migration {migration.version} 关闭外键后留下 {len(broken)} 条"
+                            f"违约行：{broken[:5]}")
+                connection.commit()
+            except BaseException:
                 if connection.in_transaction:
                     connection.rollback()
                 raise
             finally:
                 connection.execute("PRAGMA foreign_keys=ON")
-            if keys_off:
-                # 外键关着跑完，正确性就得自己交代。留下孤儿行的迁移在这里失败，
-                # 而不是等某个运维脚本半年后撞上 `foreign_key_check`。
-                broken = connection.execute("PRAGMA foreign_key_check").fetchall()
-                if broken:
-                    raise RuntimeError(
-                        f"migration {migration.version} 关闭外键后留下 {len(broken)} 条"
-                        f"违约行：{broken[:5]}")
         connection.execute("PRAGMA optimize")
     finally:
         connection.close()

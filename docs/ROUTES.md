@@ -1,5 +1,9 @@
 # 页面路由
 
+`GET /api/items?summary_only=1` 按相同筛选只返回 `total`、`bytes` 和 `work_total`。馆藏网格先读取 `count=0` 的首屏条目，再独立取得统计和后续条目；既有调用不带该参数时行为不变。
+
+「应用与维护」的存储状态使用 `GET /api/configuration/storage`；`POST /api/configuration/storage/measure` 启动统计，`POST /api/configuration/storage/clean` 按所选类别清理，`POST /api/configuration/storage/policy` 保存本机容量保护（`enabled` 总开关默认开启）并返回同一状态形状。`GET /api/configuration/storage/external-cache` 只读本机 CloudDrive 缓存目录，不自动保存；需要登录与本机管理，未配置、远程地址、权限不足或路径不可读取返回 400。容量数值为整数 `GiB`，`0` 表示自动磁盘保留值或不设对应总量上限；外部缓存目录不会由 Peach 删除。写请求需要登录、本机管理与同源检查，字段或目录无效返回 400，跨站请求返回 403；统计或清理已在运行时返回 409。规则与清理边界见[容量保护](OPERATIONS.md#容量保护与显示尺寸补测)。
+
 馆藏处理的 `POST /api/library-processing` 支持按 `job_id` 暂停、继续、取消及归档结束提示；`stopping` 仍占用当前范围，`cancelled` 不自动恢复。`scope=new` 在启动时解析成固定资产集合，不与 `asset_ids` 或失败重试混用。状态只返回新入库数量，不下发内部处理路径。
 
 `GET /api/library-processing/issues` 返回任务号、内容摘要 `revision`、总数、偏移和记录。导出后续页传入首份摘要；同任务追加、恢复或记录替换时拒绝混合读取。旧完整问题数组可分页读取，原始记录缺失或损坏作为失败返回。

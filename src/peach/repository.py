@@ -4,6 +4,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from .catalog_rules import is_jav_code, normalise_code_key, sql_is_local_extra
@@ -37,6 +38,12 @@ class LedgerDatabase:
         self.media_roots = tuple(media_roots)
         self.write_lock = threading.Lock()
         self.after_commit = lambda: None
+        self._sql_rules = (
+            ('is_jav_code', 1, lru_cache(maxsize=32768)(is_jav_code)),
+            ('normalise_code_key', 1, lru_cache(maxsize=32768)(normalise_code_key)),
+            ('infer_region', 2, lru_cache(maxsize=32768)(infer_region)),
+            ('peach_normalize', 1, lru_cache(maxsize=32768)(normalize_entity_name)),
+        )
 
     def connect(self, *, write: bool = False, timeout: float = 30) -> sqlite3.Connection:
         target = (
@@ -48,21 +55,16 @@ class LedgerDatabase:
             target, timeout=timeout, check_same_thread=False, uri=not write,
         )
         connection.row_factory = sqlite3.Row
-        connection.create_function("is_jav_code", 1, is_jav_code, deterministic=True)
         roots = self.media_roots
         connection.create_function("peach_is_local_extra", 2,
             lambda name, path: sql_is_local_extra(name, path, roots), deterministic=True)
-        connection.create_function(
-            "normalise_code_key", 1, normalise_code_key, deterministic=True)
         # 产地推断要和 Python 侧同一份实现。SQL 里重写一遍前缀名单的话，账本筛出来的
         # 那批片和页面上标着的产地会从某一次改名单开始悄悄分家。
-        connection.create_function(
-            "infer_region", 2, infer_region, deterministic=True)
         # 标签归一化必须两边同一份。SQLite 自带的 lower() 只认 ASCII：西里尔、
         # 罗马数字 Ⅱ 这类字符它原样放过，而写入时用的是 Python 的 casefold，
         # 于是「隐藏这个标签」写进去的值和查询时算出的值对不上，隐藏静默失效。
-        connection.create_function(
-            "peach_normalize", 1, normalize_entity_name, deterministic=True)
+        for name, arity, function in self._sql_rules:
+            connection.create_function(name, arity, function, deterministic=True)
         return connection
 
     @contextmanager

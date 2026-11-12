@@ -102,7 +102,7 @@ def is_current(root: Path, asset_id: int, interval: int) -> bool:
     页面上则是一片取不到的图。
     """
     meta = read_meta(root, asset_id)
-    if not meta or int(meta.get("interval") or 0) != int(interval):
+    if not meta or meta.get('invalidated_by') or int(meta.get("interval") or 0) != int(interval):
         return False
     return all(sheet_path(root, asset_id, index).is_file()
                for index in range(int(meta.get("sheets") or 0)))
@@ -263,8 +263,21 @@ def generate_library(db_path: Path | str, root: Path, interval: int, *, ffmpeg: 
             save(asset_id)
             report(**state)
             continue
-        if build(ffmpeg, str(source), float(duration or 0), root, int(asset_id),
-                 interval, active=active):
+        def frame_active():
+            if not active():
+                return False
+            if guard is not None:
+                guard.check()
+            return True
+        try:
+            made = build(ffmpeg, str(source), float(duration or 0), root, int(asset_id),
+                         interval, active=frame_active)
+        except DiskSpaceDenied as exc:
+            state['done'] -= 1
+            state['stopped'] = str(exc)
+            report(**state)
+            break
+        if made:
             state["made"] += 1
             save(asset_id)
         else:

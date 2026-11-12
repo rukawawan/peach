@@ -84,9 +84,17 @@ class ParallelShardTests(unittest.TestCase):
             def checkpoint(assigned, report, normal):
                 observed.append(normal)
                 return True
-            with redirect_stdout(io.StringIO()):
-                runner.run_shards(('checks',), jobs=1, shard_count=1, plan=[['test_a.py']],
-                                  spawn=spawn, checkpoint=checkpoint)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                passed, _, _ = runner.run_shards(('checks',), jobs=1, shard_count=1, plan=[['test_a.py']],
+                                                spawn=spawn, checkpoint=checkpoint)
+            self.assertEqual(passed, success and code == 0)
+            if not passed:
+                row = next(line for line in output.getvalue().splitlines() if line.startswith('分片失败明细：'))
+                details = json.loads(row.removeprefix('分片失败明细：'))
+                self.assertEqual(details['exit_code'], code)
+                self.assertEqual(details['files'], ['test_a.py'])
+                self.assertEqual(details['reported_success'], success)
             return observed
         for success, code, expected in ((False, 1, True), (False, 15, False), (True, 1, False), (True, 0, True)):
             with self.subTest(success=success, code=code):
@@ -95,6 +103,23 @@ class ParallelShardTests(unittest.TestCase):
     def test_imported_verification_code_belongs_to_this_workspace(self):
         self.assertEqual(Path(runner.__file__).resolve().parents[1], Path(__file__).resolve().parents[1])
         self.assertEqual(Path(evidence.__file__).resolve().parents[1], Path(__file__).resolve().parents[1])
+
+    def test_a_zero_exit_with_incomplete_coverage_reports_the_missing_proof(self):
+        def spawn(command, **kwargs):
+            path = Path(command[command.index('--timings') + 1])
+            path.write_text(json.dumps({'complete': True, 'success': True, 'count': 1,
+                                        'timings': [], 'files': {}, 'results': []}), encoding='utf8')
+            return mock.Mock(returncode=0, poll=lambda: 0)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            passed, _, _ = runner.run_shards(('checks',), jobs=1, shard_count=1,
+                plan=[['test_a.py']], spawn=spawn, checkpoint=lambda *_: False)
+        self.assertFalse(passed)
+        row = next(line for line in output.getvalue().splitlines() if line.startswith('分片失败明细：'))
+        details = json.loads(row.removeprefix('分片失败明细：'))
+        self.assertEqual(details['exit_code'], 0)
+        self.assertTrue(details['reported_success'])
+        self.assertFalse(details['coverage_complete'])
 
     def test_requested_parallelism_has_no_machine_slot_ceiling(self):
         live, peak = set(), [0]
@@ -768,10 +793,12 @@ class ShardReportTests(unittest.TestCase):
                     time.sleep(.02)
                 self.assertTrue(path.exists())
                 self.assertIsNone(process.poll())
+                forced = set()
                 with redirect_stdout(io.StringIO()):
                     finished = test_shard_results.completed_processes({0: (process, None)}, Path(folder),
-                        {0: 0}, now=test_shard_results.EXIT_GRACE_SECONDS + 1)
+                        {0: 0}, now=test_shard_results.EXIT_GRACE_SECONDS + 1, forced=forced)
                 self.assertEqual(finished, [0])
+                self.assertEqual(forced, {0})
                 self.assertIsNotNone(process.poll())
             finally:
                 if process.poll() is None:
@@ -974,7 +1001,6 @@ class VerificationTests(unittest.TestCase):
         (worker / "README.zh-CN.md").write_text("Test content\n", encoding="utf-8")
         evidence.git(worker, "add", "README.md", "README.zh-CN.md")
         evidence.git(worker, "commit", "-m", "docs: test", "-m",
-                     "README-Impact: updated; 测试文档\n"
                      "Co-Authored-By: Codex (GPT-5.5) <noreply@openai.com>")
         return worker, item["branch"]
 

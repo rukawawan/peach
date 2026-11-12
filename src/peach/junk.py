@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path, PureWindowsPath
 
 from .catalog_rules import (
@@ -191,6 +191,32 @@ def _structural_junk(attachment_reason: str, attachment_reasons, row, short_ad_s
     return bool(attachment_reason or attachment_reasons or _is_short_ad(row, short_ad_seconds))
 
 
+@lru_cache(maxsize=1 << 18)
+def _windows_path(text: str) -> PureWindowsPath:
+    """账本路径的解析结果。一次评分要过十万行，每行在多处判据里各解析同一条路径好几次。
+
+    `PureWindowsPath` 不可变，按字符串缓存与当场构造等价。
+    """
+    return PureWindowsPath(text)
+
+
+@lru_cache(maxsize=1 << 18)
+def _windows_parent(text: str) -> PureWindowsPath:
+    """`_windows_path(text).parent`；`parent` 每次访问都新造一个路径对象。"""
+    return _windows_path(text).parent
+
+
+@lru_cache(maxsize=1 << 16)
+def _promo_directory_parts(parts: tuple[str, ...]) -> bool:
+    """`_promo_directory` 按目录分量缓存：同一目录下的几百个文件判的是同一组分量。"""
+    for text in parts:
+        if AD_DIR_APP.search(text) or AD_DIR_FORM.search(text):
+            return True
+        if AD_BRAND.search(text) and AD_DIR_BRAND_MEDIA.search(text):
+            return True
+    return False
+
+
 def despaced(name: str) -> str:
     """把逐字加空格的推广名（`x u u 6 2 . c o m`、`最 新 位 址 獲 取`）合回去。
 
@@ -272,13 +298,7 @@ def _promo_directory(parts) -> bool:
     三种形态：`APP` 词形（`_含羞草APP`）、促销目录名（`一键约炮`、`論壇文宣`）、
     品牌名叠加媒体词（`_草榴视频`）。只看目录分量，文件名自己是不是推广由调用方判。
     """
-    for part in parts:
-        text = str(part)
-        if AD_DIR_APP.search(text) or AD_DIR_FORM.search(text):
-            return True
-        if AD_BRAND.search(text) and AD_DIR_BRAND_MEDIA.search(text):
-            return True
-    return False
+    return _promo_directory_parts(tuple(str(part) for part in parts))
 
 
 def _scope_clause(*, asset_ids=None, roots=None):
@@ -315,21 +335,22 @@ def _junk_rows(connection, *, asset_ids=None, roots=None, short_ad_seconds=0):
 
 def _junk_file_eligible(row) -> bool:
     """资料边车、STRM指针和文件自身带番号的分卷不属于垃圾附件。"""
-    item = PureWindowsPath(row["name"] or row["path"] or "")
+    item = _windows_path(row["name"] or row["path"] or "")
     # STRM 的大小与名字描述的是链接文件，不能作为远端影片的垃圾证据。
     if item.suffix.casefold() in MEDIA_SIDECAR_SUFFIXES or item.suffix.casefold() == '.strm':
         return False
+    if not (row["medium"] == "video" and PART_MARK.search(item.stem)):
+        return True
     identity = PART_MARK.sub("", PROMO_DOMAIN.sub("", item.stem)).strip("@._- ")
-    return not (row["medium"] == "video" and PART_MARK.search(item.stem)
-                and release_code_from_filename(identity))
+    return not release_code_from_filename(identity)
 
 
 def _promo_neighbour_counts(rows) -> dict[str, int]:
     """统计同目录中缺少内容描述的推广名。"""
     counts: dict[str, int] = {}
     for row in rows:
-        name = row["name"] or PureWindowsPath(row["path"] or "").name
-        stem = PureWindowsPath(name).stem
+        name = row["name"] or _windows_path(row["path"] or "").name
+        stem = _windows_path(name).stem
         if not (PROMO_PHRASE.search(stem) or PROMO_DOMAIN.search(stem)):
             continue
         if promo_residue(stem) >= 14:
@@ -362,15 +383,17 @@ def promo_name_rules() -> tuple[dict, ...]:
 
 def _promo_name_reason(suffix: str, path: str, size: int) -> str:
     """命中词库里推广附件固定命名的理由；只够进复核队列，见 `AUTO_TRASH_SCORE`。"""
-    item = PureWindowsPath(path)
+    item = _windows_path(path)
     stem = item.stem
+    compact = None
     for rule in promo_name_rules():
         if suffix not in rule["suffixes"] or not 0 < size <= rule["max_bytes"]:
             continue
-        if rule["parent_is_name"] and item.parent.name != stem:
+        if rule["parent_is_name"] and _windows_parent(path).name != stem:
             continue
-        if (re.sub(r"\s", "", stem).casefold() in rule["names"]
-                or any(pattern.fullmatch(stem) for pattern in rule["patterns"])):
+        if compact is None:
+            compact = re.sub(r"\s", "", stem).casefold()
+        if compact in rule["names"] or any(pattern.fullmatch(stem) for pattern in rule["patterns"]):
             return rule["reason"]
     return ""
 
@@ -379,22 +402,24 @@ def _attachment_junk_reason(suffix: str, path: str, size: int) -> str:
     """区分安装附件与网页存档组件。"""
     if suffix in INSTALLER_SUFFIXES and size < 64 * 1024**2:
         return "媒体目录中的安装附件"
+    item = _windows_path(path)
+    folder = _windows_parent(path)
     if suffix in PAGE_COMPONENT_SUFFIXES and any(
-            part.casefold().endswith("_files") for part in PureWindowsPath(path).parent.parts):
+            part.casefold().endswith("_files") for part in folder.parts):
         return "网页存档的脚本或样式附件"
-    parent = PureWindowsPath(path).parent.name
+    parent = folder.name
     if (parent.casefold().endswith('_files') and PAGE_PROMO_CLAIM.search(parent)
             and AD_DOMAIN.search(parent[:-len('_files')]) and suffix in {'.gif', '.jpg', '.png'}
             and size < 2 * 1024**2
-            and (PAGE_CHROME_IMAGE.fullmatch(PureWindowsPath(path).stem)
-                 or (PureWindowsPath(path).name.casefold() == '1.gif' and size <= 4096))):
+            and (PAGE_CHROME_IMAGE.fullmatch(item.stem)
+                 or (item.name.casefold() == '1.gif' and size <= 4096))):
         return "推广网页存档的横幅、标志或导航图片"
     return ""
 
 
 def _short_attachment(row) -> bool:
     """有测量值、没有自身作品身份或分卷标记的极短视频。"""
-    stem = PureWindowsPath(row["name"] or row["path"] or "").stem
+    stem = _windows_path(row["name"] or row["path"] or "").stem
     owner = row["creator"] or ""
     return (row["medium"] == "video"
             and 0 < (row["duration"] or 0) <= SHORT_ATTACHMENT_SECONDS
@@ -563,7 +588,7 @@ def _repeated_copies(connection, *, roots=None) -> dict[tuple[str, int], int]:
 
 def _repeated_copy_reason(row, copies: dict[tuple[str, int], int]) -> str:
     """散布在多个目录的同一份小附件；带作品番号的文件与作品图名不算。"""
-    item = PureWindowsPath(row["name"] or row["path"] or "")
+    item = _windows_path(row["name"] or row["path"] or "")
     size = int(row["size"] or 0)
     count = copies.get((item.name.casefold(), size), 0)
     if (not count or (row["medium"] != "video" and size > REPEATED_COPY_MAX_BYTES)
@@ -679,8 +704,18 @@ def scored_candidates(database, *, asset_ids=None, roots=None,
     """候选按嫌疑分从高到低排序，连同用户已确认不是垃圾的 id。
 
     `short_ad_seconds` 不给时读用户设定的短视频广告规则（`short_ad_minutes`）。
+    路径与目录分量的缓存只在一次评分里有用，评完就清掉，不让十几万条路径常驻服务进程。
     """
-    short_limit = _short_ad_limit(short_ad_seconds)
+    try:
+        return _scored_candidates(database, asset_ids=asset_ids, roots=roots,
+                                  short_limit=_short_ad_limit(short_ad_seconds))
+    finally:
+        _windows_path.cache_clear()
+        _windows_parent.cache_clear()
+        _promo_directory_parts.cache_clear()
+
+
+def _scored_candidates(database, *, asset_ids, roots, short_limit) -> tuple[list[dict], frozenset[int]]:
     (rows, longer, dismissed_ids, folder_assets, folder_videos, short_attachments,
      download_attachments, copies) = _judgement_inputs(database, asset_ids=asset_ids, roots=roots,
                                                        short_ad_seconds=short_limit)
@@ -690,8 +725,8 @@ def scored_candidates(database, *, asset_ids=None, roots=None,
     for r in rows:
         d = dict(r)
         s, why = 0, []
-        name = d.get("name") or PureWindowsPath(d.get("path") or "").name
-        name_path = PureWindowsPath(name)
+        name = d.get("name") or _windows_path(d.get("path") or "").name
+        name_path = _windows_path(name)
         nm = name_path.stem
         suffix = name_path.suffix.casefold()
         d["junk_kind"] = (
@@ -738,13 +773,7 @@ def scored_candidates(database, *, asset_ids=None, roots=None,
             or (d.get("size") or 0) >= CONTENT_BYTES
             or has_sibling_original(nm, folder_videos.get(folder, frozenset()))
         )
-        decorated = (d.get("medium") != "video" and is_decorated_name(nm)
-                     and (d.get("size") or 0) <= DECORATED_MAX_BYTES)
-        brand_hit = bool(AD_BRAND.search(nm)) and bool(
-            AD_BRAND_FORM.search(nm)
-            or (d.get("medium") == "image"
-                and (d.get("size") or 0) <= BRAND_TINY_BYTES))
-        promo_dir = _promo_directory(PureWindowsPath(d.get("path") or name).parent.parts)
+        promo_dir = _promo_directory(_windows_parent(d.get("path") or name).parts)
         if promo and residue < 6 and not bundled:
             # 名字剥完只剩广告本身，这是最硬的信号。
             s += 60; why.append("整个名字都是推广语")
@@ -765,9 +794,11 @@ def scored_candidates(database, *, asset_ids=None, roots=None,
         # 这里不重复叠加。
         if (d.get("medium") != "video" and not self_evident and not page_archive
                 and suffix not in INTERNET_SHORTCUT_SUFFIXES):
-            if decorated:
+            if is_decorated_name(nm) and (d.get("size") or 0) <= DECORATED_MAX_BYTES:
                 s += 60; why.append("装饰符小图")
-            elif brand_hit:
+            elif AD_BRAND.search(nm) and (
+                    AD_BRAND_FORM.search(nm)
+                    or (d.get("medium") == "image" and (d.get("size") or 0) <= BRAND_TINY_BYTES)):
                 s += 60; why.append("推广品牌名")
             elif promo_dir:
                 s += 50; why.append("住在推广目录")

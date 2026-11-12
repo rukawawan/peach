@@ -50,8 +50,8 @@ describe('横向导航提示', () => {
       await scrollPositions(row);
       await opened.page.setViewportSize({ width: 1280, height: 844 });
       await opened.page.waitForFunction(() => {
-        const node = document.querySelector('[aria-labelledby="reviewcategories"]');
-        return node?.closest('[data-orientation]')?.getAttribute('data-orientation') === 'vertical';
+        const node = document.querySelector('[role="tablist"][aria-label="复核分类"]');
+        return node?.getAttribute('aria-orientation') === 'vertical';
       });
       assert.equal(await row.evaluate(node => getComputedStyle(node).maskImage), 'none');
       await opened.page.setViewportSize({ width: 390, height: 844 });

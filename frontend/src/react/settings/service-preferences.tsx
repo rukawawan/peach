@@ -21,8 +21,22 @@ import {
 } from '../settings-panel/settings-data';
 import { ErrorText, Help, Rows, Section, Stack, TaskCenterLink } from './section';
 import { busyProps } from './use-action';
+import { ProcessingMode } from '../library-processing/processing-effort';
 
 const THUMBNAIL_OPTIONS = [['off', '关闭'], ['precise', '每 10 秒一张'], ['coarse', '每 30 秒一张']] as const;
+
+export function TaskSpeedSettings({ receipt }: { receipt(message: string): void }) {
+  const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: ({ signal }) => fetchSettings(signal) });
+  const save = useSaveSettings();
+  const error = save.error || settings.error;
+  return <Section title="后台任务">
+    <Rows><SettingsRow label="默认处理速度" description="新任务使用此档位。运行中的任务可在活动页单独调整。">
+      <ProcessingMode value={settings.data?.taskSpeedMode || 'standard'} busy={!settings.data || save.isPending}
+        onChange={(mode) => save.mutate({ taskSpeedMode: mode }, { onSuccess: () => receipt('已保存默认处理速度') })} />
+    </SettingsRow></Rows>
+    {error ? <Stack divided><ErrorText>{errorMessage(error)}</ErrorText></Stack> : null}
+  </Section>;
+}
 
 export function VideoThumbnailRow({ epoch = 0 }: { epoch?: number }) {
   return <Section guide="timeline" title="时间轴缩略图"><VideoThumbnailControls epoch={epoch} /></Section>;

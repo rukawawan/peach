@@ -592,6 +592,48 @@ class RepeatTests(Case):
                                " VALUES(?,'新しい名前','新しい名前','manual')", (momoka,))
         self.assertEqual(planned(), [alias.followup_key(momoka)])
 
+    def test_stock_reads_every_performer_in_a_fixed_number_of_queries_and_judges_like_one_by_one(self):
+        """存量规划每分钟跑一次：查询条数不随女优人数涨，判据与逐人查的 `has_entry`、`fingerprint` 一致。"""
+        momoka = self.entity("神山ももか", "雲母そら")
+        tried = self.entity("伊吹彩", "月島舞香")
+        fc2 = self.entity("Ab")
+        unreachable = self.entity("Cd")
+        self.work(1, momoka)
+        self.work(2, tried, code="ABP-968")
+        self.work(3, fc2, code="FC2-PPV-1234567")
+        self.work(4, unreachable)
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute("INSERT INTO entity_alias(entity_id,alias,normalized_alias,source)"
+                               " VALUES(?,'深田えいみ','深田えいみ',?)", (tried, f"{alias.SOURCE}@3"))
+            connection.execute("INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id)"
+                               " VALUES(?,?,'performer','387589')", (tried, alias.MINNANO))
+        attempts = Attempts(attempts_root(self.generated))
+
+        def planned(connection, limit=10):
+            statements = []
+            connection.set_trace_callback(statements.append)
+            try:
+                keys = [item.key for item in alias.stock(connection, attempts, limit=limit)]
+            finally:
+                connection.set_trace_callback(None)
+            return sorted(keys), len(statements)
+
+        with self.database.read_connection() as connection:
+            attempts.record(alias.followup_key(tried), alias.fingerprint(connection, tried), "写入")
+            expected = sorted(alias.followup_key(entity_id) for entity_id in (momoka, tried, fc2, unreachable)
+                              if alias.has_entry(connection, entity_id)
+                              and not attempts.settled(alias.followup_key(entity_id),
+                                                       alias.fingerprint(connection, entity_id)))
+            keys, queries = planned(connection)
+        self.assertEqual(keys, expected)
+        self.assertEqual(keys, sorted([alias.followup_key(momoka), alias.followup_key(fc2)]))
+        for index in range(20):
+            self.work(100 + index, self.entity(f"追加女優{index:02d}", f"別名{index:02d}"))
+        with self.database.read_connection() as connection:
+            keys, more = planned(connection, limit=100)
+        self.assertEqual(len(keys), 22)
+        self.assertEqual(more, queries, "多出来的女优不该多出查询")
+
     def test_stock_puts_performers_without_an_avatar_first(self):
         """作品多的那位已经有头像，缺头像的那位作品少也排在前面：别名补进来，
         补头像后继才多一个名字去图库里找。

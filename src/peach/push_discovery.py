@@ -11,8 +11,12 @@
 入库逻辑，账本里也就不会出现第二种「新文件怎么变成一行」的写法。
 
 **漏发由全量扫描兜底。** 事件通道没有送达保证：服务没起来的那段时间、CloudDrive 重启、
-watchdog 的缓冲区溢出，都会静默丢事件。所以定期全量扫描一条不删，推送只是把「多久发现」
-从一轮扫描缩短到几秒。
+watchdog 的缓冲区溢出，都会静默丢事件。所以全量扫描一条不删，推送只是把「多久发现」
+从一轮扫描缩短到几秒。扫描由用户在资料处理里点「同步新增文件」或整轮处理发起，应用里没有定时
+扫描；服务没起来那段时间漏掉的事件要等下一次扫描。
+
+**收下的待办不随重启丢。** 队列里的路径（`PENDING_FILENAME`）隔至多 `JOURNAL_SECONDS` 落一次盘，
+停服时再落一次，下次启动原样放回队列、从头去抖。已经登记过的再走一遍 `ingest_path` 只是同一条 upsert。
 
 **云端路径不由本机 pathlib 解析。** CloudDrive2 给的是它自己挂载树里的 POSIX 路径
 （`/115/影视/xxx.mp4`），本机这一侧是 Windows 盘符。`Path` 在 Windows 上会把前导 `/`
@@ -44,6 +48,7 @@ from typing import Callable
 
 from .fsutil import atomic_write_text
 from .repository import in_background
+from .discovery_rules import system_path
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,17 +64,17 @@ MAX_PENDING = 4096
 #: 登记的并发上限：一个工作线程，串行调 `ingest_path`。账本是单写者，放开并发只会
 #: 把 SQLite 的写锁冲突搬到这里来。
 MAX_WORKERS = 1
+#: 待办清单落盘的最短间隔。事件风暴时每来一条就重写一遍几千条的清单不值得；进程被强行结束时
+#: 最多丢这么久之内收下的。
+JOURNAL_SECONDS = 2.0
+#: 待办清单的落点，与设置同在状态目录。
+PENDING_FILENAME = "push-discovery-pending.json"
 
 #: 下载中、转码中或编辑器留下的半成品。这些名字不该进账本，等它改成最终名字再说。
 IGNORED_SUFFIXES = frozenset({
     ".tmp", ".temp", ".part", ".partial", ".crdownload", ".download", ".downloading",
     ".!qb", ".!ut", ".aria2", ".bak", ".swp",
 })
-#: 系统与同步工具自己的落脚文件。
-IGNORED_NAMES = frozenset({
-    "desktop.ini", "thumbs.db", ".ds_store", ".localized",
-})
-
 #: CloudDrive2 那一侧要填的地址路径。页面上照着显示，两处不能各写一份。
 WEBHOOK_PATH = "/api/inbox/clouddrive"
 
@@ -92,11 +97,11 @@ class CloudPathError(ValueError):
     """云端路径映射不出账本路径。消息可以直接给人看。"""
 
 
-def ignored(name: str) -> bool:
-    """这个文件名要不要直接丢掉。"""
-    lowered = name.casefold()
-    if lowered in IGNORED_NAMES or lowered.startswith("."):
+def ignored(path: str) -> bool:
+    """系统目录、系统文件与半成品不进入登记队列。"""
+    if system_path(path):
         return True
+    lowered = PureWindowsPath(path).name.casefold()
     return os.path.splitext(lowered)[1] in IGNORED_SUFFIXES
 
 
@@ -297,6 +302,7 @@ class DiscoveryQueue:
         self, ingest: Callable[[str, str], bool], probe: Callable[[str, str], int | None], *,
         debounce: float = DEBOUNCE_SECONDS, settle: float = SETTLE_SECONDS,
         timeout: float = SETTLE_TIMEOUT_SECONDS, max_pending: int = MAX_PENDING,
+        journal: Path | None = None, journal_seconds: float = JOURNAL_SECONDS,
     ):
         self.ingest = ingest
         self.probe = probe
@@ -304,12 +310,18 @@ class DiscoveryQueue:
         self.settle = settle
         self.timeout = timeout
         self.max_pending = max_pending
+        #: 待办清单落盘的文件；`None` 时只在内存里（测试与只读端）。
+        self.journal = Path(journal) if journal is not None else None
+        self.journal_seconds = journal_seconds
         self.counters = QueueCounters()
         self._pending: dict[tuple[str, str], _Pending] = {}
         self._lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
         self._thread: threading.Thread | None = None
         self._stopping = False
+        #: 内存里的待办与上次落盘的不一样了。
+        self._dirty = False
+        self._flushed_at = float("-inf")
         self.last_path = ""
         self.last_ingested_at: float | None = None
         self.last_error = ""
@@ -330,12 +342,15 @@ class DiscoveryQueue:
                     return False
                 self._pending[key] = _Pending(location, path, now + self.debounce,
                                               first_seen=now, move_from=move_from)
+                self._dirty = True
             else:
                 # 又写了一次：静置窗口重新开始，大小也重新测。
                 entry.due = now + self.debounce
                 entry.size = None
                 if move_from:
                     entry.move_from = move_from
+            # 改名会摘掉旧路径那一条、也可能改写这一条的来处，清单都要重写。
+            self._dirty = self._dirty or move_from is not None
             self.counters.submitted += 1
             self._wake.notify()
         return True
@@ -394,7 +409,62 @@ class DiscoveryQueue:
 
     def _forget(self, entry: _Pending) -> None:
         with self._lock:
-            self._pending.pop((entry.location, entry.path), None)
+            if self._pending.pop((entry.location, entry.path), None) is not None:
+                self._dirty = True
+
+    # -- 落盘
+
+    def restore(self, now: float) -> int:
+        """把上次落盘的待办放回队列，返回放回几条。去抖与稳定判定从头来：上次记的时刻是
+        上一个进程的单调时钟，搬过来没有意义。"""
+        if self.journal is None:
+            return 0
+        try:
+            rows = json.loads(self.journal.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return 0
+        except (OSError, ValueError):
+            LOGGER.warning("推送发现的待办清单读不出来，跳过：%s", self.journal)
+            return 0
+        restored = 0
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, dict):
+                continue
+            location, path = row.get("location"), row.get("path")
+            move_from = row.get("move_from")
+            if not (isinstance(location, str) and isinstance(path, str) and location and path):
+                continue
+            restored += self.submit(location, path, now,
+                                    move_from=move_from if isinstance(move_from, str) and move_from else None)
+        return restored
+
+    def flush(self, now: float | None = None) -> None:
+        """有变化就把待办清单整份写下；队列空了就删掉文件。"""
+        if self.journal is None:
+            return
+        with self._lock:
+            if not self._dirty:
+                return
+            rows = [{"location": entry.location, "path": entry.path,
+                     **({"move_from": entry.move_from} if entry.move_from else {})}
+                    for entry in self._pending.values()]
+            self._dirty = False
+            self._flushed_at = time.monotonic() if now is None else now
+        try:
+            if rows:
+                atomic_write_text(self.journal, json.dumps(rows, ensure_ascii=False))
+            else:
+                self.journal.unlink(missing_ok=True)
+        except OSError:
+            LOGGER.warning("推送发现的待办清单写不进去：%s", self.journal, exc_info=True)
+            with self._lock:
+                self._dirty = True
+
+    def _flush_due(self, now: float) -> float | None:
+        """下一次该落盘的时刻；没有变化返回 None。调用方持锁。"""
+        if self.journal is None or not self._dirty:
+            return None
+        return self._flushed_at + self.journal_seconds
 
     # -- 工作线程
 
@@ -415,19 +485,27 @@ class DiscoveryQueue:
             self._wake.notify_all()
         thread.join(timeout=5)
         self._thread = None
+        self.flush()
 
     def _loop(self) -> None:
         while True:
             with self._wake:
                 if self._stopping:
                     return
+                now = time.monotonic()
                 due = min((entry.due for entry in self._pending.values()), default=None)
-                delay = None if due is None else max(0.0, due - time.monotonic())
+                moments = [moment for moment in (due, self._flush_due(now)) if moment is not None]
+                delay = max(0.0, min(moments) - now) if moments else None
                 if delay is None or delay > 0:
                     self._wake.wait(delay)
                 if self._stopping:
                     return
-            self.tick(time.monotonic())
+            now = time.monotonic()
+            self.tick(now)
+            with self._lock:
+                flush_at = self._flush_due(now)
+            if flush_at is not None and flush_at <= now:
+                self.flush(now)
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -622,7 +700,8 @@ class PushDiscoveryService:
         self.available = bool(available)
         self.config = self.settings.load(self.declared_roots)
         self.queue = DiscoveryQueue(
-            self._ingest, self._probe, debounce=debounce, settle=settle)
+            self._ingest, self._probe, debounce=debounce, settle=settle,
+            journal=Path(state_root) / PENDING_FILENAME)
         self.local_channel = ChannelState()
         self._observer = None
         self._lock = threading.Lock()
@@ -694,11 +773,13 @@ class PushDiscoveryService:
             LOGGER.exception("推送发现探测时长失败：%s", path)
 
     def submit(self, location: str, path: str) -> bool:
-        if ignored(PureWindowsPath(path).name):
+        if ignored(path):
             return False
         return self.queue.submit(location, path, time.monotonic())
 
     def submit_move(self, location, old, new, *, directory=False):
+        if ignored(new):
+            return
         if directory:
             from .media_folders import path_predicate
             from contextlib import closing
@@ -709,8 +790,6 @@ class PushDiscoveryService:
                 tail = PureWindowsPath(path).relative_to(PureWindowsPath(old))
                 self.submit_move(location, path, str(PureWindowsPath(new) / tail))
             return
-        if ignored(PureWindowsPath(new).name):
-            return
         self.queue.submit(location, new, time.monotonic(), move_from=old)
 
     def ingest_now(self, location: str, path: str) -> bool:
@@ -719,7 +798,7 @@ class PushDiscoveryService:
         云下载对账时用：远端已经完成、文件就在挂载目录里，推送发现那一侧却没送来通知
         （没开、没配会员，或通知丢了）。文件不在返回假。
         """
-        if ignored(PureWindowsPath(path).name):
+        if ignored(path):
             return False
         # 云下载整理完成时另有一条通知，这里落地登记不再弹。
         return self._ingest(location, path, notify=False)
@@ -765,6 +844,7 @@ class PushDiscoveryService:
         # 设置文件可能是从别处拷来的，或者密钥文件被删过：通道开着却没有密钥，webhook 就
         # 永远收不下任何请求，而页面上只写「还没有生成」，没人看得出该点哪里。开机补一份。
         self._ensure_secret()
+        self.queue.restore(time.monotonic())
         self.queue.start()
         self._start_local()
 

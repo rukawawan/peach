@@ -45,7 +45,7 @@ export function guideEntry(step: GuideStep): GuideEntry | undefined {
     return sidebar('首页');
   }
   if (['/review', '/quality-goals', '/trash'].includes(pathname)) {
-    return sidebar('管理', ROUTE_META['/data-cleanup']!.title!, pathname === '/trash' ? '回收站' : ROUTE_META[pathname]!.title!);
+    return sidebar('管理', ROUTE_META['/data-cleanup']!.title!, ROUTE_META[pathname]!.title!);
   }
   const meta = ROUTE_META[pathname];
   if (meta?.nav && meta.title) {

@@ -12,18 +12,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { RiCheckboxCircleLine } from '@remixicon/react';
-import { Tab, TabPanel, Tabs } from 'react-aria-components';
 
 import { Button } from '@/components/base/buttons/button';
 import type { ReviewProps } from '../bundle';
 import { apiSend, errorMessage } from '../../api';
 import { confirmModal } from '@peach/legacy/ui';
 import { queryClient } from '../query';
-import { DOTS, paginationRange } from '../../pagination';
+import { DataTableFooter } from '../components/table-controls';
 import { EmptyState } from '../components/empty-state';
 import { Note } from '../components/note';
 import { Page } from '../components/page';
-import { PillAriaTabList } from '../components/pill-aria-tab-list';
+import { SortableBoardTabs, useNavigationOrder } from '../components/navigation-order';
 import { ExternalLink } from '../settings/section';
 import { AutoLandingsCard } from './auto-landings-card';
 import { BulkToolbar } from './bulk-toolbar';
@@ -41,33 +40,8 @@ import {
 // 与配置页共用 BoardUI gray PillTab 样式；保留 tabpanel 与复核队列计数。
 const TAB_CLASS = 'flex cursor-pointer items-center justify-between gap-2';
 
-/** 页码。上一页／下一页在两端，页码居中，页数多时两侧折成「…」。 */
-function Pagination(
-  { page, pages, onPage }: { page: number; pages: number; onPage(page: number): void },
-) {
-  if (pages <= 1) return null;
-  return (
-    <nav aria-label="复核分页" data-pagination-layout="" className="inline-grid w-full min-w-0 items-center gap-2">
-      <Button variant="secondary" size="small" disabled={page <= 1}
-        onClick={() => onPage(page - 1)}>上一页</Button>
-      <ul className="flex min-w-0 flex-wrap items-center justify-center gap-1">
-        {paginationRange(page, pages).map((item, at) => (
-          <li key={item === DOTS ? `dots-${at}` : item}>
-            {item === DOTS
-              ? <span aria-hidden className="px-1 text-body-2-regular text-text-tertiary">{DOTS}</span>
-              : <Button variant={item === page ? 'secondary' : 'ghost'} size="small"
-                  aria-label={`第 ${item} 页`} aria-current={item === page ? 'page' : undefined}
-                  onClick={() => onPage(Number(item))}>{item}</Button>}
-          </li>
-        ))}
-      </ul>
-      <Button variant="secondary" size="small" disabled={page >= pages}
-        onClick={() => onPage(page + 1)}>下一页</Button>
-    </nav>
-  );
-}
-
 export function ReviewPage(props: ReviewProps) {
+  const categoryOrder = useNavigationOrder('review').keys.filter(isReviewCategory);
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width:900px)').matches);
   useEffect(() => {
     const query = matchMedia('(max-width:900px)');
@@ -86,6 +60,7 @@ export function ReviewPage(props: ReviewProps) {
   const [filter, setFilter] = useState('');
   const [fieldFilter, setFieldFilter] = useState('');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   /* 勾选、选中的来源值、勾上的作品样本、失败原因，身份都是 `item_key`：翻页、换分组
      之后手里还是同一批东西。它们不进地址栏——那是这一刻手里的一批，不是这一页的身份。 */
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set<string>());
@@ -136,8 +111,9 @@ export function ReviewPage(props: ReviewProps) {
     groupOptions.some(([key]) => key === groupBy) ? groupBy : 'candidates';
   const groups = useMemo(() => groupReviewRows(fieldQueue, activeGroupBy), [fieldQueue, activeGroupBy]);
   const activeFilter = groups.some((group) => group.key === filter) ? filter : '';
-  const win = useMemo(() => reviewWindow(filterReviewRows(fieldQueue, activeGroupBy, activeFilter), page),
-    [fieldQueue, activeGroupBy, activeFilter, page]);
+  const filteredRows = useMemo(() => filterReviewRows(fieldQueue, activeGroupBy, activeFilter),
+    [fieldQueue, activeGroupBy, activeFilter]);
+  const win = useMemo(() => reviewWindow(filteredRows, page, pageSize), [filteredRows, page, pageSize]);
   const pageKeys = win.rows.map((row) => row.item_key);
   const onPage = new Set(pageKeys);
   /* 这一页上一张都没有的组不画分组条：条子底下空着，读起来像加载坏了。 */
@@ -304,33 +280,24 @@ export function ReviewPage(props: ReviewProps) {
       <GenreTagList tags={genreTags} />
 
       {/* 分类目录位于正文左侧；窄屏使用正文上方的导航。 */}
-      <Tabs orientation={narrow ? 'horizontal' : 'vertical'} selectedKey={category} onSelectionChange={(key) => {
-        const next = String(key);
-        if (isReviewCategory(next)) goCategory(next);
-      }} className="flex flex-col gap-5 review-split:flex-row review-split:items-start review-split:gap-6">
+      <div className="flex flex-col gap-5 review-split:flex-row review-split:items-start review-split:gap-6">
         <div data-section-nav className="w-full min-w-0 review-split:sticky review-split:top-topbar review-split:w-review-tabs review-split:shrink-0">
           <h2 id="reviewcategories">复核分类</h2>
-          <PillAriaTabList scrollable={narrow} aria-labelledby="reviewcategories" data-section-items
-            className="flex review-split:flex-col review-split:items-stretch">
-            {REVIEW_CATEGORIES.map((key) => {
+          <SortableBoardTabs group="review" label="复核分类" value={category} onChange={goCategory}
+            orientation={narrow ? 'horizontal' : 'vertical'} panelPrefix="review" sectionItems
+            className="" itemClassName={TAB_CLASS} disabled={decide.isPending || bulk.isPending}
+            tabs={REVIEW_CATEGORIES.map((key) => {
               const count = Number(snapshot.counts[key] || 0);
-              return (
-                <Tab key={key} id={key} className={TAB_CLASS} isDisabled={decide.isPending || bulk.isPending}
-                  data-pill-selected={category === key ? '' : undefined} data-pill-variant="gray">
-                  {REVIEW_LABELS[key]}
-                  {/* 计数走独立徽标，为 0 时整枚去掉，不留一个「0」占位。 */}
-                  {count
+              return { value: key, label: REVIEW_LABELS[key], badge: count
                     ? <span className="tabular-nums text-caption-1-medium text-text-secondary">
                         {count.toLocaleString()}
                       </span>
-                    : null}
-                </Tab>
-              );
-            })}
-          </PillAriaTabList>
+                    : null };
+            })} />
         </div>
 
-        <TabPanel id={category} className="flex min-w-0 flex-1 flex-col gap-5">
+        <div role="tabpanel" id={`review-panel-${category}`} aria-labelledby={`review-tab-${category}`}
+          className="flex min-w-0 flex-1 flex-col gap-5">
             <BulkToolbar queueView={queueView} queueCounts={queueCounts} onQueueChange={goQueue} locked={locked}
               fields={fields} fieldFilter={activeField}
               onFieldFilter={(next) => { setFieldFilter(next); setFilter(''); setPage(1) }}
@@ -401,19 +368,21 @@ export function ReviewPage(props: ReviewProps) {
             <EmptyState icon={RiCheckboxCircleLine} title={`此分类没有${REVIEW_QUEUE_LABELS[queueView]}项目`}
               actions={REVIEW_CATEGORIES.some(key => key !== category && Number(snapshot.counts[key] || 0) > 0)
                 ? <Button size="small" onClick={() => {
-                    const next = REVIEW_CATEGORIES.find(key => key !== category && Number(snapshot.counts[key] || 0) > 0);
+                    const next = categoryOrder.find(key => key !== category && Number(snapshot.counts[key] || 0) > 0);
                     if (next) goCategory(next);
                   }}>查看其他分类</Button> : undefined}>
               {queueView === 'pending' ? '可切换分类查看其他待确认资料。' : `${REVIEW_QUEUE_LABELS[queueView]}的资料会保留在这里，可恢复到待处理。`}
             </EmptyState>
           )}
 
-          <Pagination page={win.page} pages={win.pages} onPage={setPage} />
+          {filteredRows.length ? <DataTableFooter label="复核" total={filteredRows.length}
+            pagination={{ pageIndex: win.page - 1, pageSize }}
+            onChange={(next) => { setPage(next.pageIndex + 1); setPageSize(next.pageSize) }} /> : null}
           {metadata && queueView === 'pending'
             ? <AutoLandingsCard locked={locked} openItem={openItem} toast={toast} />
             : null}
-        </TabPanel>
-      </Tabs>
+        </div>
+      </div>
       </div>
     </Page>
   );

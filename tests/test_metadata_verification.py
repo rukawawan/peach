@@ -434,5 +434,71 @@ class VerificationSettlementTests(unittest.TestCase):
         self.assertForHuman(key, "adr-0139-official-entity")
 
 
+class CodeMatchingScanTests(unittest.TestCase):
+    """整队列查番号走整表单遍，收下哪些行、先后顺序都与逐段 SQL 相同。"""
+
+    def setUp(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.db_path = fresh_ledger(Path(holder.name))
+        self.next_id = 100
+
+    def assets(self, *codes, medium="video", disposal=None):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as connection, connection:
+            for code in codes:
+                connection.execute(
+                    "INSERT INTO asset(id,location,path,name,medium,code,disposal) "
+                    "VALUES(?,'local',?,?,?,?,?)",
+                    (self.next_id, f"/x/{self.next_id}.mp4", f"{self.next_id}.mp4", medium, code,
+                     disposal))
+                self.next_id += 1
+
+    def both_paths(self, codes, columns="id,code"):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            scan = [tuple(row) for row in rm_auto._codes_matching(connection, codes, columns)]
+            original = rm_auto._BULK_CODE_KEYS
+            rm_auto._BULK_CODE_KEYS = 10 ** 9
+            try:
+                sql = [tuple(row) for row in rm_auto._codes_matching(connection, codes, columns)]
+            finally:
+                rm_auto._BULK_CODE_KEYS = original
+        return scan, sql
+
+    def test_scan_matches_chunked_sql_across_chunks_and_code_spellings(self):
+        # 同号异写、Tokyo-Hot 账本写法、日期式番号里 `_` 在 LIKE 里是通配符、首尾空格、
+        # 只靠精确写法命中（`ABC-1` 归一化成 `ABC-001`，宽查找不到它）、全角写法，以及
+        # 回收站与非视频的同号资产。填充番号把宽查键撑过两段。
+        self.assets("SSIS-308", "ssis308", "SSIS308", "TOKYO-HOT-N0762", "092415_001",
+                    "092415-001", " SSIS-401 ", "ABC-1", "ｓｓｉｓ-500", "FC2PPV1234567",
+                    "FC2-PPV-1234567", None, "")
+        self.assets("SSIS-308", disposal="trash")
+        self.assets("SSIS-308", medium="image")
+        filler = [f"FILL-{index:03d}" for index in range(1, 260)]
+        self.assets(*filler[::7])
+        codes = ["SSIS-308", "n0762", "092415_001", "SSIS-401", "ABC-1", "SSIS-500",
+                 "FC2-PPV-1234567", "", "  ", *filler]
+        self.assertGreater(len(filler), rm_auto._LIKE_CHUNK)
+
+        scan, sql = self.both_paths(codes)
+
+        self.assertEqual(scan, sql)
+        found = [code for _asset_id, code in scan]
+        self.assertIn("TOKYO-HOT-N0762", found)
+        self.assertIn("ABC-1", found)
+        self.assertNotIn("092415-001", found)
+        self.assertEqual(found.count("SSIS-308"), 1)
+        self.assertIn("FILL-253", found)
+
+    def test_scan_matches_sql_with_extra_columns(self):
+        self.assets("SSIS-308", "SSNI-001", "IPX-100")
+        codes = ["SSIS-308", "ssni001", *[f"MISS-{index:03d}" for index in range(30)]]
+
+        scan, sql = self.both_paths(codes, "id,code,name,path,field_owners")
+
+        self.assertEqual(scan, sql)
+        self.assertEqual([row[1] for row in scan], ["SSIS-308", "SSNI-001"])
+
+
 if __name__ == "__main__":
     unittest.main()

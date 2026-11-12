@@ -26,7 +26,7 @@ export function MediaProcessingSettings({ receipt }: { receipt(message: string):
   return (
     <Section guide="preview" title="视频预览">
       <Rows>
-        <SettingsRow label="生成视频预览" description="为本地视频生成九宫格与时间轴预览；关闭后仍按入库规则探测时长与分辨率。">
+        <SettingsRow label="生成视频预览" description="为本地视频生成九宫格与时间轴预览。">
           <Switch aria-label="生成视频预览" isSelected={!!policy.data && !policy.data.metadata_only} isDisabled={blocked}
             onChange={(value) => void action.run('save', (signal) =>
               apiSend<MediaProcessingPolicy>(MEDIA_PROCESSING_URL, { metadata_only: !value }, 'POST', signal), (saved) => {

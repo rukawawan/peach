@@ -23,6 +23,7 @@ import { useTagPagination, useTagPageBounds } from './tag-pagination';
 import { IDENTITY_ROW_CLASS } from '../../identity-filter';
 
 import { BoardTabs, type BoardTab } from '../components/board-tabs';
+import { SortableBoardTabs } from '../components/navigation-order';
 import { EmptyState } from '../components/empty-state';
 import { LibraryShortcuts } from '../library-shortcuts/shortcut-controls';
 import { AsyncText } from '../components/async-text';
@@ -44,8 +45,8 @@ import { TagManager } from './tag-manager';
    是地址。场记板归厂牌，公文包归事务所，字形各说各的那一件事。 */
 const MAKER_TABS: BoardTab<'studios' | 'agencies' | 'series'>[] = [
   { value: 'studios', label: '厂牌', symbol: 'clapperboard' },
-  { value: 'agencies', label: '事务所', symbol: 'briefcase' },
   { value: 'series', label: '系列', symbol: 'list' },
+  { value: 'agencies', label: '事务所', symbol: 'briefcase' },
 ];
 /* 本地与在线是两套词表：计数口径、类别划分和点开去哪儿都不同，所以也是页面级的 Tabs。 */
 const SCOPE_TABS: BoardTab<IndexScope>[] = [
@@ -176,7 +177,7 @@ export function IndexPage(props: IndexProps) {
   const changeLayout = (next: PeopleLayout) => { setLayout(next); props.savePreference({ layout: next }) };
 
   const tabs = kind === 'tags'
-    ? <BoardTabs tabs={SCOPE_TABS} value={scope} label="词表" onChange={(next) => {
+    ? <SortableBoardTabs group="tags" tabs={SCOPE_TABS} value={scope} label="词表" onChange={(next) => {
       setPicked(new Set());
       // 在线标签全是英文，字母表才是它的形态；切过去时顺手换上，不必再点一次。
       go({ scope: next, category: 'all', view: next === 'online' ? 'alphabet' : view });

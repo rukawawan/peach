@@ -1,4 +1,5 @@
 """任务中心服务层：互斥、CAS、租约恢复与保留条数。"""
+from contextlib import closing
 import os
 import sqlite3
 import tempfile
@@ -23,6 +24,19 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
 
 class TaskRunStoreTests(unittest.TestCase):
+    def test_pruning_a_finished_run_preserves_download_state_and_clears_its_old_link(self):
+        run = self.store.start('download-postprocess', trigger='manual')
+        self.store.finish(run.id, 'succeeded')
+        with self.database.write_transaction(notify=False) as connection:
+            connection.execute("INSERT INTO download_task(provider,source_uri,target,state,updated_at,"
+                               "postprocess_state,postprocess_run_id,postprocess_detail) "
+                               "VALUES('115','sample','/Movies','ingested','now','complete',?,'整理完成')", (run.id,))
+        self.assertEqual(self.store.prune('download-postprocess', keep=0), 1)
+        with self.database.read_connection() as connection:
+            row = connection.execute('SELECT state,postprocess_state,postprocess_run_id,postprocess_detail '
+                                     'FROM download_task').fetchone()
+            self.assertEqual(tuple(row), ('ingested', 'complete', None, '整理完成'))
+
     def test_process_identity_preserves_owners_when_creation_time_is_unknown(self):
         started = stamp(datetime.now(timezone.utc))
         with mock.patch('peach.jobs.process_creation_time', return_value=None):
@@ -58,6 +72,31 @@ class TaskRunStoreTests(unittest.TestCase):
         self.assertEqual(run.progress_total, 10)
         self.assertEqual(run.pid, os.getpid())
         self.assertEqual(self.store.get(run.id).progress_label, "准备")
+
+    def test_active_families_match_live_ids_and_each_runs_live_descendants(self):
+        # 已结束的根 → 已结束的子 → 排队的孙；根下另一条在跑的子；独立的已失败与排队各一条。
+        ids = [self.store.start("demo", trigger="manual").id for _ in range(6)]
+        root, child, grandchild, runner, failed, alone = ids
+        layout = {root: (None, "succeeded"), child: (root, "succeeded"), grandchild: (child, "pending"),
+                  runner: (root, "running"), failed: (None, "failed"), alone: (None, "pending")}
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            for run_id, (parent, status) in layout.items():
+                finished = None if status in ("pending", "running") else "2026-01-01T00:00:00Z"
+                connection.execute("UPDATE task_run SET parent_run_id=?, status=?, finished_at=? WHERE id=?",
+                                   (parent, status, finished, run_id))
+
+        families = self.store.active_families()
+
+        self.assertEqual(set(families), self.store.live_ids())
+        self.assertEqual(families[root], [(grandchild, "pending"), (runner, "running")])
+        self.assertEqual(families[child], [(grandchild, "pending")])
+        self.assertEqual(families[alone], [(alone, "pending")])
+        self.assertNotIn(failed, families)
+        for run_id, family in families.items():
+            run = self.store.get(run_id)
+            expected = ([run_id] if run.active else []) + [
+                row.id for row in self.store.active_descendants(run_id)]
+            self.assertEqual([member for member, _status in family], sorted(expected))
 
     def test_missing_empty_or_corrupt_ledgers_have_no_available_task_center(self):
         self.assertTrue(self.store.available())

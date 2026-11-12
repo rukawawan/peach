@@ -38,3 +38,12 @@ kemono / coomer 的路径里带构建产物的内容哈希（`favicon-CPB6l7kH`�
 
 rule34.xxx 的首页对我们回 403（Cloudflare），但 `/favicon.ico` 可直接取，
 所以这一条不受影响。
+
+## Iwara 只有白色字形（2026-11-07）
+
+`www.iwara.tv` 首页只声明 `<link rel="icon" href="/logo.png">`：200 `image/png`
+25,990 B `sha256:00e00534bcd4`，540×540。manifest 的 `/images/icons/icon-192.png`、
+`icon-512.png` 与 `google.com/s2/favicons?domain=iwara.tv` 同样是透明底纯白字形，
+`/favicon.ico` 等常规路径回 HTML。原样显示时浅色主题下看不见，所以
+`/source-icon?provider=iwara` 改用 `resources/site-marks/iwara.png`，来源见该目录的 `ORIGIN.md`。
+其他来源新取回的图标也经 `follow_assets.legible_icon`：透明底纯白或纯黑字形落盘前换成圆底白字。

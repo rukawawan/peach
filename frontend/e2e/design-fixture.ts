@@ -388,6 +388,7 @@ export interface CatalogFixture {
 export async function openCatalogFixture(
   browser: Browser,
   change: (payload: CatalogFixture, url: URL) => void,
+  { completeFirstPage = false }: { completeFirstPage?: boolean } = {},
 ): Promise<Visit> {
   const opened = await visit(browser, '/', DESKTOP);
   const baselines = new Map<string, CatalogFixture>();
@@ -403,7 +404,9 @@ export async function openCatalogFixture(
     const key = url.searchParams.get('orient') || '';
     let baseline = baselines.get(key);
     if (!baseline) {
-      const response = await route.fetch();
+      const fixtureUrl = new URL(url);
+      if (completeFirstPage && !fixtureUrl.searchParams.has('orient')) fixtureUrl.searchParams.set('limit', '60');
+      const response = await route.fetch({ url: fixtureUrl.href });
       baseline = await response.json() as CatalogFixture;
       baselines.set(key, baseline);
     }

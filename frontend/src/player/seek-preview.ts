@@ -1,7 +1,7 @@
 /* 进度条上方那块预览：指着哪一秒，就显示那一秒的画面和时间。详情、小窗与沉浸三处共用。
  *
  * 只认「宿主元素 + 进度比例」，不认事件：Video.js 的进度条和沉浸自绘的那条各自把指针换成比例
- * 交进来。时间轴采集铺好了接触印相就按它取格；取不到、且有快照时退回九宫格那九格，否则只报时间。
+ * 交进来。时间轴采集铺好了接触印相就按它取格；取不到、且有快照时退回九宫格那九格，没有可用图就收起预览。
  * 这里只读已经铺好的图，`/timeline` 不现抽，`/poster` 只从已有快照裁格、不读视频。 */
 import { api, fmtClock } from '@peach/legacy/core';
 
@@ -66,6 +66,13 @@ export function createSeekPreview(host: HTMLElement, item: SeekPreviewItem | nul
   const aspect = (width: number, height: number) => { frame?.style.setProperty('--seek-aspect', String(width / height)) };
   if (item?.width && item.height) aspect(item.width, item.height);
   let sheets: TimelineSheets | null = null, shown = '', indexedImage = false, cell = -1, primed = false, disposed = false;
+  let active = false, pointer = 0, span = 0;
+  const paint = () => {
+    preview.hidden = disposed || !active || !frame || frame.hidden || !image?.complete || !image.naturalWidth;
+    if (preview.hidden) return;
+    const track = host.getBoundingClientRect().width;
+    preview.style.left = `${previewCenter(pointer * track, track, preview.offsetWidth, options.inset)}px`;
+  };
   /* 九宫格一格取不到，多半是快照没了：九格同源，不再逐格去试。 */
   let posterless = item?.has_thumb !== true;
   const warm: HTMLImageElement[] = [];
@@ -86,6 +93,8 @@ export function createSeekPreview(host: HTMLElement, item: SeekPreviewItem | nul
     (api(`/api/timeline?id=${id}`) as Promise<TimelineSheets | null>).then((meta) => {
       if (disposed || !meta || !(meta.frames > 0) || !(meta.interval > 0 || meta.cues?.length)) return;
       sheets = meta; preload();
+      // 指针先停在进度条上、索引后到：按停着的位置换成拼图那一格，不等下一次移动。
+      if (active) show(pointer, span);
     }).catch(() => {});
   }
   const showSheetFrame = (seconds: number, sheet: TimelineSheets) => {
@@ -116,24 +125,28 @@ export function createSeekPreview(host: HTMLElement, item: SeekPreviewItem | nul
     image.onerror = () => {
       if (shown.startsWith('poster:')) posterless = true;
       frame.hidden = true; sheets = indexedImage ? sheets?.fallback || null : null; shown = ''; cell = -1;
+      paint();
     };
-    image.onload = () => { if (indexedImage && image.naturalWidth && image.naturalHeight) aspect(image.naturalWidth, image.naturalHeight) };
+    image.onload = () => {
+      if (indexedImage && image.naturalWidth && image.naturalHeight) aspect(image.naturalWidth, image.naturalHeight);
+      paint();
+    };
   }
+  const show = (ratio: number, duration: number) => {
+    if (!duration || disposed) { active = false; paint(); return }
+    const clamped = Math.min(1, Math.max(0, ratio)), seconds = duration * clamped;
+    active = true; pointer = clamped; span = duration;
+    label.textContent = fmtClock(seconds);
+    if (frame && !(sheets && showSheetFrame(seconds, sheets)) && !(sheets?.fallback && showSheetFrame(seconds, sheets.fallback))) {
+      showPoster(clamped);
+    }
+    // 宽度按显出来之后的实测值夹边：框宽由样式按片源比例和视口定，这里不另算一套。
+    paint();
+  };
   return {
     prime() { if (!primed) { primed = true; preload() } },
-    show(ratio, duration) {
-      if (!duration || disposed) return;
-      const clamped = Math.min(1, Math.max(0, ratio)), seconds = duration * clamped;
-      label.textContent = fmtClock(seconds);
-      if (frame && !(sheets && showSheetFrame(seconds, sheets)) && !(sheets?.fallback && showSheetFrame(seconds, sheets.fallback))) {
-        showPoster(clamped);
-      }
-      preview.hidden = false;
-      // 宽度按显出来之后的实测值夹边：框宽由样式按片源比例和视口定，这里不另算一套。
-      const track = host.getBoundingClientRect().width;
-      preview.style.left = `${previewCenter(clamped * track, track, preview.offsetWidth, options.inset)}px`;
-    },
-    hide() { preview.hidden = true },
+    show,
+    hide() { active = false; preview.hidden = true },
     dispose() { disposed = true; warm.length = 0; preview.remove() },
   };
 }

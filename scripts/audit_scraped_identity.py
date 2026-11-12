@@ -61,7 +61,7 @@ def collect(connection) -> tuple[list[dict], Counter]:
         if not any(payload.values()):
             continue
         review = str(data.get("review_item") or "").split(":", 1)[0]
-        review = code if review in {"", "asset"} else review
+        review = code if review in {"", "asset", "date-code"} else review
         tier = classify(review, payload)
         if tier is None:
             continue

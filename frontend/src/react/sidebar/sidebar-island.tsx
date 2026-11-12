@@ -34,8 +34,10 @@ import { Icon } from '../settings-panel/icon';
 import type {
   SidebarApi, SidebarChip, SidebarContent, SidebarDot, SidebarFacets, SidebarHost, SidebarProps,
 } from './sidebar-api';
-import { useCommitSidebarOrder } from './sidebar-order';
+import { useCommitNavigationOrder } from './sidebar-order';
 import { useSidebarReorder } from './use-sidebar-reorder';
+import { resetSidebarOrder } from '../../sidebar';
+import { NavigationOrderMenu } from '../components/navigation-order';
 
 /* 首页那一项的键是空串；空串写进 dataTransfer 等于没写，给它一个占位。 */
 const HOME = '__home__';
@@ -95,7 +97,7 @@ function Sidebar({ host: at, props: view, epoch }: { host: SidebarHost; props: S
 /* ── 导航 ── */
 
 function Navigation({ host: at, epoch, version }: { host: SidebarHost; epoch: number; version: number }) {
-  const commit = useCommitSidebarOrder(at.store);
+  const commit = useCommitNavigationOrder(at.store);
   const order = at.store.value.sidebarOrder;
   const byKey = new Map(at.navCatalog.map((item) => [item[0], item]));
   const items = order.map((key) => byKey.get(key)).filter((item) => item !== undefined);
@@ -134,7 +136,7 @@ function Navigation({ host: at, epoch, version }: { host: SidebarHost; epoch: nu
           <button type="button" key={key || HOME} data-nav={key} aria-pressed={pressed[index]} aria-label={label}
             data-dragging={reorder.picked?.key === key ? '' : undefined}
             aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-            style={{ '--sidebar-picked-top': reorder.picked?.key === key ? `${reorder.picked.top}px` : undefined,
+            style={{ '--sidebar-picked-top': reorder.picked?.key === key ? `${reorder.picked.offset}px` : undefined,
               '--sidebar-nudge': `${nudge.distance}px`, '--sidebar-delay': `${nudge.delay}ms` } as CSSProperties}
             onClick={() => at.navTo(key)} onDoubleClick={() => at.navToTop()} onPointerEnter={glide.hover}
             {...reorder.bindings(key)}>
@@ -145,7 +147,8 @@ function Navigation({ host: at, epoch, version }: { host: SidebarHost; epoch: nu
           </button>
         )})}
         {reorder.hint ? <span data-sidebar-drop-line="" aria-hidden="true"
-          style={{ '--sidebar-line-top': `${reorder.lineTop}px` } as CSSProperties}><span /></span> : null}
+          style={{ '--sidebar-line-top': `${reorder.linePosition}px` } as CSSProperties}><span /></span> : null}
+        <NavigationOrderMenu order={{ label: '左侧导航', keys: order, defaults: resetSidebarOrder(order), commit }} />
         <span role="status" aria-live="polite" data-sidebar-order-status="">{reorder.announcement}</span>
       </div>
       {drawer ? createPortal(<span data-sidebar-glide="" aria-hidden="true" ref={pane} />, drawer) : null}

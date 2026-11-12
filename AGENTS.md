@@ -46,7 +46,7 @@
 ## 验证与交付门槛
 
 - 测试只用当前隔离工作树的 Windows `& .\scripts\test.ps1` 或 macOS/Linux `./scripts/test.sh`。`auto` 按域选测；实际依赖、共享设施和未知影响面用 `full`；环境、登记与记录契约见 `docs/TESTING.md`。`ready` / `integrate` 拒收无有效记录的交付，禁止手工 merge 绕过入口。健康检查只用 `/healthz`。
-- 不用 `git add .`、`git add -A`、目录或 glob；逐文件暂存并核对 `git diff --cached --name-status`。实现与对应测试原子提交，署名与 README 影响按 `peach-worktree`。
+- 不用 `git add .`、`git add -A`、目录或 glob；逐文件暂存并核对 `git diff --cached --name-status`。实现与对应测试原子提交，署名按 `peach-worktree`。
 - 预览使用独立真实小样本，启动前通过 `scripts/check_ui_preview.py`；确认与普通、编辑链接按界面技能。HTTPS 验证使用项目 CA 严格校验，失败就报告原始错误与未取得的验收面。
 - 入口与技能的结构、行数、字节数、单行长度由 `scripts/check_context_budget.py` 强制；职责与清退按 `peach-context-rules`。工作树残留与公开文档中的私有信息由 `tests/test_repo_hygiene.py` 检查。
 - 文案、注释、docstring、测试名描述当前行为；检查与事故例外见 `docs/WRITING.md`。源码文本断言只减不增；行为与设计测试分工见 `docs/TESTING.md`。

@@ -2,11 +2,16 @@ import { act } from 'react';
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { LibraryCompletionPrompt, missingPreviewIds } from '../../src/react/library-processing/library-completion';
+import { LibraryCompletionPrompt, meteredPreviewIds, missingPreviewIds } from '../../src/react/library-processing/library-completion';
 import { LIBRARY_PROCESSING_KEY } from '../../src/react/library-processing/library-processing';
 import type { MediaItem } from '../../src/react/catalog-grid/types';
 import { queryClient } from '../../src/react/query';
 import { buttonNamed, click, mount, pending } from './render';
+
+vi.mock('@peach/legacy/ui', async (original) => ({
+  ...await original<typeof import('@peach/legacy/ui')>(),
+  confirmModal: (await import('../../src/ui-kit/modal')).confirmModal,
+}));
 
 notifyManager.setScheduler(notify => notify());
 afterEach(() => queryClient.clear());
@@ -17,15 +22,44 @@ const prompt = (ids = [7, 8], onComplete = vi.fn()) =>
 const menuItem = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
   .find(button => button.querySelector('span > span')?.textContent === label);
 
-it('缺图提示只选择没有可用卡面且可以补全的影片，保留来源已有图片', () => {
+it('缺图提示只选择没有可用卡面且可以补全的影片：免费网盘也能抽帧，流量保护的只补封面', () => {
   expect(missingPreviewIds([
     item(1), item(1), item(2, { has_thumb: true }), item(3, { has_local_poster: true }),
     item(4, { location: 'online' }), item(5, { disposal: 'trash' }), item(6, { medium: 'image' }),
-    item(7, { location: '115' }), item(8, { code: 'ABW-001', location: '115' }),
+    item(7, { location: '115' }), item(8, { code: 'ABW-001', location: 'pikpak', cost: 'metered' }),
+    item(13, { location: 'pikpak', cost: 'metered' }),
     item(9, { follow_thumb_url: 'https://example.test/image.jpg' }),
     item(10, { has_cover: true, cover_key: 'sample' }),
     item(11, { name: 'unknown.strm' }), item(12, { name: 'unknown.iso' }),
-  ], 'cover')).toEqual([1, 8]);
+  ], 'cover')).toEqual([1, 7, 8]);
+});
+
+it('流量保护目录里没有图的影片单独成批：在线、STRM、回收站和已有图的不算', () => {
+  expect(meteredPreviewIds([
+    item(1, { location: 'pikpak', cost: 'metered' }), item(2, { location: 'pikpak', cost: 'metered', has_thumb: true }),
+    item(3, { location: '115', cost: 'free' }), item(4, { location: 'online', cost: 'metered' }),
+    item(5, { location: 'pikpak', cost: 'metered', name: 'a.strm' }), item(6, { location: 'pikpak', cost: 'metered', disposal: 'trash' }),
+  ], 'cover')).toEqual([1]);
+});
+
+it('两批合成一条：主按钮「同步这些影片」在最右，流量保护那批先确认，再只为它们带授权补预览', async () => {
+  const posts: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') posts.push(JSON.parse(String(init.body)));
+    return { ok: true, json: async () => ({ status: 'idle' }) };
+  }));
+  const host = await mount(<QueryClientProvider client={queryClient}>
+    <LibraryCompletionPrompt assetIds={[7, 8]} meteredIds={[8, 9]} /></QueryClientProvider>);
+  expect(host.textContent).toContain('这批影片中有 3 部暂无预览，其中 2 部在流量保护目录');
+  const labels = [...host.querySelectorAll('[data-library-completion] button')].map(button => button.textContent?.trim()).filter(Boolean);
+  expect(labels.at(-1) === '同步这些影片' || labels.at(-2) === '同步这些影片', '主按钮（含下拉）排在最右').toBe(true);
+  expect(labels.indexOf('补全流量保护的 2 部')).toBeLessThan(labels.indexOf('同步这些影片'));
+
+  await click(buttonNamed('补全流量保护的 2 部', host));
+  await vi.waitFor(() => expect(document.querySelector('dialog')?.open).toBe(true));
+  expect(document.querySelector('dialog')?.textContent).toContain('这 2 部影片');
+  await click(document.querySelector('dialog [data-modal-confirm]'));
+  await vi.waitFor(() => expect(posts).toEqual([{ stage: 'previews', asset_ids: [8, 9], allow_metered: true }]));
 });
 
 it('关闭视频预览生成时保留资料同步，并禁用单独抽帧', async () => {

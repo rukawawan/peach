@@ -6,6 +6,10 @@ export const CONFIGURATION_SECTIONS = {
   diagnostics: '系统诊断',
 } as const;
 export type ConfigurationPath = `/settings/${keyof typeof CONFIGURATION_SECTIONS}`;
+/** 「应用与维护」之下的子页：升级后的修复与迁移。不进配置分区页签，从「自动修复」进入，页头画面包屑。 */
+export const REPAIR_CENTER_PATH = '/settings/maintenance/repairs' as const;
+/** 设置分区那一层的地址（`/settings/<分区>`）；分区之下的子页不算。 */
+export const isSettingsSectionPath = (path: string): boolean => /^\/settings\/[^/]+$/.test(path);
 export function configurationSection(path: string): string {
   return CONFIGURATION_SECTIONS[path.split('/')[2] as keyof typeof CONFIGURATION_SECTIONS] || CONFIGURATION_SECTIONS.library;
 }

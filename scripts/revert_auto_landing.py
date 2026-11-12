@@ -16,6 +16,8 @@
     revert_auto_landing.py --source auto:vanished-reattach --batch auto:vanished-reattach@3
     revert_auto_landing.py --source auto:want-acquired
     revert_auto_landing.py --source auto:western-artwork --batch auto:western-artwork@20261008T000000Z
+    revert_auto_landing.py --source upgrade:garbled-performers
+    revert_auto_landing.py --source upgrade:javdb-actor-records
 
 默认只列计划；`--apply` 必须同时给 `--backup`，删文件在账本行之后、同一次运行里完成。
 """
@@ -107,6 +109,15 @@ def print_plan(planned: dict) -> None:
     for rehome in planned["rehomes"]:
         print(f" - 接回 {rehome['old_asset_id']:<8} → {rehome['new_asset_id']:<8} "
               f"{rehome['name'][:40]} {rehome['batch']}")
+    for item in planned["garbled"]:
+        row = item["row"]
+        label = row.get("canonical_name") or row.get("tag") or row.get("external_id") or row.get("alias") or ""
+        print(f" - 乱码人物 {item['table']:<20} {str(row.get('asset_id') or row.get('entity_id') or row.get('id')):<8} "
+              f"{str(label)[:30]} {item['batch']}")
+    for item in planned.get("javdb_records", []):
+        what = (f"订阅源 {item['source_id']}" if item["kind"] == "feed"
+                else ("无码" if item["uncensored"] else "有码"))
+        print(f" - JavDB {item['entity_id']:<8} {item['external_id']:<10} {what} {item['batch']}")
     print(auto_landing_revert.counts(planned))
 
 

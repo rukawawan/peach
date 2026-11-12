@@ -23,6 +23,7 @@ from pathlib import Path, PureWindowsPath
 
 from .catalog_rules import is_jav_code, is_uncensored_release, normalise_code_key, part_marker
 from .jobs import ACTIVE_ASSET_SQL
+from .task_retry import transient_delay
 from .organize_templates import MAX_PATH, TemplateError, clean_filename, render, validate_template
 from .platform import (is_windows_path, location_mounts, location_roots, resolve_root, root_online,
                        translate_ledger_path, within_root)
@@ -377,6 +378,16 @@ def _update_row(connection: sqlite3.Connection, asset_id: int,
     ).rowcount
 
 
+class MoveFailure(str):
+    """保留原有原因字符串，并把可自动恢复的移动失败带回批次结果。"""
+
+    def __new__(cls, reason: str, *, retry_after: float | None):
+        value = super().__new__(cls, reason)
+        value.retryable = retry_after is not None
+        value.retry_after = retry_after
+        return value
+
+
 def _move_one(connection: sqlite3.Connection, asset_id: int,
               old_path: str, new_path: str) -> str:
     """动一个文件并同步账本；返回 `ok` 或跳过／失败原因。
@@ -393,12 +404,14 @@ def _move_one(connection: sqlite3.Connection, asset_id: int,
     local_target = _media_path(new_path)
     if not local_source.exists():
         return "源文件不存在"
-    if local_target.exists():
+    case_only = old_path.casefold() == new_path.casefold()
+    if local_target.exists() and not (
+            case_only and isinstance(local_source, Path) and local_source.samefile(local_target)):
         return SKIP_TARGET_EXISTS
     try:
         _rename(old_path, new_path)
     except OSError as error:
-        return f"改名失败：{error.strerror or error}"
+        return MoveFailure(f"改名失败：{error.strerror or error}", retry_after=transient_delay(error))
     try:
         if not _update_row(connection, asset_id, old_path, new_path):
             raise OrganizeError("数据库里这一行已经变了")
@@ -441,7 +454,8 @@ def apply_plan(connection: sqlite3.Connection, rows: Sequence[dict], *,
             old_path, new_path = str(row["current_path"]), str(row["target_path"])
             current = connection.execute('SELECT path,disposal FROM asset WHERE id=?', (int(row['asset_id']),)).fetchone()
             landed = (current is not None and current[0] == new_path
-                      and _media_path(new_path).is_file() and not _media_path(old_path).exists())
+                      and _media_path(new_path).is_file()
+                      and (old_path.casefold() == new_path.casefold() or not _media_path(old_path).exists()))
             if current is None or current[1] is not None:
                 outcome = '资产已不在馆藏，未执行整理'
             else:
@@ -451,7 +465,9 @@ def apply_plan(connection: sqlite3.Connection, rows: Sequence[dict], *,
                                 "old_path": old_path, "new_path": new_path})
             else:
                 failures.append({"asset_id": int(row["asset_id"]),
-                                 "path": old_path, "reason": outcome})
+                                 "path": old_path, "reason": outcome,
+                                 "retryable": isinstance(outcome, MoveFailure) and outcome.retryable,
+                                 "retry_after": outcome.retry_after if isinstance(outcome, MoveFailure) else None})
             save()
             if progress:
                 progress(checked=index, total=len(movable))
@@ -475,7 +491,8 @@ def rollback_batch(connection: sqlite3.Connection, log_path: Path | str, *,
         current = connection.execute('SELECT path FROM asset WHERE id=?', (int(entry['asset_id']),)).fetchone()
         landed = (current is not None and current[0] == entry['old_path']
                   and _media_path(entry['old_path']).is_file()
-                  and not _media_path(entry['new_path']).exists())
+                  and (entry['old_path'].casefold() == entry['new_path'].casefold()
+                       or not _media_path(entry['new_path']).exists()))
         outcome = 'ok' if landed else _move_one(connection, int(entry["asset_id"]),
                                                 str(entry["new_path"]), str(entry["old_path"]))
         if outcome == "ok":

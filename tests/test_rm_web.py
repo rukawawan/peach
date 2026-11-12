@@ -25,6 +25,40 @@ from support.ledger import fresh_ledger
 
 
 class WebDataTests(unittest.TestCase):
+    def test_catalog_summary_preserves_filters_without_projecting_cards(self):
+        for filters in ({}, {'loc': '115'}, {'year': '2024'}, {'year': '1900'}):
+            with self.subTest(filters=filters):
+                cards = q_items(self.contract, {**filters, 'limit': '10'})
+                summary = q_items(self.contract, {**filters, 'summary_only': '1', 'count': '0',
+                                                  'offset': '500', 'limit': '1'})
+                self.assertEqual(summary, {key: cards[key] for key in ('total', 'bytes', 'work_total')})
+                self.assertNotIn('items', summary)
+
+    def test_watch_later_rejects_an_asset_deleted_before_submission(self):
+        with self.assertRaisesRegex(ValueError, 'asset not found'):
+            rm_web.w_watch_later(self.contract, {'id': 999999})
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_purge_preserves_follow_item_and_playback_without_a_dangling_asset(self):
+        media = Path(self.tmp.name).resolve() / 'purge-follow.mp4'
+        media.write_bytes(b'temporary media')
+        with self.contract.write_transaction() as connection:
+            connection.execute('UPDATE asset SET path=? WHERE id=1', (str(media),))
+            connection.execute("INSERT INTO follow_source(id,provider,ref,label,url,created_at,updated_at) "
+                               "VALUES(901,'test','author','author','https://example.test/author','now','now')")
+            connection.execute("INSERT INTO follow_item(id,source_id,external_id,title,release_key,asset_id,"
+                               "first_seen_at,last_seen_at) VALUES(901,901,'item','item','item',1,'now','now')")
+            connection.execute("INSERT INTO follow_playback(follow_item_id,profile_id,play_count) "
+                               "VALUES(901,'local-default',3)")
+        row = self.row(1)
+        with self.contract.write_transaction() as connection:
+            web_batch.purge_assets(connection, [row])
+            self.assertIsNone(connection.execute('SELECT id FROM asset WHERE id=1').fetchone())
+            self.assertIsNone(connection.execute('SELECT asset_id FROM follow_item WHERE id=901').fetchone()[0])
+            self.assertEqual(connection.execute('SELECT play_count FROM follow_playback WHERE follow_item_id=901').fetchone()[0], 3)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
     def test_release_year_filter_and_facets_share_scope_and_keep_other_year_options(self):
         with self.contract.write_transaction() as connection:
             connection.execute("UPDATE asset SET release_date='2024-03-05' WHERE id=1")
@@ -321,6 +355,53 @@ class WebDataTests(unittest.TestCase):
                     self.assertEqual(actual[key], expected[key])
         self.assertEqual(next(row["n"] for row in actual["tagperformers"]
                               if row["k"] == "Demo performer 0"), 20)
+
+    def test_entity_shapes_bound_asset_predicate_work_with_inaccurate_statistics(self):
+        asset_count, people_count = 400, 80
+        with self.contract.write_transaction() as connection:
+            connection.executemany(
+                "INSERT INTO asset(id,location,path,name,medium,size) VALUES(?,'local',?,?,'video',1)",
+                [(1000 + i, f'R:/Media/shape-{i}.mp4', f'shape-{i}.mp4') for i in range(asset_count)])
+            connection.executemany(
+                "INSERT INTO entity(id,kind,canonical_name,normalized_name,created_at,updated_at) "
+                "VALUES(?,'performer',?,?,'2026-01-01','2026-01-01')",
+                [(2000 + i, f'Shape person {i}', f'shape person {i}') for i in range(people_count)])
+            connection.executemany(
+                "INSERT INTO asset_entity(asset_id,entity_id,role,source) VALUES(?,?,'performer','test')",
+                [(1000 + i, 2000 + (i + offset) % people_count)
+                 for i in range(asset_count) for offset in (0, 1)])
+            connection.execute('ANALYZE')
+        with self.contract.read_connection() as connection:
+            expected = web_entity._entity_shape_parts(self.contract, connection)
+        with self.contract.write_transaction() as connection:
+            if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat4'").fetchone():
+                connection.execute('DELETE FROM sqlite_stat4')
+            connection.executemany('UPDATE sqlite_stat1 SET stat=? WHERE idx=?', [
+                ('30000 1500', 'idx_asset_location'),
+                ('30000 1500 1', 'sqlite_autoindex_asset_1'),
+                ('0 0', 'idx_asset_region'),
+                ('1 1 1', 'idx_asset_disposal_id'),
+                ('30000 1', 'idx_asset_name'),
+                ('30000 2', 'idx_asset_size'),
+                ('30000 1500 1500', 'idx_asset_hash'),
+                ('90000 250 250', 'idx_asset_entity_entity_role'),
+                ('90000 10 1 1 1', 'sqlite_autoindex_asset_entity_1'),
+                ('2500 400 1', 'sqlite_autoindex_entity_1'),
+            ])
+        calls = 0
+        def counted_extra(name, path, roots):
+            nonlocal calls
+            calls += 1
+            return catalog_rules.sql_is_local_extra(name, path, roots)
+        with mock.patch('peach.repository.sql_is_local_extra', counted_extra):
+            with self.contract.read_connection() as connection:
+                actual = web_entity._entity_shape_parts(self.contract, connection)
+                self.assertEqual(actual, expected)
+                self.assertLess(calls, asset_count * 10, f'asset predicate calls: {calls}')
+                calls = 0
+                single = web_entity._entity_shape_parts(self.contract, connection, 2000)
+                self.assertEqual(single, {2000: expected[2000]})
+                self.assertLess(calls, 50, f'single-entity predicate calls: {calls}')
 
     def test_facets_ignore_unused_tag_match_and_keep_revision_invalidation(self):
         args = {"loc": "local,115", "thumb": "0", "tag_match": "all"}
@@ -1579,6 +1660,7 @@ class WebDataTests(unittest.TestCase):
             "/api/downloads", "/api/resources/search",
             "/api/wants", "/api/wants/magnets",
             "/api/jav/detail", "/api/jav/reviews", "/api/jav/resources", "/api/jav/discoveries", "/api/jav/releases",
+            "/api/jav/discoveries/metadata",
             "/api/result-updates",
             "/api/western-scrape", "/api/jasna", "/api/ai-subtitles", "/api/junk-rules",
         })
@@ -1588,7 +1670,7 @@ class WebDataTests(unittest.TestCase):
             "/api/library-processing", "/api/thumbnail-jobs", "/api/media-repair",
             "/api/media-processing",
             "/api/scraping/settings", "/api/scraping/check", "/api/scraping/check-all",
-            "/api/scraping/cover", "/api/jav/cover",
+            "/api/scraping/cover", "/api/jav/cover", "/api/jav/discoveries/metadata", "/api/jav/releases/metadata",
             "/api/scraping/amane-bridge/check", "/api/scraping/amane-bridge/rebuild",
             "/api/activity", "/api/play", "/api/feedback", "/api/watch-later",
             "/api/playlist",
@@ -2032,6 +2114,88 @@ class WebDataTests(unittest.TestCase):
         self.assertIsNone(self.row(1))
         self.assertTrue(kept.exists(), "不在回收站的媒体一个都不能碰")
         self.assertIsNotNone(self.row(2))
+
+    def test_empty_trash_moves_media_outside_the_write_lock_and_spares_rows_restored_meanwhile(self):
+        """网盘上逐个 stat、改名不占写锁；这期间被还原出回收站的，事务里复核时留下、文件放回原处。"""
+        binned = self.stage_media(1, "binned.mp4")
+        restored = self.stage_media(2, "restored.mp4")
+        rm_web.w_feedback(self.contract, {"id": 1, "kind": "dispose"})
+        rm_web.w_feedback(self.contract, {"id": 2, "kind": "dispose"})
+        quarantine = web_batch._quarantine_media
+        locked = []
+
+        def outside_lock(original, **kwargs):
+            locked.append(self.contract.database.write_lock.locked())
+            moved = quarantine(original, **kwargs)
+            if original == restored and not locked[-1]:
+                rm_web.w_feedback(self.contract, {"id": 2, "kind": "dispose"})
+            return moved
+        with mock.patch.object(web_batch, "_quarantine_media", side_effect=outside_lock):
+            result = rm_web.w_empty_trash(self.contract)
+
+        self.assertEqual(locked, [False, False])
+        self.assertEqual(result["purged"], 1)
+        self.assertEqual([item["id"] for item in result["blocked"]], [2])
+        self.assertFalse(binned.exists())
+        self.assertIsNone(self.row(1))
+        self.assertTrue(restored.is_file(), "隔离期间被还原的，文件放回原处")
+        self.assertIsNone(self.row(2)["disposal"])
+
+    def test_a_purge_cleans_only_what_the_deleted_rows_left_behind(self):
+        """删完不再把整个派生目录扫一遍：只清这几部留下的产物，别的孤儿留给资源同步那一轮。"""
+        self.stage_media(1, "binned.mp4")
+        root = Path(self.tmp.name).resolve()
+        transcodes, streams = root / "transcodes", root / "stream-segments"
+        (streams / "1" / "v").mkdir(parents=True)
+        transcodes.mkdir()
+        mine, segment, stranger = transcodes / "1-5-6.mp4", streams / "1" / "v" / "0.ts", transcodes / "999-5-6.mp4"
+        for path in (mine, segment, stranger):
+            path.write_bytes(b"cache")
+        self.contract.transcode_root, self.contract.stream_root = transcodes, streams
+        self.contract.resource_cleanup_enabled = True
+        rm_web.w_feedback(self.contract, {"id": 1, "kind": "dispose"})
+
+        result = rm_web.w_empty_trash(self.contract)
+
+        self.assertEqual((result["purged"], result["cache_removed"]), (1, 2))
+        self.assertFalse(mine.exists())
+        self.assertFalse((streams / "1").exists())
+        self.assertTrue(stranger.is_file(), "别的孤儿留给资源同步那一轮")
+
+    def test_empty_trash_withdraws_candidates_and_decisions_pinned_to_purged_assets(self):
+        # #486：删掉的资产留下的候选与决定，之后同一路径重新登记拿到新编号时就悬空了。
+        from peach.library_processing import FIELDS
+        from peach.review_csv import read_rows, write_rows
+        binned = self.stage_media(1, "binned.mp4")
+        candidates = Path(self.tmp.name).resolve() / "generated"
+        output = candidates / "library-metadata-field-candidates.csv"
+
+        def row(asset_id, field, path):
+            return {"item_key": f"asset:{asset_id}:{field}", "code": "ABC-001", "query": "ABC-001",
+                    "asset_id": asset_id, "asset_path": path, "field": field, "status": "candidate",
+                    "candidates_json": "[]"}
+        write_rows(output, FIELDS, [row(1, "title", str(binned)), row(1, "studio", str(binned)),
+                                    row(2, "title", r"B:\two.mp4"),
+                                    {**row("", "series", ""), "item_key": "code:ABC-001:series"}],
+                   fill_missing=True)
+        with self.contract.write_transaction() as connection:
+            connection.executemany(
+                "INSERT INTO review_decision(category,item_key,status,updated_at) VALUES(?,?,'skipped','now')",
+                [("metadata_fields", "asset:1:title"), ("metadata_fields", "asset:2:title"),
+                 ("metadata_fields", "asset:11:title"), ("creator_tags", "asset:1:title")])
+        contract = rm_web.WebContract(Path(self.db_path), avatar_root=self.avatars, logo_root=self.logos,
+                                      candidate_root=candidates)
+        rm_web.w_feedback(contract, {"id": 1, "kind": "dispose"})
+
+        self.assertEqual(rm_web.w_empty_trash(contract)["purged"], 1)
+
+        self.assertEqual([candidate["item_key"] for candidate in read_rows(output)],
+                         ["asset:2:title", "code:ABC-001:series"])
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT category,item_key FROM review_decision ORDER BY category,item_key").fetchall(),
+                [("creator_tags", "asset:1:title"), ("metadata_fields", "asset:11:title"),
+                 ("metadata_fields", "asset:2:title")])
 
     def test_rclone_mount_detection_uses_the_most_specific_mountpoint(self):
         mountinfo = Path(self.tmp.name) / "mountinfo"

@@ -22,6 +22,7 @@ import { CollectionSummary } from '../components/collection-summary';
 import { useOverlayScrollbar } from '../components/overlay-scrollbar';
 import { useViewGlide } from '../components/use-view-glide';
 import { junkCount, type JunkPage, type JunkRoute } from './junk-queue';
+import { t } from '../../i18n';
 
 function Icon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><use href={`#i-${name}`} /></svg>;
@@ -75,7 +76,7 @@ export function JunkCount({ route, page, failed, onNavigate }: {
     <Button size="small" variant="danger" onClick={() => bulk('dispose')}>{`全部移入回收站（${total.toLocaleString()}）`}</Button>
   </> : null;
   /* 读不到就不再转圈：失败的原因写在网格那一格里，这里只说「没有数」。 */
-  const figure = page ? `${Number(page.total || 0).toLocaleString()} 个` : failed ? '—' : '';
+  const figure = page ? t('cleanup:junk.countFigure', { count: Number(page.total || 0) }) : failed ? '—' : '';
   return (
     <div data-junk-count="">
       <div data-junk-summary="" aria-live="polite">
@@ -83,7 +84,7 @@ export function JunkCount({ route, page, failed, onNavigate }: {
       </div>
       <div data-junk-filters-frame="" data-filter-glass="" data-glass-pane="">
         <span ref={pane} data-view-glide="" aria-hidden="true" />
-        <nav ref={nav} data-junk-filters="" aria-label="垃圾文件分类" onClick={click} onPointerLeave={glide.leave}>
+        <nav ref={nav} data-junk-filters="" aria-label={t('cleanup:junk.categories')} onClick={click} onPointerLeave={glide.leave}>
           {JUNK_KIND_OPTIONS.map(([key, label, glyph]) => (
             <a key={key || 'all'} href={junkPath(key, view)} data-junk-kind-link={key}
               aria-current={key === kind ? 'page' : undefined} onPointerEnter={glide.hover}>

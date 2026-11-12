@@ -37,8 +37,8 @@ JAVDB = SiteConfig(name="javdb", label="javdb", provider="javdb-page",
 #: 冷却按这个名字记）；解析器名另起，候选与账本证据分得清是哪一种取法。接口自己的间隔、冷却与
 #: 请求预算在 `peach.javdb_public`，这一问不经会话的传输。
 JAVDB_PUBLIC = dataclasses.replace(JAVDB, provider="javdb-api")
-#: 一问的请求上限：签名常量两次（一天一次）、搜索、详情，再留两次给换接口主机（ADR-0148）。
-PUBLIC_REQUESTS = 6
+#: 一问的请求上限：签名常量两次（一天一次）、搜索、最多两份发行详情，再留两次换接口主机。
+PUBLIC_REQUESTS = 7
 #: 会话没有动作截止时刻时，一问最多等这么久。
 PUBLIC_SECONDS = 90.0
 

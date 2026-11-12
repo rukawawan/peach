@@ -2,6 +2,7 @@
 
 合并不可逆，所以关系迁移、别名保留和唯一约束冲突的处理都要有回归。
 """
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -157,6 +158,21 @@ class EntityMergeTests(unittest.TestCase):
                 "SELECT count(*) FROM asset_entity WHERE asset_id=3 AND entity_id=10 "
                 "AND source='javinizer:r18dev:performer'").fetchone()[0], 1,
             "引用写不进去不影响这条出演关系本身")
+
+    def test_a_rescraped_credit_keeps_the_recorded_javdb_record_kind(self):
+        """作品页署名带不出有碼还是無碼，重采时换掉资料也得留着之前记下的那项（#271）。"""
+        self.con.execute(
+            "INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id,metadata_json)"
+            " VALUES(10,'javdb','performer','bkxd','{\"source\": \"javdb\", \"uncensored\": false}')")
+        self.con.commit()
+        upsert_asset_entity(
+            self.con, kind="performer", name="橋本ありな", asset_id=1, role="performer",
+            source="javdb", external_provider="javdb", external_id="bkxd",
+            metadata={"source": "javdb", "provider_id": "NNPJ-466"})
+        self.con.commit()
+        metadata = json.loads(self.con.execute(
+            "SELECT metadata_json FROM entity_external_ref WHERE external_id='bkxd'").fetchone()[0])
+        self.assertEqual((metadata["provider_id"], metadata["uncensored"]), ("NNPJ-466", False))
 
     def test_person_upsert_collapses_repeated_name_and_reuses_unique_alias(self):
         self.con.execute(

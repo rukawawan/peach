@@ -14,24 +14,67 @@
 """
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-__all__ = ["RETENTION", "sweep"]
+__all__ = ["RETENTION", "idle_process_log", "sweep"]
 
 #: 半年。
 RETENTION = timedelta(days=183)
 
 #: 切下来的段名里的标记；带它的文件不再二次切段。
 _SEGMENT_MARK = ".until-"
+#: 每个进程各一份的日志：`faulthandler` 的崩溃输出与本机事件日志（`error_reporting`）。
+_PROCESS_LOG = re.compile(r"^(?:crash|errors)-(\d+)\.log$")
+#: 只有启动记录的事件日志很小；超过这个大小一定写过别的，不必读。
+_IDLE_LIMIT = 64 * 1024
 
 
-def sweep(log_dir: Path, *, now: datetime | None = None) -> list[str]:
-    """按上面两条规则整理一个日志目录，返回做过的事（供日志与测试）。"""
+def idle_process_log(path: Path) -> bool:
+    """进程日志里没有任何问题：崩溃日志是空的，事件日志只有启动时那条 `entry` 记录。"""
+    try:
+        size = path.stat().st_size
+        if size == 0 or path.name.startswith("crash-"):
+            return size == 0
+        if size > _IDLE_LIMIT:
+            return False
+        lines = path.read_text(encoding="utf-8").splitlines()
+        return all(json.loads(line).get("stage") == "entry" for line in lines if line.strip())
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _pid_alive(pid: int) -> bool:
+    import psutil
+    return psutil.pid_exists(pid)
+
+
+def _remove_idle_process_logs(log_dir: Path, alive) -> list[str]:
+    """已结束进程留下的空进程日志直接收走（#485）。短命子进程各留一个空崩溃日志和只有启动
+    记录的事件日志，几天就是几万个文件；还在运行的进程的日志一律保留。"""
+    removed, actions = 0, []
+    for path in log_dir.glob("*.log"):
+        process = _PROCESS_LOG.match(path.name)
+        if not process or not idle_process_log(path) or alive(int(process.group(1))):
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as error:
+            actions.append(f"kept {path.name}: {error.strerror or error}")
+    if removed:
+        actions.append(f"removed {removed} idle process logs")
+    return actions
+
+
+def sweep(log_dir: Path, *, now: datetime | None = None, alive=_pid_alive) -> list[str]:
+    """按上面两条规则整理一个日志目录，返回做过的事（供日志与测试）。先收走空进程日志。"""
     if not log_dir.is_dir():
         return []
     moment = now or datetime.now()
-    actions: list[str] = []
+    actions: list[str] = _remove_idle_process_logs(log_dir, alive)
     for path in sorted(log_dir.glob("*.log")):
         try:
             modified = datetime.fromtimestamp(path.stat().st_mtime)

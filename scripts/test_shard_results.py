@@ -32,8 +32,9 @@ def read_report(path: Path) -> dict:
                    for name, seconds in report.get('files', {}).items()):
             raise ValueError('文件耗时无效')
         return report
-    except (OSError, ValueError, UnicodeError, RecursionError):
-        return {'success': False, 'count': 0, 'timings': [], 'files': {}, 'results': []}
+    except (OSError, ValueError, UnicodeError, RecursionError) as error:
+        return {'success': False, 'count': 0, 'timings': [], 'files': {}, 'results': [],
+                'report_error': f'{type(error).__name__}: {error}'}
 
 
 def duration(value):
@@ -65,7 +66,8 @@ def stop_process_tree(process):
     process.wait(timeout=15)
 
 
-def completed_processes(running, folder: Path, completed_at: dict, *, now: float) -> list[int]:
+def completed_processes(running, folder: Path, completed_at: dict, *, now: float,
+                        forced: set | None = None) -> list[int]:
     finished = []
     for index, (process, _) in running.items():
         if process.poll() is not None:
@@ -75,6 +77,8 @@ def completed_processes(running, folder: Path, completed_at: dict, *, now: float
         if report.get('complete') is True:
             completed_at.setdefault(index, now)
             if now - completed_at[index] >= EXIT_GRACE_SECONDS:
+                if forced is not None:
+                    forced.add(index)
                 print(f'分片 {index + 1} 已写出完成报告，正在回收其未退出的进程。', flush=True)
                 stop_process_tree(process)
                 finished.append(index)

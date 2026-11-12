@@ -16,6 +16,7 @@ RELEASES_URL = "https://github.com/peach-mitao/peach/releases"
 API_URL = "https://api.github.com/repos/peach-mitao/peach/releases?per_page=100"
 DOWNLOADS_BASE = "https://downloads.peach.video"
 DOWNLOADS_API = DOWNLOADS_BASE + "/releases.json"
+LISTING_RULE = 'source-aware-v1'
 
 
 def download_sources(url: str) -> tuple[str, ...]:
@@ -148,11 +149,15 @@ def check(*, transport=None, system: str | None = None, machine: str | None = No
     client = transport or HttpxTransport()
     try:
         releases = []
+        github_releases = []
         obtained = False
         for endpoint, rows in _listings(client):
             obtained = True
             try:
-                releases.extend(_release_candidates(rows, endpoint, system, machine))
+                candidates = _release_candidates(rows, endpoint, system, machine)
+                releases.extend(candidates)
+                if endpoint == API_URL:
+                    github_releases = candidates
             except (ValueError, TypeError):
                 continue
         if not releases:
@@ -162,6 +167,9 @@ def check(*, transport=None, system: str | None = None, machine: str | None = No
         current = _version(result["current_version"])
         if current is None:
             raise ValueError("current version required")
+        if version <= current and not github_releases:
+            return dict(result, state="error",
+                        message="GitHub 版本信息未取得，镜像清单可能过期，请重试。")
         state = "available" if version > current else "ahead" if version < current else "current"
         message = {"available": "有新版本可下载。", "ahead": "当前版本高于已发布测试版。", "current": "已是最新测试版。"}[state]
         if distribution.docker():

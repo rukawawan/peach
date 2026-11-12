@@ -17,6 +17,7 @@ import time
 import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from .catalog_rules import (
@@ -75,6 +76,56 @@ _MULTI_VALUE_ROLES = {"performers": "performer", "tags": "tag"}
 
 #: `_codes_matching` 一条查询里最多带几个宽查键；SQLite 表达式树深度上限是 1000。
 _LIKE_CHUNK = 200
+#: 宽查键多于这个数时，`_codes_matching` 把资产表只读一遍，在 Python 里按同一判据筛。
+#: 逐段查询每段都扫整表、每行再比一段的 LIKE：真实馆藏（1.8 万视频、复核队列 3 千多个番号）
+#: 上一次整队列刷新要扫十几遍、做几千万次 LIKE。单条候选只带一两个键，仍走 SQL。
+_BULK_CODE_KEYS = 16
+_ASCII_UPPER = str.maketrans("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+def _sql_upper(text: str) -> str:
+    """SQLite 内置 `upper()` 只转 ASCII 字母，Python 的 `str.upper` 还会转其他文字。"""
+    return text.translate(_ASCII_UPPER)
+
+
+def _like_contains(key: str):
+    """`upper(code) LIKE '%'||key||'%'` 的 Python 判据：`_` 配任一字符，`%` 配任意一串。"""
+    if "_" not in key and "%" not in key:
+        return lambda text: key in text
+    pattern = re.compile("".join(
+        "." if char == "_" else ".*" if char == "%" else re.escape(char) for char in key), re.S)
+    return lambda text: pattern.search(text) is not None
+
+
+def _codes_matching_scan(connection, wanted: list[str], exact: set[str], keys: list[str],
+                         columns: str) -> list:
+    """`_codes_matching` 的整表单遍版：每行收下与否、收下的先后，都与逐段查询相同。
+
+    逐段查询里一行要过两道：SQL 的粗筛（精确写法或该段任一宽查键作子串），再按归一化
+    键落在该段。这里先算归一化键排除绝大多数行，只对剩下的行复核它那一段的粗筛。
+    """
+    sql_exact = {_sql_upper(code) for code in wanted}
+    chunk_of = {key: index // _LIKE_CHUNK for index, key in enumerate(keys)}
+    chunk_tests = [[_like_contains(_sql_upper(key)) for key in keys[start:start + _LIKE_CHUNK]]
+                   for start in range(0, max(len(keys), 1), _LIKE_CHUNK)]
+
+    def passes(text: str, chunk: int) -> bool:
+        return (_sql_upper(text.strip(" ")) in sql_exact
+                or any(test(_sql_upper(text)) for test in chunk_tests[chunk]))
+
+    found = []
+    for row in connection.execute(
+            f"SELECT {columns} FROM asset WHERE medium='video' AND disposal IS NULL "
+            f"AND code IS NOT NULL ORDER BY id"):
+        text = str(row["code"])
+        key = normalise_code_key(text)
+        chunk = chunk_of.get(key)
+        if chunk is None and not key and text.strip().upper() in exact:
+            chunk = 0
+        if chunk is not None and passes(text, chunk):
+            found.append((chunk, row))
+    # 逐段查询按段先后、段内按 id 排；同段内这里本来就是 id 序。
+    return [row for _chunk, row in sorted(found, key=lambda item: item[0])]
 
 
 def _codes_matching(connection, codes: list[str], columns: str) -> list:
@@ -99,6 +150,8 @@ def _codes_matching(connection, codes: list[str], columns: str) -> list:
         return []
     exact = {code.upper() for code in wanted}
     keys = sorted({normalise_code_key(code) for code in wanted} - {""})
+    if len(keys) > _BULK_CODE_KEYS:
+        return _codes_matching_scan(connection, wanted, exact, keys, columns)
     marks = ",".join(["upper(?)"] * len(wanted))
     found = []
     # 每一行只在它的归一化键所在那一段收下，精确写法每段都查，也不会重复收。
@@ -674,13 +727,22 @@ def _candidate_identifies_code(code: str, candidate: dict) -> bool:
 
 
 def _parsed_candidates(row: dict) -> list[dict]:
-    """一行 `candidates_json` 里形状成立的候选，不做任何取舍。"""
+    """一行 `candidates_json` 里形状成立的候选，不做任何取舍。
+
+    候选字典按 JSON 原文缓存、各次调用共用：读的人只取值或另拼新字典，不在原地改。
+    """
+    return list(_candidates_from_json(str(row.get("candidates_json") or "[]")))
+
+
+#: 复核页每次重算都要把三万多行的 `candidates_json` 各解析一两遍；候选文件不换，原文就不变。
+@lru_cache(maxsize=65536)
+def _candidates_from_json(text: str) -> tuple[dict, ...]:
     try:
-        parsed = json.loads(str(row.get("candidates_json") or "[]"))
+        parsed = json.loads(text)
     except (TypeError, ValueError):
-        return []
-    return [candidate for candidate in parsed if isinstance(candidate, dict)
-            and str(candidate.get("candidate_key") or "").strip()]
+        return ()
+    return tuple(candidate for candidate in parsed if isinstance(candidate, dict)
+                 and str(candidate.get("candidate_key") or "").strip())
 
 
 #: FC2 番号，带不带分段后缀都算：`FC2-PPV-3312576-1` 也是同一个平台上卖的。
@@ -708,14 +770,15 @@ def _fc2_seller_as_label(field: str, code: str, candidate: dict) -> dict:
     return {**platform, "label": str(candidate.get("label") or "").strip() or seller}
 
 
-def _row_candidates(row: dict, decided) -> list[dict]:
+def _row_candidates(row: dict, decided, *, identifies=None) -> list[dict]:
     """把一行的 `candidates_json` 解析成候选列表：折叠 genre 决定、FC2 卖家改记 label、
     剔掉番号对不上的。"""
     field = str(row.get("field") or "").strip()
     code = str(row.get("code") or "").strip()
+    identifies = identifies or _candidate_identifies_code
     return [_fc2_seller_as_label(field, code, _fold_genre_decisions(field, candidate, decided))
             for candidate in _parsed_candidates(row)
-            if _candidate_identifies_code(code, candidate) and candidate_text_is_valid(candidate)]
+            if identifies(code, candidate) and candidate_text_is_valid(candidate)]
 
 
 def _auto_apply_rule(candidate: dict, agreed: int) -> str:
@@ -788,11 +851,13 @@ def _evidence_candidates(row: dict, field: str = "") -> list[dict]:
 
     黑名单（ADR-0038）排在最前面，和 amane 的 `field_blacklist` 同一个位置：被拉黑的
     来源在这个字段上连候选都不算，所以也不会因为「只剩它一家」而被采信。
+    身份尚未确认的候选保留供人工处理，不参与自动补空（ADR-0150）。
     """
     return [c for c in row.get("candidates") or []
             if (str(c.get("source") or "").strip() in SOURCE_SPECS
                 or str(c.get("source") or "").strip() == LOCAL_NFO_SOURCE)
             and not blacklisted(field, str(c.get("source") or "").strip())
+            and not c.get('requires_identity_review')
             and (str(c.get('source') or '').strip() != 'javdb' or current_javdb_candidate(c))
             and candidate_text_is_valid(c)
             and _original_title_candidate(field, c, str(row.get('code') or ''))]
@@ -1138,19 +1203,55 @@ def _pinned_asset_id(connection, group: dict) -> int | None:
     的文件改指回原行（ADR-0131），编号不变，候选件里记的还是旧路径——处理任务重出这一
     行时沿用旧行，路径也不跟着换。2026-11-04 真实账本里 697 行是这样，按路径认的话谁批准
     都写不进去。番号也对不上，就当是别的片占了这个编号。
+
+    编号认不到时按记下的路径找：永久删除后同一个文件被扫描重新登记，拿到的是新编号（#486）。
+    路径恰好对上一条在库视频的才是它；候选件不记 `location`，对上多条就不认。
     """
-    asset_id = str(group.get("asset_id") or "").strip()
-    if not asset_id.isdigit():
-        return None
-    found = connection.execute(
-        "SELECT path,code FROM asset WHERE id=? AND medium='video' AND disposal IS NULL",
-        (int(asset_id),)).fetchone()
-    if found is None:
-        return None
-    if found[0] == group.get("asset_path"):
-        return int(asset_id)
-    code = normalise_code_key(str(group.get("code") or ""))
-    return int(asset_id) if code and normalise_code_key(str(found[1] or "")) == code else None
+    return pinned_asset_ids(connection, [group])[0]
+
+
+def pinned_asset_ids(connection, groups: list[dict]) -> list[int | None]:
+    """`_pinned_asset_id` 的整批版，按顺序给出每一行指的编号。
+
+    复核队列一次判几万行，逐行查编号再逐行扫路径（`path` 没有单列索引）要一两秒；这里按
+    编号、按路径各查一趟。
+    """
+    def chunks(values):
+        values = sorted(values)
+        for offset in range(0, len(values), 900):
+            batch = values[offset:offset + 900]
+            yield batch, ",".join("?" * len(batch))
+
+    raws = [str(group.get("asset_id") or "").strip() for group in groups]
+    found = {}
+    for batch, marks in chunks({int(raw) for raw in raws if raw.isdigit()}):
+        for asset_id, path, code in connection.execute(
+                f"SELECT id,path,code FROM asset WHERE medium='video' AND disposal IS NULL AND id IN ({marks})",
+                batch):
+            found[int(asset_id)] = (path, code)
+    result: list[int | None] = []
+    lost: dict[int, str] = {}
+    for index, (group, raw) in enumerate(zip(groups, raws)):
+        result.append(None)
+        if not raw.isdigit():
+            continue
+        hit = found.get(int(raw))
+        code = normalise_code_key(str(group.get("code") or ""))
+        if hit is not None and (hit[0] == group.get("asset_path")
+                                or (code and normalise_code_key(str(hit[1] or "")) == code)):
+            result[index] = int(raw)
+        elif group.get("asset_path"):
+            lost[index] = str(group["asset_path"])
+    at_path: dict[str, list[int]] = defaultdict(list)
+    for batch, marks in chunks(set(lost.values())):
+        for asset_id, path in connection.execute(
+                f"SELECT id,path FROM asset WHERE medium='video' AND disposal IS NULL AND path IN ({marks})",
+                batch):
+            at_path[path].append(int(asset_id))
+    for index, path in lost.items():
+        if len(at_path[path]) == 1:
+            result[index] = at_path[path][0]
+    return result
 
 
 def verification_outcome(connection, row: dict, *, assets=None) -> Verification | None:

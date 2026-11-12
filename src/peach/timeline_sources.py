@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -53,15 +54,15 @@ def _text(path: Path) -> str:
 
 
 def _local(base: Path, name: str, root: Path) -> Path:
-    """只接受同一视频目录内的本地引用，解析符号链接后仍须留在目录内。"""
+    """只接受同一视频目录内的本地引用。越界按 `_real` 判：其他平台解析符号链接，Windows 按词法。"""
     url = urlsplit(name)
     if url.scheme or url.netloc or url.query or '\\' in name:
         raise ValueError('预览图片引用无效')
     relative = Path(unquote(url.path))
     if relative.is_absolute() or ':' in str(relative):
         raise ValueError('预览图片引用无效')
-    path = (base / relative).resolve()
-    if not path.is_relative_to(root.resolve()):
+    path = _real(base / relative)
+    if not path.is_relative_to(_real(root)):
         raise ValueError('预览图片超出视频目录')
     return path
 
@@ -355,11 +356,11 @@ def read_jellyfin(directory: Path, duration: float) -> Timeline | None:
                    key=lambda item: int(item.stem))
     if not paths or [int(item.stem) for item in paths] != list(range(len(paths))):
         return None
-    if any(not path.resolve().is_relative_to(directory.parent.parent.resolve()) for path in paths):
+    if any(not _inside(path, directory.parent.parent) for path in paths):
         return None
     interval, count, estimated = 10.0, math.ceil(duration / 10), True
     metadata = directory / 'trickplay.json'
-    if metadata.is_file() and metadata.resolve().is_relative_to(directory.parent.parent.resolve()):
+    if metadata.is_file() and _inside(metadata, directory.parent.parent):
         data = json.loads(_text(metadata))
         interval = float(data['Interval']) / 1000
         count = int(data['ThumbnailCount'])
@@ -381,36 +382,78 @@ def read_jellyfin(directory: Path, duration: float) -> Timeline | None:
     return _timeline('jellyfin', frames, estimated=estimated)
 
 
-def discover(video: Path, duration: float) -> Timeline | None:
-    """按准确文件主名配对，不通过番号或同目录唯一性猜测视频版本。"""
-    root = video.parent.resolve()
-    candidates = []
-    for suffix, reader in (('.vtt', read_vtt), ('.m3u8', read_hls), ('.mpd', read_dash)):
-        for stem in (video.stem, video.name, video.stem + '.thumbnails', video.stem + '-thumbs', video.stem + '.storyboard'):
-            candidates.append((root / (stem + suffix), reader))
+def _real(path: Path) -> Path:
+    """越界判断用的绝对路径，口径同 `media.normalized_path`：Windows 只做 `abspath`。
+
+    PikPak、115 的盘符是网络重定向器映射的，`resolve()` 要逐级问最终路径，一次就是几秒。
+    """
+    return Path(os.path.abspath(path)) if os.name == 'nt' else path.resolve()
+
+
+def _inside(path: Path, root: Path) -> bool:
+    return _real(path).is_relative_to(_real(root))
+
+
+def _listed(entries: dict, root: Path, name: str, *, directory: bool = False) -> Path | None:
+    """目录清单里认一个名字（不分大小写）。清单里的普通条目本来就在目录里，不再 stat；
+    符号链接仍按真实路径核对不出目录。"""
+    entry = entries.get(name.casefold())
+    if entry is None:
+        return None
     try:
-        for path, reader in candidates:
-            if path.is_file() and path.resolve().is_relative_to(root):
+        if not (entry.is_dir() if directory else entry.is_file()):
+            return None
+        path = root / entry.name
+        if entry.is_symlink() and not path.resolve().is_relative_to(root.resolve()):
+            return None
+    except OSError:
+        return None
+    return path
+
+
+def discover(video: Path, duration: float) -> Timeline | None:
+    """按准确文件主名配对，不通过番号或同目录唯一性猜测视频版本。
+
+    绝大多数片子旁边什么都没有，所以先把视频目录列一次，候选名字从这份清单里认（`_listed`），
+    不对十几个候选逐个 stat。
+    """
+    root = _real(video.parent)
+    try:
+        with os.scandir(root) as listing:
+            entries = {entry.name.casefold(): entry for entry in listing}
+    except OSError:
+        return None
+
+    def present(name: str, *, directory: bool = False) -> Path | None:
+        return _listed(entries, root, name, directory=directory)
+
+    try:
+        for suffix, reader in (('.vtt', read_vtt), ('.m3u8', read_hls), ('.mpd', read_dash)):
+            for stem in (video.stem, video.name, video.stem + '.thumbnails', video.stem + '-thumbs', video.stem + '.storyboard'):
+                path = present(stem + suffix)
+                if path is None:
+                    continue
                 try:
                     found = reader(path, root)
                     if found:
                         return replace(found, root=root)
                 except (OSError, ValueError, OverflowError, KeyError, TypeError, ET.ParseError, Image.DecompressionBombError):
                     continue
-        for path in sorted(root.iterdir()):
-            if path.suffix.lower() != '.bif' or not path.name.startswith(video.stem):
+        for name in sorted(entry.name for entry in entries.values()):
+            if not name.lower().endswith('.bif') or not name.startswith(video.stem):
                 continue
-            tail = path.stem[len(video.stem):]
+            tail = Path(name).stem[len(video.stem):]
             if tail and not re.fullmatch(r'-(?:\d+-\d+|sd|hd|fhd)', tail):
                 continue
-            if path.resolve().is_relative_to(root):
-                found = read_bif(path.resolve(), duration)
+            path = present(name)
+            if path is not None:
+                found = read_bif(path, duration)
                 if found:
                     return replace(found, root=root)
-        directory = root / (video.stem + '.trickplay')
-        if directory.is_dir() and directory.resolve().is_relative_to(root):
+        directory = present(video.stem + '.trickplay', directory=True)
+        if directory is not None:
             for resolution in sorted(directory.iterdir()):
-                if resolution.is_dir() and resolution.resolve().is_relative_to(root):
+                if resolution.is_dir() and _inside(resolution, root):
                     try:
                         found = read_jellyfin(resolution, duration)
                         if found:
@@ -428,7 +471,7 @@ def frame_bytes(timeline: Timeline, number: int) -> bytes | None:
         return None
     frame = timeline.frames[number]
     try:
-        if timeline.root is not None and not frame.path.resolve().is_relative_to(timeline.root):
+        if timeline.root is not None and not _inside(frame.path, timeline.root):
             return None
         if frame.bif_index is not None:
             return bif.read_frame(frame.bif_index, frame.bif_number)

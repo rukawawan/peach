@@ -7,6 +7,15 @@ export async function scrollToAnchor(hash: string, isCurrent: () => boolean): Pr
   let id: string;
   try { id = decodeURIComponent(hash.slice(1)) } catch { return }
   if (!id) return;
+  const pending = () => document.getElementById(id)?.querySelector('[data-content-transition][data-pending]');
+  if (isCurrent() && pending()) {
+    await new Promise<void>(resolve => {
+      const observer = new MutationObserver(() => {
+        if (!isCurrent() || !pending()) { observer.disconnect(); resolve() }
+      });
+      observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-pending'] });
+    });
+  }
   await document.fonts?.ready;
   await new Promise<void>(resolve => { requestAnimationFrame(() => { requestAnimationFrame(() => resolve()) }) });
   if (!isCurrent()) return;

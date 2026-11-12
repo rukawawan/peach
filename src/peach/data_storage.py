@@ -145,7 +145,7 @@ def _roots(config) -> dict[str, str]:
         (config.directory("secrets"), "accounts"),
         (config.directory("logs"), "logs"),
     ]
-    return {_key(path): category for path, category in pairs}
+    return {_key(path.resolve()): category for path, category in pairs}
 
 
 def _reclaimable(category: str, path: Path, parent_name: str) -> bool:
@@ -166,10 +166,17 @@ def measure(config, *, should_stop: Callable[[], bool] = lambda: False,
     """
     root = config.data_root
     roots = _roots(config)
-    database = _key(config.directory("database"))
+    database = _key(config.directory("database").resolve())
     totals = {key: {"bytes": 0, "files": 0, "reclaimable": 0} for key in CATEGORY_KEYS}
-    stack = [(root, "other")]
+    from . import storage_budget
+    policy = storage_budget.load_policy(config)
+    config.directory('state').mkdir(parents=True, exist_ok=True)
+    binding = storage_budget.layout(config, policy)
+    stack = [(path, roots.get(_key(path), 'other')) for path in storage_budget.data_roots(config)]
     files = size_seen = 0
+    allocated = 0
+    allocated_files = set()
+    allocated_error = ''
     reported = time.monotonic()
     while stack:
         if should_stop():
@@ -180,16 +187,23 @@ def measure(config, *, should_stop: Callable[[], bool] = lambda: False,
         folder, inherited = stack.pop()
         try:
             entries = list(os.scandir(folder))
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            allocated_error = str(error)
             continue
         in_database = _key(folder) == database
         for entry in entries:
             try:
+                if entry.is_symlink() or Path(entry.path).is_junction():
+                    continue
                 if entry.is_dir(follow_symlinks=False):
                     stack.append((Path(entry.path), roots.get(_key(Path(entry.path)), inherited)))
                     continue
-                size = entry.stat(follow_symlinks=False).st_size
-            except OSError:
+                info = storage_budget.file_stat(entry)
+                size = info.st_size
+            except OSError as error:
+                allocated_error = str(error)
                 continue
             category = inherited
             if in_database and _BACKUP_FILE.match(entry.name):
@@ -199,17 +213,34 @@ def measure(config, *, should_stop: Callable[[], bool] = lambda: False,
             bucket["files"] += 1
             files += 1
             size_seen += size
+            try:
+                if storage_budget.count_file(info, allocated_files):
+                    allocated += storage_budget.allocated_bytes(Path(entry.path), info)
+            except OSError as error:
+                allocated_error = str(error)
             if _reclaimable(category, Path(entry.path), Path(folder).name):
                 bucket["reclaimable"] += size
     live = config.directory("database") / "ledger.db"
     totals["backups"]["reclaimable"] = sum(
         _backup_plan(live, directory).removable_bytes
         for directory in backup_directories(config))
+    try:
+        capacity = {**storage_budget.cache_usage(config), 'capacity_error': ''}
+    except (OSError, ValueError) as error:
+        capacity = {'managed_cache_bytes': None, 'external_cache_bytes': None, 'capacity_error': str(error)}
+    if storage_budget.layout(config, policy) != binding:
+        raise OSError('容量目录在统计期间发生变化，请重新统计')
+    storage_budget.record_history(config, data_bytes=allocated if not allocated_error else None,
+                                  cache_bytes=capacity['managed_cache_bytes'])
     return {
-        "root": str(root.resolve()), "measured_at": time.time(),
+        "root": str(root.resolve()), "layout": binding,
+        "measured_at": time.time(),
         "total_bytes": sum(item["bytes"] for item in totals.values()),
         "total_files": sum(item["files"] for item in totals.values()),
+        "allocated_bytes": allocated if not allocated_error else None,
+        "allocation_error": allocated_error,
         "categories": totals,
+        **capacity,
     }
 
 
@@ -218,32 +249,57 @@ def _backup_plan(live: Path, directory: Path, *, apply: bool = False) -> ledger_
     return ledger_backups.prune(live, apply=apply, keep_recent=1, min_age=timedelta(0), directory=directory)
 
 
-def _remove(path: Path) -> tuple[int, int, int]:
+def _remove(path: Path, *, allocations: list[int | None] | None = None) -> tuple[int, int, int]:
     """删一个文件或整个目录，返回 (删掉的文件数, 字节, 删不掉的文件数)。"""
     removed = size = failed = 0
+    if path.is_symlink() or path.is_junction():
+        return 0, 0, 0
     if path.is_dir() and not path.is_symlink():
-        for folder, _dirs, files in os.walk(path, topdown=False):
+        folders = []
+        for folder, dirs, files in os.walk(path):
+            dirs[:] = [name for name in dirs if not (Path(folder) / name).is_symlink()
+                       and not (Path(folder) / name).is_junction()]
+            folders.append(Path(folder))
             for name in files:
                 file = Path(folder) / name
+                if file.is_symlink():
+                    continue
                 try:
-                    length = file.stat().st_size
+                    info = file.stat()
+                    length = info.st_size
+                    allocated = _clean_allocation(file, info) if allocations is not None else None
                     file.unlink()
                 except OSError:
                     failed += 1
                     continue
                 removed += 1
                 size += length
+                if allocations is not None:
+                    allocations.append(allocated)
+        for folder in reversed(folders):
             try:
-                Path(folder).rmdir()
+                folder.rmdir()
             except OSError:
                 pass
         return removed, size, failed
     try:
-        length = path.stat().st_size
+        info = path.stat()
+        length = info.st_size
+        allocated = _clean_allocation(path, info) if allocations is not None else None
         path.unlink()
     except OSError:
         return 0, 0, 1
+    if allocations is not None:
+        allocations.append(allocated)
     return 1, length, 0
+
+
+def _clean_allocation(path, info):
+    from .storage_budget import allocated_bytes
+    try:
+        return allocated_bytes(path, info) if info.st_nlink == 1 else 0
+    except OSError:
+        return None
 
 
 def clean(config, category: str) -> dict:
@@ -261,6 +317,9 @@ def clean(config, category: str) -> dict:
                 raise ValueError(f"数据库备份未清理：{decided.refused}")
             removed += len(decided.remove) + len(decided.orphans)
             size += decided.removable_bytes
+        if removed:
+            from .storage_budget import invalidate_measurements
+            invalidate_measurements(config)
         return {"files": removed, "bytes": size, "failed": 0}
     if category == "playback":
         transcodes, segments = generated / "transcodes", generated / "stream-segments"
@@ -278,19 +337,29 @@ def clean(config, category: str) -> dict:
         if logs.is_dir():
             targets += [path for path in logs.iterdir() if path.is_file() and _ROTATED_LOG.match(path.name)]
     totals = [0, 0, 0]
+    allocations = [] if category in {'playback', 'thumbnails'} else None
     for target in targets:
-        for index, value in enumerate(_remove(target)):
+        for index, value in enumerate(_remove(target, allocations=allocations)):
             totals[index] += value
+    if allocations and all(amount is not None for amount in allocations):
+        from .storage_budget import record_history
+        record_history(config, data_bytes=None, cache_bytes=None, cleaned_bytes=sum(allocations))
+    if totals[0]:
+        from .storage_budget import invalidate_measurements
+        invalidate_measurements(config)
     return {"files": totals[0], "bytes": totals[1], "failed": totals[2]}
 
 
 def read_usage(config) -> dict | None:
-    """上次统计的结果；不是这个数据目录的（迁移前留下的）不算。"""
+    """只显示当前目录及挂载身份的统计，迁移前或无身份的旧读数失效。"""
+    from . import storage_budget
     try:
         data = json.loads((config.directory("state") / USAGE_NAME).read_text(encoding="utf-8"))
+        current = storage_budget.layout(config, storage_budget.load_policy(config))
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or data.get("root") != str(config.data_root.resolve()):
+    if (not isinstance(data, dict) or data.get("root") != str(config.data_root.resolve())
+            or data.get('layout') != current):
         return None
     return data
 
@@ -548,6 +617,7 @@ def request(config, raw: object) -> dict:
 
 def snapshot(config) -> dict:
     """设置页「存储空间」一屏的数据。"""
+    from . import storage_budget
     root = config.data_root.resolve()
     try:
         disk = shutil.disk_usage(root)
@@ -568,9 +638,14 @@ def snapshot(config) -> dict:
         "data_root": str(root),
         "free_bytes": free, "total_bytes": total,
         "system_drive": os.name == "nt" and bool(drive) and drive == system,
+        "budget": storage_budget.snapshot(config, usage=usage),
         "usage": None if usage is None else {
             "measured_at": usage.get("measured_at"), "total_bytes": usage.get("total_bytes", 0),
-            "total_files": usage.get("total_files", 0), "categories": categories},
+            "total_files": usage.get("total_files", 0), "categories": categories,
+            "allocated_bytes": usage.get('allocated_bytes'),
+            "capacity_error": usage.get('allocation_error') or usage.get('capacity_error') or '',
+            "managed_cache_bytes": usage.get('managed_cache_bytes'),
+            "external_cache_bytes": usage.get('external_cache_bytes')},
         "job": JOBS.snapshot(),
         "relocation": {"available": available, "message": message, "steps": manual_steps(),
                        "last": read_result(config)},

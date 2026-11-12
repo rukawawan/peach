@@ -12,14 +12,17 @@ import { useMutation } from '@tanstack/react-query';
 
 import { Button } from '@/components/base/buttons/button';
 import { LinkButton } from '@/components/base/buttons/link-button';
+import { Select, SelectItem } from '@/components/base/select/select';
 import { Chip } from '@/components/base/badges/chip';
 
 import { apiSend, errorMessage } from '../../api';
-import { SCAN_CARD_TEXT } from '../../management';
+import { SCAN_CARD_TEXT, scanCardSkeletonHtml } from '../../management';
 import type { LibraryProcessingProps } from '../bundle';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { IssueRow } from '../components/issue-row';
 import { Note } from '../components/note';
+import { RetryNote } from '../components/grid-reveal';
+import { SkeletonContent } from '../components/skeleton-content';
 import { StatusLabel } from '../components/status-label';
 import { useOverlayScrollbar } from '../components/overlay-scrollbar';
 import { PathLine } from '../components/path-line';
@@ -38,6 +41,20 @@ import { TrafficProgress } from './processing-traffic';
 import { ProcessingControls } from './processing-controls';
 import { downloadIssueList, exportProcessingIssues } from './issue-export';
 import { busyProps, useAction } from '../settings/use-action';
+import { SourceMark } from '../settings/section';
+import { useLibraryTints, type LibraryTint } from '../components/library-tint';
+import { useOrderedLibraries } from '../components/library-order';
+
+const ALL_LIBRARIES = { id: '', name: '所有媒体库', icon: 'database' };
+
+function LibraryLabel({ library }: { library: Pick<LibraryTint, 'id' | 'name' | 'icon'> }) {
+  return <span className="flex min-w-0 items-center gap-2">
+    <span data-library={library.id} className="inline-flex shrink-0 text-(--library-color)">
+      <SourceMark mark={library.icon} />
+    </span>
+    <span className="truncate">{library.name}</span>
+  </span>;
+}
 
 /* 中文正文写成常量：JSX 里换行的文字会在接缝处多出一个空格，中文句子里看得见。
    卡片正文与首屏骨架共用 `SCAN_CARD_TEXT`（`management.ts`）。 */
@@ -172,6 +189,12 @@ function Outcome(
 
 export function LibraryProcessingCard(props: LibraryProcessingProps) {
   const { toast, onComplete } = props;
+  const [libraryId, setLibraryId] = useState('');
+  const tints = useLibraryTints({ names: true });
+  const libraries = useOrderedLibraries([...tints.values()].filter(library => library.name), library => library.id);
+  const selectedLibrary = libraryId
+    ? tints.get(libraryId) || { id: libraryId, name: '媒体库已不存在', icon: 'database' }
+    : ALL_LIBRARIES;
   const { job, settled, forget } = useLibraryProcessingJob(props);
   const start = useMutation({
     mutationFn: (command: LibraryProcessingCommand) =>
@@ -204,6 +227,10 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
     void run({ job_id: state.job_id, retry: state.retryable_asset_ids }).catch(() => {});
   };
 
+  if (!job.data) return job.isError
+    ? <RetryNote message={errorMessage(job.error)} onRetry={() => { void job.refetch() }} />
+    : <SkeletonContent pending skeletonHtml={scanCardSkeletonHtml}>{null}</SkeletonContent>;
+
   return (
     <div className="flex flex-col gap-4">
       <Fieldset layout="stack" label="扫描与采集" footer={
@@ -214,7 +241,7 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
             ? <LinkButton href="/review" size="small" trailingIcon={RiArrowRightLine}>复核资料</LinkButton>
             : null}
           {/* 日常同步保留独立入口，原任务的定向重试只处理该任务的失败项。 */}
-          <ProcessingActions scan busy={start.isPending} occupied={processingActive(state)} metadataOnly={state?.metadata_only}
+          <ProcessingActions scan libraryId={libraryId} libraryName={libraryId ? selectedLibrary.name : undefined} busy={start.isPending} occupied={processingActive(state)} metadataOnly={state?.metadata_only}
             speedMode={state.speed_mode} pendingCount={state.new_asset_count} onRun={run} onOccupied={() => toast(busyText(state))} />
         </>
       }>
@@ -223,7 +250,7 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
             <div className="flex flex-wrap items-center gap-2">
               <FieldsetTitle>扫描与采集</FieldsetTitle>
               {state.new_asset_count ? <Chip variant="caption" color="blue">
-                <span className="tabular-nums">{state.new_asset_count.toLocaleString()} 部待补全</span>
+                <span className="tabular-nums">{libraryId ? '所有媒体库 · ' : ''}{state.new_asset_count.toLocaleString()} 部待补全</span>
               </Chip> : null}
             </div>
             {hidden && (processingActive(state) || state.status === 'failed' || job.isError)
@@ -232,6 +259,20 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
                 </Button> : null}
           </div>
           <p className="text-body-2-regular text-text-secondary">{SCAN_CARD_TEXT}</p>
+          <div className="w-full max-w-80">
+            <p id="processingLibraryLabel" className="mb-1 text-body-2-medium text-text-secondary">媒体库</p>
+            <Select aria-labelledby="processingLibraryLabel" selectedKey={libraryId || 'all'} isDisabled={start.isPending || !libraries.length}
+              renderValue={<LibraryLabel library={selectedLibrary} />}
+              onSelectionChange={key => { if (key !== null) setLibraryId(key === 'all' ? '' : String(key)) }}>
+              <SelectItem id="all" textValue="所有媒体库"><LibraryLabel library={ALL_LIBRARIES} /></SelectItem>
+              {libraries.map(library => <SelectItem id={library.id} key={library.id} textValue={library.name}>
+                <LibraryLabel library={library} />
+              </SelectItem>)}
+            </Select>
+          </div>
+          {processingActive(state) && state.library_name ? <p className="text-body-2-regular text-text-secondary">
+            当前任务媒体库：{state.library_name}
+          </p> : null}
           {state.status === 'paused' && !state.total
             ? <span className="self-start"><StatusLabel>已暂停</StatusLabel></span>
             : processingActive(state)

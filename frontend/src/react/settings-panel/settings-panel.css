@@ -38,7 +38,7 @@
 [data-settings-panel] [data-setting-group]>h3+[data-setting-row]{border-top:0}
 [data-settings-panel] [data-setting-row] b{display:block;font-size:var(--fs-md)}
 [data-settings-panel] [data-setting-row] small{display:block;color:var(--muted);margin-top:8px;line-height:1.45;overflow-wrap:anywhere}
-[data-settings-panel] [data-setting-row]:has(#performerNameLanguageSetting){align-items:start}
+[data-settings-panel] [data-setting-row]:has(#performerNameLanguageSetting,#interfaceLanguageSetting){align-items:start}
 [data-settings-panel] [data-setting-row] [class~=ui-gselect]{min-width:148px}
 [data-settings-panel] [data-setting-row][data-setting-related]{border-top:0}
 [data-settings-panel] [data-setting-group] [data-setting-row][data-setting-sort]{grid-template-columns:minmax(0,1fr);gap:12px;padding-block:14px 16px}
@@ -164,10 +164,6 @@
    看得出是两拨控件。紧凑档的图标钮加上下 1px 内边距和 1px 边框正好是 --control-h。 */
 [data-settings-panel] [data-sidebar-row]{position:relative;display:flex;align-items:center;justify-content:space-between;min-height:var(--control-h);padding:1px 5px;border:1px solid var(--line-soft);border-radius:var(--surface-radius);background:var(--surface);cursor:grab}
 [data-settings-panel] [data-sidebar-row]:active{cursor:grabbing}
-[data-settings-panel] [data-sidebar-row][data-dragging]{opacity:.42}
-[data-settings-panel] [data-sidebar-row][data-drop="before"]::before,[data-settings-panel] [data-sidebar-row][data-drop="after"]::after{content:'';position:absolute;z-index:2;left:7px;right:7px;height:2px;border-radius:var(--pill-radius);background:var(--ink)}
-[data-settings-panel] [data-sidebar-row][data-drop="before"]::before{top:-5px}
-[data-settings-panel] [data-sidebar-row][data-drop="after"]::after{bottom:-5px}
 [data-settings-panel] [data-sidebar-row]>span{display:flex;align-items:center;gap:8px}
 [data-settings-panel] [data-sidebar-row] svg{width:18px;height:18px;stroke:currentColor;fill:none}
 /* 名目前那枚字形与名字同行，随字号缩放；拖柄和右端的上移、下移键仍按键的尺寸。 */
@@ -226,7 +222,7 @@
    `--picked` 压在玻璃上面，切换时只看得见它瞬间换位置，滑动的那块从头到尾被盖住。
    文字色走 `--glass-text`：这一列站在玻璃上，跟着卡片的 `--ink` 走会在玻璃的提亮
    之后偏灰。按钮抬到玻璃之上，玻璃自己是 `z-index:0`。 */
-[data-settings-panel] [data-settings-card][data-settings-card]>[data-settings-nav]>:is(button,[data-settings-nav-caption]){position:relative;z-index:1}
+[data-settings-panel] [data-settings-card][data-settings-card]>[data-settings-nav]>:is(button,[data-settings-nav-caption]):where(:not([data-dragging])){position:relative;z-index:1}
 :is([data-settings-panel] [data-settings-card][data-settings-card]>[data-settings-nav] button,.peach-react [data-shortcuts-footer] a){color:color-mix(in srgb,var(--glass-text) 65%,transparent)}
 [data-settings-panel] [data-settings-card][data-settings-card]>[data-settings-nav] button[aria-selected=true]{background:none;box-shadow:none;color:var(--glass-text)}
 :is([data-settings-panel] [data-settings-card][data-settings-card]>[data-settings-nav] button,.peach-react [data-shortcuts-footer] a):hover{color:var(--glass-text)}

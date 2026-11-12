@@ -16,7 +16,7 @@ import { DOWNLOADS_KEY, DOWNLOADS_URL } from '../activity/downloads-panel';
 import { cardClass } from '../components/card';
 import { EmptyState, EmptyFocusButton } from '../components/empty-state';
 import { Note } from '../components/note';
-import { Pagination } from '../follow-manage/source-list';
+import { DataTableFooter } from '../components/table-controls';
 import { pageWindow } from '../follow-manage/follow-manage';
 import { ErrorLine } from '../follow-manage/source-view';
 import { Help } from '../settings/section';
@@ -95,18 +95,19 @@ function WantRow({ want, readOnly, busy, onReset, onRemove, onCloudDownload, dow
   );
 }
 
-/** 一段（待找、未发售……）：标题带这一段的总数，多于一页时分页，页码各段各记各的。 */
+/** 一段（待找、未发售……）：标题带总数，各段独立保存页码与每页数量。 */
 function WantPhase({ phase, label, rows, row }: {
   phase: string; label: string; rows: Want[]; row(want: Want): ReactNode;
 }) {
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(WANT_PAGE_SIZE);
   const [magnetFilter, setMagnetFilter] = useState('all');
   const cached = cachedMagnetStates(rows);
   const hasMagnet = (want: Want) => want.has_magnets ?? cached.get(want.code || '') ?? false;
   const available = rows.filter(hasMagnet);
   const filtered = phase !== 'searching' || magnetFilter === 'all' ? rows
     : rows.filter(want => hasMagnet(want) === (magnetFilter === 'available'));
-  const win = pageWindow(filtered.length, WANT_PAGE_SIZE, page);
+  const win = pageWindow(filtered.length, pageSize, page);
   return (
     <section aria-label={label} data-want-phase={phase} className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -126,14 +127,10 @@ function WantPhase({ phase, label, rows, row }: {
       {!filtered.length ? <EmptyState size="compact" icon={RiStarLine} title="暂无符合条件的作品"
         actions={<Button size="small" onClick={() => { setMagnetFilter('all'); setPage(1) }}>查看全部</Button>}>{null}</EmptyState> : null}
       <ul className="flex flex-col gap-4">{filtered.slice(win.start, win.end).map(row)}</ul>
-      {win.pages > 1 ? (
-        <div data-want-pager="" className="flex flex-wrap items-center justify-between gap-3">
-          <span className="text-body-2-regular tabular-nums text-text-secondary">
-            {`${(win.start + 1).toLocaleString()}–${win.end.toLocaleString()} / ${win.total.toLocaleString()} 条`}
-          </span>
-          <Pagination label={`${label}分页`} page={win.page} pages={win.pages} onPage={setPage} />
-        </div>
-      ) : null}
+      <div data-want-pager="">
+        <DataTableFooter label={label} total={win.total} pagination={{ pageIndex: win.page - 1, pageSize }}
+          onChange={next => { setPageSize(next.pageSize); setPage(next.pageIndex + 1) }} unit="条" />
+      </div>
     </section>
   );
 }

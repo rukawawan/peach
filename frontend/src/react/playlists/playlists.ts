@@ -50,7 +50,7 @@ export interface PlaylistDetail {
   source_kind: string;
   source_seed_asset_id: number | null;
   current_asset_id: number | null;
-  items: { id: number }[];
+  items: { id: number; name?: string; title?: string }[];
 }
 
 export const fetchPlaylists = (signal?: AbortSignal) => apiGet<PlaylistsData>(PLAYLISTS_URL, signal);
@@ -78,6 +78,10 @@ export const renamePlaylist = (id: number, name: string) =>
 
 export const deletePlaylist = (id: number) =>
   apiSend<{ ok: true; deleted: number }>(PLAYLIST_URL, { action: 'delete', id });
+
+export const fetchPlaylist = (id: number, signal?: AbortSignal) => apiGet<PlaylistDetail>(`${PLAYLIST_URL}?id=${id}`, signal);
+export const reorderPlaylist = (id: number, ids: number[]) =>
+  apiSend<Written>(PLAYLIST_URL, { action: 'reorder', id, asset_ids: ids });
 
 /** 删之前先把内容取回来：`delete` 连 playlist_item 一起清，删完就没有地方能问出这份列表
  *  装着哪些视频。取不到就是 null，那一次删除不给撤销。 */

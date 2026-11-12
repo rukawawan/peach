@@ -21,16 +21,10 @@ def author_mail(repo: Path) -> str:
 def check(repo: Path, message: str, *, own: bool = True) -> list[str]:
     parsed = check_readme_impact.trailers(repo, message)
     problems = co_author.problems("待提交", parsed.get("co-authored-by", []), own=own)
-    for name in ("Co-Authored-By", "README-Impact", "README-Reviewed"):
-        mentioned = sum(line.partition(":")[0].casefold() == name.casefold()
-                        for line in message.splitlines())
-        values = parsed.get(name.casefold(), [])
-        if mentioned != len(values):
-            problems.append(f"{name} 须连续放在提交消息末尾的同一块，中间不要留空行。")
-        if name == "README-Impact" and (mentioned or values):
-            problems.extend(check_readme_impact.declaration(values)[1])
-        if name == "README-Reviewed" and (mentioned or values):
-            problems.extend(check_readme_impact.reviewed_declaration(values))
+    mentioned = sum(line.partition(":")[0].casefold() == "co-authored-by"
+                    for line in message.splitlines())
+    if mentioned != len(parsed.get("co-authored-by", [])):
+        problems.append("Co-Authored-By 须连续放在提交消息末尾的同一块，中间不要留空行。")
     return problems
 
 

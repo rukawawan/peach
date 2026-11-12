@@ -18,7 +18,7 @@ import { Note } from '../components/note';
 import { CoverQueue } from '../components/cover-queue';
 import { TaskProgress } from '../components/task-progress';
 import { EmptyState } from '../components/empty-state';
-import { Pagination } from '../components/table-pagination';
+import { DataTableFooter } from '../components/table-controls';
 import { FilterGlassRows, FilterPill, GlassPill } from '../components/filter-glass';
 import { Segments, Shuffle, SortKeys } from '../entity-filter/entity-filter-page';
 import { Chip } from '@/components/base/badges/chip';
@@ -27,11 +27,15 @@ import { addWant, invalidateWants } from '../wants/wants';
 import { useAction } from '../settings/use-action';
 import { useEntityNames } from '../use-entity-names';
 import { DiscoveryCard, resourcePrefill } from './discovery-card';
-import { coverArrived, fetchCoverNow, fetchReleases, releaseFilters, releaseKey, RELEASE_PAGE_SIZE, type Discovery, type ReleaseFacetPerformer, type ReleaseFacetStudio,
-  type ReleaseFilters, writeJavQuery } from './jav';
+import { controlReleaseMetadata, coverArrived, DISCOVERY_METADATA_KEY, DISCOVERY_REFRESH_MS, fetchCoverNow, fetchDiscoveryMetadata, fetchReleases,
+  releaseFilters, releaseKey, RELEASE_PAGE_SIZE, RELEASE_PAGE_SIZES,
+  type Discovery, type DiscoveryMetadataStatus, type ReleaseFacetPerformer, type ReleaseFacetStudio, type ReleaseFilters,
+  writeJavQuery } from './jav';
+import { queryClient } from '../query';
 import { ReleaseTable } from './jav-release-table';
 import { CatalogViewToggle } from '../catalog-grid/catalog-view-toggle';
 import { useCatalogView } from '../catalog-grid/catalog-view';
+import { useVisibleJavWorks } from './jav-selection';
 
 type Facet = 'performer' | 'studio' | 'tag';
 /** 等数据时两排头像的占位，与路由骨架（`releasesFilterSkeleton`）同一份。 */
@@ -80,9 +84,10 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
     writeJavQuery({ [facet]: next, page: '' });
   };
   const section = useRef<HTMLElement>(null);
-  const goPage = (page: number) => {
-    setFilters(current => ({ ...current, page }));
-    writeJavQuery({ page: page > 1 ? String(page) : '' });
+  const changePage = ({ pageIndex, pageSize }: { pageIndex: number; pageSize: number }) => {
+    const page = pageIndex + 1;
+    setFilters(current => ({ ...current, page, size: pageSize }));
+    writeJavQuery({ page: page > 1 ? String(page) : '', size: pageSize === RELEASE_PAGE_SIZE ? '' : String(pageSize) });
     section.current?.scrollIntoView({ block: 'start' });
   };
   const clear = () => {
@@ -115,28 +120,60 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
   /* 卡片／列表与馆藏同一个开关（`peach.catalog-view.v1`）：JAV 页的馆藏与新作一起切。 */
   const view = useCatalogView();
   const ratio = cardRatio(gridLayout({ active: true, home: false, portrait: false }));
-  /* 还没读过来源资料的那几部由服务端起一轮读取：跑着就按它给的间隔轮询，跑完再取一次，标签与筛选项补全。 */
-  const metadataJob = useRef('');
-  const releases = useQuery({ queryKey: releaseKey(filters), queryFn: ({ signal }) => fetchReleases(filters, signal, metadataJob.current),
+  /* 新作列表只读：每问一次都把全部候选重算一遍，不拿它当进度轮询。还没读过来源资料的那几部由
+     「读取资料」起一轮（与「发现」共用一个任务），进度单独轮询；读的期间列表隔 `DISCOVERY_REFRESH_MS`
+     才重取一次，跑完再取一次，标签与筛选项补全。 */
+  const readingNow = useRef(false);
+  const releases = useQuery({ queryKey: releaseKey(filters), queryFn: ({ signal }) => fetchReleases(filters, signal),
     placeholderData: keepPreviousData, retry: false, refetchOnWindowFocus: false,
-    refetchInterval: current => current.state.data?.metadata_job?.status === 'running'
-      ? Math.max(1000, current.state.data.poll_after_ms || 3000) : false });
-  const metadata = releases.data?.metadata_job;
+    refetchInterval: () => (readingNow.current ? DISCOVERY_REFRESH_MS : false) });
+  const listedJob = releases.data?.metadata_job;
+  const listedRunning = useRef(false);
+  listedRunning.current = listedJob?.status === 'running';
+  const polled = queryClient.getQueryData<DiscoveryMetadataStatus>(DISCOVERY_METADATA_KEY)?.metadata_job;
+  /* 进度只在有一轮在跑时轮询：列表带回来的、或起读回执写进来的那一轮。 */
+  const progress = useQuery({ queryKey: DISCOVERY_METADATA_KEY, retry: false, refetchOnWindowFocus: false,
+    enabled: listedJob?.status === 'running' || polled?.status === 'running',
+    queryFn: ({ signal }) => fetchDiscoveryMetadata(signal),
+    refetchInterval: current => current.state.data?.metadata_job?.status === 'running' || listedRunning.current
+      ? Math.max(1000, current.state.data?.poll_after_ms || 3000) : false });
+  // 两处谁新用谁：进度轮询与起读的回执写在进度那份里，列表重取时也带回当前任务。
+  const metadata = progress.data && progress.dataUpdatedAt >= releases.dataUpdatedAt
+    ? progress.data.metadata_job : listedJob;
   const reading = metadata?.status === 'running';
+  readingNow.current = reading;
   const wasReading = useRef(false);
-  useEffect(() => { if (metadata?.job_id) metadataJob.current = metadata.job_id }, [metadata?.job_id]);
   useEffect(() => {
     if (wasReading.current && !reading) void releases.refetch();
     wasReading.current = reading;
   }, [reading, releases]);
+  /* 筛选结果里有从没读过的就起一轮；同一组筛选每次挂载只起一次，停下、失败的那一轮不在这里重启。 */
+  const started = useRef('');
+  const scope = JSON.stringify([filters.performer, filters.studio, filters.tag, filters.q, filters.sort, filters.dir, filters.seed]);
+  const unread = !releases.isPlaceholderData && (releases.data?.metadata_unread || 0) > 0 && !reading;
+  useEffect(() => {
+    if (!unread || started.current === scope) return;
+    started.current = scope;
+    void controlReleaseMetadata('start', filters).then(async (result) => {
+      // 起读之前发出的进度请求晚回来会盖掉这份回执，先取消。
+      await queryClient.cancelQueries({ queryKey: DISCOVERY_METADATA_KEY });
+      queryClient.setQueryData(DISCOVERY_METADATA_KEY, result);
+    }).catch(() => {});
+  }, [unread, scope]); // eslint-disable-line react-hooks/exhaustive-deps
   const action = useAction();
   const want = (item: Discovery) => { void action.run(String(item.id), signal => addWant({ code: item.code }, signal), () => {
     receipt('已加入想要'); void invalidateWants(); void releases.refetch();
   }) };
   const data = releases.data;
+  useVisibleJavWorks(data?.items || []);
   const waiting = releases.isPending;
   const filtered = !!(filters.performer || filters.studio || filters.tag || filters.q);
-  const pages = Math.max(1, Math.ceil((data?.total || 0) / RELEASE_PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil((data?.total || 0) / filters.size));
+  useEffect(() => {
+    if (!data || releases.isPlaceholderData || filters.page <= pages) return;
+    setFilters(current => ({ ...current, page: pages }));
+    writeJavQuery({ page: pages > 1 ? String(pages) : '' });
+  }, [data, releases.isPlaceholderData, filters.page, pages]);
   return <section ref={section} aria-label="订阅新作" aria-busy={waiting || releases.isFetching} className="flex min-w-0 scroll-mt-24 flex-col gap-4">
     {waiting ? <div data-catalog-tiers="" aria-busy="true" dangerouslySetInnerHTML={{ __html: TIER_PLACEHOLDERS }} /> : null}
     {data && (data.facets.performers.length || data.facets.studios.length) ? <div data-catalog-tiers="" data-release-tiers="">
@@ -200,6 +237,8 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
         wanting={action.busy === String(item.id)} onWant={() => want(item)}
         onResource={() => resource(resourcePrefill(item))} badge={filters.sort === 'taste' ? <TasteChip value={item.taste_score} /> : undefined} />)}
     </div>}
-    <div className="flex justify-center"><Pagination page={filters.page} pages={pages} onPage={goPage} label="新作分页" /></div>
+    {data ? <DataTableFooter label="新作" total={data.total}
+      pagination={{ pageIndex: filters.page - 1, pageSize: filters.size }} onChange={changePage}
+      unit="部作品" pageUnit="部" pageSizes={RELEASE_PAGE_SIZES} /> : null}
   </section>;
 }

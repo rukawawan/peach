@@ -61,7 +61,71 @@ class ProjectBoardTests(unittest.TestCase):
 
     def issue(self, **changes):
         return {"__typename": "Issue", "state": "OPEN", "labels": {"nodes": []},
+                "body": "## 问题描述\n闪退\n## 运行环境\nWindows 11", "authorAssociation": "NONE",
+                "author": {"__typename": "User"},
                 "repository": {"nameWithOwner": "peach-mitao/peach"}, **changes}
+
+    def test_待补模板关闭两小时内不移动随后补齐保持原位置(self):
+        issue = self.issue(state="CLOSED", stateReason="NOT_PLANNED", closedAt="2026-11-06T02:00:00Z",
+                           labels={"nodes": [{"name": "status:needs-template"}]})
+        current = {"Status": "待评估"}
+        for hour, minute, expected in ((2, 0, "待评估"), (3, 59, "待评估"), (4, 0, "已取消")):
+            with self.subTest(hour=hour, minute=minute):
+                with mock.patch.object(self.script, "datetime") as clock:
+                    clock.now.return_value = datetime(2026, 11, 6, hour, minute, tzinfo=timezone.utc)
+                    clock.fromisoformat.side_effect = datetime.fromisoformat
+                    self.assertEqual(self.script.decision(issue, current, [], None)["Status"], expected)
+        reopened = {**issue, "state": "OPEN", "closedAt": None, "labels": {"nodes": []}}
+        self.assertEqual(self.script.decision(reopened, current, [], None)["Status"], "待评估")
+
+    def test_普通关闭不等待补模板缓冲(self):
+        issue = self.issue(state="CLOSED", stateReason="NOT_PLANNED", closedAt="2026-11-06T02:00:00Z")
+        self.assertEqual(self.script.decision(issue, {"Status": "待评估"}, [], None)["Status"], "已取消")
+
+    def test_看板新条目先按模板校验并保留维护者豁免(self):
+        invalid = self.issue(id="invalid", number=444, body="nas中docker无法自动更新", issueType={"name": "Feature"})
+        valid = self.issue(id="valid", number=445)
+        maintained = self.issue(id="maintained", number=446, body="维护任务", authorAssociation="MEMBER")
+        config = {"repository": "peach-mitao/peach", "project_id": "public", "issues_only": True}
+        candidates = {}
+        with mock.patch.object(self.script, "incoming_issues", return_value=[invalid, valid, maintained]), \
+                mock.patch.object(self.script, "graphql", side_effect=lambda query, **kw: {
+                    "addProjectV2ItemById": {"item": {"id": "item-" + kw["content"]}}}) as api:
+            self.script.include_incoming(config, candidates, [], None, True)
+        self.assertEqual(set(candidates), {"valid", "maintained"})
+        self.assertEqual([call.kwargs["content"] for call in api.call_args_list], ["valid", "maintained"])
+
+    def test_整体同步在缓冲期不写状态到期只移动一次(self):
+        issue = self.issue(id="issue", number=444, title="更新失败", state="CLOSED", stateReason="NOT_PLANNED",
+                           closedAt="2026-11-06T02:00:00Z", labels={"nodes": [{"name": "status:needs-template"}]})
+        current = {"Status": "待评估", "交付进度": "未关联实现"}
+        item = {"id": "item", "content": issue, "isArchived": False}
+        fields = {name: {"id": name} for name in ("发布版本", "发布说明", "实现关联")}
+        fields["Status"] = {"id": "Status", "options": [{"id": name, "name": name} for name in ("待评估", "已取消")]}
+        fields["交付进度"] = {"id": "交付进度", "options": [{"id": "未关联实现", "name": "未关联实现"}]}
+        config = {"repository": "peach-mitao/peach", "project_id": "public"}
+        def update(query, **variables):
+            current[variables["field"]] = variables["value"]["singleSelectOptionId"]
+        with mock.patch.object(self.script, "read_project", return_value=(fields, [item])), \
+                mock.patch.object(self.script, "values", side_effect=lambda item: dict(current)), \
+                mock.patch.object(self.script, "pull_requests", return_value=[]), \
+                mock.patch.object(self.script, "incoming_issues", return_value=[]), \
+                mock.patch.object(self.script, "published_releases", return_value=[]), \
+                mock.patch.object(self.script, "graphql", side_effect=update) as api, \
+                mock.patch.object(self.script, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 6, 3, 0, tzinfo=timezone.utc)
+            clock.fromisoformat.side_effect = datetime.fromisoformat
+            self.assertEqual(self.script.reconcile(config, apply=True), [])
+            issue.update(state="OPEN", labels={"nodes": []}, closedAt=None)
+            clock.now.return_value = datetime(2026, 11, 6, 5, 0, tzinfo=timezone.utc)
+            self.assertEqual(self.script.reconcile(config, apply=True), [])
+            api.assert_not_called()
+            issue.update(state="CLOSED", closedAt="2026-11-06T02:00:00Z",
+                         labels={"nodes": [{"name": "status:needs-template"}]})
+            changes = self.script.reconcile(config, apply=True)
+            self.assertEqual([(change["field"], change["value"]) for change in changes], [("Status", "已取消")])
+            self.assertEqual(self.script.reconcile(config, apply=True), [])
+            api.assert_called_once()
 
     def test_merge_and_publication_keep_open_issue_waiting_for_acceptance(self):
         release = {"tag_name": "v1.2.0", "html_url": "https://example.test/release"}
@@ -1524,8 +1588,8 @@ class OperationalScriptTests(unittest.TestCase):
             provider = Flaky()
             clock = [0.0]
             health = root / "health.csv"
-            with mock.patch.object(self.scrape_codes.time, "monotonic",
-                                   side_effect=lambda: clock[0]):
+            with mock.patch.object(self.scrape_codes, "time", wraps=self.scrape_codes.time) as scrape_time:
+                scrape_time.monotonic.side_effect = lambda: clock[0]
                 with redirect_stdout(io.StringIO()):
                     self.scrape_codes.main([
                         "--db", str(db), "--out", str(root / "c.csv"),
@@ -1549,8 +1613,8 @@ class OperationalScriptTests(unittest.TestCase):
                 clock[0] += self.scrape_codes.COOLDOWN_SECONDS
                 return clock[0]
 
-            with mock.patch.object(self.scrape_codes.time, "monotonic",
-                                   side_effect=advancing):
+            with mock.patch.object(self.scrape_codes, "time", wraps=self.scrape_codes.time) as scrape_time:
+                scrape_time.monotonic.side_effect = advancing
                 with redirect_stdout(io.StringIO()):
                     self.scrape_codes.main([
                         "--db", str(db), "--out", str(root / "c2.csv"),
@@ -5178,6 +5242,116 @@ class R2ReleaseTests(unittest.TestCase):
         self.assertEqual(uploads[-1], ("releases.json", False))
         self.assertTrue(all(immutable for _key, immutable in uploads[:-1]))
 
+    def publish_into(self, module, objects: dict, root: Path, version: str) -> list[tuple]:
+        """在内存桶上跑一次发布，返回按顺序发生的 `("upload"|"purge", 键)`。"""
+        events = []
+
+        def read(command, **_kwargs):
+            if command[1] == "lsjson":
+                return json.dumps([{"Path": key, "Size": len(value)} for key, value in objects.items()])
+            return objects["releases.json"].decode()
+
+        def run(command, **_kwargs):
+            if command[1] == "purge":
+                folder = command[2].split("peach:peach-releases/", 1)[1]
+                for key in [key for key in objects if key.startswith(folder + "/")]:
+                    del objects[key]
+                events.append(("purge", folder))
+                return
+            key = command[3].split("peach:peach-releases/", 1)[1]
+            objects[key] = Path(command[2]).read_bytes()
+            events.append(("upload", key))
+
+        def verify(url, item):
+            content = objects[url.split("https://downloads.example/", 1)[1].split("?", 1)[0]]
+            self.assertEqual((len(content), hashlib.sha256(content).hexdigest()), (item["size"], item["sha256"]))
+
+        environment = {"PEACH_RCLONE": "rclone", "PEACH_R2_BUCKET": "peach-releases",
+                       "PEACH_R2_PUBLIC_BASE": "https://downloads.example", "CI_COMMIT_SHA": "a" * 40,
+                       "CI_COMMIT_TIMESTAMP": "2026-11-08T00:00:00Z"}
+        with mock.patch.object(module, "rclone_environment", return_value=environment), \
+                mock.patch.object(module.subprocess, "check_output", side_effect=read), \
+                mock.patch.object(module.subprocess, "run", side_effect=run), \
+                mock.patch.object(module, "verify_download", side_effect=verify):
+            module.publish(root, version, apply=True)
+        return events
+
+    @staticmethod
+    def release_files(root: Path, version: str) -> list[str]:
+        names = [f"Peach-{version}-windows-x64{suffix}" for suffix in (".zip", "-setup.exe", "-lite-setup.exe", "-update.zip")]
+        names += [f"Peach-{version}-macos-{arch}.dmg" for arch in ("arm64", "x86_64")]
+        for name in names:
+            (root / name).write_bytes(name.encode())
+        return names
+
+    def test_github_release_is_mirrored_with_its_signed_sums_and_only_three_versions_kept(self):
+        """GitHub 发版作业的 `SHA256SUMS.txt` 带 `./` 前缀且已签名：镜像原样转存，签名才验得过。"""
+        module = load_script("release_r2")
+        objects = {"releases.json": json.dumps([{"tag_name": f"v1.{minor}.0"} for minor in (2, 1, 0)]).encode(),
+                   "sparkle/macos-arm64.xml": b"feed", "_ci/1/2/keep.json": b"ci"}
+        objects.update({f"v1.{minor}.0/app.zip": b"old" for minor in (0, 1, 2)})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            names = self.release_files(root, "1.3.0")
+            sums = "".join(f"{hashlib.sha256(name.encode()).hexdigest()}  ./{name}\n" for name in names).encode()
+            (root / "SHA256SUMS.txt").write_bytes(sums)
+            (root / "SHA256SUMS.txt.sig").write_bytes(b"key signature\n")
+            events = self.publish_into(module, objects, root, "1.3.0")
+        index = json.loads(objects["releases.json"])
+        self.assertEqual([row["tag_name"] for row in index], ["v1.3.0", "v1.2.0", "v1.1.0"])
+        self.assertEqual(index[0]["html_url"], "https://github.com/peach-mitao/peach/releases/tag/v1.3.0")
+        self.assertEqual(objects["v1.3.0/SHA256SUMS.txt"], sums)
+        self.assertEqual(objects["v1.3.0/SHA256SUMS.txt.sig"], b"key signature\n")
+        self.assertEqual(sorted(key for key in objects if key.startswith(("v1.0.0/", "v1.1.0/", "v1.2.0/"))),
+                         ["v1.1.0/app.zip", "v1.2.0/app.zip"])
+        self.assertEqual((objects["sparkle/macos-arm64.xml"], objects["_ci/1/2/keep.json"]), (b"feed", b"ci"))
+        # 旧目录在索引不再指向它之后才删。
+        self.assertEqual(events[-2:], [("upload", "releases.json"), ("purge", "v1.0.0")])
+
+    def test_mirror_refuses_versions_older_than_the_kept_ones_and_mismatched_sums(self):
+        module = load_script("release_r2")
+        index = json.dumps([{"tag_name": f"v1.{minor}.0"} for minor in (3, 2, 1)]).encode()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.release_files(root, "1.0.0")
+            objects = {"releases.json": index}
+            with self.assertRaisesRegex(ValueError, "都旧"):
+                self.publish_into(module, objects, root, "1.0.0")
+            self.assertEqual(objects, {"releases.json": index})
+            (root / "SHA256SUMS.txt").write_text("0" * 64 + "  Peach-1.0.0-windows-x64.zip\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "摘要与制品不一致"):
+                module.release_sums(root, module.inventory(root, "1.0.0"), root)
+
+    def test_every_github_release_runs_the_mirror_publication(self):
+        """镜像索引断过档：GitHub 发版后没有作业调 `release_r2.py`，`releases.json` 停在旧版。
+
+        按作业依赖判定：创建 Release 的作业之后，必须有一个同条件运行的作业发布镜像。
+        """
+        jobs, current = {}, None
+        lines = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8").splitlines()
+        for line in lines[lines.index("jobs:") + 1:]:
+            header = re.fullmatch(r"  ([A-Za-z0-9_-]+):", line)
+            if header:
+                current = jobs.setdefault(header[1], {"needs": [], "if": None, "body": ""})
+            elif current is not None:
+                current["body"] += line + "\n"
+                field = re.fullmatch(r"    (needs|if): (.+)", line)
+                if field and field[1] == "needs":
+                    current["needs"] = re.findall(r"[A-Za-z0-9_-]+", field[2])
+                elif field:
+                    current["if"] = field[2]
+
+        def ancestors(name):
+            return {parent for need in jobs[name]["needs"] for parent in {need, *ancestors(need)}}
+
+        creators = [name for name, job in jobs.items() if "gh release create" in job["body"]]
+        mirrors = [name for name, job in jobs.items()
+                   if "scripts/release_r2.py" in job["body"] and "--apply" in job["body"]]
+        self.assertEqual(len(creators), 1)
+        self.assertEqual(len(mirrors), 1)
+        self.assertEqual(ancestors(mirrors[0]) & set(creators), set(creators))
+        self.assertEqual(jobs[mirrors[0]]["if"], jobs[creators[0]]["if"])
+
     def test_capacity_keeps_existing_versions_and_stops_before_upload(self):
         module = load_script("release_r2")
         existing = [{"Path": "v1.0.0/old.zip", "Size": 2_000_000}, {"Path": "v1.2.3/app.zip", "Size": 3_000_000}]
@@ -5619,6 +5793,10 @@ class ReleaseTagTests(unittest.TestCase):
         audit = mock.patch.object(self.release, "require_clean_dependencies")
         audit.start()
         self.addCleanup(audit.stop)
+        # 这组用例模拟的版本号不在真实仓库的公告里；公告门槛另有用例（test_version_bump）。
+        notice = mock.patch.object(self.release, "require_release_notice")
+        notice.start()
+        self.addCleanup(notice.stop)
 
     def test_dependency_audit_covers_both_npm_projects_and_names_the_failing_one(self):
         """标签流水线第一步就是这两份 npm 审计；有一份不干净就不能定版或打标签。"""
@@ -5899,6 +6077,9 @@ class ShipTests(unittest.TestCase):
         audit = mock.patch.object(self.release, "require_clean_dependencies")
         self.audit = audit.start()
         self.addCleanup(audit.stop)
+        readme = mock.patch.object(self.release, "point_readme", return_value={"readme": ["README.md"]})
+        self.point_readme = readme.start()
+        self.addCleanup(readme.stop)
 
     def test_a_vulnerable_dependency_found_after_the_test_turns_green_stops_before_the_tag(self):
         """Test 绿了到打标签之间可能刚好公布了新漏洞：标签打出去就什么也发不了，所以标签前再查一次。"""
@@ -5998,6 +6179,16 @@ class ShipTests(unittest.TestCase):
             self.release.ship("owner/repo", apply=True)
         self.assertEqual(self._writes(command), [])
 
+    def test_readme_links_never_ride_along_in_the_release_commit(self):
+        """制品还没上传就换直链，读者点到的是 404；README 改动等 Release 齐了单独提交。"""
+        early = {("git", "status", "--porcelain"):
+                 " M CHANGELOG.md\n M README.md\n M src/peach/__init__.py"}
+        with self._shell(early) as command, self._api(), self._version(), self._document(), \
+                self.assertRaisesRegex(ValueError, "README.md"):
+            self.release.ship("owner/repo", apply=True)
+        self.assertEqual(self._writes(command), [])
+        self.point_readme.assert_not_called()
+
     def test_a_version_without_its_changelog_section_cannot_ship(self):
         with self._shell(), self._api(), self._version(), \
                 self._document("# 变更日志\n\n## [未发布]\n"), \
@@ -6031,6 +6222,9 @@ class ShipTests(unittest.TestCase):
             ("git", "push", "https://github.com/owner/repo.git", "refs/tags/v0.8.0"),
         ])
         self.assertEqual(result["test"], "test-url")
+        self.point_readme.assert_called_once_with("owner/repo", apply=True,
+                                                  timeout=self.release.TEST_TIMEOUT)
+        self.assertEqual(result["readme"], ["README.md"])
 
     def test_a_red_test_run_never_becomes_a_tag(self):
         red = {**self.SUCCESS, "conclusion": "failure"}
@@ -6041,6 +6235,7 @@ class ShipTests(unittest.TestCase):
         self.assertIn(("git", "-c", "peach.masterWriter=release", "commit",
                        "-m", "chore(release): 版本 0.8.0"), issued)
         self.assertFalse([args for args in issued if "refs/tags/v0.8.0" in args], issued)
+        self.point_readme.assert_not_called()
 
     def test_running_it_again_skips_what_is_already_done(self):
         """网络断在半路就再跑一次：已提交的不重提，已推送的不重推。"""
@@ -6052,6 +6247,104 @@ class ShipTests(unittest.TestCase):
             ("git", "tag", "-a", "v0.8.0", "abc", "-m", "Peach v0.8.0 Windows 测试版"),
             ("git", "push", "https://github.com/owner/repo.git", "refs/tags/v0.8.0"),
         ])
+
+
+class PointReadmeTests(unittest.TestCase):
+    """`--point-readme`：Release 制品齐了才把 README 直链换到新版本，空档里读者仍拿旧版。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.release = load_script("release_tag")
+
+    SUBJECT = "docs(readme): 下载直链指向 v0.8.0"
+    OLD = ("[Installer](https://github.com/o/p/releases/download/v0.7.9/Peach-0.7.9-windows-x64-setup.exe)"
+           " · [DMG](https://github.com/o/p/releases/download/v0.7.9/Peach-0.7.9-macos-arm64.dmg)\n")
+    ASSETS = ["Peach-0.8.0-macos-arm64.dmg", "Peach-0.8.0-windows-x64-setup.exe"]
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        (self.root / "src/peach").mkdir(parents=True)
+        (self.root / "src/peach/__init__.py").write_text('__version__ = "0.8.0"\n', encoding="utf-8")
+        for name in self.release.version_bump.README_FILES:
+            (self.root / name).write_bytes(self.OLD.encode("utf-8"))
+        root = mock.patch.object(self.release, "ROOT", self.root)
+        root.start()
+        self.addCleanup(root.stop)
+
+    def _shell(self, *, status="", subject=SUBJECT):
+        answers = {("git", "branch", "--show-current"): "master",
+                   ("git", "status", "--porcelain"): status,
+                   ("git", "rev-parse", "HEAD"): "def",
+                   ("git", "log", "-1", "--format=%s", "def"): subject}
+        return mock.patch.object(self.release, "command",
+                                 side_effect=lambda *args, **_: answers.get(args, ""))
+
+    def _api(self, uploads, remote="abc"):
+        """`uploads` 依次是每次查询时已上传完的制品；用完后停在最后一份。"""
+        seen = iter(uploads)
+        last = [()]
+
+        def answer(_repo, endpoint):
+            if endpoint == "git/ref/heads/master":
+                return {"object": {"sha": remote}}
+            if endpoint == "releases/tags/v0.8.0":
+                last[0] = next(seen, last[0])
+                return {"draft": False, "assets": [{"name": name, "state": "uploaded"}
+                                                   for name in last[0]]}
+            raise AssertionError(f"没预料到的调用：{endpoint}")
+        return mock.patch.object(self.release, "api", side_effect=answer)
+
+    def _readmes(self):
+        return {name: (self.root / name).read_bytes().decode("utf-8")
+                for name in self.release.version_bump.README_FILES}
+
+    def test_links_move_only_after_every_linked_asset_is_uploaded(self):
+        sleeps = []
+        partial = self.ASSETS[:1]
+        with self._shell() as command, self._api([(), partial, self.ASSETS]):
+            result = self.release.point_readme("owner/repo", apply=True, sleep=sleeps.append)
+        self.assertEqual(len(sleeps), 2)
+        new = self.OLD.replace("v0.7.9/Peach-0.7.9-", "v0.8.0/Peach-0.8.0-")
+        self.assertEqual(self._readmes(), dict.fromkeys(self.release.version_bump.README_FILES, new))
+        self.assertEqual(result["readme"], list(self.release.version_bump.README_FILES))
+        self.assertEqual(ShipTests._writes(command), [
+            ("git", "add", *self.release.version_bump.README_FILES),
+            ("git", "-c", "peach.masterWriter=release", "commit", "-m", self.SUBJECT),
+            ("git", "push", "https://github.com/owner/repo.git", "refs/heads/master"),
+        ])
+
+    def test_a_release_that_never_completes_leaves_the_previous_links_in_place(self):
+        clock = iter(range(0, 10_000, 100))
+        with self._shell() as command, self._api([self.ASSETS[:1]]), \
+                self.assertRaisesRegex(ValueError, "仍缺 Peach-0.8.0-windows-x64-setup.exe.*--point-readme"):
+            self.release.point_readme("owner/repo", apply=True, timeout=300, sleep=lambda _: None,
+                                      clock=lambda: next(clock))
+        self.assertEqual(self._readmes(), dict.fromkeys(self.release.version_bump.README_FILES, self.OLD))
+        self.assertEqual(ShipTests._writes(command), [])
+
+    def test_rerunning_after_an_interrupted_push_only_pushes(self):
+        """README 已换、已提交，推送断了：再跑一次不重提交，只补推送。"""
+        for name in self.release.version_bump.README_FILES:
+            (self.root / name).write_text(self.OLD.replace("0.7.9", "0.8.0"), encoding="utf-8")
+        with self._shell() as command, self._api([self.ASSETS]):
+            self.release.point_readme("owner/repo", apply=True, sleep=lambda _: None)
+        self.assertEqual(ShipTests._writes(command), [
+            ("git", "push", "https://github.com/owner/repo.git", "refs/heads/master")])
+
+    def test_someone_elses_commit_on_top_is_not_pushed_on_their_behalf(self):
+        for name in self.release.version_bump.README_FILES:
+            (self.root / name).write_text(self.OLD.replace("0.7.9", "0.8.0"), encoding="utf-8")
+        with self._shell(subject="Merge branch 'agent/x'") as command, self._api([self.ASSETS]):
+            self.release.point_readme("owner/repo", apply=True, sleep=lambda _: None)
+        self.assertEqual(ShipTests._writes(command), [])
+
+    def test_unrelated_changes_block_the_readme_commit(self):
+        with self._shell(status=" M README.md\n M src/peach/api.py") as command, \
+                self._api([self.ASSETS]), self.assertRaisesRegex(ValueError, "src/peach/api.py"):
+            self.release.point_readme("owner/repo", apply=True, sleep=lambda _: None)
+        self.assertEqual(ShipTests._writes(command), [])
 
 
 class AwaitTestTests(unittest.TestCase):

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser, Locator, Page } from 'playwright-core';
 import { launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
+import { stubServer } from './settings-fixture.ts';
 
 const box = (target: Locator) => target.evaluate(node => {
   const { x, y, width, height } = node.getBoundingClientRect();
@@ -32,6 +33,63 @@ describe('管理页面容器与骨架', () => {
   let browser: Browser;
   before(async () => { browser = await launch(); });
   after(async () => { await browser?.close(); });
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    it(`管理菜单拖动显示插入位置并保存顺序（${reducedMotion}）`, { timeout: 60_000 }, async () => {
+      const opened = await visit(browser, '/data-cleanup', VIEWPORTS.find(viewport => !viewport.mobile)!);
+      const { page } = opened;
+      try {
+        const server = await stubServer(page);
+        await page.emulateMedia({ reducedMotion });
+        await page.reload({ waitUntil: 'load' });
+        await settle(page);
+        const menu = page.locator('[data-manage-menu]');
+        await menu.locator('[data-manage="configuration"]').waitFor({ state: 'visible' });
+        const keys = () => menu.locator('button[data-manage]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-manage')));
+        const original = await keys();
+        const picked = menu.locator('[data-manage="activity"]');
+        const neighbor = menu.locator('[data-manage="taste"]');
+        const start = (await picked.boundingBox())!;
+        const target = (await neighbor.boundingBox())!;
+        await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(target.x + 2, target.y + target.height / 2, { steps: 10 });
+        assert.equal(await picked.getAttribute('data-dragging'), '');
+        const line = menu.locator('[data-manage-drop-line]');
+        assert.ok(await line.isVisible(), '插入线应显示在目标位置');
+        assert.notEqual(await line.locator('span').evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');
+        assert.equal(await neighbor.evaluate(node => node.style.getPropertyValue('--sidebar-nudge')), '10px');
+        assert.equal(await menu.locator('[data-manage="cleanup"]').evaluate(node => node.style.getPropertyValue('--sidebar-delay')), '24ms');
+        assert.equal(await menu.locator('[data-pill-thumb]').evaluate(node => getComputedStyle(node).opacity), '0');
+        if (reducedMotion === 'no-preference') {
+          await page.waitForFunction(() => parseFloat(getComputedStyle(document.querySelector('[data-manage="taste"]')!).translate) > 0);
+          await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-manage="activity"]')!).scale === '0.9');
+          assert.equal(await picked.evaluate(node => {
+            const rect = node.getBoundingClientRect();
+            return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('[data-dragging]') === node;
+          }), true, '拾起项移出菜单行后仍应完整可见');
+        } else {
+          assert.equal(await neighbor.evaluate(node => getComputedStyle(node).translate), 'none');
+          assert.equal(await picked.evaluate(node => getComputedStyle(node).position), 'static');
+        }
+        const saved = page.waitForResponse(response => response.url().endsWith('/api/settings') && response.request().method() === 'POST');
+        await page.mouse.up();
+        const expected = original.filter(key => key !== 'activity');
+        expected.splice(1, 0, 'activity');
+        await saved;
+        assert.deepEqual(await keys(), expected);
+        assert.deepEqual(server.posts.find(post => 'manageOrder' in post.body)?.body.manageOrder, expected);
+        assert.equal(await menu.locator('[data-dragging],[data-manage-drop-line]').count(), 0);
+        assert.equal(await menu.evaluate(node => getComputedStyle(node).overflowY), 'hidden');
+        assert.equal(await page.locator('[data-manage-bar] .ov-y:not([hidden])').count(), 0, '放下后菜单右侧应清除纵向滚动条');
+        assert.equal(new URL(page.url()).pathname, '/data-cleanup');
+        await page.reload({ waitUntil: 'load' });
+        await settle(page);
+        await menu.locator('[data-manage="configuration"]').waitFor({ state: 'visible' });
+        assert.deepEqual(await keys(), expected);
+        assert.deepEqual(opened.problems, []);
+      } finally { await opened.close(); }
+    });
+  }
   for (const viewport of VIEWPORTS) {
     it(`扫描和链接操作位于分隔底栏（${viewport.name}）`, { timeout: 60_000 }, async () => {
       const opened = await visit(browser, '/data-cleanup', viewport);

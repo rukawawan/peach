@@ -153,12 +153,18 @@ def _portrait_account(connection: sqlite3.Connection, entity_id: int) -> bool:
 
 
 def needs_avatar(avatar_root, kind: str, entity_id: int) -> bool:
-    """没有头像，或者装着的是封面截的、小图兜底的那一档（还可能换到更清楚的）。"""
-    if (avatar_picker.installed_digest(avatar_root, kind, entity_id)
-            and _installed_record(avatar_root, kind, entity_id).get("user_selected")):
+    """没有头像，或者装着的是封面截的、小图兜底的那一档（还可能换到更清楚的）。
+
+    「装没装」只看文件在不在：存量规划每分钟对每位女优问一次，原来为这一问把每张头像整张算两遍
+    SHA-256，一千多位要将近一秒。
+    """
+    from .previews import entity_image_key
+
+    if not (Path(avatar_root) / f"{entity_image_key(kind, int(entity_id))}.img").is_file():
+        return True
+    if _installed_record(avatar_root, kind, entity_id).get("user_selected"):
         return False
-    return (not avatar_picker.installed_digest(avatar_root, kind, entity_id)
-            or avatar_cover_face.installed_face_px(avatar_root, kind, entity_id) is not None
+    return (avatar_cover_face.installed_face_px(avatar_root, kind, entity_id) is not None
             or _installed_small(avatar_root, kind, entity_id))
 
 

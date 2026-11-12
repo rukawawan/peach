@@ -23,7 +23,8 @@ describe('数据管理首屏', () => {
     const split = root.querySelector('#libraryProcessing [data-split-button]')!;
     expect(split.getAttribute('data-variant')).toBe('primary');
     expect(split.querySelector('button:last-child use')?.getAttribute('href')).toBe('#i-chevron-down');
-    for (const button of root.querySelectorAll('button')) {
+    expect(root.querySelector('[aria-label="媒体库"]')?.getAttribute('aria-disabled')).toBe('true');
+    for (const button of root.querySelectorAll('footer button')) {
       expect(button.hasAttribute('disabled')).toBe(true);
       expect(button.hasAttribute('data-skeleton-action')).toBe(true);
     }

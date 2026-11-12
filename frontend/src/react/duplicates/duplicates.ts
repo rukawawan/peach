@@ -10,6 +10,7 @@
 import { apiGet, apiSend } from '../../api';
 import { prefetchMediaSources } from '../media-sources';
 import { queryClient } from '../query';
+import { t } from '../../i18n';
 
 /** 120 组够铺满这一页，再多的由「可回收」排序挤到后面。 */
 export const DUPLICATES_URL = '/api/duplicates?limit=120';
@@ -83,13 +84,11 @@ export function sharedNamePrefix(names: readonly string[]): string {
 export const distinctName = (name: string, prefix: string) =>
   prefix && name.startsWith(prefix) && name.length > prefix.length ? `…${name.slice(prefix.length)}` : name;
 
-/** 首屏：重复分组与配了根目录的网盘（「留 115」那几颗键要它），取完才画。不给 `staleTime`，
+/** 首屏分组就绪后显示；来源独立读取，供「留 115」等可选规则使用。不给 `staleTime`，
  *  `/duplicates` 是 `refresh:'reopen'`，进来就重取。 */
 export async function prefetchDuplicates(signal: AbortSignal): Promise<void> {
-  await Promise.all([
-    queryClient.fetchQuery({ queryKey: DUPLICATES_KEY, queryFn: () => fetchDuplicates(signal) }),
-    prefetchMediaSources(signal),
-  ]);
+  void prefetchMediaSources(signal).catch(() => {});
+  await queryClient.fetchQuery({ queryKey: DUPLICATES_KEY, queryFn: () => fetchDuplicates(signal) });
 }
 
 /** 每组保留哪一个的口径。`all` 是一个不留——整组都是广告时才用得上。其余是网盘代号。 */
@@ -97,8 +96,8 @@ export type KeepRule = 'largest' | 'longest' | 'all' | (string & {});
 
 /** 确认弹层里「每组保留……」那半句。 */
 export const KEEP_LABELS: Record<string, string> = {
-  largest: '最大的一个', longest: '最长的一个', file: '你选的那一个',
-  '115': '115（没有则留最大）', pikpak: 'PikPak（没有则留最大）', all: '零个文件',
+  largest: t('cleanup:duplicates.keepRuleLargest'), longest: t('cleanup:duplicates.keepRuleLongest'), file: '你选的那一个',
+  '115': t('cleanup:duplicates.keepRule115'), pikpak: t('cleanup:duplicates.keepRulePikpak'), all: t('cleanup:duplicates.keepRuleNone'),
 };
 
 /** 这一批文件里真正出现过的网盘来源。 */
@@ -164,4 +163,4 @@ export async function batchOperate(ids: readonly number[], operation: 'dispose' 
 
 /** 页头说明行与汇总块那一句。 */
 export const duplicatesLede = (data: DuplicatesData, formatSize: (bytes: number) => string) =>
-  `${data.total} 组 · ${data.files} 个文件 · 可回收 ${formatSize(data.reclaimable)}`;
+  t('cleanup:duplicates.lede', { count: data.total, files: data.files, size: formatSize(data.reclaimable) });

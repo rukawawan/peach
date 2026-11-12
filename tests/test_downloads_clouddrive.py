@@ -35,6 +35,8 @@ class FakeCloudDrive:
         self.quota = pb.OfflineQuotaInfo(total=1500, used=3, left=1497)
         self.add_error = ""
         self.files: set[str] = set()
+        self.files_after_refresh: set[str] = set()
+        self.list_error = None
         self.can_manage = True
 
     def _auth(self, name, request, context):
@@ -47,6 +49,10 @@ class FakeCloudDrive:
         header = dict(context.invocation_metadata()).get("authorization", "")
         self.calls.append(("GetSystemInfo", request, header))
         return pb.CloudDriveSystemInfo(IsLogin=True, UserName="u1", SystemReady=True)
+
+    def GetSystemSettings(self, request, context):
+        self._auth('GetSystemSettings', request, context)
+        return pb.SystemSettings()
 
     def GetApiTokenInfo(self, request, context):
         self._auth("GetApiTokenInfo", request, context)
@@ -84,6 +90,13 @@ class FakeCloudDrive:
         if full in self.files:
             return pb.CloudDriveFile(name=request.path, fullPathName=full)
         context.abort(grpc.StatusCode.NOT_FOUND, "no such file")
+
+    def GetSubFiles(self, request, context):
+        self._auth('GetSubFiles', request, context)
+        if self.list_error is not None:
+            context.abort(self.list_error, 'listing unavailable')
+        self.files.update(self.files_after_refresh)
+        yield pb.SubFilesReply()
 
     def CreateFolder(self, request, context):
         self._auth("CreateFolder", request, context)
@@ -138,6 +151,9 @@ class _Server(unittest.TestCase):
                 getattr(fake, name), request_deserializer=request.FromString,
                 response_serializer=response.SerializeToString)
             for name, (request, response) in cd._METHODS.items()}
+        handlers['GetSubFiles'] = grpc.unary_stream_rpc_method_handler(
+            fake.GetSubFiles, request_deserializer=pb.FileRequest.FromString,
+            response_serializer=pb.SubFilesReply.SerializeToString)
         server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
         server.add_generic_rpc_handlers(
             (grpc.method_handlers_generic_handler("clouddrive.CloudDriveFileSrv", handlers),))
@@ -240,6 +256,19 @@ class TrackingTests(_Server):
         self.assertFalse(self.provider.landed(self.task()))
         self.fake.files.add(f"{TARGET}/ABC-123")
         self.assertTrue(self.provider.landed(self.task()))
+
+    def test_landed_refreshes_the_official_directory_cache(self):
+        self.fake.files_after_refresh.add(f'{TARGET}/ABC-123')
+        self.assertTrue(self.provider.landed(self.task()))
+        name, request, header = self.fake.calls[0]
+        self.assertEqual((name, request.path, request.forceRefresh), ('GetSubFiles', TARGET, True))
+        self.assertEqual(header, f'Bearer {TOKEN}')
+
+    def test_directory_refresh_network_failure_remains_retryable(self):
+        self.fake.list_error = grpc.StatusCode.UNAVAILABLE
+        with self.assertRaises(dl.DownloadError) as caught:
+            self.provider.landed(self.task())
+        self.assertEqual(caught.exception.failure, 'network')
 
     def test_cancelling_keeps_the_downloaded_files(self):
         self.provider.submit(MAGNET, TARGET)

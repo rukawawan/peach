@@ -155,6 +155,41 @@ class FetchImageTests(unittest.TestCase):
             self.assertIsNone(follow_assets.fetch_image(client, "https://icons.test/a"))
 
 
+class LegibleIconTests(unittest.TestCase):
+    """来源图标在浅色和深色主题下都得看得见。"""
+
+    @staticmethod
+    def _glyph(colour, background=(0, 0, 0, 0)):
+        import io
+
+        from PIL import Image
+
+        image = Image.new("RGBA", (32, 32), background)
+        image.paste(Image.new("RGBA", (16, 16), colour + (255,)), (8, 8))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_a_bare_white_glyph_gets_a_neutral_disc(self):
+        """Iwara 那枚透明底白字形：换成深灰圆底，白字在两种主题下都有对比。"""
+        import io
+
+        from PIL import Image
+
+        from peach import link_marks
+
+        made = follow_assets.legible_icon(self._glyph((255, 255, 255)))
+        image = Image.open(io.BytesIO(made)).convert("RGBA")
+        self.assertEqual(image.getpixel((image.width // 2, 3))[:3], link_marks.NEUTRAL_DISC)
+        self.assertEqual(image.getpixel((image.width // 2, image.height // 2))[:3], (255, 255, 255))
+
+    def test_coloured_and_opaque_icons_are_kept_byte_for_byte(self):
+        for body in (self._glyph((240, 0, 96)),
+                     self._glyph((255, 255, 255), background=(30, 30, 30, 255)),
+                     ICO, None):
+            self.assertEqual(follow_assets.legible_icon(body), body)
+
+
 class ShrinkImageTests(unittest.TestCase):
     """取图和显示图要的尺寸不是一个数：高清那份只用来检脸，落盘的按圆标存。"""
 

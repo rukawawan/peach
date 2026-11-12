@@ -63,7 +63,7 @@ def capture_frame(ffmpeg: str, path: str, timestamp: float, destination: Path, *
     command += input_options
     command += [
         "-ss", f"{timestamp:.2f}", "-i", path, "-frames:v", "1",
-        "-vf", f"scale={int(width)}:-1", "-q:v", "4",
+        "-vf", f"scale={int(width)}:'max(1,round(ow/dar))',setsar=1", "-q:v", "4",
         *ffmpeg_options(), str(destination),
     ]
     try:

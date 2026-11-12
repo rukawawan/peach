@@ -308,6 +308,7 @@ def _snapshot(connection, old_id: int) -> dict:
                    for table in ASSET_REFERENCE_TABLES},
         "playlists": _rows(connection, "SELECT id,current_asset_id,source_seed_asset_id FROM playlist "
                            "WHERE current_asset_id=? OR source_seed_asset_id=?", (old_id, old_id)),
+        "follow_items": _rows(connection, 'SELECT id FROM follow_item WHERE asset_id=?', (old_id,)),
     }
 
 
@@ -331,6 +332,7 @@ def move(connection, old_id: int, new_id: int, *, source: str, rule: str,
         [(stamp, new_id, row["profile_id"]) for row in moved[GOAL_TABLE]])
     for column in ("current_asset_id", "source_seed_asset_id"):
         connection.execute(f"UPDATE playlist SET {column}=? WHERE {column}=?", (new_id, old_id))
+    connection.execute('UPDATE follow_item SET asset_id=? WHERE asset_id=?', (new_id, old_id))
     for table in ASSET_REFERENCE_TABLES:
         connection.execute(f"DELETE FROM {table} WHERE asset_id=?", (old_id,))
     connection.execute("DELETE FROM asset WHERE id=?", (old_id,))
@@ -417,6 +419,9 @@ def revert_one(connection, rehome_id: int, *, now: str | None = None) -> None:
             if playlist[column] == old["id"]:
                 connection.execute(f"UPDATE playlist SET {column}=? WHERE id=? AND {column}=?",
                                    (old["id"], playlist["id"], new_id))
+    for item in snapshot.get('follow_items', []):
+        connection.execute('UPDATE follow_item SET asset_id=? WHERE id=? AND asset_id=?',
+                           (old['id'], item['id'], new_id))
     if before := moved.get(ROW_RECORDS):
         connection.execute(
             f"UPDATE asset SET {','.join(f'{column}=?' for column in ASSET_RECORD_COLUMNS)} WHERE id=?",

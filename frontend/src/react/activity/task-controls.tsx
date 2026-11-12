@@ -9,7 +9,9 @@ import { Button } from '@/components/base/buttons/button';
 import { errorMessage } from '../../api';
 import { Note } from '../components/note';
 import { busyProps } from '../settings/use-action';
-import { controlTask, isActive, TASKS_KEY, type TaskControlAction, type TaskRunPayload } from './tasks';
+import { ProcessingMode } from '../library-processing/processing-effort';
+import type { ProcessingSpeed } from '../library-processing/library-processing';
+import { controlTask, setTaskSpeed, isActive, TASKS_KEY, type TaskControlAction, type TaskRunPayload } from './tasks';
 
 const CONTROL_KEY = ['task-control'] as const;
 const ICONS = { pause: RiPauseLine, resume: RiPlayLine, cancel: RiStopLine };
@@ -74,10 +76,19 @@ export function TaskControls({ run, runs = [run] }: { run: TaskRunPayload; runs?
     mutationFn: send,
     onSettled: () => { pending.current.cancel = false; refresh() },
   });
-  const actions = run.control?.actions || [];
+  const speed = useMutation({
+    mutationFn: async (mode: ProcessingSpeed) => {
+      const results = await Promise.allSettled(runs.map((row) => setTaskSpeed(row.id, mode)));
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+    },
+    onSettled: refresh,
+  });
+  const actions = (run.control?.actions || []).filter((action): action is TaskControlAction => action !== 'set_speed');
+  const canSetSpeed = Boolean(run.control?.actions.includes('set_speed') && run.control.speed_mode);
   const followups = !isActive(run);
   const cancelling = cancellation.isPending || cancellation.isSuccess;
-  if (!actions.length) return null;
+  if (!actions.length && !canSetSpeed) return null;
 
   const submit = (action: TaskControlAction) => {
     const command = { id: run.id, label: run.task_label, action, followups };
@@ -106,9 +117,12 @@ export function TaskControls({ run, runs = [run] }: { run: TaskRunPayload; runs?
   };
 
   return (
-    <div className="ml-auto shrink-0" data-task-controls={run.id}>
+    <div className="ml-auto min-w-0" data-task-controls={run.id}>
       <div role="group" aria-label={`${run.task_label}${followups ? '后续任务' : '任务'}控制`}
-        className="flex items-center justify-end gap-2">
+        className="flex flex-wrap items-center justify-end gap-2">
+        {canSetSpeed ? <ProcessingMode value={run.control!.speed_mode!}
+          busy={speed.isPending || cancelling} animate={run.control?.state === 'running'}
+          onChange={(mode) => speed.mutate(mode)} /> : null}
         {actions.map((action) => {
           const label = (followups ? FOLLOWUP_LABELS : LABELS)[action];
           const busy = action === 'cancel' ? cancellation.isPending : change.isPending && change.variables?.action === action;
@@ -120,6 +134,7 @@ export function TaskControls({ run, runs = [run] }: { run: TaskRunPayload; runs?
             data-tooltip-copy-key={`tasks.control.action.${followups ? 'followups.' : ''}${action}`} />;
         })}
       </div>
+      {speed.error ? <Note tone="error">{errorMessage(speed.error)}</Note> : null}
     </div>
   );
 }

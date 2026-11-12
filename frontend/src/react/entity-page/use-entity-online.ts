@@ -50,6 +50,7 @@ export function useEntityOnline(author: string, active: boolean, wall: {
     .filter((group) => groupMediaKinds(group).has(media === 'images' ? 'image' : 'video')), [data, media]);
   const context = useMemo<FollowContext>(() => ({
     sources: data?.sources || [], aliases: data?.author_aliases || [],
+    credentialsReady: credentials.data !== undefined,
     credentials: new Set((credentials.data?.providers || [])
       .filter((provider) => provider.present).map((provider) => provider.provider)),
   }), [data, credentials.data]);

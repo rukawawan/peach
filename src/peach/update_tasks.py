@@ -1,7 +1,7 @@
 """同一数据目录内，任务起跑与安装准备共用进程间闸门。"""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 import json
 import os
@@ -19,6 +19,10 @@ from .fsutil import atomic_write_text
 
 class UpdateBusy(ValueError):
     """任务或安装事务占用数据目录，调用方应保留当前程序。"""
+
+
+class GateBusy(UpdateBusy):
+    """闸门锁等满超时：不是在装更新，只是别人拿着锁，过一会儿再试就好。"""
 
 
 def state_for(db: Path) -> Path:
@@ -70,10 +74,25 @@ def _maintenance(root: Path) -> dict:
 
 
 @contextmanager
+def gate(root: Path):
+    """取闸门锁；等满超时按「忙」报 `GateBusy`，调用方本来就把 `UpdateBusy` 当成这一轮先不做。
+
+    裸 `filelock.Timeout` 没有调用方接，曾直接打死后继通道线程。
+    """
+    stack = ExitStack()
+    try:
+        stack.enter_context(_mutex(root))
+    except Timeout:
+        raise GateBusy("任务闸门正忙，稍后自动重试。") from None
+    with stack:
+        yield
+
+
+@contextmanager
 def admission(db: Path):
     """持锁完成任务登记；安装取得预约后不接受新任务。"""
     root = state_for(db)
-    with _mutex(root):
+    with gate(root):
         if data := _maintenance(root):
             raise UpdateBusy(data.get("busy") or "正在准备安装更新，暂时不能启动新任务。请等待安装完成。")
         yield
@@ -118,9 +137,23 @@ def reserve(db: Path, *, owner: int | None = None, busy: str | None = None) -> s
 
 
 def is_pausing(db: Path) -> bool:
+    """有没有活着的安装预约。每个任务检查点都问，所以不取闸门锁。
+
+    `install.json` 只经原子替换写入，无锁读到的不是旧版就是新版。预约者已死只答「否」，
+    文件留给持锁的 `admission`／`reserve` 清：无锁删可能删掉刚写进来的新预约。读文件出错
+    （Windows 替换瞬间的共享冲突）才回到持锁路径，不按「正在暂停」处理。
+    """
     root = state_for(db)
-    with _mutex(root):
-        return bool(_maintenance(root))
+    try:
+        data = json.loads((root / "install.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        with gate(root):
+            return bool(_maintenance(root))
+    return bool(data) and _alive(data)
 
 
 def check_pause(db: Path | None) -> None:

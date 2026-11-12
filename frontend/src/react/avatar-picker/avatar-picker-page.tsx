@@ -99,6 +99,8 @@ function PickerBody({ kind, entityId, name, onPicked, close }: AvatarPickerProps
      一小块。整屏换掉而不是再叠一层弹层：这一步要的是尽可能大的底图，而弹层套弹层只会
      让底图更小。 */
   const [cropping, setCropping] = useState<Cropping | null>(null);
+  const [lostChoices, setLostChoices] = useState<Set<string>>(new Set());
+  const [imageAttempts, setImageAttempts] = useState<Record<string, number>>({});
   const key = avatarChoicesKey(kind, entityId);
   const picked = useRef(false);
 
@@ -213,19 +215,27 @@ function PickerBody({ kind, entityId, name, onPicked, close }: AvatarPickerProps
                 aria-selected={choice.current} title={choiceDetail(choice)} {...busyProps(busy)}
                 onClick={() => {
                   if (busy) return;
+                  if (lostChoices.has(choice.ref)) {
+                    setLostChoices(previous => new Set([...previous].filter(ref => ref !== choice.ref)));
+                    setImageAttempts(previous => ({ ...previous, [choice.ref]: (previous[choice.ref] || 0) + 1 }));
+                    opening.reset();
+                    submit.reset();
+                    return;
+                  }
                   if (choice.crop) { submit.reset(); opening.reset(); setCropping({ choice }) }
                   else opening.mutate({ via: 'choice', choice });
                 }}
                 className="relative flex cursor-pointer flex-col gap-1 overflow-hidden rounded-2lg border border-separator-border bg-background-secondary-default pb-1 text-center text-caption-1-regular text-text-secondary outline-none hover:border-border-button-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-border-focus-ring aria-selected:border-border-focus-ring aria-selected:bg-background-tertiary-default aria-selected:text-text-primary aria-disabled:cursor-progress aria-disabled:opacity-60">
-                <ChoiceImage src={choiceImageUrl(kind, entityId, choice.ref, baseVersion(choice, choice.ref))}
-                  choice={choice} />
+                <ChoiceImage key={imageAttempts[choice.ref] || 0}
+                  src={choiceImageUrl(kind, entityId, choice.ref, baseVersion(choice, choice.ref))}
+                  choice={choice} onUnavailable={() => setLostChoices(previous => new Set(previous).add(choice.ref))} />
                 <span className="truncate px-1">{choice.label}</span>
                 {choice.current
                   ? <span className="absolute top-1 left-1"><Chip variant="caption" color="gray">在用</Chip></span>
                   : null}
                 {/* 合演封面上最大那张脸多半是领衔的另一位，格子不围着它取景，这里标出人数。 */}
-                {sharedCast(choice)
-                  ? <span className="absolute top-1 right-1"><Chip variant="caption" color="gray">{choice.cast.toLocaleString()} 人</Chip></span>
+                {sharedCast(choice) || choice.user_cropped
+                  ? <span className="absolute top-1 right-1"><Chip variant="caption" color="gray">{sharedCast(choice) ? `${choice.cast.toLocaleString()} 人` : '已裁剪'}</Chip></span>
                   : null}
               </button>
             ))}
@@ -276,7 +286,9 @@ function PickerBody({ kind, entityId, name, onPicked, close }: AvatarPickerProps
  *  要框的横图（作品画面、番号封面）不整张铺满居中：封面正中常常是书脊或背景，格子
  *  在后端给的取景区里取一块 3:4，看到的就是框选那一步默认框住的那张脸。竖的图库
  *  人像照旧 `object-cover`。 */
-function ChoiceImage({ src, choice }: { src: string; choice: AvatarChoice }) {
+function ChoiceImage({ src, choice, onUnavailable }: {
+  src: string; choice: AvatarChoice; onUnavailable(): void;
+}) {
   const image = useRef<HTMLImageElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [lost, setLost] = useState(false);
@@ -290,10 +302,10 @@ function ChoiceImage({ src, choice }: { src: string; choice: AvatarChoice }) {
   return (
     <span data-choice-lost={lost || undefined}
       className="relative block w-full aspect-avatar-choice overflow-hidden">
-      {/* 取不到图时揭开骨架、撤掉图：骨架停在那儿读成还在等，留着图就是一枚破图标。
-          格子剩一块空底，名字和来源照旧在下面那行与 title 里。 */}
-      {lost ? null : <img ref={image} loading="lazy" alt="" src={src} data-revealed={shown}
-        onLoad={() => setRevealed(true)} onError={() => setLost(true)}
+      {/* 失败保留来源与重试入口，不把空白格当作可进入框选的图片。 */}
+      {lost ? <span className="absolute inset-0 flex items-center justify-center px-3">图片未取得，点击重试</span>
+        : <img ref={image} loading="lazy" alt="" src={src} data-revealed={shown}
+        onLoad={() => setRevealed(true)} onError={() => { setLost(true); onUnavailable() }}
         className={place
           ? 'reveal-content absolute max-w-none top-(--tile-top) left-(--tile-left) h-(--tile-height) w-(--tile-width)'
           : 'reveal-content absolute inset-0 size-full object-cover'}

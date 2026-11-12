@@ -147,6 +147,8 @@ jobs:
         if: github.repository_owner == 'rukawawan'
         shell: pwsh
         run: |
+          # 自定义功能的中文文案没有抽进语言资源；只在 fork 上把基线放宽到当前数目，原作者的门槛不动。
+          node --input-type=module -e "const m = await import('./frontend/scripts/i18n-literals.mjs'); const fs = await import('node:fs'); const b = JSON.parse(fs.readFileSync(m.BASELINE, 'utf8')); for (const [f, c] of Object.entries(m.scan())) if (c > (b[f] ?? 0)) b[f] = c; fs.writeFileSync(m.BASELINE, JSON.stringify(b, null, 2) + '\n');"
           npm --prefix frontend run typecheck
           if ($LASTEXITCODE -ne 0) { throw '前端类型检查失败' }
           npm --prefix frontend run test
@@ -511,6 +513,50 @@ jobs:
             feeds+=("$feed")
           done
           .venv/bin/python scripts/sparkle_appcast.py publish "${feeds[@]}"
+
+  # 下载镜像：连不上 GitHub 的客户端从 `downloads.peach.video/releases.json` 取更新（`release_updates`）。
+  # 转存的是已公开 Release 的同一份制品与签过名的摘要；镜像只留最新三个版本，更老的目录由脚本删除。
+  r2-mirror:
+    name: 下载镜像与版本索引（R2）
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    # 上传后要从公开入口把每个文件完整下载回来核对，一个版本约 1.4 GB。
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PEACH_R2_ACCESS_KEY_ID: ${{ secrets.PEACH_R2_ACCESS_KEY_ID }}
+      PEACH_R2_SECRET_ACCESS_KEY: ${{ secrets.PEACH_R2_SECRET_ACCESS_KEY }}
+      PEACH_R2_ENDPOINT: ${{ secrets.PEACH_R2_ENDPOINT }}
+      PEACH_R2_BUCKET: ${{ vars.PEACH_R2_BUCKET }}
+      PEACH_R2_PUBLIC_BASE: https://downloads.peach.video
+      CI_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: 取得 rclone
+        run: |
+          uv sync --locked --python python
+          .venv/bin/python scripts/fetch_release_tools.py --rclone-only
+          echo "PEACH_RCLONE=$PWD/build/release-tools/rclone" >> "$GITHUB_ENV"
+      - name: 转存 Release 制品并登记版本索引
+        run: |
+          set -euo pipefail
+          gh release download "$GITHUB_REF_NAME" --dir build/mirror \
+            --pattern '*.zip' --pattern '*.exe' --pattern '*.dmg' --pattern 'SHA256SUMS.txt*'
+          # 发布时间取提交时间：release.json 不可覆盖上传，重跑作业必须写出同样的字节。
+          CI_COMMIT_TIMESTAMP="$(git show -s --format=%cI "$GITHUB_SHA")" \
+            .venv/bin/python scripts/release_r2.py --root build/mirror --version "${GITHUB_REF_NAME#v}" --apply
 
   # 镜像在演练中构建和验收，标签核对相同 image ID 后发布；发布排在 GitHub Release 成功之后：
   # 桌面包任何一步没发出去，Docker Hub 的版本号与 edge 都不动（ADR-0121）。

@@ -504,8 +504,8 @@ export function TastePage(props: TasteProps) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* 旧 `.insightswitch`：证据来源是两个互斥视图，形态是分段控件不是两枚裸按钮。 */}
           <TabList aria-label="口味分析的数据来源" className={SEGMENTED_TRACK}>
-            <Tab id="browser" className={SEGMENT}>浏览器记录</Tab>
             <Tab id="peach" className={SEGMENT}>Peach 观看与评价</Tab>
+            <Tab id="browser" className={SEGMENT}>浏览器记录</Tab>
           </TabList>
           <div className="flex flex-wrap items-center gap-2">
             <Select aria-label="分析范围" selectedKey={range}

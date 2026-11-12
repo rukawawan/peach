@@ -5,6 +5,18 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 75s
+    # 检查命令沿用镜像的 HEALTHCHECK，这里只定时间参数，默认值与镜像相同；写入敏感的宿主机见 docs/DOCKER.md。
+    healthcheck:
+      interval: ${PEACH_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${PEACH_HEALTHCHECK_TIMEOUT:-5s}
+      start_period: ${PEACH_HEALTHCHECK_START_PERIOD:-60s}
+      retries: ${PEACH_HEALTHCHECK_RETRIES:-3}
+    # 容器标准输出的日志；PEACH_LOG_DRIVER 只能是 json-file 或 local，两者都按下面的大小轮转。
+    logging:
+      driver: ${PEACH_LOG_DRIVER:-json-file}
+      options:
+        max-size: ${PEACH_LOG_MAX_SIZE:-10m}
+        max-file: ${PEACH_LOG_MAX_FILE:-3}
     environment:
       # Watchtower 只换同一标签的新镜像；标签不是 edge 时配置页不给「一键更新」。
       PEACH_IMAGE_TAG: ${PEACH_VERSION:-edge}

@@ -13,6 +13,7 @@ describe('JAV 推荐与加载结构', () => {
     const { page } = opened;
     const reads: string[] = [];
     try {
+      await page.route('**/api/result-updates', route => route.fulfill({ json: { result_versions: {} } }));
       await page.route('**/api/taste?*', route => route.fulfill({ json: { summary: {}, rankings: {} } }));
       await page.route('**/api/jav/discoveries?*', route => {
         reads.push(route.request().url());
@@ -32,6 +33,8 @@ describe('JAV 推荐与加载结构', () => {
       await search.fill('PCH');
       await section.evaluate(node => { (node as HTMLElement).dataset.returnProbe = 'kept' });
       const count = reads.length;
+      const drawer = () => page.evaluate(() => document.body.classList.contains('drawer-open'));
+      const drawerOpen = await drawer();
       for (const exit of ['close', 'escape', 'back']) {
         const link = section.locator('[data-jav-card]').nth(8).locator('[data-jav-cover-box]');
         await link.scrollIntoViewIfNeeded();
@@ -43,12 +46,13 @@ describe('JAV 推荐与加载结构', () => {
         else if (exit === 'escape') await page.keyboard.press('Escape');
         else await page.goBack();
         await page.waitForFunction(() => location.pathname === '/jav' && !document.querySelector('#stage[open]'));
+        assert.equal(await drawer(), drawerOpen, `${exit} 关闭详情时侧栏不能跟着收起`);
         assert.equal(await search.inputValue(), 'PCH');
         assert.equal(await section.locator('[data-entity-tag="library"]').getAttribute('aria-pressed'), 'true');
         assert.equal(await section.locator('[data-catalog-tag="恋足"]').getAttribute('aria-pressed'), 'true');
         assert.equal(await section.locator('[data-entity-sort="release_date"]').getAttribute('aria-pressed'), 'true');
         assert.equal(await section.getAttribute('data-return-probe'), 'kept');
-        assert.equal(reads.length, count);
+        assert.equal(reads.length, count, JSON.stringify(reads));
         await page.waitForFunction(previous => Math.abs(window.scrollY - previous) < 2, top);
       }
       assert.deepEqual(opened.problems.filter(line => !line.includes('VIDEOJS')), []);
@@ -112,7 +116,7 @@ describe('JAV 推荐与加载结构', () => {
       });
       assert.deepEqual(avatarShape, { width: '38px', height: '38px', radius: '50%' });
       assert.deepEqual(await page.locator('[data-jav-skeleton-actions]').first().locator('.skeleton').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).height)), ['36px', '36px', '36px']);
-      assert.deepEqual(await page.locator('[data-jav-skeleton-card]').first().locator('[data-jav-skeleton-text]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).height)), ['20px', '20px', '20px']);
+      assert.deepEqual(await page.locator('[data-jav-skeleton-card]').first().locator('[data-jav-skeleton-text]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).height)), ['20px', '20px', '18px', '18px']);
       assert.equal(await page.locator('[data-jav-skeleton-cover]').first().evaluate(node => getComputedStyle(node).borderRadius),
         await page.locator('#main').evaluate(node => getComputedStyle(node).getPropertyValue('--surface-radius').trim()));
       assert.equal(await page.locator('[data-jav-filter] [data-entity-sep]').count(), 1);

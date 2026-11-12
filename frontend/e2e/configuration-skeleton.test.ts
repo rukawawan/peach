@@ -73,7 +73,7 @@ describe('配置页等待态', () => {
         assert.ok(bounds.scrollWidth <= bounds.viewportWidth);
         assert.deepEqual(bounds.offenders, []);
         await page.setViewportSize({ width: viewport.mobile ? 1280 : 390, height: 844 });
-        await page.waitForFunction(expected => document.querySelector('.ui-configpage>.ui-board-local-nav')?.getAttribute('aria-orientation') === expected,
+        await page.waitForFunction(expected => document.querySelector('[role="tablist"][aria-label="配置分区"]')?.getAttribute('aria-orientation') === expected,
           viewport.mobile ? 'vertical' : 'horizontal');
         assert.equal(await general.getAttribute('aria-selected'), 'true');
         assert.equal(await input.inputValue(), 'example.invalid');

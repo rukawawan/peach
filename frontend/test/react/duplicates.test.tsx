@@ -142,8 +142,8 @@ it('批量保留最大先确认，弹层点名条数与字节数；确认后进�
   await click(buttonNamed('全部保留最大', host));
   await settle();
   expect(seen).toHaveLength(1);
-  expect(seen[0]!.body).toContain('将把 2 个重复文件的馆藏记录移入回收站，每组保留最大的一个。');
-  expect(seen[0]!.body).toContain('文件共 2.0 GB，记录可从回收站还原。');
+  expect(seen[0]!.body).toContain('将 2 个重复文件的记录移入回收站（共 2.0 GB）');
+  expect(seen[0]!.body).toContain('每组保留最大的一个，可从回收站还原。');
   const batch = fetcher.mock.calls.findIndex((call) => call[0] === '/api/batch');
   expect(sentBody(fetcher, batch)).toEqual({ ids: [2, 4], operation: 'dispose', disposal_reason: 'duplicate' });
   expect(toast).toHaveBeenCalledWith('已把 2 项移入回收站', expect.objectContaining({ undo: expect.any(Function) }));
@@ -194,7 +194,7 @@ it('「都保留」不进回收站也不弹确认，整组一条；回执撤销�
 it('标过都保留的组数写在页尾，空态时也写', async () => {
   vi.stubGlobal('fetch', fetchMock(200, {}));
   const { host } = await open({ total: 0, files: 0, reclaimable: 0, groups: [], kept: 3 });
-  expect(host.textContent).toContain('另有 3 组标记了都保留，不再列出；组里文件有增减时会重新列出。');
+  expect(host.textContent).toContain('另有 3 组标记了都保留，不再列出');
   const plain = await open();
   expect(plain.host.textContent).not.toContain('标记了都保留');
 });

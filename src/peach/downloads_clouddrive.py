@@ -60,6 +60,7 @@ SUGGESTED_FOLDER = "云下载"
 
 _METHODS = {
     "GetSystemInfo": (empty_pb2.Empty, pb.CloudDriveSystemInfo),
+    "GetSystemSettings": (empty_pb2.Empty, pb.SystemSettings),
     "GetApiTokenInfo": (pb.StringValue, pb.TokenInfo),
     "GetAllCloudApis": (empty_pb2.Empty, pb.CloudAPIList),
     "GetCloudAPIConfig": (pb.GetCloudAPIConfigRequest, pb.CloudAPIConfig),
@@ -208,6 +209,21 @@ class CloudDriveClient:
         return Folder(path, bool(found.canOfflineDownload), found.CloudAPI.name,
                       found.CloudAPI.userName, bool(found.supportOfflineDownloadManagement))
 
+    def refresh_directory(self, path: str) -> None:
+        """完整读取目标目录元数据，让远端新文件进入 CloudDrive 与挂载的目录缓存。"""
+        call = self.channel.unary_stream(SERVICE + 'GetSubFiles',
+            request_serializer=pb.FileRequest.SerializeToString,
+            response_deserializer=pb.SubFilesReply.FromString)
+        stream = call(pb.FileRequest(path=path, forceRefresh=True), timeout=self.timeout,
+                      metadata=(("authorization", f"Bearer {self.token}"),))
+        try:
+            for _response in stream:
+                pass
+        except grpc.RpcError as error:
+            raise _translate(error, '刷新落地目录') from None
+        finally:
+            stream.cancel()
+
     def quota(self, folder: Folder) -> pb.OfflineQuotaInfo:
         return self.call("GetOfflineQuotaInfo", pb.OfflineQuotaRequest(
             cloudName=folder.cloud_name, cloudAccountId=folder.cloud_account, path=folder.path),
@@ -310,6 +326,7 @@ class CloudDriveProvider:
 
     def landed(self, task: DownloadTask) -> bool:
         with self.client() as client:
+            client.refresh_directory(task.target)
             return self._landed(client, task)
 
     @staticmethod

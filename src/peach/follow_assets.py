@@ -155,6 +155,21 @@ def fetch_image(client: httpx.Client, url: str) -> bytes | None:
     return body if sniff(body) else None
 
 
+def legible_icon(body: bytes | None) -> bytes | None:
+    """来源图标落盘前的最后一道：透明底纯白或纯黑字形换成外链圆标同款的圆底白字。
+
+    Iwara 只声明一枚透明底白字形，原样发给页面在浅色主题下看不见。其余图标原样保留。
+    """
+    if not body:
+        return body
+    from . import link_marks
+
+    image = link_marks.decode(body)
+    if image is None or not link_marks.bare_single_tone(image):
+        return body
+    return link_marks.glyph_mark(image) or body
+
+
 #: 圆标落盘时的长边。定这个数的不是圆标有多大，是圆标里那张脸能放大到多少：页面按
 #: 人脸取景放大，上限之一是「源图里那张脸有多少像素」，越过去就是上采样。实测本库的
 #: 代表图，脸框在 256px 那份里只剩 19～30px，而 28px 的圆在双倍屏上要 26px——正好

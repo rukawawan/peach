@@ -16,6 +16,7 @@ INTERVAL = 6 * 3600
 EVENT_LIMIT = 5
 NEW_KEY_LIMIT = 20
 RETENTION_DAYS = 7
+LOCK_TIMEOUT = 5
 
 
 def _now():
@@ -108,7 +109,7 @@ def record(config, revision, event, emit, log):
     """记录一次筛选后的故障；新诊断键立即上传错误事件，重复发生只累计次数。"""
     path = _path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(path) + ".lock", timeout=.1):
+    with FileLock(str(path) + ".lock", timeout=LOCK_TIMEOUT):
         now = _now()
         state = _load(path, revision, now)
         sample = {key: value for key, value in event.items() if key != "event_id"}
@@ -132,7 +133,7 @@ def flush(config, revision, emit, log, *, force=False):
     path = _path(config)
     if not path.exists():
         return
-    with FileLock(str(path) + ".lock", timeout=.1):
+    with FileLock(str(path) + ".lock", timeout=LOCK_TIMEOUT):
         now = _now()
         state = _load(path, revision, now)
         for key, row in state["records"].items():
@@ -144,5 +145,5 @@ def flush(config, revision, emit, log, *, force=False):
 def clear(config):
     path = _path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(path) + ".lock", timeout=.1):
+    with FileLock(str(path) + ".lock", timeout=LOCK_TIMEOUT):
         path.unlink(missing_ok=True)

@@ -696,6 +696,26 @@ class JavdbTests(Case):
                 " WHERE entity_id=? AND provider=? ORDER BY external_id",
                 (entity_id, followup.JAVDB))]
 
+    def test_javdb_actor_pages_queue_behind_library_processing_on_one_interval(self):
+        """资料处理刚问过 javdb.com，女优页这一问要等满同一份 3 秒；两份间隔各算各的会叠到每分钟 30 多页。"""
+        from peach import library_processing
+        from peach.scripting import HostLimiter
+
+        now, slept = [100.0], []
+
+        def sleep(delay):
+            slept.append(delay)
+            now[0] += delay
+
+        shared = HostLimiter(library_processing.SOURCE_INTERVALS, default_interval=2.0,
+                             clock=lambda: now[0], sleeper=sleep)
+        with mock.patch.object(library_processing, "SOURCE_LIMITER", shared):
+            pages = followup.open_sites(self.contract)[followup.JAVDB]
+            shared.wait("https://javdb.com/v/Ab12")
+            pages.limiter.wait("https://javdb.com/actors/Ab12")
+        self.assertEqual(slept, [3.0])
+        self.assertEqual(60 / library_processing.SOURCE_INTERVALS["javdb.com"], 20)
+
     def test_her_censored_and_uncensored_records_are_both_bound(self):
         """有碼、無碼两条是同一个人；名字对不上的近似结果不算。"""
         self.search("美ノ嶋めぐり", ("Ab12", "美ノ嶋めぐり, 中村めぐり", ""),
@@ -704,6 +724,8 @@ class JavdbTests(Case):
         found = self.javdb_ids(self.meguri)
         self.assertEqual([number for number, _metadata in found], ["Ab12", "Cd34"])
         self.assertEqual({metadata["batch"] for _number, metadata in found}, {f"{followup.SOURCE}@4"})
+        # 记下哪页是無碼那条：日后作品署名了其中一类，同类的另一页才分得出来（#271）。
+        self.assertEqual([metadata["uncensored"] for _number, metadata in found], [False, True])
         self.assertIn("javdb 绑定", summary["outcome"])
 
     def test_two_people_sharing_her_name_are_left_unbound(self):

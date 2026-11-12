@@ -32,7 +32,7 @@ const PEOPLE_LAYOUTS =[['big', '大图 · 竖幅头像', 'maximize'], ['compact'
 /* 公司那一格摆的是方形标识而不是脸，说法跟着换；档位仍是同一个设置值。 */
 const COMPANY_LAYOUTS = [['big', '大图 · 完整标识', 'maximize'], ['compact', '紧凑 · 圆形标识', 'layout-grid']] as const;
 const SERIES_LAYOUTS = [['big', '大图 · 系列图片', 'maximize'], ['compact', '紧凑 · 系列图片', 'layout-grid']] as const;
-const MAKER_INDEX_KINDS = [['studios', '厂牌', 'clapperboard'], ['agencies', '事务所', 'briefcase'], ['series', '系列', 'file-stack']] as const;
+const MAKER_INDEX_KINDS = [['studios', '厂牌', 'clapperboard'], ['series', '系列', 'file-stack'], ['agencies', '事务所', 'briefcase']] as const;
 const INDEX_SCOPES = [['local', '本地', 'hard-drive'], ['online', '在线', 'rss']] as const;
 const PEOPLE_INDEX_TABS = [['performers', '艺人', 'user-round'], ['creators', '卖家', 'user-round'], ['online', '在线', 'rss']] as const;
 const TAG_VIEWS = [['cloud', '标签云', 'tags'], ['alphabet', '字母表', 'text-aa']] as const;

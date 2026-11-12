@@ -350,14 +350,13 @@ class PullRequestIntegrationTests(_WorktreeCase):
 
 
 class PreflightTests(_WorktreeCase):
-    def worker(self, *, declaration=True):
+    def worker(self):
         item = create(self.repo, "Codex", "preflight", self.root / "worktrees")
         worker = Path(item["path"])
         path = worker / "src/peach/module.py"
         path.write_text("VALUE = 1\n", encoding="utf-8")
         _git(worker, "add", "src/peach/module.py")
-        trailers = ("README-Impact: none; 内部规则，使用方式不变\n" if declaration else "") + AUTHOR
-        _git(worker, "commit", "-m", "fix(tooling): 示例规则", "-m", trailers)
+        _git(worker, "commit", "-m", "fix(tooling): 示例规则", "-m", AUTHOR)
         return worker
 
     def test_the_cli_checks_metadata_without_reading_or_signing_test_proof(self):
@@ -375,11 +374,14 @@ class PreflightTests(_WorktreeCase):
         agent_worktree.require_pull_request.assert_not_called()
         self.assertFalse((self.repo / "build/agent-verification").exists())
 
-    def test_a_missing_final_declaration_is_rejected_before_test_proof(self):
-        worker = self.worker(declaration=False)
+    def test_single_readme_change_passes_preflight_with_authorship_only(self):
+        worker = self.worker()
+        (worker / 'README.md').write_text('# Example\n', encoding='utf-8')
+        _git(worker, 'add', 'README.md')
+        _git(worker, 'commit', '-m', 'docs: 更新说明', '-m', AUTHOR)
         with mock.patch.object(agent_worktree.test_evidence, "key") as key:
-            with self.assertRaisesRegex(WorkspaceError, "README"):
-                agent_worktree.preflight(worker)
+            result = agent_worktree.preflight(worker)
+        self.assertEqual(result['metadata'], 'passed')
         key.assert_not_called()
 
     def test_dirty_content_and_a_newer_target_require_preparation(self):
@@ -474,23 +476,13 @@ class CommitMessageGuardTests(_WorktreeCase):
                 self.assertEqual(_git(self.worker, "diff", "--cached", "--name-only").stdout.strip(),
                                  "worker.txt")
 
-    def test_separated_or_malformed_readme_declarations_refuse_the_commit(self):
+    def test_optional_readme_trailers_are_accepted_as_commit_text(self):
         for declaration in ("README-Impact: none; 内部测试\n\n", "README-Impact: none\n",
-                            "README-Impact: none; 内部测试\nREADME-Impact: updated; 文档\n"):
+                            "README-Impact: none; 内部测试\nREADME-Impact: updated; 文档\n",
+                            "README-Reviewed: README.zh-CN.md; 已核对\n\n",
+                            "README-Reviewed: README.zh-CN.md;\n", "README-Reviewed: unknown.md; 已核对\n"):
             with self.subTest(declaration=declaration):
-                result = self.attempt("test: check\n\n" + declaration + AUTHOR)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("README-Impact", result.stderr)
-
-    def test_counterpart_review_trailer_requires_a_file_reason_and_contiguous_block(self):
-        for declaration in ("README-Reviewed: README.zh-CN.md; 已核对\n\n",
-                            "README-Reviewed: README.zh-CN.md;\n",
-                            "README-Reviewed: unknown.md; 已核对\n"):
-            result = self.attempt("test: 核对声明\n\n" + declaration + AUTHOR)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("README-Reviewed", result.stderr)
-        result = self.attempt("test: 核对声明\n\nREADME-Reviewed: README.zh-CN.md; 中文正确\n" + AUTHOR)
-        self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(check_commit_message.check(self.worker, "test: check\n\n" + declaration + AUTHOR), [])
 
     def test_valid_trailers_and_amend_preserve_the_message(self):
         message = ("test: 中文提交\n\nREADME-Impact: updated; 两种语言\n" + AUTHOR
@@ -508,7 +500,7 @@ class CommitMessageGuardTests(_WorktreeCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(_git(self.worker, "show", "-s", "--format=%B").stdout.strip(), message.strip())
 
-    def test_intermediate_commit_can_leave_readme_scope_for_delivery_check(self):
+    def test_commit_accepts_authorship_without_readme_trailers(self):
         result = self.attempt("test: intermediate\n\n" + AUTHOR)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -519,7 +511,7 @@ class CommitMessageGuardTests(_WorktreeCase):
         self.assertIn("Co-Authored-By", result.stderr)
 
     def test_git_comment_lines_do_not_count_as_declarations(self):
-        result = self.attempt("test: comments\n\n" + AUTHOR + "\n\n# README-Impact: example\n")
+        result = self.attempt("test: comments\n\n" + AUTHOR + "\n\n# Co-Authored-By: example\n")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_merge_messages_are_exempt_from_authorship_trailers(self):
@@ -870,99 +862,7 @@ class IntegrationVersionTests(_WorktreeCase):
         self.assertEqual((report["release"]["entries"], report["release"]["due"]), (0, False))
 
 
-from scripts.check_readme_impact import check, git
-
-
-class ReadmeImpactTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.repo = Path(self.temp.name).resolve()
-        git(self.repo, "init", "-b", "master")
-        git(self.repo, "config", "user.name", "Test")
-        git(self.repo, "config", "user.email", "test@example.invalid")
-        self.save("README.md", "English")
-        self.save("README.zh-CN.md", "中文")
-        git(self.repo, "commit", "-m", "base")
-        self.base = git(self.repo, "rev-parse", "HEAD").strip()
-        git(self.repo, "checkout", "-b", "worker")
-
-    def save(self, name, content):
-        path = self.repo / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        git(self.repo, "add", "--", name)
-
-    def commit(self, trailer=""):
-        git(self.repo, "commit", "-m", "测试", "-m", trailer)
-        return check(self.repo, self.base)
-
-    def test_runtime_change_requires_review(self):
-        self.save("src/peach/example.py", "x = 1")
-        self.assertTrue(self.commit())
-
-    def test_internal_change_accepts_explained_none(self):
-        self.save("src/peach/example.py", "x = 1")
-        self.assertEqual(self.commit("README-Impact: none; 内部缓存实现，使用方式不变"), [])
-
-    def test_single_language_update_requires_counterpart_review(self):
-        self.save("README.md", "新内容")
-        self.assertTrue(self.commit("README-Impact: updated; 功能说明"))
-
-    def test_single_language_typo_accepts_explicit_counterpart_review(self):
-        self.save("README.md", "修正错字")
-        self.assertEqual(self.commit("README-Impact: updated; 中文错字\n"
-                                     "README-Reviewed: README.zh-CN.md; 中文表述正确，无需修改"), [])
-
-    def test_counterpart_review_requires_correct_file_and_reason(self):
-        self.save("README.md", "修正错字")
-        for trailer in ("README-Reviewed: README.md; 已核对", "README-Reviewed: README.zh-CN.md;",
-                        "README-Reviewed: README.zh-CN.md; 已核对\nREADME-Reviewed: README.zh-CN.md; 重复"):
-            self.assertTrue(self.commit("README-Impact: updated; 中文错字\n" + trailer))
-            git(self.repo, "reset", "--soft", "HEAD^")
-
-    def test_bilingual_update_accepts_review(self):
-        self.save("README.md", "新内容")
-        self.save("README.zh-CN.md", "New content")
-        self.assertEqual(self.commit("README-Impact: updated; 功能说明"), [])
-
-    def test_none_cannot_describe_document_changes(self):
-        self.save("README.md", "新内容")
-        self.save("README.zh-CN.md", "New content")
-        self.assertTrue(self.commit("README-Impact: none; 内部改动"))
-
-    def test_test_only_change_needs_no_declaration(self):
-        self.save("tests/example.py", "x = 1")
-        self.assertEqual(self.commit(), [])
-
-    def test_uncommitted_readme_does_not_satisfy_review(self):
-        self.save("frontend/package.json", "{}")
-        self.commit("README-Impact: updated; 工具要求")
-        self.save("README.md", "新内容")
-        self.save("README.zh-CN.md", "New content")
-        self.assertTrue(check(self.repo, self.base))
-
-    def test_missing_reason_and_duplicate_trailers_are_rejected(self):
-        self.save("web/app.js", "x = 1")
-        for trailer in ("README-Impact: none;",
-                        "README-Impact: none; 原因\nREADME-Impact: updated; 原因"):
-            git(self.repo, "commit", "--allow-empty", "-m", "测试", "-m", trailer)
-            self.assertTrue(check(self.repo, self.base))
-
-    def test_deletion_and_rename_trigger_review(self):
-        self.save("src/peach/example.py", "x = 1")
-        self.commit("README-Impact: none; 内部实现")
-        self.base = git(self.repo, "rev-parse", "HEAD").strip()
-        git(self.repo, "mv", "src/peach/example.py", "example.txt")
-        self.assertTrue(self.commit())
-
-    def test_gate_rejects_before_accepting_verification(self):
-        self.save("web/app.js", "x = 1")
-        self.commit()
-        with mock.patch.object(agent_worktree.test_evidence, "key") as key:
-            with self.assertRaisesRegex(agent_worktree.WorkspaceError, "README"):
-                agent_worktree.require_verified(self.repo, "master", {"web/app.js"})
-            key.assert_not_called()
+from scripts.check_readme_impact import git
 
 
 from scripts import check_commit_message, co_author
@@ -1100,7 +1000,7 @@ class CoAuthorTests(unittest.TestCase):
         self.assertEqual(co_author.check(self.repo, "master"), [])
 
     def test_the_signature_gate_runs_before_the_test_evidence_is_read(self):
-        """署名和 README 影响面在同一处拒收，都不必等到去读测试记录。"""
+        """署名在读取测试记录前检查。"""
         (self.repo / "tests").mkdir()
         (self.repo / "tests" / "example.py").write_text("x = 1\n", encoding="utf-8")
         git(self.repo, "add", "--", "tests/example.py")

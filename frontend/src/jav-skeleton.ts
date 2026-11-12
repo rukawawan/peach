@@ -25,7 +25,7 @@ export function javContentSkeleton(tab: string, layout = javLayout()): string {
   return `<div data-media-grid class="${JAV_RECOMMENDATION_GRID}" data-skeleton="jav-discover">${Array.from({ length: 6 }, () => `<div data-jav-skeleton-card data-media-card data-jav-card class="flex min-w-0 flex-col gap-3">
     <span data-jav-skeleton-cover class="skeleton block w-full rounded-2lg" style="aspect-ratio:${ratio}"></span>
     <div data-media-meta><span data-jav-skeleton-avatar class="skeleton block shrink-0"></span><div data-media-text>
-      <div data-media-title>${text('85%')}${text('65%')}</div><div data-media-byline>${text('55%')}</div>
+      <div data-media-title>${text('85%')}${text('65%')}</div><div data-media-byline><span data-media-who>${text('6em')}</span><span data-media-facts><span data-media-release>${text('7em')}</span></span></div>
       <div data-media-tags><span class="skeleton block h-5 w-20 rounded-md"></span><span class="skeleton block h-5 w-24 rounded-md"></span></div>
     </div></div>
     <div data-jav-skeleton-actions class="flex flex-wrap gap-2"><span data-jav-skeleton-action class="skeleton block h-9 w-20 rounded-md"></span><span data-jav-skeleton-action class="skeleton block h-9 w-12 rounded-md"></span><span data-jav-skeleton-action class="skeleton block h-9 w-26 rounded-md"></span></div>

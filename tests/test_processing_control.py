@@ -668,6 +668,8 @@ class ProcessingControlTests(unittest.TestCase):
             w_library_processing(contract, {'action': 'pause', 'job_id': initial['job_id']})
             advance.set()
             self.assert_processing_status(contract, 'paused')
+            from peach import task_control
+            task_control.request(runs, initial['run_id'], 'set_speed', mode='low')
             first.stop()
             self.assertEqual(runs.get(initial['run_id']).status, 'pending')
             self.assertEqual(runs.get(initial['run_id']).progress_label, '已暂停，等待继续')
@@ -680,7 +682,8 @@ class ProcessingControlTests(unittest.TestCase):
             self.assertEqual(resumes[1]['completed_metadata'], ['1:R:\\a.mp4'])
             self.assertEqual(second.snapshot()['status'], 'complete')
             self.assertEqual(second.snapshot()['run_id'], initial['run_id'])
-            self.assertEqual(control_for(self.config).mode, 'high')
+            self.assertEqual(control_for(self.config).mode, 'low')
+            self.assertEqual(task_control.speed_mode(db, initial['run_id']), 'low')
             self.assertEqual(runs.get(initial['run_id']).status, 'succeeded')
 
     def test_a_paused_run_whose_progress_file_stopped_can_still_resume(self):
@@ -748,6 +751,60 @@ class ProcessingControlTests(unittest.TestCase):
             self.assertEqual(second.snapshot()['run_id'], initial['run_id'])
             self.assertEqual(control_for(self.config).mode, 'high')
             self.assertEqual(runs.get(initial['run_id']).status, 'succeeded')
+
+    def test_legacy_library_recovery_preserves_speed_without_a_task_speed_file(self):
+        from peach import task_control, update_tasks
+        from peach.jobs import BackgroundJob
+        from peach.library_processing import _save, state_path
+        from peach.task_runs import TaskRunStore
+        from peach.web_job_recovery import restore
+        from peach.web_library_processing import q_library_processing
+        from peach.processing_control import default_mode
+        database_root = self.config.directory('database')
+        database_root.mkdir(parents=True)
+        db = fresh_ledger(database_root)
+        runs = TaskRunStore(db)
+        for mode, source in (('low', 'state'), ('high', 'state'), ('high', 'control')):
+            with self.subTest(mode=mode, source=source):
+                identity = f'legacy-{mode}-{source}'
+                run = runs.start('library-processing', trigger='manual')
+                runs.suspend(run.id)
+                speed_file = update_tasks.state_for(db).parent / 'task-controls' / f'{run.id}.speed.json'
+                speed_file.unlink()
+                control = control_for(self.config)
+                control.select_job(identity)
+                control.request('set_speed', mode=mode if source == 'control' else 'standard')
+                previous = dict(job_id=identity, requested_stage='metadata', status='paused',
+                                completed_metadata=['1:R:\\a.mp4'])
+                if source == 'state':
+                    previous['speed_mode'] = mode
+                _save(state_path(self.config), previous)
+                job_recovery.save(db, 'library-processing', identity, {'stage': 'metadata', 'speed_mode': mode},
+                                  run_id=run.id, waiting=True)
+                job_recovery.checkpoint(db, 'library-processing', identity, previous)
+                job = BackgroundJob('library-processing', runs=runs)
+                self.addCleanup(job.stop, timeout=None)
+                contract = SimpleNamespace(db_path=db, library_processing_job=job, task_runs=runs,
+                                           database=runs.database, candidate_root=self.root / 'candidates',
+                                           cover_root=self.root / 'covers', cache_bust=lambda: None)
+                observed = []
+                def process(*_args, observed=observed, **kwargs):
+                    observed.append((kwargs['speed_mode'], task_control.CURRENT.get().mode,
+                                     kwargs['resume_state']['completed_metadata']))
+                    return {'status': 'complete'}
+                with patch('peach.web_library_processing.settings_file.active', return_value=self.config), \
+                        patch('peach.web_library_processing.process_library', side_effect=process):
+                    self.assertEqual(q_library_processing(contract, {})['speed_mode'], mode)
+                    self.assertEqual(restore(contract), ['library-processing'])
+                    job.thread.join(5)
+                self.assertFalse(job.thread.is_alive())
+                self.assertEqual(observed, [(mode, mode, ['1:R:\\a.mp4'])])
+                self.assertEqual(job.snapshot()['run_id'], run.id)
+                self.assertEqual(job.snapshot()['speed_mode'], mode)
+                self.assertEqual(runs.get(run.id).status, 'succeeded')
+                self.assertTrue(speed_file.exists())
+                self.assertEqual(task_control.speed_mode(db, run.id), mode)
+                self.assertEqual(default_mode(runs.database), 'standard')
 
     def test_three_intensities_set_distinct_io_start_intervals(self):
         control = control_for(self.config)
@@ -868,6 +925,60 @@ class ProcessingControlTests(unittest.TestCase):
             low = w_library_processing(contract, {'action': 'set_speed', 'job_id': 'one', 'speed_mode': 'low'})
             self.assertEqual((low['eta_seconds_min'], low['eta_seconds_max']), (180, 360))
             self.assertTrue(control.paused)
+
+    def test_library_and_task_controls_share_runtime_speed_without_changing_the_default(self):
+        from peach import task_control
+        from peach.jobs import BackgroundJob
+        from peach.task_runs import TaskRunStore
+        from peach.web_library_processing import q_library_processing
+        from peach.processing_control import default_mode
+        runs = TaskRunStore(self.db)
+        run = runs.start('library-processing', trigger='manual')
+        job = BackgroundJob('library-processing')
+        job.state = dict(job_id='one', run_id=run.id, status='running', speed_mode='standard',
+                         eta_seconds_min=100, eta_seconds_max=200)
+        contract = SimpleNamespace(db_path=self.db, library_processing_job=job, task_runs=runs)
+        control = control_for(self.config)
+        with patch('peach.web_library_processing.settings_file.active', return_value=self.config):
+            task_control.request(runs, run.id, 'set_speed', mode='high')
+            state = q_library_processing(contract, {})
+            self.assertEqual((state['speed_mode'], state['eta_seconds_min']), ('high', 75))
+            state = w_library_processing(contract, {'action': 'set_speed', 'job_id': 'one', 'speed_mode': 'low'})
+            self.assertEqual(state['speed_mode'], 'low')
+            self.assertEqual(task_control.projection(runs, run)['speed_mode'], 'low')
+            self.assertEqual(default_mode(runs.database), 'standard')
+            with task_control.bind(runs, run.id), control.bind(
+                    'one', publish=lambda **_: None, active=lambda: True, db_path=self.db):
+                self.assertEqual(control.mode, 'low')
+                task_control.request(runs, run.id, 'set_speed', mode='high')
+                self.assertEqual(control.mode, 'high')
+
+    def test_new_library_run_uses_settings_instead_of_the_previous_processing_mode(self):
+        from peach.jobs import BackgroundJob
+        from peach.task_runs import TaskRunStore
+        from peach.web_settings import w_settings
+        root = self.config.directory('database')
+        root.mkdir(parents=True)
+        db = fresh_ledger(root)
+        runs = TaskRunStore(db)
+        w_settings(runs.database, {'taskSpeedMode': 'low'})
+        control_for(self.config).request('set_speed', mode='high')
+        job = BackgroundJob('library-processing', runs=runs)
+        contract = SimpleNamespace(db_path=db, database=runs.database, task_runs=runs,
+                                   library_processing_job=job)
+        with patch('peach.web_library_processing.settings_file.active', return_value=self.config), \
+                patch.object(job, 'start', side_effect=lambda _work, **kwargs: kwargs['initial']) as start:
+            result = w_library_processing(contract, {'stage': 'metadata'})
+            self.assertEqual(result['speed_mode'], 'low')
+            self.assertEqual(start.call_args.kwargs['recovery']['speed_mode'], 'low')
+            chosen = w_library_processing(contract, {'action': 'set_speed', 'speed_mode': 'high'})
+            self.assertEqual(chosen['speed_mode'], 'high')
+            from peach.processing_control import default_mode
+            self.assertEqual(default_mode(runs.database), 'low')
+            selected = w_library_processing(contract, {'stage': 'metadata'})
+            self.assertEqual(selected['speed_mode'], 'high')
+            from peach.web_library_processing import q_library_processing
+            self.assertEqual(q_library_processing(contract, {})['speed_mode'], 'low')
 
     def test_scan_progress_accumulates_discovered_counts_across_roots(self):
         from peach.library_processing import _scan_sources

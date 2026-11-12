@@ -30,6 +30,7 @@ import { useEntityNames } from '../use-entity-names';
 
 import type { MediaCardActions, MediaCardHelpers, MediaCardLayout, MediaItem } from '../catalog-grid/types';
 import { ArtSlot } from './art-slot';
+import { ArtworkGapView, failedArtwork, missingArtwork, type ArtworkGap } from './artwork-gap';
 import { CardDate, CardTags, Icon, WhoLabel } from './card-meta';
 import { RecommendationReason } from './recommendation-reason';
 import { useLibraryTints } from './library-tint';
@@ -46,18 +47,6 @@ const UNNAMED = '未命名视频';
 
 const RESOURCE_LABELS: Record<string, string> = { image: '图片', audio: '音频', archive: '压缩包', other: '其它文件' };
 const DISPOSAL_LABELS = { manual: '手动', junk: '垃圾', duplicate: '重复', missing: '文件缺失' };
-
-function missingDuration(item: MediaItem): { key: string; label: string } {
-  // media_probe 将已探查但未取得时长记为 -1；NULL 才是尚未探查。
-  if (Number(item.duration) < 0) return { key: 'unavailable', label: '探查错误' };
-  if (item.duration != null) return { key: 'unknown', label: '时长未取得' };
-  if (item.location === 'online') return { key: 'online', label: '来源未提供时长' };
-  const path = String(item.path || item.name || '').toLowerCase();
-  if (item.is_strm || path.endsWith('.strm')) return { key: 'strm', label: 'STRM 不自动探查' };
-  if (path.endsWith('.iso')) return { key: 'iso', label: 'ISO 不自动探查' };
-  if (item.cost === 'metered') return { key: 'metered', label: '流量保护 · 未探查' };
-  return { key: 'pending', label: '尚未探查' };
-}
 
 function DisposalReason({ item }: { item: MediaItem }) {
   if (item.disposal !== 'trash') return null;
@@ -202,14 +191,13 @@ function VideoCard({ item, variant, layout, selected, selectMode, seekSeconds, h
   const flaggedBy = [Number(item.liked) > 0 ? '喜欢' : '', Number(item.o_count) > 0 ? '有高潮记录' : ''].filter(Boolean);
   const latest = useRef(item);
   latest.current = item;
-  /* 悬停预览只接一次：`wireHover` 往卡上挂监听，ref 回调换了身份 React 就会先卸后挂，
-     同一张卡上会叠出第二套。卸载时收掉正在放的预览。 */
+  /* 资源身份或缩略图能力变化时重绑；wireHover 先清理旧事件，避免虚拟卡片复用旧资源。 */
   const attach = useCallback((el: HTMLElement | null) => {
     const current = latest.current;
     if (card.current && card.current !== el) releaseHover(card.current);
     card.current = el;
     if (el && (!current.medium || current.medium === 'video')) wireHover(el, current);
-  }, []);
+  }, [item.id, item.location, item.has_thumb, item.medium]);
 
   /* 按画幅筛的列表里，接口只算同画幅的卷与版本，组可能只剩一卷或一个版本：那张卡就是这一个
      文件自己，不叠纸边、不标卷数或版本数。 */
@@ -221,16 +209,32 @@ function VideoCard({ item, variant, layout, selected, selectMode, seekSeconds, h
   const size = jav ? layout.size : 'small';
   /* 竖屏格（竖屏带与筛竖屏的网格）只展示竖屏比例的视频，卡面只用视频自己的帧图；番号作品也
      不走官方封面，「JAV 默认封面」设置在这里不起作用：那张封面是整部作品的宣传图，多是横图，
-     和这一卷竖屏视频不是同一个画面。没有帧图就是「无预览」。 */
+     和这一卷竖屏视频不是同一个画面。没有图时写缺的是什么、为什么缺（`./artwork-gap.tsx`）。 */
   const frameOnly = ratio === PORTRAIT_RATIO && !!item.is_jav;
-  const artwork = frameOnly ? frameArtwork(item, false) : cardArtwork(item, size, false, layout.javImage);
-  const identity = frameOnly || size === 'small' ? artwork.html : cardArtwork(item, 'small', false, layout.javImage).html;
+  const drawn = frameOnly ? frameArtwork(item, false) : cardArtwork(item, size, false, layout.javImage);
+  const identity = frameOnly || size === 'small' ? drawn.html : cardArtwork(item, 'small', false, layout.javImage).html;
+  /* 取失败记在当时那段片段上：换了图（补到封面、改了「JAV 默认封面」）就不再算失败。重试给地址
+     添一个序号，身份跟着变，`ArtSlot` 才会换一个新元素重新取。 */
+  const [failure, setFailure] = useState<{ html: string; gap: ArtworkGap | null } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const failed = failure?.html === drawn.html ? failure : null;
+  const artwork = attempt ? { ...drawn, html: drawn.html.replace(/ src="([^"]*)"/, (_all, src: string) =>
+    ` src="${src}${src.includes('?') ? '&amp;' : '?'}r=${attempt}"`) } : drawn;
+  const onFailed = useCallback((src: string) => {
+    const html = drawn.html;
+    setFailure({ html, gap: null });
+    void failedArtwork(src.replace(/&r=\d+$/, ''), drawn.kind).then(gap =>
+      setFailure(current => current?.html === html ? { html, gap } : current));
+  }, [drawn.html, drawn.kind]);
+  const retry = useCallback(() => { setFailure(null); setAttempt(count => count + 1) }, []);
+  const gap = !artwork.html ? missingArtwork(item, frameOnly) : failed
+    ? failed.gap || { key: 'checking', title: drawn.kind === 'cover' ? '封面未取得' : '预览未取得', reason: '正在查原因', fix: '' as const }
+    : null;
   const rawName = parts?.title || item.name || '';
   const shownName = helpers.displayName(item, rawName).trim() || UNNAMED;
   const titleHtml = helpers.titleHtml(item, rawName).trim() || esc(UNNAMED);
   const shownSize = parts?.total_size ?? item.size;
   const shownDuration = parts?.total_duration ?? item.duration;
-  const durationReason = Number(shownDuration) > 0 ? null : missingDuration(item);
   const watched = !parts && Number(item.play_seconds) > 0 && Number(item.duration) > 0
     ? Math.min(Number(item.play_seconds) / Number(item.duration), 1) : 0;
   const { avatar, who } = identityParts(item);
@@ -262,9 +266,10 @@ function VideoCard({ item, variant, layout, selected, selectMode, seekSeconds, h
   const pic = (
     <div data-media-pic="" data-pic-portrait={ratio === PORTRAIT_RATIO ? '' : undefined}
       style={{ '--card-ratio': String(ratio) } as CSSProperties}>
-      {artwork.html
-        ? <ArtSlot artwork={artwork} identity={identity} relayout={(root) => relayoutCovers(root, size)} />
-        : <span data-media-nopic="">无预览</span>}
+      {gap
+        ? <ArtworkGapView gap={gap} item={item} onRetry={retry} />
+        : <ArtSlot artwork={artwork} identity={`${identity}#${attempt}`} relayout={(root) => relayoutCovers(root, size)}
+          onFailed={onFailed} />}
       <div data-media-badge="" dangerouslySetInnerHTML={{ __html: helpers.badgeHtml(item.location || '', item.cost || '') }} />
       <span data-media-check=""><Icon name="check" /></span>
       <span data-media-trash-mark=""><Icon name="trash" /><b>回收站</b></span>
@@ -272,9 +277,7 @@ function VideoCard({ item, variant, layout, selected, selectMode, seekSeconds, h
       {editions
         ? <span data-media-group="" title={editions.editions.join(' · ')}>{`${Number(editions.count).toLocaleString()} 个版本`}</span>
         : null}
-      <span data-media-duration="" data-copy-key={durationReason ? `media.duration.${durationReason.key}` : undefined}>
-        {durationReason ? durationReason.label : fmtDur(shownDuration)}
-      </span>
+      {Number(shownDuration) > 0 ? <span data-media-duration="">{fmtDur(shownDuration)}</span> : null}
       {!selectMode && item.disposal === 'trash' ? <ResourceAction item={item} actions={actions} /> : null}
       {watched > 0
         ? (

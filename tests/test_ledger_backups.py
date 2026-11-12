@@ -361,6 +361,57 @@ def task_row(db: Path, task_key: str, status: str = "succeeded") -> int:
 
 
 class LedgerRestoreTests(unittest.TestCase):
+    def completed_download(self):
+        previous_run = task_row(self.live, 'download-postprocess')
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            task = connection.execute("INSERT INTO download_task(provider,source_uri,target,state,updated_at,"
+                                      "postprocess_state,postprocess_run_id,postprocess_detail) "
+                                      "VALUES('115','sample','/Movies','ingested','now','complete',?,'整理完成')",
+                                      (previous_run,)).lastrowid
+            connection.execute('UPDATE task_run SET mutex_key=? WHERE id=?',
+                               (f'download-ingest:{task}', previous_run))
+            connection.commit()
+        return previous_run
+
+    def test_restore_keeps_a_postprocess_link_that_matches_its_download(self):
+        previous_run = self.completed_download()
+        backup = ledger_backups.create(self.live)
+        self.restore(backup)
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            self.assertEqual(connection.execute('SELECT postprocess_run_id FROM download_task').fetchall(),
+                             [(previous_run,)])
+
+    def test_restore_drops_a_postprocess_link_reused_by_unrelated_current_history(self):
+        previous_run = self.completed_download()
+        backup = ledger_backups.create(self.live)
+        from peach.task_runs import TaskRunStore
+        TaskRunStore(self.live).prune('download-postprocess', keep=0)
+        current = task_row(self.live, 'other-task')
+        self.assertEqual(current, previous_run)
+        self.restore(backup)
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            self.assertEqual(connection.execute('SELECT task_key FROM task_run').fetchall(), [('other-task',)])
+            self.assertEqual(connection.execute('SELECT postprocess_state,postprocess_run_id,postprocess_detail '
+                                                'FROM download_task').fetchall(), [('complete', None, '整理完成')])
+            connection.execute("UPDATE task_run SET task_key='download-postprocess',mutex_key='download-ingest:999999'")
+            connection.commit()
+        self.restore(backup)
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            self.assertIsNone(connection.execute('SELECT postprocess_run_id FROM download_task').fetchone()[0])
+
+    def test_restore_refuses_logically_invalid_backup_before_replacing_live_data(self):
+        backup = ledger_backups.create(self.live)
+        with contextlib.closing(sqlite3.connect(backup)) as connection:
+            connection.execute("INSERT INTO watch_queue(profile_id,asset_id,added_at,source) "
+                               "VALUES('local-default',999999,'now','test')")
+            connection.commit()
+        self.assertEqual(ledger_backups.integrity(backup), 'ok')
+        with self.assertRaisesRegex(ledger_backups.BackupRejected, '外键'):
+            self.restore(backup)
+        self.assertEqual(notes(self.live), ['before'])
+        with contextlib.closing(sqlite3.connect(self.live)) as connection:
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

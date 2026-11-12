@@ -232,6 +232,14 @@ class RootBoundaryTests(unittest.TestCase):
             insensitive = (Path(tmp).resolve() / "MEDIA").is_dir()
             self.assertEqual(within_root(shouting, root), insensitive)
 
+    @unittest.skipUnless(os.name == "nt", "盘符只在 Windows 上有意义")
+    def test_windows_roots_answer_from_the_path_text_without_touching_the_drives(self):
+        """网盘盘符每次 stat 都是一趟网络往返：大小写不同和跨盘符都不该去问盘。"""
+        with patch.object(Path, "samefile", side_effect=AssertionError("不该 stat 盘符")):
+            self.assertTrue(within_root(Path("B:/Media/a.mp4"), Path("b:/media")))
+            self.assertFalse(within_root(Path("A:/media/a.mp4"), Path("B:/")))
+            self.assertFalse(within_root(Path("B:/other/a.mp4"), Path("C:/media")))
+
     def test_root_online_needs_a_readable_mount_not_just_a_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertTrue(root_online(Path(tmp)))

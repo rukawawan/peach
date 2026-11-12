@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fmtSize } from '@peach/legacy/core';
-import { shellNavigate } from '@peach/history';
+import { peachHistory } from '@peach/history';
 import { CLEANUP_HASH_REDIRECTS, CLEANUP_TOOLS, type CleanupTool } from '../../cleanup-tools';
 import type { DataCleanupProps, DataCleanupSection } from '../bundle';
 import { SectionHeading } from '../components/fieldset';
@@ -19,13 +19,14 @@ import {
 } from './data-cleanup';
 import { CLEANUP_ENTRY_GRID } from './cleanup-entry';
 import { CleanupEntryCard } from './cleanup-entry-card';
+import { t } from '../../i18n';
 
 export { DataCleanupToolPage } from './data-cleanup-tool-page';
 
 interface Reading { figure: string; meta?: string; state?: 'loading' | 'error' }
 function reading<T>(query: { data: T | undefined; isError: boolean }, read: (data: T) => Reading): Reading {
   if (query.data !== undefined) return read(query.data);
-  return query.isError ? { figure: '读取失败', state: 'error' } : { figure: '正在读取…', state: 'loading' };
+  return query.isError ? { figure: t('cleanup:overview.loadFailed'), state: 'error' } : { figure: t('cleanup:overview.loading'), state: 'loading' };
 }
 
 function EntryCard({ section, label, icon, value, open }: {
@@ -62,38 +63,38 @@ export function DataCleanupPage({ toast, open, navigate }: DataCleanupProps) {
   const trash = useQuery({ queryKey: TRASH_KEY, queryFn: ({ signal }) => fetchTrashSummary(signal) });
   useEffect(() => {
     const target = CLEANUP_HASH_REDIRECTS[location.hash];
-    if (target) shellNavigate(target + location.search, { replace: true });
+    if (target) peachHistory.replace(target + location.search);
   }, []);
 
   return <Page>
     <section aria-labelledby="cleanup-pending" className="flex flex-col gap-4">
-      <SectionHeading id="cleanup-pending">待处理事项</SectionHeading>
+      <SectionHeading id="cleanup-pending">{t('cleanup:overview.needsAttention')}</SectionHeading>
       <div className={PLAIN_STAT_STRIP}>
-        <EntryCard section="review" label="人工复核" icon={REVIEW} open={open} value={reading(review, reviewSummary)} />
-        <EntryCard section="duplicates" label="重复文件" icon={DUPLICATES} open={open}
+        <EntryCard section="review" label={t('cleanup:overview.review')} icon={REVIEW} open={open} value={reading(review, reviewSummary)} />
+        <EntryCard section="duplicates" label={t('cleanup:overview.duplicates')} icon={DUPLICATES} open={open}
           value={reading(duplicates, data => Number(data.total || 0) ? {
-            figure: `${Number(data.total).toLocaleString()} 组 · ${Number(data.files || 0).toLocaleString()} 个文件`,
-            meta: `可回收 ${fmtSize(data.reclaimable || 0)}`,
-          } : { figure: '没有重复内容' })} />
-        <EntryCard section="ads" label="垃圾文件" icon={JUNK} open={open}
-          value={reading(junk, data => ({ figure: `${Number(data.pending_total || 0).toLocaleString()} 个待判断`, meta: junkBreakdown(data) }))} />
-        <EntryCard section="quality" label="高清版" icon={QUALITY} open={open}
-          value={reading(quality, data => ({ figure: `${Number(data.total || 0).toLocaleString()} 个待升级` }))} />
-        <EntryCard section="trash" label="回收站" icon={TRASH} open={open}
-          value={reading(trash, data => ({ figure: `${Number(data.total || 0).toLocaleString()} 项在回收站`, meta: data.total ? `占用 ${fmtSize(data.bytes || 0)}` : '查看和还原已移入回收站的内容' }))} />
+            figure: t('cleanup:overview.duplicateGroups', { count: Number(data.total), files: Number(data.files || 0).toLocaleString() }),
+            meta: t('cleanup:overview.reclaimable', { size: fmtSize(data.reclaimable || 0) }),
+          } : { figure: t('cleanup:overview.noDuplicates') })} />
+        <EntryCard section="ads" label={t('cleanup:overview.junkFiles')} icon={JUNK} open={open}
+          value={reading(junk, data => ({ figure: t('cleanup:overview.junkUndecided', { count: Number(data.pending_total || 0) }), meta: junkBreakdown(data) }))} />
+        <EntryCard section="quality" label={t('cleanup:overview.hdUpgrades')} icon={QUALITY} open={open}
+          value={reading(quality, data => ({ figure: t('cleanup:overview.upgradesPending', { count: Number(data.total || 0) }) }))} />
+        <EntryCard section="trash" label={t('cleanup:overview.trash')} icon={TRASH} open={open}
+          value={reading(trash, data => ({ figure: t('cleanup:overview.trashCount', { count: Number(data.total || 0) }), meta: data.total ? t('cleanup:overview.trashSize', { size: fmtSize(data.bytes || 0) }) : t('cleanup:overview.trashEmptyHint') }))} />
       </div>
     </section>
     <div id="libraryProcessing" className="scroll-mt-20">
       <LibraryProcessingCard toast={message => toast(message)} monitor onComplete={refreshReadings} />
     </div>
     <section aria-labelledby="cleanup-maintenance" className="flex flex-col gap-4">
-      <SectionHeading id="cleanup-maintenance">整理与维护</SectionHeading>
+      <SectionHeading id="cleanup-maintenance">{t('cleanup:overview.maintenanceSection')}</SectionHeading>
       <div className={CLEANUP_ENTRY_GRID}>
         {CLEANUP_TOOLS.filter(tool => tool.key !== 'batch-delete').map(tool => <ToolEntry key={tool.key} tool={tool} navigate={navigate} />)}
       </div>
     </section>
     <section aria-labelledby="cleanup-deletion" className="flex flex-col gap-4">
-      <SectionHeading id="cleanup-deletion">清理与删除</SectionHeading>
+      <SectionHeading id="cleanup-deletion">{t('cleanup:overview.deletionSection')}</SectionHeading>
       <div className={CLEANUP_ENTRY_GRID}>
         {CLEANUP_TOOLS.filter(tool => tool.key === 'batch-delete').map(tool => <ToolEntry key={tool.key} tool={tool} navigate={navigate} />)}
       </div>

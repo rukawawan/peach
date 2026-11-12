@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import struct
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -110,7 +111,7 @@ class Mp4HeaderRepairTests(unittest.TestCase):
     def repair(self, path: Path, order=DECODE_TO_DISPLAY) -> RepairedHeader:
         """把「解一遍片子问显示顺序」换成已知答案，只验头里的算术。"""
         with patch.object(mp4repair, "_display_order",
-                          lambda ffprobe, source, times: list(order)):
+                          lambda ffprobe, source, times, **_kwargs: list(order)):
             return repaired_header(path, Path("ffprobe"))
 
     def test_a_rebuilt_header_puts_every_frame_back_in_display_order(self):
@@ -286,7 +287,7 @@ class Mp4HeaderRepairTests(unittest.TestCase):
 
     def test_the_display_order_is_the_order_the_decoder_hands_frames_back(self):
         """解码器按显示顺序出帧，每帧的时间戳原样来自它那个样本，所以置换是读出来的。"""
-        with patch.object(mp4repair.subprocess, "run",
+        with patch.object(mp4repair, "run_task_process",
                           lambda *args, **options: _Probe(b"0\n800\n1200\n400\n")):
             order = mp4repair._display_order(Path("ffprobe"), Path("movie.mp4"),
                                              [0, 400, 800, 1200])
@@ -295,10 +296,31 @@ class Mp4HeaderRepairTests(unittest.TestCase):
 
     def test_a_decode_that_loses_frames_is_refused_instead_of_guessed(self):
         """少一帧就说明这份表和码流对不上，宁可不修，也不能写一张错的 ctts。"""
-        with patch.object(mp4repair.subprocess, "run",
+        with patch.object(mp4repair, "run_task_process",
                           lambda *args, **options: _Probe(b"0\n800\n")):
             with self.assertRaises(RepairUnavailable):
                 mp4repair._display_order(Path("ffprobe"), Path("movie.mp4"), [0, 400, 800])
+
+    def test_probe_timeout_means_missing_output_and_reports_decoded_frames(self):
+        progress = []
+
+        def probe(command, **options):
+            self.assertIsNone(options.get('timeout'))
+            self.assertEqual(options['idle_timeout'], mp4repair.PROBE_IDLE_SECONDS)
+            options['on_stdout'](b'0\n800\n')
+            options['on_stdout'](b'1200\n400\n')
+            return _Probe(b'0\n800\n1200\n400\n')
+
+        with patch.object(mp4repair, 'run_task_process', side_effect=probe):
+            result = mp4repair._display_order(Path('ffprobe'), Path('movie.mp4'),
+                                              [0, 400, 800, 1200], progress=lambda *v: progress.append(v))
+        self.assertEqual(result, [0, 3, 1, 2])
+        self.assertEqual(progress, [(2, 4), (4, 4)])
+
+    def test_a_stalled_probe_has_a_distinct_failure_reason(self):
+        with patch.object(mp4repair, 'run_task_process', side_effect=subprocess.TimeoutExpired('ffprobe', 900)):
+            with self.assertRaisesRegex(RepairUnavailable, '没有解码输出'):
+                mp4repair._display_order(Path('ffprobe'), Path('movie.mp4'), [0, 400])
 
 
 class SidecarTests(unittest.TestCase):
@@ -437,7 +459,7 @@ class HeaderRepairStoreTests(unittest.TestCase):
         store = TaskRunStore(fresh_ledger(ledger))
         repairs = HeaderRepairStore(self.root / 'managed-cache', _Resolver(), runs=store)
         entered, release = threading.Event(), threading.Event()
-        def build(source, ffprobe):
+        def build(source, ffprobe, **_options):
             entered.set()
             release.wait(5)
             task_control.checkpoint()
@@ -475,6 +497,26 @@ class HeaderRepairStoreTests(unittest.TestCase):
         self.assertEqual(outcomes, [False, False, False])
         self.assertEqual(len(attempts), 1)
         self.assertIsNone(self.store.lookup(6297, self.source))
+
+    def test_background_repair_keeps_frame_progress_and_the_probe_failure_reason(self):
+        from support.ledger import fresh_ledger
+        from peach.task_runs import TaskRunStore
+        ledger = self.root / 'ledger'
+        ledger.mkdir()
+        runs = TaskRunStore(fresh_ledger(ledger))
+        repairs = HeaderRepairStore(self.root / 'managed-cache', _Resolver(), runs=runs)
+        def build(_source, _ffprobe, *, progress):
+            progress(20, 100)
+            raise RepairUnavailable('ffprobe 连续 900 秒没有解码输出')
+        with patch.object(mp4repair, 'repaired_header', build):
+            repairs.request(6297, self.source)
+            job = next(iter(repairs._jobs.values()))
+            job.thread.join(5)
+            self.assertFalse(job.thread.is_alive())
+        run = runs.query(task_key='mp4-header-repair')[0]
+        self.assertEqual(run.status, 'failed')
+        self.assertEqual((run.result_summary['checked'], run.result_summary['total']), (20, 100))
+        self.assertIn('900 秒没有解码输出', run.error)
 
     def test_a_stored_header_is_not_computed_a_second_time(self):
         write_sidecar(self.sidecar(), self.header)

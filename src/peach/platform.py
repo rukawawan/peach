@@ -155,11 +155,20 @@ def root_online(root: Path) -> bool:
 
 
 
+def _letter_drive(path: Path) -> bool:
+    drive = path.drive
+    return len(drive) == 2 and drive[0].isalpha() and drive[1] == ":"
+
+
 def within_root(path: Path, root: Path) -> bool:
     """路径是否落在授权根内。
 
     字面比较先走一遍；不匹配时用 inode 比较兜底，因为账本里是 `R:\\Media`
     而授权根是 `/Volumes/Media/media`，exFAT/NTFS 大小写不敏感、pathlib 不是。
+
+    Windows 上 inode 比较要 stat 两边，网盘挂载的盘符每次 stat 都是一趟网络往返，而授权根有
+    好几个、每个请求逐个问。所以先按不分大小写的字面比较，两边都是盘符路径且盘符不同就直接
+    不在：不同盘符的同深度前缀只有跨盘的目录联接才会是同一个目录。
     """
     from .smb_media import SmbResource
     if isinstance(path, SmbResource) or isinstance(root, SmbResource):
@@ -168,6 +177,12 @@ def within_root(path: Path, root: Path) -> bool:
         return (path.root_id == root.root_id and path.relative[:len(root.relative)] == root.relative)
     if path == root or root in path.parents:
         return True
+    if os.name == "nt":
+        folded, base = os.path.normcase(path), os.path.normcase(root)
+        if folded == base or folded.startswith(base.rstrip("\\") + "\\"):
+            return True
+        if _letter_drive(path) and _letter_drive(root) and path.drive.casefold() != root.drive.casefold():
+            return False
     depth = len(root.parts)
     if len(path.parts) < depth:
         return False

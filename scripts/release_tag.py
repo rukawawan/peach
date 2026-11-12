@@ -4,7 +4,8 @@
 
     python scripts/release_tag.py --bump auto --apply   # 推版本号、起草那一节
     #  → 人看一眼 `CHANGELOG.md` 新那一节的措辞，这是使用者唯一读到的说明
-    python scripts/release_tag.py --ship --apply        # 提交、推送、等 CI、打标签
+    python scripts/release_tag.py --ship --apply        # 提交、推送、等 CI、打标签，
+                                                        # 制品齐了再把 README 直链换到新版本
 
 确认点只有一个，剩下的判据都由脚本挡：`--ship` 拒绝夹带别的改动，拒绝在 Test 转绿前
 打标签，中途停下再跑一次就接着走。人要决定的只是措辞对不对，不是流程走到哪一步了。
@@ -38,7 +39,9 @@ GITLAB = None
 MASTER_WRITER = "peach.masterWriter"
 
 #: 定版只该改这两份：版本号一行，变更日志一节。`--ship` 拒绝夹带别的文件。
+#: README 下载直链不在其中：制品上传完之前换过去就是 404，它们等 Release 齐了单独提交。
 RELEASE_FILES = (version_bump.VERSION_FILE, changelog.CHANGELOG)
+README_SUBJECT = "docs(readme): 下载直链指向 {tag}"
 
 #: `--ship` 等 Test 工作流的默认秒数上限，以及两次查询之间的间隔。版本提交的流水线里还有发布
 #: 演练（macOS 两个架构从源码编译，作业时限 2 小时），所以按整条演练定。
@@ -258,6 +261,21 @@ def require_clean_dependencies(root: Path = None) -> None:
         raise ValueError("依赖审计发现高危漏洞（" + "、".join(failed) + "）；先升级依赖再发布")
 
 
+def require_release_notice(root: Path, version: str, part: str) -> None:
+    """minor 及以上的版本必须先写好更新公告（`src/peach/release_notices.py`），升级后的弹窗靠它。
+
+    补丁版可以不写：没有公告就不弹，只在设置页留记录。"""
+    if part not in ("minor", "major"):
+        return
+    import ast
+    tree = ast.parse((root / "src/peach/release_notices.py").read_text(encoding="utf-8"))
+    notices = next(ast.literal_eval(node.value) for node in tree.body
+                   if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "NOTICES")
+    if version not in notices:
+        raise version_bump.VersionError(
+            f"{version} 还没有更新公告：先在 src/peach/release_notices.py 写好这一版的新入口与自动进行的事")
+
+
 def prepare(repo: str, part: str, *, apply: bool,
             reference_evidence: dict[str, Path] | None = None) -> dict:
     """为下一次发布推进版本号并起草变更日志。
@@ -269,6 +287,7 @@ def prepare(repo: str, part: str, *, apply: bool,
     version = str(planned["version"])
     tag = f"v{version}"
     _require_free_tag(repo, tag)
+    require_release_notice(ROOT, version, str(planned["bump"]))
     result = {**planned, "tag": tag, "repo": repo, "applied": apply}
     if not apply:
         return result
@@ -350,8 +369,58 @@ def ship(repo: str, *, apply: bool, timeout: float = TEST_TIMEOUT) -> dict:
     require_clean_dependencies()
     command("git", "tag", "-a", tag, sha, "-m", f"Peach {tag} Windows 测试版")
     command("git", "push", remote_url(repo), f"refs/tags/{tag}")
+    readme = point_readme(repo, apply=True, timeout=timeout)
     return {**result, "sha": sha, "test": checked["html_url"],
-            "release": release_url(repo, tag)}
+            "release": release_url(repo, tag), "readme": readme["readme"]}
+
+
+def release_assets(repo: str, tag: str) -> set[str]:
+    """这个标签的 GitHub Release 已上传完的制品名；Release 还没建或仍是草稿时为空。"""
+    try:
+        release = api(repo, f"releases/tags/{tag}")
+    except subprocess.CalledProcessError:
+        return set()
+    if release.get("draft"):
+        return set()
+    return {asset["name"] for asset in release.get("assets") or ()
+            if asset.get("state") == "uploaded"}
+
+
+def point_readme(repo: str, *, apply: bool, timeout: float = TEST_TIMEOUT, poll: float = TEST_POLL,
+                 sleep=time.sleep, clock=time.monotonic) -> dict:
+    """等这一版 README 直链要下载的制品都上传完，再把直链换过去、提交并推送 master。
+
+    `--ship` 打完标签后接着跑；中途停下就单独跑 `--point-readme --apply`，已换的不重换，
+    已提交未推送的只补推送。等待期间 README 仍指向上一版，读者拿到的始终是能下载的链接。
+    """
+    _require_master()
+    version = version_bump.read_version(ROOT)
+    tag = "v" + version
+    pending = _pending_files()
+    if not set(pending) <= set(version_bump.README_FILES):
+        raise ValueError("工作区除了 README 还有别的改动：" + "、".join(pending))
+    names = version_bump.readme_assets(ROOT, version)
+    if not names:
+        raise ValueError("README 里没有 Release 下载直链")
+    result = {"version": version, "tag": tag, "assets": names, "applied": apply, "readme": []}
+    if not apply:
+        return result
+    start = clock()
+    while missing := sorted(set(names) - release_assets(repo, tag)):
+        if clock() - start >= timeout:
+            raise ValueError(f"等了 {timeout / 60:.0f} 分钟，{tag} 的 Release 仍缺 {'、'.join(missing)}；"
+                             "README 仍指向上一版，制品齐了以后跑 --point-readme --apply")
+        sleep(poll)
+    changed = version_bump.point_readmes(ROOT, version)
+    subject = README_SUBJECT.format(tag=tag)
+    if changed or pending:
+        command("git", "add", *version_bump.README_FILES)
+        command("git", "-c", f"{MASTER_WRITER}=release", "commit", "-m", subject)
+    head = command("git", "rev-parse", "HEAD")
+    # HEAD 是这次的 README 提交才推送；中断后 master 上又落了别的提交，就交给集成方推送。
+    if command("git", "log", "-1", "--format=%s", head) == subject and master_sha(repo) != head:
+        command("git", "push", remote_url(repo), "refs/heads/master")
+    return {**result, "readme": changed}
 
 
 def plan(repo: str) -> dict:
@@ -420,6 +489,8 @@ def main(argv=None) -> int:
                       help="推进 __version__ 并起草变更日志，为下一次发布做准备")
     mode.add_argument("--ship", action="store_true",
                       help="把定好版的工作区送到标签：提交、推送、等 Test 转绿、打标签")
+    mode.add_argument("--point-readme", action="store_true",
+                      help="当前版本的 Release 制品齐了以后，把 README 下载直链换过去并推送 master")
     mode.add_argument("--verify-sha", help="仅核对指定提交的主线归属与 CI，供 Release 工作流使用")
     mode.add_argument("--release-sha", help="为完整 SHA 指定的已通过 CI 的主线提交补打标签")
     args = parser.parse_args(argv)
@@ -442,6 +513,10 @@ def main(argv=None) -> int:
             print(json.dumps(ship(args.repo, apply=args.apply, timeout=args.timeout),
                              ensure_ascii=False, indent=2))
             return 0
+        if args.point_readme:
+            print(json.dumps(point_readme(args.repo, apply=args.apply, timeout=args.timeout),
+                             ensure_ascii=False, indent=2))
+            return 0
         result = (plan_commit(args.repo, args.release_sha)
                   if args.release_sha is not None else plan(args.repo))
         if args.apply:
@@ -454,6 +529,7 @@ def main(argv=None) -> int:
                     "-m", f"Peach {result['tag']} Windows 测试版")
             command("git", "push", remote_url(args.repo),
                     f"refs/tags/{result['tag']}")
+            result["next"] = "Release 制品上传完以后跑 --point-readme --apply，把 README 下载直链换到这一版"
         print(json.dumps({**result, "applied": args.apply}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, version_bump.VersionError, subprocess.CalledProcessError) as exc:

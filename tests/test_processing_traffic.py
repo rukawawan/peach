@@ -191,7 +191,7 @@ class ProcessingTrafficTests(unittest.TestCase):
     def test_disk_forecast_combines_one_volume_and_reports_shortfall(self):
         traffic = ProcessingTraffic(self.config, self.db, 'previews')
         traffic.refresh_plan([{**self._video(), 'location':'local', 'path':'R:\\Media\\a.mp4'}])
-        with patch('peach.processing_storage.volume_space', return_value=(1, 1024, 'R:\\')):
+        with patch('peach.processing_storage.volume_space', return_value=(1, 1024, 'R:\\', 10 * 1024**3)):
             result = traffic.snapshot()['disk']
         self.assertEqual(len(result['volumes']), 1)
         volume = result['volumes'][0]
@@ -205,12 +205,21 @@ class ProcessingTrafficTests(unittest.TestCase):
         traffic = ProcessingTraffic(self.config, self.db, 'metadata')
         traffic.refresh_plan([self._video()])
         def space(path):
-            return (1, None, 'X:\\') if path == traffic.storage.generated else (2, 10 * 1024**3, 'Y:\\')
+            return (1, None, 'X:\\', None) if path == traffic.storage.generated else (2, 10 * 1024**3, 'Y:\\', 20 * 1024**3)
         with patch('peach.processing_storage.volume_space', side_effect=space):
             result = traffic.snapshot()['disk']
         self.assertEqual(len(result['volumes']), 2)
         self.assertIsNone(result['can_fit'])
         self.assertTrue(result['cache_unknown'])
+
+    def test_disk_forecast_uses_the_saved_capacity_reserve(self):
+        from peach.storage_budget import save_policy
+        save_policy(self.config, {'minimum_free_gib': 7})
+        traffic = ProcessingTraffic(self.config, self.db, 'metadata')
+        traffic.refresh_plan([self._video()])
+        with patch('peach.processing_storage.volume_space', return_value=(1, 20 * 1024**3, 'R:\\', 40 * 1024**3)):
+            disk = traffic.snapshot()['disk']
+        self.assertEqual(disk['volumes'][0]['reserve_bytes'], 7 * 1024**3)
 
     def test_complete_fields_and_local_cover_have_no_download_work(self):
         traffic = ProcessingTraffic(self.config, self.db, 'collect')

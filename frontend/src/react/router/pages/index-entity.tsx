@@ -188,13 +188,14 @@ async function openEntity(
   const { segment, kind, name } = target;
   if (!live()) return;
   writeShell({ entityJavLayout: false });
-  /* 卡外面依次是交集条与玻璃浮层、新作和正文，顶到底一条线。四块宿主先在文档外排好，首屏取齐那一刻才换掉骨架
-     （`place`）：换掉与画出整页落在同一个任务里。资料卡、浮层与正文各带一层 `.peach-react`（React 子树的样式
+  /* 卡外面依次是交集条与玻璃浮层、新作和正文，顶到底一条线。身份资料就绪时将四块宿主放进页面；
+     其余区域独立加载。资料卡、浮层与正文各带一层 `.peach-react`（React 子树的样式
      范围）；新作那一行是遗留层的卡片，宿主不进这个范围。 */
   const frame = document.createElement('template');
+  const reserveFeed = !!host.querySelector('.feednew');
   frame.innerHTML = `<div data-entity-hero><div class="peach-react"></div></div>
     <div data-entity-filter><div class="peach-react"></div></div>
-    <section class="feednew" data-feed-new aria-label="未入库的新作" hidden></section>
+    <section class="feednew" data-feed-new aria-label="未入库的新作" ${reserveFeed ? 'aria-busy="true"' : 'hidden'}></section>
     <div data-entity-body><div class="peach-react"></div></div>`;
   const parts = [...frame.content.childNodes];
   const hero = frame.content.querySelector('[data-entity-hero]')!;

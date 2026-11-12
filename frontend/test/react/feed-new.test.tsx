@@ -7,7 +7,7 @@ import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { appSettingsStore } from '@peach/appearance';
-import { feedNewKey, prefetchFeedNew, type FeedDiscoveries, type FeedNewProps } from '../../src/react/feed-new/feed-new';
+import { feedNewKey, fetchFeedNew, prefetchFeedNew, type FeedDiscoveries, type FeedNewProps } from '../../src/react/feed-new/feed-new';
 import { FeedNewPage } from '../../src/react/feed-new/feed-new-page';
 import { queryClient } from '../../src/react/query';
 import { click, mountRoot, settle } from './render';
@@ -74,6 +74,21 @@ async function open(given: FeedNewProps) {
 }
 
 describe('取数', () => {
+  it('文字和操作就绪即返回，不在取数阶段预载或解码封面', async () => {
+    serve([1]);
+    const image = vi.fn(function () { throw new Error('不应预载封面') });
+    vi.stubGlobal('Image', image);
+    const data = await fetchFeedNew(null, () => '<article>作品<button>想要</button><img src="/cover-image?code=EXM-001"></article>');
+    expect(data.items).toHaveLength(1);
+    expect(data.html).toContain('想要');
+    expect(image).not.toHaveBeenCalled();
+  });
+
+  it('读取失败保留失败状态，不伪装成没有新作', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ error: '读取未完成' }) })));
+    await expect(fetchFeedNew(null, rowHtml)).rejects.toThrow('读取未完成');
+  });
+
   it('首页那一行不分人：只带条数，与资料页那一行各占一个键', async () => {
     const fetcher = serve([1, 2]);
     await open(props());

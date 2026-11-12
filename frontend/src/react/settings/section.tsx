@@ -152,8 +152,8 @@ export function Fact({ term, children }: { term: ReactNode; children: ReactNode 
 /** 展开正文。原生 `details` 给键盘与无障碍语义；开合交给共用 Collapse 的 `setCollapseOpen`，
  *  它给正文外层挂上 `ui-kit/collapse.css` 的 `.ui-fcollapse` 让高度过渡。内边距放在里层，高度才能收到 0。 */
 export function Disclosure(
-  { summary, defaultOpen = false, isOpen, children, trailing = false, onOpenChange, contentClassName }:
-  { summary: ReactNode; defaultOpen?: boolean; isOpen?: boolean; children: ReactNode; trailing?: boolean; onOpenChange?(open: boolean): void; contentClassName?: string },
+  { summary, defaultOpen = false, isOpen, children, trailing = false, row = false, onOpenChange, contentClassName }:
+  { summary: ReactNode; defaultOpen?: boolean; isOpen?: boolean; children: ReactNode; trailing?: boolean; row?: boolean; onOpenChange?(open: boolean): void; contentClassName?: string },
 ) {
   const id = useId();
   const details = useRef<HTMLDetailsElement>(null);
@@ -184,13 +184,13 @@ export function Disclosure(
   return (
     <details ref={attach}>
       <summary aria-expanded={open} aria-controls={id} onClick={toggle}
-        className={`${trailing ? 'w-full' : 'w-fit'} flex cursor-pointer list-none items-center gap-1 rounded-sm text-body-2-medium text-text-secondary outline-none select-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-border-focus-ring`}>
+        className={cx('flex w-full cursor-pointer list-none items-center gap-1 rounded-sm text-body-2-medium text-text-secondary outline-none select-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-border-focus-ring', row && 'px-5 py-2.5')}>
         {!trailing ? <RiArrowRightSLine aria-hidden className={open ? 'size-(--icon-inline) shrink-0 rotate-90 transition-transform' : 'size-(--icon-inline) shrink-0 transition-transform'} /> : null}
         {summary}
         {trailing ? <RiArrowRightSLine aria-hidden className={open ? 'ml-auto size-(--icon-inline) shrink-0 -rotate-90 transition-transform' : 'ml-auto size-(--icon-inline) shrink-0 rotate-90 transition-transform'} /> : null}
       </summary>
       <div ref={body} id={id} inert={!open}>
-        <div className={cx('flex flex-col gap-2 pt-3', contentClassName)}>{children}</div>
+        <div className={cx('flex flex-col gap-2', row ? 'px-5 pt-0.5' : 'pt-3', contentClassName)}>{children}</div>
       </div>
     </details>
   );

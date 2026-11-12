@@ -89,7 +89,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     # avsox 经 amane 桥（ADR-0043）垫在最后：它专收无码，但是转载索引，且要经 Cloudflare，
     # 三家综合索引都落空才轮到它。
     "uncensored": ("1pondo", "avbase", "javbus", "javdb", "avsox"),
-    # FC2：发行方商品页 → 下架作品的镜像站 → FC2PPV-DB → JAVten → JavArchive → javdb。
+    # FC2 元数据优先匿名 JavDB；缺字段或演员身份未确认时再问专站（ADR-0150）。
     # fc2cmadb 给下架作品的原图与女优栏，排在前；FC2PPV-DB 给女优、卖家、販売日与流出标记，
     # 不给封面；JAVten 给日文标题、标签与 FC2 存储原件的地址（ADR-0060）。这两站都在 Cloudflare
     # 验证后面，由本机浏览器过验证（ADR-0065）；验证没过、或没有浏览器时 Cookie 失效回 403，各自
@@ -100,7 +100,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     # 不含 r18dev（实测 85 条全空）、不含 AVBase 与 JavBus（本机 1213 份来源证据里
     # 这两家对 FC2 番号一份都没给过，javdb 给了 166 份）。判据原文在
     # `community_catalog.community_sources_for` 与 `docs/SOURCING.md`。
-    "fc2": ("fc2", "fc2cmadb", "fc2ppvdb", "javten", "javarchive", "javdb"),
+    "fc2": ("javdb", "fc2", "fc2cmadb", "fc2ppvdb", "javten", "javarchive"),
     # 韩国 MIB 一家都不问：番号和日本番号同形，JAV 目录站按它去查返回的是别的作品，
     # 那份错值只能靠人一条条认出来。官网走 `scripts/harvest_kmib.py`，不在这条路上。
     "kmib": (),
@@ -355,9 +355,11 @@ def official_route(code: str | None, *hints: str | None,
     return tuple(source for source in chain if source in OFFICIAL_STAGE)
 
 
-def required_scalars(missing: Iterable[str]):
+def required_scalars(missing: Iterable[str], *, code: str | None = None):
     """这一行还缺、且属于必填标量的那些字段。空集合表示没有可短路的目标。"""
     wanted = set(str(field) for field in missing)
+    if code and classify(code) == 'fc2':
+        wanted.discard('studio')
     return tuple(field for field in SCALAR_FIELDS if field in wanted)
 
 

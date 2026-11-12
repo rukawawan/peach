@@ -95,6 +95,36 @@ class TimelineSourceTests(unittest.TestCase):
         self.vtt()
         self.assertIsNone(sources.discover(self.root / 'movie-4k.mp4', 10))
 
+    def test_a_video_without_previews_costs_one_directory_listing(self):
+        """网盘上每次 stat 都是一趟网络往返：没有预览的片子只列一次目录，不逐个候选 stat。"""
+        self.image()
+        listings = []
+        scandir = sources.os.scandir
+
+        def counting(path):
+            listings.append(path)
+            return scandir(path)
+        with patch.object(sources.os, 'scandir', side_effect=counting), \
+                patch.object(Path, 'stat', side_effect=AssertionError('逐个候选 stat')):
+            self.assertIsNone(sources.discover(self.root / 'other.mp4', 10))
+        self.assertEqual(len(listings), 1)
+        self.vtt()
+        if sources.os.name == 'nt':
+            with patch.object(Path, 'resolve', side_effect=AssertionError('网盘上 resolve 一次要几秒')):
+                self.assertEqual(sources.discover(self.video, 10).source, 'webvtt')
+
+    def test_the_route_keeps_its_pairing_across_commits(self):
+        """预览不在账本里：配对结果按资产长缓存，不跟着提交清空，也记住「没有」。"""
+        database = self.root / 'ledger.db'
+        with sqlite3.connect(database) as connection:
+            connection.execute('CREATE TABLE asset(id INTEGER PRIMARY KEY,path TEXT,duration REAL,medium TEXT,disposal TEXT)')
+            connection.execute('INSERT INTO asset VALUES(1,?,10,"video",NULL)', (str(self.video),))
+        contract = SimpleNamespace(read_connection=lambda: sqlite3.connect(f'file:{database}?mode=ro', uri=True))
+        with patch.object(web.timeline_sources, 'discover', return_value=None) as discover:
+            self.assertIsNone(web.external_timeline(contract, 1))
+            self.assertIsNone(web.external_timeline(contract, 1))
+        discover.assert_called_once()
+
     def hls(self, layout='2x1', duration=15, interval=10):
         return self.text('movie.m3u8', '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:20\n'
                          '#EXT-X-IMAGES-ONLY\n'

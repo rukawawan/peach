@@ -6,6 +6,7 @@
  * 来源与模板原样留着。执行与回滚是真实 ledger 写入，调用方必须先过确认弹层。 */
 import { apiGet, apiSend } from '../../api';
 import { queryClient } from '../query';
+import { t } from '../../i18n';
 import { PICK_FOLDER_URL } from '../../configuration-endpoints';
 /* 模板跟着数据库走（`SYNCED_SETTING_KEYS` 里的 `organizeTemplates`），写的是设置面板同一个端点。 */
 import { SETTINGS_URL } from '../settings-panel/settings-data';
@@ -108,9 +109,12 @@ const count = (value: number | undefined) => Number(value || 0).toLocaleString()
 export function planSummary(plan: OrganizePlan): string {
   const skipped = Object.entries(plan.reasons || {}).sort((a, b) => b[1] - a[1])
     .map(([reason, value]) => `${reason} ${count(value)}`).join(' · ');
-  if (!Number(plan.counts?.change || 0)) return `没有要改的文件。${skipped ? `跳过：${skipped}。` : ''}`;
-  return `${count(plan.counts.change)} 个文件会改名或移动，${count(plan.counts.unchanged)} 个已经就是目标名字`
-    + `${skipped ? `；跳过 ${skipped}` : ''}。`;
+  if (!Number(plan.counts?.change || 0)) {
+    return [t('cleanup:organize.planNothing'), ...(skipped ? [t('cleanup:organize.planSkipped', { reasons: skipped })] : [])]
+      .join(t('cleanup:shared.sentenceGap'));
+  }
+  return t('cleanup:organize.planChanges', { count: Number(plan.counts.change), unchanged: count(plan.counts.unchanged) })
+    + (skipped ? t('cleanup:organize.planChangesSkipped', { reasons: skipped }) : '') + t('cleanup:shared.sentenceEnd');
 }
 
 /** 跑完的那一趟怎么说。回滚那一趟有 `restored`。 */
@@ -118,8 +122,8 @@ export function organizeOutcome(job: OrganizeJob): { text: string; failed: numbe
   const rollback = job.restored !== undefined;
   const failed = Number(job.failed || 0);
   const done = Number(rollback ? job.restored : job.moved || 0);
-  const text = rollback
-    ? `已退回 ${count(done)} 个文件${failed ? `，${count(failed)} 行未能退回` : ''}。`
-    : `已整理 ${count(done)} 个文件${failed ? `，${count(failed)} 行未能处理` : ''}。`;
+  const text = t(rollback ? 'cleanup:organize.rolledBack' : 'cleanup:organize.organized', { count: done })
+    + (failed ? t(rollback ? 'cleanup:organize.rollbackFailedRows' : 'cleanup:organize.organizeFailedRows', { count: failed }) : '')
+    + t('cleanup:shared.sentenceEnd');
   return { text, failed, rollback };
 }

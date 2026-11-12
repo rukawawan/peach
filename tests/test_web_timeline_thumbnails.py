@@ -86,7 +86,8 @@ class ThumbnailJobEndpointTests(unittest.TestCase):
             report(total=12, done=5, made=5, skipped=0, failed=0, stopped="")
             return {"total": 12, "done": 12, "made": 11, "skipped": 1, "failed": 0, "stopped": ""}
 
-        with patch.object(timeline_sheets, "generate_library", side_effect=generate),                 patch.object(web_timeline_thumbnails, "DiskGuard"):
+        with patch.object(timeline_sheets, "generate_library", side_effect=generate), \
+                patch.object(web_timeline_thumbnails, "CapacityGuard"):
             work("job-1")
         updates = [call.kwargs for call in self.contract.thumbnail_job.update.call_args_list]
         self.assertEqual([(u["checked"], u["total"]) for u in updates], [(5, 12), (12, 12)])

@@ -131,6 +131,44 @@ describe('库外 JAV 作品详情', () => {
     } finally { await context.close() }
   });
   for (const viewport of VIEWPORTS) {
+    it(`${viewport.name}：预告失败提示保持横排，重试恢复播放，资料提示上下等距`, { timeout: 60000 }, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, reducedMotion: 'reduce' });
+      try {
+        const page = await context.newPage();
+        await mockJavDetail(page);
+        await page.route(/\/api\/jav\/detail\?/, route => route.fulfill({ json: { ...JAV_DETAIL,
+          message: '作品资料未取得，请稍后重试', preview_video_url: `/stream?id=${process.env.PEACH_E2E_ITEM}` } }));
+        let unavailable = true;
+        await page.route(/\/stream\?/, route => unavailable
+          ? route.fulfill({ status: 404, body: '' }) : route.continue());
+        await page.goto(requiredEnv('PEACH_E2E_ORIGIN') + '/works/EXM-001');
+        const infoNote = page.locator('[data-jav-info] > [role="note"]');
+        await infoNote.waitFor();
+        const spacing = await infoNote.evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return { before: box.top - node.previousElementSibling!.getBoundingClientRect().bottom,
+            after: node.nextElementSibling!.getBoundingClientRect().top - box.bottom };
+        });
+        assert.ok(spacing.before >= 16 && Math.abs(spacing.before - spacing.after) < 1, JSON.stringify(spacing));
+        await page.locator('[data-jav-preview-toggle]').click();
+        const preview = page.locator('[data-jav-video]');
+        const failure = preview.getByRole('note');
+        await failure.waitFor();
+        assert.equal(await preview.locator('.video-js, video').count(), 0, '失败后移除播放器及其加载状态');
+        const bounds = await failure.evaluate(node => {
+          const box = node.getBoundingClientRect(), frame = node.parentElement!.getBoundingClientRect();
+          const text = node.querySelector('p')!.getBoundingClientRect();
+          return { width: box.width, textWidth: text.width, inside: box.left >= frame.left && box.right <= frame.right,
+            centerOffset: Math.abs((box.top + box.bottom - frame.top - frame.bottom) / 2) };
+        });
+        assert.ok(bounds.width >= 260 && bounds.textWidth >= 120 && bounds.inside && bounds.centerOffset < 1, JSON.stringify(bounds));
+        unavailable = false;
+        await failure.getByRole('button', { name: '立即重试', exact: true }).click();
+        await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>('[data-jav-video] video')?.readyState || 0) >= 1);
+        assert.equal(await failure.count(), 0);
+        assert.ok((await layout(page)).scrollWidth <= viewport.width + 1);
+      } finally { await context.close() }
+    });
     it(`${viewport.name}：页面重建后评论与资源复用成功快照`, async () => {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, reducedMotion: 'reduce' });
       try {

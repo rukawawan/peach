@@ -234,7 +234,7 @@ def working_changes(*, root: Path = ROOT) -> list[str]:
 
 def commit_message(key: str, versions: list[str], pr: str | None,
                    signature: str) -> str:
-    """接管提交的说明。README-Impact 与 Co-Authored-By 必须同一个 trailer 块、中间不空行。
+    """生成依赖接管提交的来源、重算步骤与署名。
 
     署名由 `--co-author` 传进来，脚本不替谁署名：跑它的可能是任一个智能体，写死一个
     工具名就是往提交历史里记错人。形态由 `co_author.FORM` 判，这里提前判一次，免得
@@ -255,7 +255,6 @@ def commit_message(key: str, versions: list[str], pr: str | None,
     return (f"chore(deps): 接管 {recipe['label']} 的升级\n\n{why}\n\n"
             + ("升级：" + "、".join(versions) + "\n\n" if versions else "")
             + (f"Refs #{pr}\n\n" if pr else "")
-            + "README-Impact: none; 依赖版本与派生产物，README 不涉及。\n"
             + f"Co-Authored-By: {signature}\n")
 
 

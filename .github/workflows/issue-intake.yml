@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   intake:
-    if: github.repository == 'peach-mitao/peach'
+    if: github.repository == 'peach-mitao/peach' && (github.event_name == 'workflow_dispatch' || github.event.action == 'opened' || github.event.changes.body)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -36,13 +36,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+          ACTION: ${{ github.event.action || 'opened' }}
           PYTHONUTF8: '1'
         run: |
-          event="$GITHUB_EVENT_PATH"
-          if [ "$DRY_RUN" = true ]; then
-            event="$RUNNER_TEMP/event.json"
-            gh api "repos/$GH_REPO/issues/$NUMBER" | jq '{action: "opened", issue: .}' > "$event"
-          fi
+          # 排队期间正文和开闭状态可能已改变，始终判定当前内容。
+          event="$RUNNER_TEMP/event.json"
+          gh api "repos/$GH_REPO/issues/$NUMBER" | jq --arg action "$ACTION" '{action: $action, issue: .}' > "$event"
           verdict=$(python scripts/issue_intake.py --event "$event")
           echo "#$NUMBER: $verdict"
           if [ "$DRY_RUN" = true ]; then

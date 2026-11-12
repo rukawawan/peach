@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { showToast } from '../toaster';
 import { Button } from '@/components/base/buttons/button';
 import { cx } from '@/utils/cx';
 import { cardClass } from './card';
@@ -18,6 +19,7 @@ export function CodeBlock({ code, language, label, maxCharacters, bounded = true
     try {
       await navigator.clipboard.writeText(code);
       setFailed(false); setStatus('已复制'); onCopy?.();
+      showToast('code-copy', { html: '已复制', alert: false, timeout: 4000, action: null });
     } catch {
       setFailed(true); setStatus('复制失败，请选中文本复制。');
     }

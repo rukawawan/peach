@@ -11,8 +11,8 @@
 /* ── 管理条 ──
    一排页面去处，当前项使用中性填充。超宽时横滚，
    两端渐隐与滚轮转横向由壳的横滚层清单接（`src/ui-kit/scroll.ts` 的 `BOARD_EDGE_SCROLLERS`）。 */
-[data-manage-bar]{display:block;margin-top:0;margin-bottom:24px}
-[data-manage-menu]{position:relative;display:flex;flex-wrap:nowrap;gap:4px;margin:0;padding:0;overflow-x:auto;scrollbar-width:none}
+[data-manage-bar]{display:flex;align-items:flex-start;gap:4px;margin-top:0;margin-bottom:24px}
+[data-manage-menu]{position:relative;display:flex;flex:1;min-width:0;flex-wrap:nowrap;gap:4px;margin:0;padding:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 [data-manage-menu]::-webkit-scrollbar{display:none}
 [data-manage-menu]>button{position:relative;display:inline-flex;flex:none;align-items:center;gap:7px;margin:0;padding:8px 12px;min-height:36px;border:0;border-radius:var(--control-radius);background:none;color:var(--ink-2);font-size:14px;font-weight:400;white-space:nowrap;cursor:pointer}
 [data-manage-menu]>button svg{width:var(--icon-inline);height:var(--icon-inline);flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -67,3 +67,13 @@ p[data-manage-lede]{display:flex;flex-wrap:wrap;align-items:center;justify-conte
   [data-manage-lede]>button[data-empty-trash]{height:44px;padding-inline:16px}
   [data-manage-lede] [data-trash-lede-skeleton="action"]{width:92px;height:44px}
 }
+
+[data-manage-menu]{position:relative;--sidebar-reorder-ms:250}
+[data-manage-menu]>button{--navigation-nudge-x:var(--sidebar-nudge,0px)}
+[data-manage-menu][data-reordering]>button[data-dragging]{position:fixed;left:var(--manage-picked-left);top:var(--manage-picked-top);width:var(--manage-picked-width)}
+[data-manage-menu][data-reordering]>[data-pill-thumb]{opacity:0}
+[data-manage-drop-line]{top:6px;bottom:6px;left:0;transform:translateX(var(--manage-line-left));width:2px}
+[data-manage-drop-line]>span{transform:scaleY(1)}
+@starting-style{[data-manage-drop-line]>span{transform:scaleY(0)}}
+@media(prefers-reduced-motion:reduce){[data-manage-menu][data-reordering]>button[data-dragging]{position:static;width:auto}}
+[data-manage-order-status]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}

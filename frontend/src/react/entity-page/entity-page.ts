@@ -7,8 +7,7 @@
  * 地址栏是筛选与视图的唯一真相源、归壳写——页面改筛选只调 `actions.route`，壳写好地址再经
  * `updateManagedRoute` 把新的 `filters`／`media` 推回来，页面按新键重取。
  *
- * 首屏仍由壳铺骨架（深链冷启动时 React 包还没到，骨架只能由壳画），`prefetch` 把四样取齐再画，
- * 骨架与整页一次换掉；页内换筛选时作品区的骨架归正文那一格自己（`useSkeletonReveal`）。 */
+ * 首屏由壳铺骨架，身份资料就绪后挂载页面；作品、照片与新作各自替换对应区域的骨架。 */
 import { api } from '@peach/legacy/core';
 
 import type { CatalogGridProps, MediaPage } from '../catalog-grid/types';
@@ -19,6 +18,7 @@ import type { EntityHeroData, HeroCostar } from '../entity-hero/entity-hero';
 import { feedNewKey, feedNewOptions, type FeedRowHtml } from '../feed-new/feed-new';
 import type { IndexPerson, PeopleLayout } from '../index/index-data';
 import { queryClient } from '../query';
+import { pendingRefetch } from '../components/pending-work';
 
 /** 地址栏上这一页的筛选，键同壳的 `ENTITY_FILTER_KEYS`。 */
 export const ENTITY_FILTER_KEYS = ['loc', 'creator', 'tag', 'state', 'dur_min', 'dur_max', 'orient', 'year', 'sort', 'dir', 'browse', 'folder', 'folder_recursive'] as const;
@@ -224,6 +224,7 @@ export const entityOptions = (kind: string, name: string) => ({
   queryFn: ({ signal }: { signal: AbortSignal }) =>
     api(`/api/entity?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`, { signal }) as Promise<EntityPageData>,
   staleTime: Infinity,
+  refetchInterval: pendingRefetch,
 });
 
 /** 照片一页的地址。整组照片第一页沿用壳里的口径（不带 limit，换一批才带种子）；图集与续页每页 120。 */
@@ -263,23 +264,20 @@ export const photosOptions = (kind: string, name: string, set: number, seed: str
 export const codeSetsOf = (page: PhotoPage | null | undefined): EntityCodeSet[] =>
   page && !page.error ? (page.sets || []).filter((set) => set.kind === 'code') : [];
 
-/** 首次进入先清掉这一位名下的缓存；历史返回复用原查询。再把资料（连同新作）、作品第一页与照片
- *  并行取齐，深链落在一个图集上时连那一组一起取。四样齐了路由树（`openManagedRoute`）一次换掉骨架。 */
+/** 身份资料就绪后显示页头，作品、照片与新作独立预取；历史返回复用原查询。 */
 export async function prefetchEntityPage(props: EntityPageProps): Promise<void> {
   const { kind, name } = props;
   if (!props.restoreNavigation) for (const head of ['entity', 'entity-items', 'entity-photos'] as const) {
     queryClient.removeQueries({ queryKey: [head, kind, name] });
   }
   if (props.resolvedEntity?.id) queryClient.setQueryData(entityKey(kind, name), props.resolvedEntity);
-  await Promise.all([
-    queryClient.fetchQuery(entityOptions(kind, name)).then((entity) => {
-      if (!entity || entity.error || !entity.id) return null;
-      if (!props.restoreNavigation) queryClient.removeQueries({ queryKey: feedNewKey(Number(entity.id)) });
-      return queryClient.fetchQuery(feedNewOptions(Number(entity.id), props.helpers.feedRowHtml, true));
-    }),
-    queryClient.fetchQuery(itemsOptions(props)),
-    queryClient.fetchInfiniteQuery(photosOptions(kind, name, 0, '')),
-    props.media.media === 'photos' && props.media.set
-      ? queryClient.fetchInfiniteQuery(photosOptions(kind, name, props.media.set, '')) : null,
-  ]);
+  void queryClient.prefetchQuery(itemsOptions(props));
+  void queryClient.prefetchInfiniteQuery(photosOptions(kind, name, 0, ''));
+  if (props.media.media === 'photos' && props.media.set) {
+    void queryClient.prefetchInfiniteQuery(photosOptions(kind, name, props.media.set, ''));
+  }
+  const entity = await queryClient.fetchQuery(entityOptions(kind, name));
+  if (!entity || entity.error || !entity.id) return;
+  if (!props.restoreNavigation) queryClient.removeQueries({ queryKey: feedNewKey(Number(entity.id)) });
+  void queryClient.prefetchQuery(feedNewOptions(Number(entity.id), props.helpers.feedRowHtml));
 }

@@ -34,6 +34,15 @@ def make_ca(tls_dir: Path) -> CertificateFiles:
 
 
 class CertificateTests(unittest.TestCase):
+    def test_missing_openssl_reports_the_required_tool_before_launch(self):
+        from peach import certs
+        with mock.patch.object(certs.shutil, 'which', return_value=None), \
+                mock.patch.object(certs.Path, 'is_file', return_value=False), \
+                mock.patch.object(certs.subprocess, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, '未找到 OpenSSL'):
+                certs.require_openssl()
+            run.assert_not_called()
+
     def test_openssl_hides_its_windows_console_and_preserves_output(self):
         from peach import certs
         result = subprocess.CompletedProcess(['openssl'], 0, 'certificate output', '')

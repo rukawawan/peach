@@ -1,4 +1,4 @@
-import { CLEANUP_HASH_REDIRECTS } from '../cleanup-tools';
+import { CLEANUP_HASH_REDIRECTS } from '../cleanup-routes';
 
 /** 产品地址规范化，API 与媒体端点使用自己的契约。 */
 export function canonicalPath(path: string): string {

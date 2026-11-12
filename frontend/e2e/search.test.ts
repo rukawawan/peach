@@ -112,14 +112,22 @@ describe('顶栏搜索', () => {
         await page.locator('#q').click();
         await page.waitForFunction(() => {
           const menu = document.querySelector<HTMLElement>('#searchMenu')!;
-          return menu.dataset.overlayScrollbar === 'true' && menu.scrollHeight > menu.clientHeight + 1;
+          return menu.dataset.overlayScrollbar === 'true'
+            && menu.querySelectorAll('[data-remove-history]').length === 30
+            && !menu.querySelector('[data-search-placeholder],[aria-busy="true"]')
+            && menu.scrollHeight - menu.clientHeight > 100;
         });
         const track = page.locator(`${MENU} > [data-overlay-track="y"]`);
         await track.waitFor({ state: 'visible' });
         assert.equal(await page.locator(MENU).evaluate(node => getComputedStyle(node).scrollbarWidth), 'none');
         const start = (await track.boundingBox())!;
         await page.locator(MENU).evaluate(node => { node.scrollTop = 100 });
-        await page.waitForFunction(() => document.querySelector<HTMLElement>('#searchMenu > .ov-y')!.style.transform.includes('100px'));
+        await page.waitForFunction(() => {
+          const menu = document.querySelector<HTMLElement>('#searchMenu')!;
+          const track = menu.querySelector<HTMLElement>(':scope > .ov-y')!;
+          return Math.abs(menu.scrollTop - 100) <= 1 && !!track.style.transform
+            && Math.abs(new DOMMatrixReadOnly(track.style.transform).m42 - menu.scrollTop) <= 1;
+        });
         const moved = (await track.boundingBox())!;
         assert.ok(Math.abs(start.y - moved.y) <= 1, '轨道应保持在下拉框可视边缘');
         const thumb = (await track.locator('.ovthumb').boundingBox())!;
@@ -140,6 +148,14 @@ describe('顶栏搜索', () => {
         assert.equal(await track.count(), 1);
         assert.deepEqual(await unmanagedScrollers(page), []);
         assert.deepEqual(opened.problems, []);
+      } catch (error) {
+        const state = await page.locator(MENU).evaluate(menu => ({
+          history: menu.querySelectorAll('[data-remove-history]').length,
+          pending: menu.querySelectorAll('[data-search-placeholder],[aria-busy="true"]').length,
+          scrollTop: menu.scrollTop, range: menu.scrollHeight - menu.clientHeight,
+          transform: menu.querySelector<HTMLElement>(':scope > .ov-y')?.style.transform,
+        })).catch(() => '未取得');
+        throw new Error(`${String(error)}；搜索滚动状态：${JSON.stringify(state)}`, { cause: error });
       } finally { await opened.close(); }
     });
 

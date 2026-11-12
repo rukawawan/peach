@@ -27,7 +27,7 @@ classifiers = [
 ]
 dependencies = [
   "itsdangerous==2.2.0",
-  "filelock==4.2.8",
+  "filelock==4.2.9",
   "tldextract==5.4.0",
   "APScheduler==3.11.3",
   "beautifulsoup4==4.15.0",
@@ -35,7 +35,7 @@ dependencies = [
   "browserexport==0.4.4",
   "pyahocorasick==2.3.1",
   "curl_cffi==0.17.0",
-  "fastapi==0.162.0",
+  "fastapi==0.162.2",
   # grpcio 与 protobuf 给云下载调 CloudDrive2 的 gRPC 接口（`downloads_clouddrive.py`）。
   # 消息代码由 grpcio-tools 1.84.0 生成后提交，它自带的 protoc 对应 protobuf 7.35.1，
   # 运行时 protobuf 必须同一大版本且不低于它。
@@ -48,16 +48,16 @@ dependencies = [
   "pystray==0.19.5",
   # 配置页让手机扫码下载本机 CA（`routes_configuration.certificate_payload`）；只取模块矩阵，不走 Pillow 出图。
   "qrcode==8.2",
-  "pydantic==2.14.2",
+  "pydantic==2.14.3",
   "resvg-py==0.5.0",
-  "sentry-sdk==2.73.0",
+  "sentry-sdk==2.74.0",
   "socksio==1.0.0",
   "starlette==1.10.0",
   "torznab==0.2.1",
   "tzlocal==5.4.5",
   "uvicorn==0.54.0",
-  "watchdog==7.0.0",
-  "zeroconf==0.153.0",
+  "watchdog==7.1.0",
+  "zeroconf==0.154.0",
   "smbprotocol==1.17.0",
   # 应用内更新校验发布签名（Ed25519，ADR-0137）。
   "cryptography==50.0.2",
@@ -75,9 +75,9 @@ peach-tray = "peach.error_reporting:tray_main"
 [project.optional-dependencies]
 # 开发工具复用运行依赖 psutil 查询工作树进程。
 dev = [
-    "filelock==4.2.8",
+    "filelock==4.2.9",
     "httpx2==2.16.0",
-    "ruff==0.17.3",
+    "ruff==0.17.4",
     "seiso==0.4.0",
 ]
 build = [

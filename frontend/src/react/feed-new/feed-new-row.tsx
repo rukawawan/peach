@@ -7,6 +7,9 @@ import { createPortal } from 'react-dom';
 import { ShellActionsContext } from '../router/router';
 import { SourceAvatar } from '../components/source-avatar';
 import { coverImage, coverStateHtml } from '@peach/card-art';
+import { fitSkeleton } from '@peach/legacy/ui';
+import { feedNewSkeletonHtml } from '../../feed-new-skeleton';
+import { RetryNote } from '../components/grid-reveal';
 import { CoverQueue } from '../components/cover-queue';
 import { fetchCoverNow, type CoverNow } from '../jav/jav';
 
@@ -28,8 +31,10 @@ async function prioritise(code: string, slot: Element, card: Element): Promise<b
   return result.has_cover;
 }
 
-export function FeedNewRow({ feedNew, host, wire, act, settled }: {
+export function FeedNewRow({ feedNew, host, wire, act, settled, error, retry }: {
   feedNew: FeedNew | null;
+  error?: string;
+  retry?(): void;
   host: HTMLElement;
   /** 拖动、滚轮，按设置接自动滚动。 */
   wire(row: Element | null): void;
@@ -42,6 +47,7 @@ export function FeedNewRow({ feedNew, host, wire, act, settled }: {
   const box = useRef<HTMLDivElement>(null);
   const [sourceFaces, setSourceFaces] = useState<HTMLElement[]>([]);
   const html = feedNew?.items.length ? feedNew.html : '';
+  const [reserve] = useState(() => host.getAttribute('aria-busy') === 'true');
   /* 这一行里已经当场处理过的番号（点了单张的、整批里轮到的）：卡片已原地换过样子，一键插队不再数它们。
      取回新的一行就清空，按服务端的现状重数。 */
   const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
@@ -57,10 +63,16 @@ export function FeedNewRow({ feedNew, host, wire, act, settled }: {
   const queued = (feedNew?.items || []).filter(item => item.code && item.cover_state === 'queued' && !item.cover_url
     && !handled.has(item.code)).map(item => item.code!);
   useLayoutEffect(() => {
+    if (!feedNew && reserve && !error) {
+      host.setAttribute('aria-busy', 'true');
+      host.hidden = false;
+      fitSkeleton(host);
+      return;
+    }
     host.removeAttribute('aria-busy');
-    host.hidden = !html;
+    host.hidden = !html && !error;
     if (feedNew) settled?.(!!html);
-  }, [host, html, feedNew, settled]);
+  }, [host, html, feedNew, settled, reserve, error]);
   useEffect(() => {
     if (html) wire(box.current?.querySelector('.feednewrow') ?? null);
     setSourceFaces([...box.current?.querySelectorAll<HTMLElement>('[data-feed-source-avatar]') ?? []]);
@@ -96,6 +108,8 @@ export function FeedNewRow({ feedNew, host, wire, act, settled }: {
   };
   // 这一行显示着、封面还在排队的那几部一键插队：首页与女优页各是一行，各管自己的。宿主在 Tailwind 作用域外，
   // 提示条与进度条套一层 `peach-react` 进去（与骨架同一个写法）。
+  if (error) return <RetryNote message={error} onRetry={() => retry?.()} />;
+  if (!feedNew && reserve) return <div dangerouslySetInnerHTML={{ __html: feedNewSkeletonHtml() }} />;
   return html ? <><div className="peach-react" data-feed-cover-queue><CoverQueue scope="这一行" codes={queued} fetchOne={cover} /></div>
     <div ref={box} className="contents" onClick={(event) => { void click(event) }}
     dangerouslySetInnerHTML={{ __html: html }} />{sourceFaces.map((face, index) => createPortal(

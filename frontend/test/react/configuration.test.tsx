@@ -124,6 +124,11 @@ it('挂载状态只跟随已保存路径，修改文件夹时撤下读数', asyn
   await type(row.querySelector<HTMLInputElement>('input[aria-label^="媒体目录 "]'), 'B:/Movies');
   expect(row.querySelector('[data-mount]')).toBeNull();
 });
+it('网盘检测超时的挂载（快照里是 null）显示未检测，不当离线', async () => {
+  const host = await open(data({ windows: true, media_sources: [{ location: '115', path: 'B:/', root: 'B:/', online: null }] }));
+  const badge = host.querySelector('[data-folder-row] [data-mount]');
+  expect([badge?.getAttribute('data-mount'), badge?.textContent]).toEqual(['unknown', '未检测']);
+});
 it('非 Windows 文件夹只展示媒体目录，提交时保留已有路径对应关系', async () => {
   const host = await open(data({ windows: false,
     media_sources: [{ location: 'local', path: '/old', root: 'R:\\media', library: '电影', cost: 'free' }] }));

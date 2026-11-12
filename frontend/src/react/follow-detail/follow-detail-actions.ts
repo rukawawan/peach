@@ -12,6 +12,8 @@ export interface FollowDetailActionPorts {
   open(id: number, mediaIndex: number | null, preserveReturn: boolean): void;
   openAuthor(name: string): void;
   drawer(drawer: Pick<FollowDrawer, 'tags'>): void;
+  /** 画出了这一条：壳据此写标签页标题。 */
+  presented(item: { id: number; title: string; author?: string }): void;
 }
 
 /** 舞台的打开、代次与卸载仍由舞台拥有者持有；域只决定筛选与返回地址。 */
@@ -30,6 +32,9 @@ export function createFollowDetailActions(ports: FollowDetailActionPorts,
       ports.rememberReturn(followViewPath(next));
       ports.close();
     },
-    present: item => ports.drawer({ tags: sidebarTagCounts([{ tags: item.tags || [] }]) }),
+    present: item => {
+      ports.drawer({ tags: sidebarTagCounts([{ tags: item.tags || [] }]) });
+      ports.presented(item);
+    },
   };
 }

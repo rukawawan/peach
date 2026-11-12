@@ -9,11 +9,11 @@ describe('实体页冷启动等待态', () => {
   before(async () => { browser = await launch() });
   after(async () => { await browser.close() });
   for (const viewport of VIEWPORTS) for (const jav of [false, true]) for (const theme of ['light', 'dark']) for (const view of ['cards', 'list']) {
-    it(`${viewport.name} ${theme} ${view} ${jav ? 'JAV' : '普通'}艺人直达和刷新保持首次形状`, { timeout: 60_000 }, async () => {
+    it(`${viewport.name} ${theme} ${view} ${jav ? 'JAV' : '普通'}艺人直达和刷新保持形状，身份与作品独立显示`, { timeout: 60_000 }, async () => {
       const context = await browser.newContext({ viewport });
       const releases: (() => void)[] = [];
       const gate = () => new Promise<void>(resolve => { releases.push(resolve) });
-      let shapes = gate(), entity = gate(), items = gate();
+      let shapes = gate(), entity = gate(), items = gate(), photos = gate();
       const name = '演示艺人';
       const shape = { id: 90001, kind: 'performer', names: [name], parts: jav ? ['facts', 'costars', 'jav'] : [] };
       try {
@@ -48,10 +48,13 @@ describe('实体页冷启动等待态', () => {
         await page.route(/\/api\/items\?/, async route => { await items; await route.fulfill({ json: {
           items: [{ id: 91001, name: '演示作品', is_jav: jav, has_thumb: false }], total: 1, has_more: false,
         } }) });
-        await page.route(/\/api\/photos\?/, route => route.fulfill({ json: { items: [], total: 0, sets: [], has_more: false } }));
+        await page.route(/\/api\/photos\?/, async route => {
+          await photos;
+          await route.fulfill({ json: { items: [], total: 0, sets: [], has_more: false } });
+        });
         for (const mode of ['direct', 'refresh']) {
           if (mode === 'refresh') {
-            shapes = gate(); entity = gate(); items = gate();
+            shapes = gate(); entity = gate(); items = gate(); photos = gate();
             await page.reload({ waitUntil: 'load' });
           } else await page.goto(requiredEnv('PEACH_E2E_ORIGIN') + '/performers/90001', { waitUntil: 'load' });
           const root = page.locator('[data-skeleton="entity/performer"]');
@@ -95,20 +98,40 @@ describe('实体页冷启动等待态', () => {
           // 筛选条里的标签取紧凑档 `--control-h-compact`，骨架与真实标签同高。
           assert.equal(await root.locator('[data-entity-tags] .skeleton').first().evaluate(node => node.getBoundingClientRect().height), 32);
           assert.ok(await root.locator('[data-entity-state]').count(), '静态观看筛选尚未显示');
-          const ratio = () => root.locator('[style*="--skeleton-card-ratio"]').first().evaluate(node =>
+          const ratio = (scope = root) => scope.locator('[style*="--skeleton-card-ratio"]').first().evaluate(node =>
             Number((node as HTMLElement).style.getPropertyValue('--skeleton-card-ratio')));
           if (view === 'cards') assert.equal(await ratio(), jav ? .75 : 16 / 9);
           if (process.env.PEACH_COLD_EVIDENCE) await page.screenshot({
             path: join(process.env.PEACH_COLD_EVIDENCE, `${viewport.name}-${jav ? 'jav' : 'ordinary'}-${mode}.png`),
             fullPage: false,
           });
+          const identityResponse = page.waitForResponse(response => response.url().includes('/api/entity?'));
           for (const release of releases.splice(0, 2)) release();
-          await page.waitForResponse(response => response.url().includes('/api/entity?'));
-          assert.equal(await first!.evaluate(node => node === document.querySelector('[data-skeleton="entity/performer"]')), true,
-            '解析实体后换成了第二段等待态');
-          if (view === 'cards') assert.equal(await ratio(), jav ? .75 : 16 / 9);
-          releases.shift()!();
+          await identityResponse;
+          const identity = page.locator('[data-entity-hero] [data-entity-identity] h2');
+          await identity.filter({ hasText: name }).waitFor();
           await root.waitFor({ state: 'detached' });
+          assert.equal(await first!.evaluate(node => node.isConnected), false, '身份已取得仍保留整页等待态');
+          const hero = await page.locator('[data-entity-hero]').elementHandle();
+          const body = page.locator('[data-entity-body]');
+          const waitingBody = body.locator('[data-content-transition][data-pending][aria-busy="true"]');
+          await waitingBody.waitFor();
+          assert.equal(await body.locator('[data-media-card], [data-catalog-row]').count(), 0,
+            '作品响应未放行时不应出现伪造或旧人物作品');
+          if (view === 'cards') assert.equal(await ratio(waitingBody), jav ? .75 : 16 / 9,
+            '身份先显示时，作品等待区仍应保持已知的卡片比例');
+          else await waitingBody.locator('[data-list-skeleton]').waitFor();
+          releases.shift()!();
+          await body.locator('[data-media-card][data-id="91001"], [data-catalog-row][data-id="91001"]').first().waitFor();
+          await waitingBody.waitFor({ state: 'detached' });
+          assert.equal(await hero!.evaluate(node => node === document.querySelector('[data-entity-hero]')), true,
+            '作品到达时重建了已显示的人物身份');
+          assert.equal(await identity.textContent(), name, '照片仍在等待时人物身份应继续显示');
+          const photoResponse = page.waitForResponse(response => response.url().includes('/api/photos?'));
+          releases.shift()!();
+          await photoResponse;
+          assert.equal(await hero!.evaluate(node => node === document.querySelector('[data-entity-hero]')), true,
+            '照片到达时重建了已显示的人物身份');
           assert.deepEqual(await controls(), waitingControls, '筛选按钮的尺寸或间距与就绪状态不一致');
           const bottom = page.locator('[data-entity-filter-glass] > [data-filter-row="bottom"]');
           const overflow = await bottom.evaluate(node => {
@@ -141,6 +164,7 @@ describe('实体页冷启动等待态', () => {
           assert.equal(await page.locator('[data-entity-facts]').count() > 0, jav);
           assert.equal(await page.locator('[data-entity-foot]').count() > 0, jav);
           await first!.dispose();
+          await hero!.dispose();
         }
       } finally { releases.forEach(release => release()); await context.close() }
     });

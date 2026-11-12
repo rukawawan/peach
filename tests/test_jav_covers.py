@@ -198,15 +198,19 @@ class FetchRetryTests(unittest.TestCase):
                 covers.best_cover(transport, code, 0)
 
     def test_a_spent_run_budget_stops_before_trying_another_candidate(self):
-        from peach.scraping_access import SourceTransport
+        from peach.scraping_access import BUDGET_SPENT, SourceTransport
         candidates = tuple(covers.candidate_for(f'https://{name}.example/cover.jpg')
                            for name in ('first', 'second'))
         with tempfile.TemporaryDirectory() as directory:
             transports = [SourceTransport(Path(directory), max_requests=1),
                           SourceTransport(Path(directory), max_bytes=1),
                           SourceTransport(Path(directory), max_seconds=1)]
+            self.assertEqual([transport.exhausted() for transport in transports], ['', '', ''])
             transports[0].requests = transports[1].bytes = 1
             transports[2].deadline = time.monotonic() - 1
+            # 到顶与否不必发一问去撞：处理任务据此整趟停下（#513）。
+            self.assertEqual([covers.HostLimitedTransport(transport, 0).exhausted() for transport in transports],
+                             [BUDGET_SPENT['requests'], BUDGET_SPENT['bytes'], BUDGET_SPENT['seconds']])
             for transport in transports:
                 for code in ('FC2-PPV-123456', 'ABW-192', 'SSIS-057'):
                     with self.subTest(transport=transport, code=code), \

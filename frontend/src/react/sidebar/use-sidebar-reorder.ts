@@ -1,16 +1,18 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import { moveSidebarKey } from './sidebar-order';
+import './navigation-reorder.css';
 
 interface Picked {
   key: string;
   origin: number;
   slot: number | null;
-  top: number;
+  offset: number;
+  bounds: { left: number; top: number; width: number };
 }
 interface Gesture {
   key: string;
-  node: HTMLButtonElement;
+  node: HTMLElement;
   pointer: number;
   x: number;
   y: number;
@@ -20,9 +22,24 @@ interface Gesture {
   cursor: string;
 }
 
+/** 玻璃背景和弹层变换会成为 fixed 的定位容器，拾起坐标须换算到该容器。 */
+function floatingBounds(node: HTMLElement) {
+  const bounds = node.getBoundingClientRect();
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    if (style.transform !== 'none' || style.filter !== 'none' || style.backdropFilter !== 'none'
+      || style.perspective !== 'none' || /paint|layout|strict|content/.test(style.contain)) {
+      const origin = parent.getBoundingClientRect();
+      return { left: bounds.left - origin.left - parent.clientLeft + parent.scrollLeft,
+        top: bounds.top - origin.top - parent.clientTop + parent.scrollTop, width: bounds.width };
+    }
+  }
+  return { left: bounds.left, top: bounds.top, width: bounds.width };
+}
+
 /** 导航只在松手时保存顺序；指针移动只更新浮起项和插入位置。 */
 export function useSidebarReorder(column: RefObject<HTMLDivElement | null>, order: readonly string[],
-  commit: (next: string[]) => void, settled: () => void) {
+  commit: (next: string[]) => void, settled: () => void, axis: 'x' | 'y' = 'y', attribute = 'nav', fixed: readonly string[] = []) {
   const [picked, setPicked] = useState<Picked | null>(null);
   const [announcement, announce] = useState('');
   const gesture = useRef<Gesture | null>(null);
@@ -30,7 +47,7 @@ export function useSidebarReorder(column: RefObject<HTMLDivElement | null>, orde
   const ignoreClick = useRef(false);
   const latest = useRef({ order, commit, settled, picked });
   latest.current = { order, commit, settled, picked };
-  const rows = () => [...column.current!.querySelectorAll<HTMLButtonElement>(':scope > button[data-nav]')];
+  const rows = () => [...column.current!.querySelectorAll<HTMLElement>(`:scope > [data-${attribute}]`)];
   const capture = () => { before.current = new Map(rows().map(node => [node, node.getBoundingClientRect()])) };
 
   useLayoutEffect(() => {
@@ -39,7 +56,7 @@ export function useSidebarReorder(column: RefObject<HTMLDivElement | null>, orde
     if (!snapshot || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const css = getComputedStyle(column.current!);
     for (const node of rows()) {
-      if (node.dataset.nav === picked?.key) continue;
+      if (node.dataset[attribute] === picked?.key) continue;
       const old = snapshot.get(node);
       if (!old) continue;
       const now = node.getBoundingClientRect(), dx = old.left - now.left, dy = old.top - now.top;
@@ -93,16 +110,18 @@ export function useSidebarReorder(column: RefObject<HTMLDivElement | null>, orde
     };
   }, []);
 
-  const pointerDown = (event: PointerEvent<HTMLButtonElement>, key: string) => {
-    if (event.button !== 0 || !event.isPrimary) return;
+  const pointerDown = (event: PointerEvent<HTMLElement>, key: string) => {
+    if (event.button !== 0 || !event.isPrimary || fixed.includes(key)) return;
     ignoreClick.current = false;
+    const control = (event.target as Element).closest('button,input,select,a');
+    if (control && control !== event.currentTarget) return;
     const node = event.currentTarget;
     gesture.current = { key, node, pointer: event.pointerId, x: event.clientX, y: event.clientY,
-      keys: rows().map(row => row.dataset.nav!), started: false,
+      keys: rows().map(row => row.dataset[attribute]!), started: false,
       minHeight: column.current!.style.minHeight, cursor: document.body.style.cursor };
     node.setPointerCapture(event.pointerId);
   };
-  const pointerMove = (event: PointerEvent<HTMLButtonElement>) => {
+  const pointerMove = (event: PointerEvent<HTMLElement>) => {
     const active = gesture.current;
     if (!active || active.pointer !== event.pointerId) return;
     const dx = event.clientX - active.x, dy = event.clientY - active.y;
@@ -112,31 +131,38 @@ export function useSidebarReorder(column: RefObject<HTMLDivElement | null>, orde
       capture();
       column.current!.style.minHeight = `${column.current!.offsetHeight}px`;
       document.body.style.cursor = 'grabbing';
-      const top = active.node.offsetTop, origin = active.keys.indexOf(active.key);
-      flushSync(() => setPicked({ key: active.key, top, origin, slot: origin }));
+      const offset = axis === 'x' ? active.node.offsetLeft : active.node.offsetTop;
+      const { left, top, width } = floatingBounds(active.node);
+      const origin = active.keys.indexOf(active.key);
+      flushSync(() => setPicked({ key: active.key, offset, origin, slot: origin, bounds: { left, top, width } }));
     }
     event.preventDefault();
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    active.node.style.setProperty('--sidebar-drag-x', `${reduced ? 0 : dx + 18}px`);
-    active.node.style.setProperty('--sidebar-drag-y', `${reduced ? 0 : dy}px`);
+    active.node.style.setProperty('--sidebar-drag-x', `${reduced ? 0 : dx + (axis === 'y' ? 18 : 0)}px`);
+    active.node.style.setProperty('--sidebar-drag-y', `${reduced ? 0 : dy + (axis === 'x' ? 18 : 0)}px`);
     const box = column.current!.getBoundingClientRect();
     const inside = event.clientX >= box.left && event.clientX <= box.right
       && event.clientY >= box.top && event.clientY <= box.bottom;
     let slot: number | null = null;
     if (inside) {
       const remaining = rows().filter(row => row !== active.node);
-      const at = remaining.findIndex(row => event.clientY - box.top < row.offsetTop + row.offsetHeight / 2);
-      slot = at < 0 ? remaining.length : at;
+      const at = remaining.findIndex(row => axis === 'x'
+        ? event.clientX - box.left + column.current!.scrollLeft < row.offsetLeft + row.offsetWidth / 2
+        : event.clientY - box.top < row.offsetTop + row.offsetHeight / 2);
+      slot = Math.max(active.keys.filter(key => fixed.includes(key)).length, at < 0 ? remaining.length : at);
     }
     if (slot !== latest.current.picked?.slot) flushSync(() => setPicked(mark => mark && { ...mark, slot }));
   };
-  const keyboard = (event: KeyboardEvent<HTMLButtonElement>, key: string) => {
-    if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+  const keyboard = (event: KeyboardEvent<HTMLElement>, key: string) => {
+    const previousKey = axis === 'x' ? 'ArrowLeft' : 'ArrowUp';
+    const nextKey = axis === 'x' ? 'ArrowRight' : 'ArrowDown';
+    if (!event.altKey || (event.key !== previousKey && event.key !== nextKey)) return;
     event.preventDefault();
-    const visible = rows().map(row => row.dataset.nav!);
-    const at = visible.indexOf(key), down = event.key === 'ArrowDown';
+    event.stopPropagation();
+    const visible = rows().map(row => row.dataset[attribute]!);
+    const at = visible.indexOf(key), down = event.key === nextKey;
     const target = visible[at + (down ? 1 : -1)];
-    if (target === undefined) return;
+    if (target === undefined || fixed.includes(key) || fixed.includes(target)) return;
     const next = moveSidebarKey(order, key, target, down);
     if (!next) return;
     capture();
@@ -145,25 +171,27 @@ export function useSidebarReorder(column: RefObject<HTMLDivElement | null>, orde
     settled();
   };
 
-  const remaining = picked ? rows().filter(row => row.dataset.nav !== picked.key) : [];
+  const remaining = picked ? rows().filter(row => row.dataset[attribute] !== picked.key) : [];
   const hint = !!picked && picked.slot !== null && picked.slot !== picked.origin;
-  const lineTop = hint ? (picked.slot === remaining.length
-    ? remaining.at(-1)!.offsetTop + remaining.at(-1)!.offsetHeight + 1.5
-    : remaining[picked.slot!]!.offsetTop - 1.5) : 0;
-  return {
-    picked, announcement, lineTop, hint,
-    nudge(key: string) {
-      const at = remaining.findIndex(row => row.dataset.nav === key);
+  const position = (node: HTMLElement) => axis === 'x' ? node.offsetLeft : node.offsetTop;
+  const size = (node: HTMLElement) => axis === 'x' ? node.offsetWidth : node.offsetHeight;
+  const linePosition = hint ? (picked.slot === remaining.length
+    ? position(remaining.at(-1)!) + size(remaining.at(-1)!) + 1.5
+    : position(remaining[picked.slot!]!) - 1.5) : 0;
+  const nudge = (key: string) => {
+      const at = remaining.findIndex(row => row.dataset[attribute] === key);
       if (!hint || at < 0) return { distance: 0, delay: 0 };
       const above = at < picked!.slot!, n = above ? picked!.slot! - at - 1 : at - picked!.slot!;
       return { distance: (above ? -1 : 1) * 10 * 0.7 ** n, delay: 24 * n };
-    },
+  };
+  return {
+    picked, announcement, linePosition, hint, nudge,
     bindings(key: string) {
-      return { onPointerDown: (event: PointerEvent<HTMLButtonElement>) => pointerDown(event, key),
+      return { onPointerDown: (event: PointerEvent<HTMLElement>) => pointerDown(event, key),
         onPointerMove: pointerMove,
-        onPointerUp: (event: PointerEvent<HTMLButtonElement>) => { if (gesture.current?.pointer === event.pointerId) finish(true) },
+        onPointerUp: (event: PointerEvent<HTMLElement>) => { if (gesture.current?.pointer === event.pointerId) finish(true) },
         onPointerCancel: () => finish(false),
-        onLostPointerCapture: () => finish(false), onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => keyboard(event, key),
+        onLostPointerCapture: () => finish(false), onKeyDown: (event: KeyboardEvent<HTMLElement>) => keyboard(event, key),
         onDragStart: (event: { preventDefault(): void }) => event.preventDefault() };
     },
     clickCapture(event: { preventDefault(): void; stopPropagation(): void }) {

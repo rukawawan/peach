@@ -14,6 +14,7 @@ import { REPAIR_CARD_TEXT } from '../../management';
 import { useBackgroundJob } from '../background-job';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
+import { useOrderedLibraries } from '../components/library-order';
 import { Progress } from '../components/progress';
 import { queryClient } from '../query';
 import { SourceMark } from '../settings/section';
@@ -22,6 +23,7 @@ import {
   fetchMediaRepair, fetchRepairLibraries, IDLE_REPAIR, MEDIA_REPAIR_KEY, MEDIA_REPAIR_URL,
   missingToolText, REPAIR_LIBRARIES_KEY, statusLine, type MediaRepairState,
 } from './media-repair';
+import { t } from '../../i18n';
 
 const libraryMark = (icon: string) => MEDIA_SOURCE_ICONS[icon] || icon;
 const replace = (next: MediaRepairState) => queryClient.setQueryData(MEDIA_REPAIR_KEY, next);
@@ -32,7 +34,7 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
     start: (library) => apiSend<MediaRepairState>(MEDIA_REPAIR_URL, { library, restart: true }),
     onFinish: (result) => {
       if (result.status === 'complete' && !result.failed && !result.missing_tool) {
-        toast(result.repaired ? `已修复 ${result.repaired.toLocaleString()} 部视频` : '已检查媒体库，没有需要修复的视频');
+        toast(result.repaired ? t('cleanup:mediaRepair.repaired', { count: result.repaired }) : t('cleanup:mediaRepair.nothingToRepair'));
       }
     },
   });
@@ -42,7 +44,7 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
   const [chosen, setChosen] = useState('');
   const action = useAction();
   const state = repair.job ?? IDLE_REPAIR;
-  const libraries = choices.data ?? [];
+  const libraries = useOrderedLibraries(choices.data ?? [], row => row.id);
   const running = state.status === 'running';
 
   // 跑着的那一轮握着下拉框；空闲时是人选的那个，没选过就是上一轮修的库，再没有就是第一个。
@@ -52,11 +54,10 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
   const start = () => {
     if (!selected) return;
     void confirmModal({
-      title: `修复媒体库「${selected.name}」`,
-      body: '缺时间戳表的片子另存一份修好的头，原文件不动；缺索引的片子重建后替换原文件，'
-        + '坏原件改名成同目录的隐藏文件（.文件名.peach-original）留着。'
-        + (selected.metered ? '这个库在计费来源上，每修一部都要把片子完整拉一遍。' : ''),
-      confirmLabel: '修复媒体库',
+      title: t('cleanup:mediaRepair.confirmTitle', { name: selected.name }),
+      body: [t('cleanup:mediaRepair.body'), ...(selected.metered ? [t('cleanup:mediaRepair.meteredWarning')] : [])]
+        .join(t('cleanup:shared.sentenceGap')),
+      confirmLabel: t('cleanup:mediaRepair.confirm'),
       onConfirm: async () => { await repair.start.mutateAsync(selected.id) },
     });
   };
@@ -65,13 +66,13 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
 
   const outcome = repair.outcome;
   const line = statusLine(running ? state : outcome ?? IDLE_REPAIR);
-  const problem = action.error || outcome?.error || (repair.query.error ? '读不到媒体修复的状态' : '');
+  const problem = action.error || outcome?.error || (repair.query.error ? t('cleanup:mediaRepair.statusUnavailable') : '');
   return (
     <div className="flex flex-col gap-4">
-      <Fieldset layout="split" label="媒体修复" footer={
+      <Fieldset layout="split" label={t('cleanup:tools.mediaRepair')} footer={
         <>
-          <Select aria-label="媒体库" prefix="媒体库" className="w-48" selectedKey={selected?.id ?? null}
-            isDisabled={running || !libraries.length}
+          <Select aria-label={t('cleanup:mediaRepair.library')} prefix={t('cleanup:mediaRepair.library')} className="w-48" selectedKey={selected?.id ?? null}
+            isDisabled={running || !libraries.length} aria-busy={choices.isPending || undefined}
             onSelectionChange={(key) => { if (key !== null) setChosen(String(key)); }}>
             {libraries.map((row) => (
               <SelectItem key={row.id} id={row.id} textValue={row.name}>
@@ -80,23 +81,24 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
             ))}
           </Select>
           {running
-            ? <Button onClick={stop} {...busyProps(action.busy === 'stop')}>停止</Button>
-            : <Button onClick={start} disabled={!selected}>开始修复</Button>}
+            ? <Button onClick={stop} {...busyProps(action.busy === 'stop')}>{t('cleanup:shared.stop')}</Button>
+            : <Button onClick={start} disabled={!selected}>{t('cleanup:mediaRepair.start')}</Button>}
         </>
       }>
         <div className="flex flex-col gap-2">
-          <FieldsetTitle>媒体修复</FieldsetTitle>
+          <FieldsetTitle>{t('cleanup:tools.mediaRepair')}</FieldsetTitle>
           <p className="text-body-2-regular text-text-secondary">{REPAIR_CARD_TEXT}</p>
           {running && state.total
-            ? <Progress label="修复进度" value={state.checked} max={state.total} />
+            ? <Progress label={t('cleanup:mediaRepair.progress')} value={state.checked} max={state.total} />
             : null}
           {line ? <p role="status" className="text-caption-1-regular text-text-secondary">{line}</p> : null}
         </div>
       </Fieldset>
       <div aria-live="polite" className="flex flex-col gap-4 empty:hidden">
         {outcome?.status === 'complete' && outcome.missing_tool
-          ? <Note tone="warning" title="缺少 untrunc" action={<Button variant="ghost" size="small" onClick={repair.dismiss}>关闭提示</Button>}>{missingToolText(outcome)}</Note>
+          ? <Note tone="warning" title={t('cleanup:mediaRepair.missingTool')} action={<Button variant="ghost" size="small" onClick={repair.dismiss}>{t('cleanup:mediaRepair.dismiss')}</Button>}>{missingToolText(outcome)}</Note>
           : null}
+        {choices.isError ? <Note tone="error">{t('cleanup:mediaRepair.librariesUnavailable')}</Note> : null}
         {problem ? <Note tone="error">{problem}</Note> : null}
       </div>
     </div>

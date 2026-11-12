@@ -118,7 +118,7 @@ export function followBadges(group: FollowGroup, shown: FollowItem = group.prima
 export function followMediaIssue(item: FollowItem, context: FollowContext): string {
   const error = text(item.media_error);
   if (error) return `媒体未取得：${error}`;
-  if (item.media_needs_credential && !context.credentials.has(item.provider)) {
+  if (item.media_needs_credential && context.credentialsReady !== false && !context.credentials.has(item.provider)) {
     return item.playable ? '部分媒体未取得：需要 F95 登录会话解析' : '媒体未取得：需要 F95 登录会话解析';
   }
   return '';

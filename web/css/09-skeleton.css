@@ -123,7 +123,9 @@
   background:linear-gradient(var(--hover),var(--hover)),var(--ground)}
 /* 封面和带脸框的头像取景完才露面：大图边下边画，取景要等 `load`，之前画出来的是几何居中，
    取景那一下画面会跳。缓存图在插入时就取景（`frameCachedImages`）；回落图摘掉脸框后不再等。 */
-img.cover:not([data-frame]),img[data-facebox]:not([data-face-framed]){visibility:hidden}
+img.cover:not([data-frame]){visibility:hidden}
+/* 头像保留可见性参与原生懒加载；取景完成前只隐藏像素，不能等待 load 才解除 visibility。 */
+img[data-facebox]:not([data-face-framed]){opacity:0}
 
 /* 计数骨架的宽高定死：跟着真实文本走的话，数字回来那一刻整行会横向弹一下。
    14px 远低于筛选条按钮的 32px，而 `.count` 有 min-height 兜底，所以换成真数字

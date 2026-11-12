@@ -6,6 +6,7 @@ import { $, api, esc, foldName, icon, isCatalogPath } from '../core';
 import { javTitleHtml } from '../core/jav-title';
 import { COVER_FRONT_RATIO } from './../appearance/layout';
 import { catalogState } from './catalog.js';
+import { feedNewSkeletonHtml } from '../feed-new-skeleton';
 import { managedTaken, openManagedRoute, updateManagedRoute } from './../history/managed';
 import { noteHtml, stopAutoScroll, wireAutoScroll } from '../ui-kit';
 import { preferencesState, wireDrag } from './preferences.js';
@@ -26,7 +27,7 @@ export function feedNewCoverHtml(item){
 export function feedNewCardHtml(item){
   // 署名与日期各占一行，长出演名单可从悬停说明查看。
   const label=[item.performers&&`<span class="feednewperformers" title="${esc(item.performers)}">${esc(item.performers)}</span>`,
-    item.release_date&&`<span>${esc(item.release_date)}</span>`].filter(Boolean)
+    item.release_date&&`<time class="feednewdate" datetime="${esc(item.release_date)}">${esc(item.release_date)}</time>`].filter(Boolean)
     .join('');
   const cover=feedNewCoverHtml(item);
   // 番号与标题排在同一个两行的标题块里，和资产卡一样：番号加粗打头，标题接在后面截断。
@@ -154,11 +155,7 @@ export function syncHeroWide([entry]){
 
 export function installFeed13() {
 feedState.FEED_SKELETON_CARDS = 8;
-feedState.feedNewSkeletonHtml = ()=>`<div class="feednewrow srow" data-skeleton="feed/new" aria-hidden="true">${
-  `<article class="card feednewcard feednewskeleton"><div class="pic imgwait" style="--card-ratio:${COVER_FRONT_RATIO}"></div>
-    <div class="meta"><div class="mtext"><span class="t"><span class="skeleton"></span></span>
-      <div class="s mono"><span class="skeleton">&#8203;</span></div></div></div></article>`
-    .repeat(feedState.FEED_SKELETON_CARDS)}</div>`;
+feedState.feedNewSkeletonHtml = ()=>feedNewSkeletonHtml(feedState.FEED_SKELETON_CARDS);
 feedState.entityShapes = null;
 feedState.entityShapesComplete = false;
 feedState.hasEntityShape = (kind,name)=>feedState.entityShapesComplete||!!feedState.entityShapes?.has(`${kind}/${foldName(name)}`);

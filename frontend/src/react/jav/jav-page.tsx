@@ -11,9 +11,12 @@ import { CloudDownloadDialog, type DownloadPrefill } from '../activity/cloud-dow
 import { Note } from '../components/note';
 import { EmptyState } from '../components/empty-state';
 import { WantList } from '../wants/want-list';
+import { JavSelectionProvider, useVisibleJavWorks } from './jav-selection';
 import { addWant, invalidateWants } from '../wants/wants';
 import { busyProps, useAction } from '../settings/use-action';
-import { discoveryKey, fetchDiscoveries, writeJavQuery, type DiscoveryScope } from './jav';
+import { controlDiscoveryMetadata, DISCOVERY_METADATA_KEY, DISCOVERY_REFRESH_MS, discoveryKey, fetchDiscoveries, fetchDiscoveryMetadata, writeJavQuery,
+  type DiscoveryMetadataJob, type DiscoveryScope } from './jav';
+import { queryClient } from '../query';
 import { DiscoveryCard, resourcePrefill } from './discovery-card';
 import { Releases } from './jav-releases';
 import { JavHeader } from './jav-header';
@@ -35,7 +38,7 @@ export function JavPage({ tab, readOnly, navigate, receipt }: {
   const [download, setDownload] = useState<DownloadPrefill | null>(null);
   const [text, changeText] = useState(() => new URLSearchParams(location.search).get('q') || '');
   const setText = (value: string) => { changeText(value); writeJavQuery({ q: value }) };
-  return <div className="flex w-full flex-col gap-6">
+  return <JavSelectionProvider key={tab} readOnly={readOnly} receipt={receipt}><div className="flex w-full flex-col gap-6">
     <JavHeader tab={tab} navigate={navigate} find={() => setDownload({})}
       search={<IndexSearch label={SEARCH_LABELS[tab] || '筛选'} value={text} onQuery={setText} />} />
     {tab === 'releases'
@@ -44,7 +47,7 @@ export function JavPage({ tab, readOnly, navigate, receipt }: {
       ? <Discover readOnly={readOnly} receipt={receipt} resource={setDownload} query={text.trim()} navigate={navigate} clearText={() => setText('')} />
       : <WantList readOnly={readOnly} toast={receipt} query={text.trim()} clearQuery={() => setText('')} />}
     <CloudDownloadDialog prefill={download} close={() => setDownload(null)} receipt={receipt} />
-  </div>;
+  </div></JavSelectionProvider>;
 }
 
 function Discover({ readOnly, receipt, resource, query, navigate, clearText }: {
@@ -71,37 +74,67 @@ function Discover({ readOnly, receipt, resource, query, navigate, clearText }: {
   useSyncExternalStore(settings.subscribe, settings.version, settings.version);
   const layout = javLayout();
   const ratio = cardRatio(gridLayout({ active: true, home: false, portrait: false }));
-  const metadataJobs = useRef<Partial<Record<DiscoveryScope, string>>>({});
-  const refreshMetadata = useRef(false);
-  const cancelMetadata = useRef(false);
   const direction = ascending ? 'asc' : 'desc';
+  const reading = useRef(false);
+  /* 推荐列表只读。资料读取进行中时进度单独轮询；列表隔 `DISCOVERY_REFRESH_MS` 才重取一次，
+     把读到的标签与评分带上来，读完再取一次。 */
   const discoveries = useQuery({ queryKey: discoveryKey(scope, sort, direction), retry: false, refetchOnWindowFocus: false,
-    queryFn: ({ signal }) => {
-      const refresh = refreshMetadata.current;
-      const cancel = cancelMetadata.current;
-      refreshMetadata.current = false;
-      cancelMetadata.current = false;
-      return fetchDiscoveries(scope, signal, { sort, direction, jobId: refresh ? undefined : metadataJobs.current[scope], refreshMetadata: refresh, cancelMetadata: cancel });
-    },
-    refetchInterval: current => current.state.data?.metadata_job?.status === 'running'
-      ? Math.max(1000, current.state.data.poll_after_ms || 3000) : false,
+    queryFn: ({ signal }) => fetchDiscoveries(scope, signal, { sort, direction }),
+    refetchInterval: () => (reading.current ? DISCOVERY_REFRESH_MS : false),
   });
-  const metadata = discoveries.data?.metadata_job;
-  useEffect(() => { if (metadata?.job_id) metadataJobs.current[scope] = metadata.job_id }, [scope, metadata?.job_id]);
+  const listedJob = discoveries.data?.metadata_job;
+  const listedRunning = useRef(false);
+  listedRunning.current = listedJob?.status === 'running';
+  const progress = useQuery({ queryKey: DISCOVERY_METADATA_KEY, retry: false, refetchOnWindowFocus: false,
+    enabled: scope === 'external',
+    queryFn: ({ signal }) => fetchDiscoveryMetadata(signal),
+    refetchInterval: current => current.state.data?.metadata_job?.status === 'running' || listedRunning.current
+      ? Math.max(1000, current.state.data?.poll_after_ms || 3000) : false,
+  });
+  // 两处谁新用谁：进度轮询与起停的回执写在进度那份里，列表重取时也带回当前任务。
+  const metadata = progress.data && progress.dataUpdatedAt >= discoveries.dataUpdatedAt
+    ? progress.data.metadata_job : listedJob;
+  reading.current = scope === 'external' && metadata?.status === 'running';
+  const jobState = (job: DiscoveryMetadataJob | null | undefined) => (job ? `${job.job_id}:${job.status}` : '');
+  const answered = useRef('');
+  const seen = useRef('');
+  const polled = progress.data?.metadata_job;
+  useEffect(() => {
+    // 轮询看到这一轮从进行中到结束：列表再取一次。起停按钮自己的回执不算，它已经取过。
+    const state = jobState(polled);
+    const ended = seen.current.endsWith(':running') && polled && polled.status !== 'running';
+    seen.current = state;
+    if (ended && state !== answered.current) void discoveries.refetch();
+  }, [jobState(polled)]); // eslint-disable-line react-hooks/exhaustive-deps
   const action = useAction();
   const metadataAction = useAction();
-  const updateMetadata = (key: 'stop' | 'update' | 'retry') => {
-    void metadataAction.run(key, async () => {
-      cancelMetadata.current = key === 'stop';
-      refreshMetadata.current = key !== 'stop';
-      return discoveries.refetch({ cancelRefetch: true, throwOnError: true });
-    }, () => {});
+  const control = async (kind: 'start' | 'refresh' | 'cancel', signal?: AbortSignal) => {
+    const result = await controlDiscoveryMetadata(kind, { sort, direction, jobId: metadata?.job_id }, signal);
+    if (kind !== 'start') await discoveries.refetch({ cancelRefetch: true, throwOnError: true });
+    // 起停之前发出的进度请求晚回来会盖掉这份回执（比如挂载时那次），先取消。
+    await queryClient.cancelQueries({ queryKey: DISCOVERY_METADATA_KEY });
+    answered.current = jobState(result.metadata_job);
+    queryClient.setQueryData(DISCOVERY_METADATA_KEY, result);
   };
+  const updateMetadata = (key: 'stop' | 'update' | 'retry') => {
+    void metadataAction.run(key, signal => control(key === 'stop' ? 'cancel' : 'refresh', signal), () => {});
+  };
+  // 打开页面时补读从没读过或已过期的那几部（停下、失败的那一轮由服务端留着，不重启）；
+  // 每次挂载只问一次。
+  const autoStarted = useRef(false);
+  const unread = scope === 'external' && metadata?.status !== 'running' && (discoveries.data?.items || [])
+    .some(item => item.metadata_state === 'pending' || item.metadata_state === 'stale');
+  useEffect(() => {
+    if (!unread || autoStarted.current) return;
+    autoStarted.current = true;
+    void control('start').catch(() => {});
+  }, [unread]); // eslint-disable-line react-hooks/exhaustive-deps
   const all = discoveries.data?.items || [];
   const tags = [...new Set(all.flatMap(item => item.tags || []))];
   const items = all.filter(item => (!tag || item.tags?.includes(tag)) &&
     (!query || [item.code, item.title, item.performers, item.studio, ...(item.tags || []), ...(item.performer_refs || []).map(ref => ref.name)].join(' ').toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   const waiting = discoveries.isPending;
+  useVisibleJavWorks(items);
   return <section ref={section} aria-label="为你推荐" aria-busy={waiting} className="flex min-w-0 flex-col gap-4">
     <FilterGlassRows label="发现筛选与排序" topLabel="发现范围与标签" attrs={{ 'data-filter-frame': '', 'data-jav-filter': '', 'data-catalog-frame': '' }}
       busy={waiting} topClassName="gap-1.5 overflow-visible" bottomClassName="min-h-12" top={<div data-catalog-scroll="">

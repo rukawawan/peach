@@ -302,7 +302,10 @@ body:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-follo
   white-space: nowrap;
   transition: opacity .15s ease;
 }
-.peach-react [data-media-badge] > span { width: 20px; height: 20px; padding: 0; background: transparent; }
+/* 旧样式表的来源图标是浅绿、浅橙，配它自己垫的深色底；这里底换成了随主题的玻璃，图标颜色也跟角标的
+ * 文字走，浅色主题下才看得见。计费来源单独用计费色。115、PikPak 是自带底色的位图，不受颜色影响。 */
+.peach-react [data-media-badge] > span { width: 20px; height: 20px; padding: 0; background: transparent; color: inherit; }
+.peach-react [data-media-badge] > span[class~="metered"] { color: var(--meter); }
 .peach-react [data-media-duration] {
   position: absolute;
   right: 6px;
@@ -327,13 +330,6 @@ body:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-follo
     visibility: hidden;
     transition: opacity .15s ease, visibility 0s .15s;
   }
-}
-/* 改字模式下，缺失时长的说明必须能被点击命中。 */
-body[data-peach-copy-mode] .peach-react [data-media-card] [data-media-duration][data-copy-key] {
-  z-index: 10;
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .peach-react [data-media-badge] { background: var(--ground); backdrop-filter: none; -webkit-backdrop-filter: none; }
@@ -443,7 +439,7 @@ body[data-peach-copy-mode] .peach-react [data-media-card] [data-media-duration][
 
 /* ── 悬停工具 ──
  * 右上角一圈倒计时：停够 `--hover-delay` 走满一圈，卡片随即抬起放大；居中三颗快退、快进与
- * 打开详情，右下角「稍后看」。它们是同一种磨砂圆底，只差尺寸。 */
+ * 打开详情，右下角「稍后看」。两枚角落动作等大，居中播放控件使用大一档。 */
 .peach-react [data-media-preview] {
   position: absolute;
   top: 12px;
@@ -467,7 +463,7 @@ body[data-peach-copy-mode] .peach-react [data-media-card] [data-media-duration][
 }
 .peach-react :is([data-previewing], [data-media-card]:has(:focus-visible)) [data-media-preview] { opacity: 1; pointer-events: auto; }
 .peach-react [data-longhover] [data-media-preview] { opacity: 0; pointer-events: none; }
-.peach-react [data-media-preview] > svg:first-child { position: absolute; inset: 0; width: 36px; height: 36px; transform: rotate(-90deg); }
+.peach-react [data-media-preview] > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .peach-react [data-media-preview] circle { fill: none; stroke-width: 2; }
 .peach-react [data-media-preview] circle:first-child { stroke: rgb(255 255 255 / .18); }
 .peach-react [data-media-preview] circle:last-child {
@@ -522,7 +518,7 @@ body[data-peach-copy-mode] .peach-react [data-media-card] [data-media-duration][
 .peach-react :is([data-media-preview], :is([data-media-later], [data-media-seek]) button):hover { background: rgb(0 0 0 / .34); }
 .peach-react [data-media-seek] svg { width: 34px; height: 34px; }
 /* 稍后看是卡片悬浮动作，取紧凑档。 */
-.peach-react [data-media-later] button { width: var(--control-h-compact); height: var(--control-h-compact); padding: 0; }
+.peach-react [data-media-later] button { width: 36px; height: 36px; padding: 0; }
 .peach-react [data-media-later] svg { width: 18px; height: 18px; }
 .peach-react [data-media-later] button[aria-pressed="true"] { background: var(--ink); color: var(--ground); }
 
@@ -607,6 +603,31 @@ body[data-peach-copy-mode] .peach-react [data-media-card] [data-media-duration][
 }
 .peach-react [data-media-avatars] > :is(:hover, :focus-visible) + * { --lift-y: -1.8px; }
 .peach-react [data-media-avatars] > :is(:hover, :focus-visible) + * + * { --lift-y: -.81px; }
+/* 短横图中的播放控件与角落动作分开摆放，避免相互覆盖。 */
+@container media-card (width < 260px) {
+  .peach-react [data-media-seek] { top: 55%; gap: 4px; }
+  .peach-react [data-media-seek] button {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+  }
+  .peach-react [data-media-seek] svg { width: 20px; height: 20px; }
+  .peach-react [data-media-preview], .peach-react [data-media-later] button { width: 30px; height: 30px; }
+  .peach-react [data-longhover] [data-media-later] { top: 6px; right: 6px; bottom: auto; }
+}
+/* 窄卡片优先给标题和署名留空间；头像仍可悬停展开。 */
+@container media-card (width < 320px) {
+  .peach-react [data-media-avatars] {
+    width: calc(var(--media-avatar-tight) + 7px + var(--media-avatar-tight-step) * (var(--media-avatar-visible) - 1));
+    max-width: min(var(--media-avatar-tight-max), max(45px, 24%));
+  }
+  .peach-react [data-media-avatars] > [data-media-avatar] {
+    width: var(--media-avatar-tight);
+    height: var(--media-avatar-tight);
+    left: calc(5px + (100% - var(--media-avatar-tight) - 7px) / var(--media-avatar-gaps) * var(--media-avatar-index));
+  }
+}
 /* 接着看与竖屏条保留两枚共演头像。 */
 .peach-react :is([data-variant="next"], [data-variant="short"]) [data-media-avatars] { --media-avatar-visible: min(2, var(--media-avatar-count)); }
 .peach-react :is([data-variant="next"], [data-variant="short"]) [data-media-avatars] > :nth-child(n+3) { display: none; }

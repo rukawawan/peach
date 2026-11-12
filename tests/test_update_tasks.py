@@ -136,6 +136,67 @@ class UpdateTaskTests(unittest.TestCase):
                 self.assertTrue(update_tasks.wait_quiescent(self.db, timeout=0))
                 update_tasks.release(self.db, token)
 
+    def test_pause_checks_do_not_wait_for_the_gate_lock_and_leave_stale_reservations_to_it(self):
+        """检查点问「在装更新吗」不取闸门锁；预约者死了只答「否」，文件留给持锁方清。"""
+        from filelock import FileLock
+        root = update_tasks.state_for(self.db)
+        root.mkdir(parents=True, exist_ok=True)
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with FileLock(root / 'admission.lock'):
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        try:
+            self.assertTrue(held.wait(5))
+            with patch.object(update_tasks, '_mutex', side_effect=AssertionError('检查点取了闸门锁')):
+                self.assertFalse(update_tasks.is_pausing(self.db))
+                (root / 'install.json').write_text(json.dumps({'pid': os.getpid(), 'token': 't'}), encoding='utf-8')
+                self.assertTrue(update_tasks.is_pausing(self.db))
+                with patch('peach.jobs.process_alive', return_value=False):
+                    self.assertFalse(update_tasks.is_pausing(self.db))
+                self.assertTrue((root / 'install.json').is_file())
+        finally:
+            release.set()
+            holder.join(5)
+        with patch('peach.jobs.process_alive', return_value=False):
+            update_tasks.reserve(self.db)
+        self.assertTrue(update_tasks.is_pausing(self.db))
+
+    def test_a_timed_out_gate_is_reported_as_busy_instead_of_a_bare_lock_timeout(self):
+        from filelock import FileLock
+        root = update_tasks.state_for(self.db)
+        root.mkdir(parents=True, exist_ok=True)
+        outcome = []
+
+        def admit():
+            try:
+                with update_tasks.admission(self.db):
+                    outcome.append(None)
+            except Exception as error:
+                outcome.append(error)
+
+        with FileLock(root / 'admission.lock'), patch.object(
+                update_tasks, '_mutex', lambda path: FileLock(path / 'admission.lock', timeout=0.05)):
+            worker = threading.Thread(target=admit)
+            worker.start()
+            worker.join(5)
+        self.assertIsInstance(outcome[0], update_tasks.GateBusy)
+        self.assertIsInstance(outcome[0], update_tasks.UpdateBusy)
+
+    def test_disk_guard_asks_about_installation_only_when_its_check_is_due(self):
+        from peach.jobs import DiskGuard
+        guard = DiskGuard(self.root, 0, interval_secs=3600)
+        with patch.object(update_tasks, 'check_pause') as pause:
+            guard.check()
+            for _ in range(50):
+                self.assertIsNone(guard.check())
+            guard.check(force=True)
+        self.assertEqual(pause.call_count, 2)
+
     def test_reservation_prevents_task_start_until_release(self):
         token = update_tasks.reserve(self.db)
         with self.assertRaises(update_tasks.UpdateBusy):

@@ -163,6 +163,14 @@ class RouteTests(_App):
         last = self.client.get(f"/api/downloads?limit=2&before_id={first['next_before_id']}").json()
         self.assertEqual(len(last["tasks"]), 1)
         self.assertFalse(last["has_more"])
+        numbered = self.client.get('/api/downloads?limit=2&page=2').json()
+        self.assertEqual([row['id'] for row in numbered['tasks']], [row['id'] for row in last['tasks']])
+        self.assertEqual(numbered['total'], 3)
+        self.assertEqual(numbered['page'], 2)
+        beyond = self.client.get('/api/downloads?limit=2&page=99').json()
+        self.assertEqual(beyond['page'], 2)
+        for page in ('0', '-1', 'invalid'):
+            self.assertEqual(self.client.get(f'/api/downloads?page={page}').status_code, 400)
         for position in ("nope", "0", "-1"):
             self.assertEqual(self.client.get(f"/api/downloads?before_id={position}").status_code, 400)
 
@@ -215,6 +223,7 @@ class RouteTests(_App):
             source=f"magnet:?xt=urn:btih:{HASH}&dn=ABC-123", provider="115",
             target="/115/云下载", code="ABC-123")
         result.task.state = dl.INGESTED
+        result.task.next_check_at = None
         result.task.postprocess_state = dl.POSTPROCESS_PENDING
         self.service.store.save(result.task)
         contract = self.app.state.web_contract

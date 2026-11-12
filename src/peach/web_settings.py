@@ -21,6 +21,7 @@ from .catalog_rules import compile_code_patterns
 from .feeds import DEFAULT_HIDDEN_COMPILATIONS, EXCERPT, GROUP_COMPILATION, SOLO_COMPILATION
 from .media_sources import SCANNABLE_LOCATIONS
 from .remote_media_cache import AVATAR_REFRESH_SECONDS, FAVICON_REFRESH_SECONDS
+from .system_language import system_language
 
 from .profiles import DEFAULT_PROFILE_ID
 
@@ -43,6 +44,10 @@ DEFAULT_FOLLOW_INITIAL_DAYS = 30
 #: 搜索框下拉里列几条最近搜索；0 是不记录。记录本身就在账本里（`/api/search-history`），
 #: 上限跟着它走，否则同一份记录在两台设备上显示的条数不一样。
 SEARCH_HISTORY_LIMIT_MAX = 50
+#: 有译文的界面语言，与前端 `frontend/src/i18n/index.ts` 的 `INTERFACE_LANGUAGES` 逐项一致（test_web_settings.py）。
+INTERFACE_LANGUAGES = ("zh-CN", "en")
+#: 设置里能存的值：`auto` 由每个浏览器按自己的语言偏好、再按运行 Peach 的电脑的系统语言选（默认）。
+INTERFACE_LANGUAGE_CHOICES = ("auto", *INTERFACE_LANGUAGES)
 
 #: 只有这些键跟着账本走。白名单而不是黑名单：将来往设置里加字段的人必须显式表态
 #: 它该不该跨机同步，而不是默认就同步过去。
@@ -52,10 +57,12 @@ SEARCH_HISTORY_LIMIT_MAX = 50
 #: 新作那一行收不收合集（`feeds.compilation_kind`）同样是服务端行为：列表、未读数和
 #: 替哪些壳补封面都按它算，所以跟着账本走。
 #: 番号识别规则描述的是这套馆藏的命名，处理任务按它往账本里写番号，同样跟着账本走。
+#: 界面语言（ADR-0156）是用这套馆藏的那个人读的语言，每个部署只有一人，换台设备不该再选一遍。
 SYNCED_SETTING_KEYS = frozenset({
-    "sidebarOrder", "followInitialDays", "postSetupTutorialDone",
+    "sidebarOrder", "manageOrder", "navigationOrders", "libraryOrder", "followInitialDays", "postSetupTutorialDone",
     "organizeTemplates", "feedHideGroupCompilations", "feedHideSoloCompilations",
-    "feedHideExcerpts", "searchHistoryLimit", "codePatterns", "performerNameLanguage",
+    "feedHideExcerpts", "searchHistoryLimit", "codePatterns", "performerNameLanguage", "taskSpeedMode",
+    "interfaceLanguage",
 })
 #: 三个收起开关的键与各自对应的那一类，缺省值取 `feeds.DEFAULT_HIDDEN_COMPILATIONS`。
 FEED_COMPILATION_SWITCHES = (
@@ -68,6 +75,48 @@ FEED_COMPILATION_SWITCHES = (
 class SettingsContract(Protocol):
     def read_connection(self): ...
     def write_transaction(self): ...
+
+
+DEFAULT_MANAGE_ORDER = ('stats', 'taste', 'cleanup', 'follow', 'activity', 'configuration')
+NAVIGATION_ORDERS = {
+    'review': ('metadata_fields', 'creator_tags', 'code_creators', 'western_identity', 'performer_avatars',
+               'studio_logos', 'fc2_markings', 'fc2_similarity', 'video_endcards'),
+    'configuration': ('library', 'sources', 'downloads', 'network', 'maintenance', 'diagnostics'),
+    'favorites': ('all', 'filters', 'performer', 'creator', 'tag', 'series', 'studio', 'agency'),
+    'jav': ('library', 'wants', 'releases', 'discover'),
+    'follow': ('list', 'add', 'tags'),
+    'tags': ('local', 'online'),
+    'preferences': ('appearance', 'browsing', 'jav', 'search', 'content'),
+}
+
+
+def normalise_navigation_orders(raw):
+    """按组归一化已存顺序，新入口追加至个人顺序末尾。"""
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for group, defaults in NAVIGATION_ORDERS.items():
+        entries = raw.get(group)
+        if isinstance(entries, list):
+            fixed = ['all'] if group == 'favorites' else []
+            result[group] = list(dict.fromkeys(fixed + [key for key in entries if isinstance(key, str) and key in defaults]
+                                              + list(defaults)))
+    return result
+
+
+def navigation_orders_patch(raw):
+    if not isinstance(raw, dict) or set(raw) - NAVIGATION_ORDERS.keys():
+        raise ValueError('导航排序需要已知分组与顺序数组')
+    if any(not isinstance(entries, list) or any(not isinstance(key, str) or key not in NAVIGATION_ORDERS[group]
+                                               for key in entries) for group, entries in raw.items()):
+        raise ValueError('导航顺序包含无效项目')
+    return normalise_navigation_orders(raw)
+
+
+def normalise_manage_order(raw):
+    entries = raw if isinstance(raw, list) else []
+    return list(dict.fromkeys([value for value in entries if isinstance(value, str) and value in DEFAULT_MANAGE_ORDER]
+                             + list(DEFAULT_MANAGE_ORDER)))
 
 
 def normalise_sidebar_order(raw) -> list[str]:
@@ -200,6 +249,9 @@ def q_settings(contract: SettingsContract, _args=None) -> dict:
     payload = _stored(contract)
     return {
         "sidebarOrder": normalise_sidebar_order(payload.get("sidebarOrder")),
+        **({"manageOrder": normalise_manage_order(payload["manageOrder"])} if "manageOrder" in payload else {}),
+        **({"navigationOrders": normalise_navigation_orders(payload["navigationOrders"])} if "navigationOrders" in payload else {}),
+        **({"libraryOrder": payload["libraryOrder"]} if isinstance(payload.get("libraryOrder"), list) else {}),
         "avatarRefreshDays": AVATAR_REFRESH_SECONDS // 86400,
         "faviconRefreshDays": FAVICON_REFRESH_SECONDS // 86400,
         "followInitialDays": normalise_follow_initial_days(payload.get("followInitialDays")),
@@ -209,7 +261,24 @@ def q_settings(contract: SettingsContract, _args=None) -> dict:
         **_feed_switches(payload),
         "searchHistoryLimit": normalise_search_history_limit(payload.get("searchHistoryLimit")),
         "performerNameLanguage": "ja" if payload.get("performerNameLanguage") == "ja" else "zh-CN",
+        "interfaceLanguage": payload["interfaceLanguage"] if payload.get("interfaceLanguage") in INTERFACE_LANGUAGE_CHOICES else "auto",
+        "systemLanguage": system_language(),
+        "taskSpeedMode": payload.get("taskSpeedMode", "standard"),
     }
+
+
+def _navigation_patch(body):
+    patch = {}
+    if "navigationOrders" in body:
+        patch["navigationOrders"] = navigation_orders_patch(body["navigationOrders"])
+    if "libraryOrder" in body:
+        order = body["libraryOrder"]
+        if (not isinstance(order, list) or len(order) > 1000
+                or any(not isinstance(key, str) or not key or len(key) > 120 for key in order)
+                or len(set(order)) != len(order)):
+            raise ValueError("媒体库顺序须使用不重复的媒体库 ID")
+        patch["libraryOrder"] = order
+    return patch
 
 
 def w_settings(contract: SettingsContract, body) -> dict:
@@ -227,11 +296,21 @@ def w_settings(contract: SettingsContract, body) -> dict:
         raise ValueError("没有要写入的设置")
 
     merged = _stored(contract)
+    merged.update(_navigation_patch(body))
+    if "taskSpeedMode" in body:
+        from .processing_control import valid_mode
+        merged["taskSpeedMode"] = valid_mode(body["taskSpeedMode"])
     if "performerNameLanguage" in body:
         language = body["performerNameLanguage"]
         if language not in ("zh-CN", "ja"):
             raise ValueError("performerNameLanguage 只收 zh-CN 或 ja")
         merged["performerNameLanguage"] = language
+    if "interfaceLanguage" in body:
+        if body["interfaceLanguage"] not in INTERFACE_LANGUAGE_CHOICES:
+            raise ValueError("interfaceLanguage 只收 " + "、".join(INTERFACE_LANGUAGE_CHOICES))
+        merged["interfaceLanguage"] = body["interfaceLanguage"]
+    if "manageOrder" in body:
+        merged["manageOrder"] = normalise_manage_order(body["manageOrder"])
     if "sidebarOrder" in body:
         merged["sidebarOrder"] = normalise_sidebar_order(body["sidebarOrder"])
     if "followInitialDays" in body:
@@ -260,7 +339,11 @@ def w_settings(contract: SettingsContract, body) -> dict:
         except (TypeError, ValueError):
             current = {}
         current = current if isinstance(current, dict) else {}
-        current.update({key: merged[key] for key in body})
+        patch = {key: merged[key] for key in body}
+        if "navigationOrders" in patch:
+            patch["navigationOrders"] = {**normalise_navigation_orders(current.get("navigationOrders")),
+                                         **patch["navigationOrders"]}
+        current.update(patch)
         updated = connection.execute(
             "UPDATE profile SET settings_json=?, updated_at=? WHERE id=?",
             (json.dumps(current, ensure_ascii=False), stamp, DEFAULT_PROFILE_ID),

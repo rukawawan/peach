@@ -91,12 +91,19 @@ def dmm_preview(code, secrets_root, *, transport=None):
 
 
 def javdb_preview(code, movie_id, secrets_root, *, transport=None):
-    """从同一番号的 JavDB 详情读取页面声明的 DMM 预告。"""
+    """从同一番号的 JavDB 详情读取页面声明的 DMM 预告。
+
+    详情页在 javdb.com 上，等的是进程共用的 `SOURCE_LIMITER`：资料处理同时在取页时，这一页排在它们中间，
+    合计不超过用户定的每分钟 20 页。
+    """
+    from .library_processing import SOURCE_LIMITER
+
     if movie_id is not None and (not isinstance(movie_id, str) or not re.fullmatch(r'[A-Za-z0-9]+', movie_id)):
         return ''
     owned = transport is None
     transport = transport or HostLimitedTransport(SourceTransport(
-        secrets_root, max_requests=3, max_bytes=2 * 1024 * 1024, max_seconds=30), JAVDB.interval)
+        secrets_root, max_requests=3, max_bytes=2 * 1024 * 1024, max_seconds=30), JAVDB.interval,
+        limiter=SOURCE_LIMITER)
     try:
         source = JavDBSource()
         session = Session(transport, deadline=time.monotonic() + 30)

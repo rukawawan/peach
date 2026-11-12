@@ -13,6 +13,7 @@ import { mixLabel, type FaceRef } from '@peach/card-art';
 import { apiGet } from '../../api';
 import type { MediaCardActions, MediaCardHelpers, MediaCardLayout, MediaItem } from '../catalog-grid/types';
 import { queryClient } from '../query';
+import type { PendingWorkItem } from '../components/pending-work';
 
 /* ── 接口形状（`src/peach/web_catalog.py` 的 `q_item`） ── */
 
@@ -38,6 +39,8 @@ type CardFields = { [K in keyof MediaItem as string extends K ? never : K]: Medi
 export interface DetailItem extends Omit<CardFields, 'tags'> {
   [field: string]: unknown;
   error?: string;
+  /** 刚入库还在补资料：扫描与采集或云下载后处理还没走完。 */
+  pending_work?: PendingWorkItem[];
   title?: string;
   width?: number | null;
   height?: number | null;

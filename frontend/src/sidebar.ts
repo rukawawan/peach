@@ -8,6 +8,12 @@ const KNOWN_SIDEBAR_KEYS = new Set([...DEFAULT_SIDEBAR_ORDER, ...OPTIONAL_SIDEBA
 /* 垃圾文件与重复文件两页并进了数据管理，存过的旧键换成它。 */
 const sidebarKeyAlias = (key: string) => (key === 'ads' || key === 'dupes' ? 'data-cleanup' : key);
 
+/** 当前可见入口按默认次序重排，额外入口接在其后。 */
+export function resetSidebarOrder(order: readonly string[]): string[] {
+  return [...DEFAULT_SIDEBAR_ORDER.filter(key => order.includes(key)),
+    ...order.filter(key => !DEFAULT_SIDEBAR_ORDER.includes(key))];
+}
+
 /** 本机或数据库里读到的侧栏顺序：认旧键、去重、丢掉这一版没有的入口；一项不剩时回到默认顺序。 */
 export function normalizeSidebarOrder(value: unknown): string[] {
   const keys = Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : [];

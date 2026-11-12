@@ -17,8 +17,8 @@ import { useLocation } from 'react-router';
 import { appSettingsStore } from '@peach/appearance';
 import { followManageParams } from '../../follow-manage/manage-route';
 import {
-  isOverlayPath, managedEntry, openManagedRoute, peachHistory, shellNavigate,
-  configurationSection, updateManagedRoute,
+  isOverlayPath, managedEntry, openManagedRoute, peachHistory,
+  configurationSection, isSettingsSectionPath, updateManagedRoute,
 } from '@peach/history';
 import { api, isAbort } from '@peach/legacy/core';
 import {
@@ -82,7 +82,7 @@ async function openProps(path: ManagedPath, run: Run): Promise<object | null> {
     writeShell({ cameFromSetup: false });
     return { onboarding } satisfies ManagedOpenProps['/taste'];
   }
-  if (path.startsWith('/settings/')) {
+  if (isSettingsSectionPath(path)) {
     if (window.location.hash === '#peachProxy') writeShell({ configurationRequestedSection: '网络与访问' });
     const section = search().get('section') || configurationRequestedSection || configurationSection(path);
     return (section ? { section } : {}) satisfies ManagedOpenProps['/settings/library'];
@@ -113,10 +113,10 @@ async function openPage(path: ManagedPath, actions: ShellActions, run: Run): Pro
     peachHistory.replace(javLibraryPath(window.location.search)); return;
   }
   if (path === '/subscriptions' && search().get('tab') === 'wants') {
-    shellNavigate('/jav?tab=wants', { replace: true }); return;
+    peachHistory.replace('/jav?tab=wants'); return;
   }
   if (path === '/subscriptions' && search().get('tab') === 'source') {
-    shellNavigate('/settings/subscriptions', { replace: true }); return;
+    peachHistory.replace('/settings/subscriptions'); return;
   }
   const stats = document.getElementById('stats');
   if (!stats) return;
@@ -139,11 +139,11 @@ async function openPage(path: ManagedPath, actions: ShellActions, run: Run): Pro
   const opened = await openManagedRoute(path, props, { container: stats, isCurrent });
   if (opened) run.revision = managedEntry(stats)?.revision ?? 0;
   /* 配置页选中的页签只交给画上的那一次：没画上（取数途中走开了）就留给下一次打开。 */
-  if (path.startsWith('/settings/') && opened) writeShell({ configurationRequestedSection: '' });
+  if (isSettingsSectionPath(path) && opened) writeShell({ configurationRequestedSection: '' });
   if (opened && isCurrent()) {
     const { hash } = window.location;
     if (path === '/settings/library' && hash === '#libraryProcessing') {
-      queueMicrotask(() => { if (isCurrent()) shellNavigate('/data-cleanup#libraryProcessing', { replace: true, state: null }) });
+      queueMicrotask(() => { if (isCurrent()) peachHistory.replace('/data-cleanup#libraryProcessing', null) });
     } else {
       void pageNavigationReady(isCurrent);
     }
@@ -162,7 +162,7 @@ export function ManagedMatch({ path }: { path: ManagedPath }) {
   if (!covered && (!wasCovered.current || opening.current === null)) opening.current = epoch;
   wasCovered.current = covered;
   // 路径也进 key：认领的写地址从一页换到另一页（配置页改写到数据管理页）时代次不变，页面组在同一个位置换了路由。
-  const group = path.startsWith('/settings/') ? '/settings/configuration' : path;
+  const group = isSettingsSectionPath(path) ? '/settings/configuration' : path;
   return <ManagedPage key={`${group} ${opening.current ?? 'covered'}`} path={path} covered={opening.current === null} />;
 }
 
@@ -171,7 +171,7 @@ function ManagedPage({ path, covered }: { path: ManagedPath; covered: boolean })
   const started = useRoutingStarted();
   const run = useRef<Run | null>(null);
   useEffect(() => {
-    if (path.startsWith('/settings/')) {
+    if (isSettingsSectionPath(path)) {
       updateManagedRoute(document.getElementById('stats'), { section: configurationSection(path) });
     }
   }, [path]);
@@ -201,7 +201,7 @@ export function ResourceSyncRedirect() {
     let live = true;
     queueMicrotask(() => {
       if (!live) return;
-      shellNavigate('/data-cleanup/resource-sync', { replace: true });
+      peachHistory.replace('/data-cleanup/resource-sync');
     });
     return () => { live = false };
   }, [started]);

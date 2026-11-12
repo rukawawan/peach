@@ -377,6 +377,21 @@ class ApplyTests(_Case):
         loaded, _ = onboarding.resolve_config(self.root / "peach-data", environ={})
         self.assertEqual(loaded.server.port, 9100)
 
+    def test_required_tls_checks_the_signer_before_creating_the_data_tree(self):
+        with mock.patch.object(onboarding.certs, "require_openssl", side_effect=RuntimeError("OpenSSL 未取得")):
+            with self.assertRaisesRegex(RuntimeError, "OpenSSL"):
+                onboarding.apply(self.config, self._answers(), windows=NATIVE_WINDOWS, require_tls=True)
+        self.assertFalse((self.root / "peach-data" / "database" / "ledger.db").exists())
+        self.assertFalse((self.root / "peach-data" / "config.toml").exists())
+        self.certs.assert_not_called()
+
+    def test_required_tls_does_not_save_settings_after_certificate_generation_fails(self):
+        self.certs.side_effect = RuntimeError("证书签发失败")
+        with mock.patch.object(onboarding.certs, "require_openssl"):
+            with self.assertRaisesRegex(RuntimeError, "证书签发失败"):
+                onboarding.apply(self.config, self._answers(), windows=NATIVE_WINDOWS, require_tls=True)
+        self.assertFalse((self.root / "peach-data" / "config.toml").exists())
+
     def test_the_first_scan_marker_is_consumed_exactly_once(self):
         applied = onboarding.apply(self.config, self._answers(), windows=NATIVE_WINDOWS)
         config = applied.config
@@ -464,6 +479,19 @@ class SetupJsonContractTests(_SetupHttpCase):
 
     QUESTIONS = "/api/setup/questions"
     SUBMIT = "/api/setup"
+
+    @unittest.skipUnless(NATIVE_WINDOWS, 'Windows 源码首设需要 TLS')
+    def test_windows_source_setup_reports_missing_openssl_and_accepts_a_retry(self):
+        with mock.patch.object(distribution, 'standalone', return_value=False), \
+                mock.patch.object(onboarding.certs, 'require_openssl',
+                                  side_effect=RuntimeError('未找到 OpenSSL')) as require:
+            response = self._send('POST', self.SUBMIT, json=self._body(scan_now=False))
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertIn('OpenSSL', response.json()['errors']['data_root'])
+            self.assertFalse((self.data_root / 'config.toml').exists())
+            require.side_effect = None
+            response = self._send('POST', self.SUBMIT, json=self._body(scan_now=False))
+            self.assertEqual(response.status_code, 200, response.text)
 
     def _rows(self, *paths, location="local"):
         return [{"path": str(path), "location": location,

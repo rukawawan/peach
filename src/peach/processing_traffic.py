@@ -71,7 +71,8 @@ def download_route(metered):
 
 
 class ProcessingTraffic:
-    def __init__(self, config, db_path, stage, asset_ids=None, *, resume_state=None, inventory_rows=()):
+    def __init__(self, config, db_path, stage, asset_ids=None, *, resume_state=None, inventory_rows=(),
+                 allow_metered=False):
         self.config, self.db_path, self.stage, self.asset_ids = config, db_path, stage, asset_ids
         self.lock = threading.RLock()
         self.publish = lambda: None
@@ -107,7 +108,7 @@ class ProcessingTraffic:
                 self.rows[old['key']].update(remaining_min=0, remaining_max=0)
         self.unknown_files = stage in ('all', 'scan') and asset_ids is None
         from .processing_traffic_plan import TrafficPlan
-        self.plan = TrafficPlan(config, stage, self._media_key)
+        self.plan = TrafficPlan(config, stage, self._media_key, allow_metered=allow_metered)
         from .processing_storage import ProcessingStorage
         self.storage = ProcessingStorage(config)
         self.plan.completed.update(previous.get('completed_work', []))

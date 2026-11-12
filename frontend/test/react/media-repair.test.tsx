@@ -98,7 +98,7 @@ it('不在计费来源上的库，确认正文不提流量', async () => {
   await click(buttonNamed('开始修复', host));
   await settle();
   expect(seen[0]?.title).toBe('修复媒体库「网盘」');
-  expect(seen[0]?.body).toContain('坏原件改名成同目录的隐藏文件');
+  expect(seen[0]?.body).toContain('原件改为隐藏文件保留');
   expect(seen[0]?.body).not.toContain('拉一遍');
 });
 
@@ -134,7 +134,7 @@ it('缺索引的片子卡在没装 untrunc 上时，指明去配置页的运行�
   await click(buttonNamed('开始修复', host));
   await settle();
   expect(host.querySelector('p[role="status"]')?.textContent).toBe('修好 0 部，2 部修不了');
-  expect(host.textContent).toContain('2 部缺索引的片子要装上 untrunc 才修得了，下载入口在配置页的「运行信息」里');
+  expect(host.textContent).toContain('2 部缺索引的片子需要先安装 untrunc（配置页「运行信息」）');
   await click(buttonNamed('关闭提示', host));
   expect(host.textContent).not.toContain('缺少 untrunc');
 });

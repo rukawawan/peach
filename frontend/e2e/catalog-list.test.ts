@@ -39,6 +39,7 @@ describe('馆藏卡片与列表', () => {
         await settle(page, '#grid');
         const count = await page.locator('#grid [data-catalog-row]').count();
         assert.ok(count > 0);
+        const listedIds = await page.locator('#grid [data-catalog-row]').evaluateAll(rows => rows.map(row => row.getAttribute('data-id')).sort());
         assert.equal(await page.locator('#grid [data-mix-card]').count(), 0);
         const geometry = await page.locator('#grid [data-catalog-row]').first().evaluate(node => {
           const row = node.getBoundingClientRect();
@@ -77,7 +78,17 @@ describe('馆藏卡片与列表', () => {
         assert.equal(await page.getByRole('button', { name: '第 2 页', exact: true }).getAttribute('aria-current'), 'page');
         await choose('卡片');
         await page.locator('[data-catalog-view-mode="cards"] [data-media-card]').first().waitFor();
+        // 卡片首批只覆盖视口；列表的一页可能已经包含全部样本，先正常续载再比较同一集合。
+        while (await page.locator('#grid [data-media-card]').count() < count) {
+          const before = await page.locator('#grid [data-media-card]').count();
+          if (!await page.locator('#grid [data-load-more]').count()) break;
+          await page.evaluate(() => document.querySelector('#grid [data-load-more]')?.scrollIntoView());
+          await page.waitForFunction(before => document.querySelectorAll('#grid [data-media-card]').length > before
+            || !document.querySelector('#grid [data-load-more]'), before);
+        }
         assert.equal(await page.locator('#grid [data-media-card]').count(), count);
+        assert.deepEqual(await page.locator('#grid [data-media-card]').evaluateAll(cards => cards.map(card => card.getAttribute('data-id')).sort()),
+          listedIds, '切换和刷新后卡片应展示列表中的同一批作品');
         if (viewport.mobile) {
           await page.evaluate(() => {
             document.documentElement.dataset.theme = 'dark';

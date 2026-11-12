@@ -98,7 +98,7 @@ const quiet = (overrides: Partial<Source> = {}) => ({
   'GET /api/scraping/amane-bridge': () => ({ body: BRIDGE }),
   'GET /api/custom-metadata': () => ({ body: { items: [] } }),
 });
-/** 首屏来源与任务数据的请求顺序，和 `prefetchScraping` 一致。 */
+/** 首屏独立读取的来源与任务数据；各读取仅发一次。 */
 const FIRST_SCREEN = ['/api/scraping', '/api/scraping/cover', '/api/scraping/check-all',
   '/api/scraping/amane-bridge', '/api/custom-metadata'];
 
@@ -114,7 +114,7 @@ const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync
 
 it('首屏用 prefetch 缓存画出来源与任务，挂载时不重复请求', async () => {
   const { calls, host } = await open(quiet());
-  expect(calls.map((call) => call.path)).toEqual(FIRST_SCREEN);
+  expect(calls.map((call) => call.path).sort()).toEqual([...FIRST_SCREEN].sort());
   expect(section(host, 'JavBus')).not.toBeNull();
   expect(section(host, '高清封面')).not.toBeNull();
   const bridge = section(host, 'amane');

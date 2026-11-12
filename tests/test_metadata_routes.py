@@ -148,14 +148,14 @@ class RouteTableTests(unittest.TestCase):
             route_for_code('040221-001', 'R:/media/Carib-040221-001-FHD/040221-001-carib.mp4'),
             ('avbase', 'javbus', 'javdb', 'avsox'))
 
-    def test_fc2_asks_the_shop_then_the_archives_then_javdb_only(self):
+    def test_fc2_asks_javdb_before_the_shop_and_archives(self):
         """AVBase 与 JavBus 对 FC2 番号一份证据都没给过，问了只是各撞一次空搜索。
 
         fc2club 在 FC2 那一档一份资料都没交过，还回 429 把自己送进冷却，不在默认链上；
         站点仍登记着，整条覆盖时可以点名。
         """
         self.assertEqual(route_for_code('FC2-PPV-1812235'),
-                         ('fc2', 'fc2cmadb', 'fc2ppvdb', 'javten', 'javarchive', 'javdb'))
+                         ('javdb', 'fc2', 'fc2cmadb', 'fc2ppvdb', 'javten', 'javarchive'))
         self.assertNotIn('r18dev', route_for_code('FC2-PPV-1812235'))
         self.assertIn('fc2club', SOURCE_SPECS)
         self.assertEqual(route_for_code('FC2-PPV-1812235', overrides={'fc2': ('fc2', 'fc2club')}),
@@ -238,7 +238,7 @@ class StageTests(unittest.TestCase):
         self.assertEqual(stages_for_code('300MIUM-1239'),
                          ('amane_official', 'sougouwiki', 'av_neme', 'community', 'r18dev'))
         self.assertEqual(stages_for_code('040221-001'), ('community', 'amane'))
-        self.assertEqual(stages_for_code('FC2-PPV-1812235'), ('fc2', 'community'))
+        self.assertEqual(stages_for_code('FC2-PPV-1812235'), ('community', 'fc2'))
         self.assertEqual(stages_for_code('AIN-203'), ())
 
     def test_stage_members_name_the_sources_the_evidence_files_use(self):

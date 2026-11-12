@@ -4,14 +4,19 @@
  * 存量只接受形状与范围合法的值，单项非法时取该项默认值。 */
 import { api } from '@peach/legacy/core';
 
+import { isInterfaceLanguageChoice, matchInterfaceLanguage, type InterfaceLanguage, type InterfaceLanguageChoice } from '../i18n';
+import { SETTINGS_KEY } from '../settings-key';
+
 import { normalizeJavPreferences } from '../jav-artwork';
 import { boundedPreference } from '../number-setting';
 import { createSettingsStore, type SettingsStore } from '../settings-store';
+import { MANAGE_MENU_SECTIONS, normalizeManageOrder } from '../application/navigation-items';
 import { DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder } from '../sidebar';
+import { normalizeNavigationOrders, type NavigationOrders } from '../navigation-order';
 import { SORT_ALIASES, SORT_KEYS } from '../sort-preferences';
 import { DEFAULT_ACCENT, DEFAULT_HOME_GLOW, normalizeAccent, normalizeHomeGlow, type HomeGlow } from './home-glow';
 
-export const SETTINGS_KEY = 'peach.settings.v1';
+export { SETTINGS_KEY };
 /* 主题三档，键名与 <html> 上的 data-theme 同一套写法：web/css/01-base.css 的色板
    已经按 `prefers-color-scheme` 和 `[data-theme]` 两条路径写好，这里只负责选哪一条。
    跟随系统是默认档，选它等于不写属性。 */
@@ -39,6 +44,9 @@ export interface AppSettings {
   homeLayout: string;
   javImage: string;
   performerNameLanguage: 'zh-CN' | 'ja';
+  interfaceLanguage: InterfaceLanguageChoice;
+  /** 运行 Peach 的电脑的系统语言（服务端报来，缓存在本地）；「自动」时浏览器语言都对不上才看它。 */
+  systemLanguage: InterfaceLanguage | null;
   followLayout: string;
   peopleLayout: string;
   photoSize: string;
@@ -57,6 +65,9 @@ export interface AppSettings {
   feedHideExcerpts: boolean;
   followInitialDays: number;
   sidebarOrder: string[];
+  manageOrder: string[];
+  navigationOrders: NavigationOrders;
+  libraryOrder: string[];
   homeGlow: HomeGlow;
   accent: string;
 }
@@ -65,8 +76,10 @@ export const DEFAULT_SETTINGS = {
   batchSize: 60, defaultSort: 'seed', sortDefaultsVersion: 3, hoverDelaySeconds: 5, seekSeconds: 10, longSeekSeconds: 30,
   searchHistoryLimit: 10, relatedLimit: 20, feedLimit: 12, javLayout: 'big', homeLayout: 'small', javImage: 'cover',
   followLayout: 'default', peopleLayout: 'big', photoSize: 'small', ambientMode: true, miniplayer: true,
-  theaterMode: false, theme: 'system', groupCollapse: true, sidebarOrder: [...DEFAULT_SIDEBAR_ORDER],
-  homeGlow: DEFAULT_HOME_GLOW, accent: DEFAULT_ACCENT, performerNameLanguage: 'zh-CN',
+  theaterMode: false, theme: 'system', groupCollapse: true, sidebarOrder: [...DEFAULT_SIDEBAR_ORDER], manageOrder: [...MANAGE_MENU_SECTIONS],
+  homeGlow: DEFAULT_HOME_GLOW, accent: DEFAULT_ACCENT, performerNameLanguage: 'zh-CN', interfaceLanguage: 'auto', systemLanguage: null,
+  navigationOrders: {},
+  libraryOrder: [],
 } as const;
 
 /** 白名单里的值原样给回，否则给 `fallback`。 */
@@ -111,9 +124,14 @@ export function normalizeAppSettings(raw: unknown): { settings: AppSettings; mig
   Object.assign(settings, normalizeJavPreferences(settings));
   settings.theme = allowedSetting(settings.theme, THEME_CHOICES, 'system');
   settings.performerNameLanguage = allowedSetting(settings.performerNameLanguage, ['zh-CN', 'ja'], 'zh-CN');
+  settings.interfaceLanguage = isInterfaceLanguageChoice(settings.interfaceLanguage) ? settings.interfaceLanguage : 'auto';
+  settings.systemLanguage = matchInterfaceLanguage(settings.systemLanguage);
   settings.homeGlow = normalizeHomeGlow(settings.homeGlow);
   settings.accent = normalizeAccent(settings.accent);
   settings.sidebarOrder = normalizeSidebarOrder(settings.sidebarOrder);
+  settings.manageOrder = normalizeManageOrder(settings.manageOrder);
+  settings.navigationOrders = normalizeNavigationOrders(settings.navigationOrders);
+  settings.libraryOrder = Array.isArray(settings.libraryOrder) ? [...new Set(settings.libraryOrder.filter(key => typeof key === 'string'))] : [];
   return { settings: settings as AppSettings, migrated };
 }
 
@@ -136,17 +154,22 @@ export function appSettingsStore(): SettingsStore<AppSettings> {
 }
 
 /** 数据库那一份要求某个壳侧效果跟着做时报的名字（同设置面板的效果名）。 */
-export type SyncedEffect = 'searchHistoryLimit' | 'performerNameLanguage';
+export type SyncedEffect = 'searchHistoryLimit' | 'performerNameLanguage' | 'interfaceLanguage';
 
 /** 搜索记录条数在 `/api/settings` 上的形状：还没定过时是 null。 */
 export interface SyncedSettings {
   performerNameLanguage?: unknown;
+  interfaceLanguage?: unknown;
+  systemLanguage?: unknown;
   followInitialDays?: unknown;
   feedHideGroupCompilations?: unknown;
   feedHideSoloCompilations?: unknown;
   feedHideExcerpts?: unknown;
   searchHistoryLimit?: unknown;
   sidebarOrder?: unknown;
+  manageOrder?: unknown;
+  navigationOrders?: unknown;
+  libraryOrder?: unknown;
 }
 
 /* 数据库那一份落进本地缓存。启动时壳取一次、设置面板每次打开再取一次，都交到这里；开着的面板与
@@ -163,6 +186,16 @@ export function applySyncedSettings(
     target.save();
     changed('performerNameLanguage');
   }
+  /* 界面语言在页面载入时就定了（`i18n` 模块）。数据库里的选择或服务端报的系统语言变了，交给壳判断要不要整页重载。 */
+  const choice = remote?.interfaceLanguage;
+  const system = remote && 'systemLanguage' in remote ? matchInterfaceLanguage(remote.systemLanguage) : settings.systemLanguage;
+  const nextChoice = isInterfaceLanguageChoice(choice) ? choice : settings.interfaceLanguage;
+  if (nextChoice !== settings.interfaceLanguage || system !== settings.systemLanguage) {
+    settings.interfaceLanguage = nextChoice;
+    settings.systemLanguage = system;
+    target.save();
+    changed('interfaceLanguage');
+  }
   const initial = remote && remote.followInitialDays;
   if (FOLLOW_INITIAL_DAYS.includes(initial as number)) { settings.followInitialDays = initial as number; target.save() }
   for (const key of FEED_COMPILATION_KEYS) {
@@ -178,7 +211,23 @@ export function applySyncedSettings(
     }
   } else if (remote && remote.searchHistoryLimit === null
     && settings.searchHistoryLimit !== DEFAULT_SETTINGS.searchHistoryLimit) postSearchHistoryLimit(target);
+  if (Array.isArray(remote?.manageOrder)) {
+    const manageOrder = normalizeManageOrder(remote.manageOrder);
+    if (manageOrder.join(',') !== settings.manageOrder.join(',')) { settings.manageOrder = manageOrder; target.save() }
+  }
   const order = Array.isArray(remote && remote.sidebarOrder) ? remote!.sidebarOrder as string[] : null;
+  if (Array.isArray(remote?.libraryOrder) && remote.libraryOrder.every(key => typeof key === 'string')
+    && remote.libraryOrder.join(',') !== settings.libraryOrder.join(',')) {
+    settings.libraryOrder = remote.libraryOrder;
+    target.save();
+  }
+  if (remote?.navigationOrders) {
+    const navigationOrders = normalizeNavigationOrders(remote.navigationOrders);
+    if (JSON.stringify(navigationOrders) !== JSON.stringify(settings.navigationOrders)) {
+      settings.navigationOrders = navigationOrders;
+      target.save();
+    }
+  }
   if (!order || !order.length || order.join(',') === settings.sidebarOrder.join(',')) return;
   settings.sidebarOrder = order;
   target.save();

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import time
 from pathlib import Path
@@ -51,15 +52,34 @@ def _new_entities(connection: sqlite3.Connection, since_entity_id: int) -> bool:
         (int(since_entity_id), *seed_pack.KINDS)).fetchone() is not None
 
 
+#: 解析并校验过的种子包：路径 → (文件字节的 SHA-256, 包, 摘要)。升级补修每分钟问一次「该不该派」，
+#: 2 MB 的包每次整包解析、校验再算两遍摘要要 0.1 秒，而包只随应用版本变。按字节判同而不按修改时间：
+#: 同样大小的改写落在同一个时间戳里也认得出来，读一遍、算一次哈希只要几毫秒。
+_LOADED: dict[str, tuple[bytes, dict, str]] = {}
+
+
+def _load(path: Path) -> tuple[dict, str]:
+    """种子包与它的摘要；文件字节没变就用上次解析、校验的结果。"""
+    raw = path.read_bytes()
+    signature = hashlib.sha256(raw).digest()
+    cached = _LOADED.get(str(path))
+    if cached is not None and cached[0] == signature:
+        return cached[1], cached[2]
+    pack = seed_pack.parse(raw.decode("utf-8"))
+    digest = seed_validation.digest(pack)
+    _LOADED[str(path)] = (signature, pack, digest)
+    return pack, digest
+
+
 def plan(connection: sqlite3.Connection, *, since_entity_id: int, pack_path: Path | None = None) -> list[Followup]:
     """这一轮该不该派：包的版本没成功导过，或这一轮登记了包里那三类的新实体。"""
     path = Path(pack_path) if pack_path is not None else seed_pack.DEFAULT_PACK
     if not path.is_file():
         return []
-    pack = seed_pack.load(path)
-    seed_corrections.check_history(connection, pack)
+    pack, digest = _load(path)
+    seed_corrections.check_history(connection, pack, content_digest=digest)
     version = pack["version"]
-    key = followup_key(version, seed_validation.digest(pack))
+    key = followup_key(version, digest)
     if landed(connection, key) and not _new_entities(connection, since_entity_id):
         return []
     return [Followup(key=key, task_key=TASK_KEY, label=f"{TASK_LABEL}：{version}")]

@@ -10,7 +10,6 @@ import json
 import os
 import sqlite3
 import tempfile
-import time
 import unittest
 from pathlib import Path, PureWindowsPath
 from unittest import mock
@@ -422,13 +421,12 @@ class PurgeMissingTests(unittest.TestCase):
             started = rm_sync.w_resource_sync_scan(
                 self.contract, {"background": True, "restart": True})
             self.assertIn(started["status"], {"running", "complete"})
-            status = started
-            deadline = time.monotonic() + 2
-            while status["status"] == "running":
-                status = rm_sync.w_resource_sync_scan(
-                    self.contract, {"background": True})
-                self.assertLess(time.monotonic(), deadline)
-                time.sleep(0.01)
+            status = rm_sync.w_resource_sync_scan(self.contract, {"background": True})
+            self.assertIn(status['status'], {'running', 'complete'})
+            self.contract.resource_scan.thread.join(10)
+            self.assertFalse(self.contract.resource_scan.thread.is_alive(), '后台检查未结束')
+            status = rm_sync.w_resource_sync_scan(
+                self.contract, {"background": True, "status_only": True})
             self.assertEqual(status["status"], "complete")
             self.assertEqual(status["missing"], 2)
             resumed = rm_sync.w_resource_sync_scan(

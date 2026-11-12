@@ -49,14 +49,13 @@ Movie demo data; see [asset credits and licenses](https://peach.video/en/credits
 - **Cloud download**: search by video code or submit a magnet link, then organize completed downloads into your library.
 - **Library management**: manage tags, duplicates, versions and parts; permanently delete videos by performer while keeping profiles and photos. Metadata and watch history are stored locally.
 - **Task center**: pause, resume or cancel local background tasks and view their CPU, GPU and download activity where available.
-- **Guided tours**: learn the interface and settings as needed; tutorial progress is shared across devices connected to the same instance.
 
 ## Download and use
 
 | Method | Get started |
 | --- | --- |
-| Windows x64 | [Installer](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-windows-x64-setup.exe) · [Portable](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-windows-x64.zip) |
-| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-macos-x86_64.dmg) |
+| Windows x64 | [Installer](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-windows-x64-setup.exe) · [Portable](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-windows-x64.zip) |
+| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-macos-x86_64.dmg) |
 | Docker / NAS | [Deployment guide](docs/DOCKER.md) |
 | Source | [Setup instructions](docs/OPERATIONS.md#从源码运行windowsmacos); requires Git, uv and Python 3.14+ |
 

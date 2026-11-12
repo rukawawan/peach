@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 
 from . import entities, feed_followup, web_catalog, web_feeds, wants
 from .related import rank_related
 from .taste_preferences import preference_profile, preference_score
 from .genre_decisions import load_genre_decisions
 from .jav_discovery_metadata import discovery_metadata, source_number
+from .web_state import path_version
 from .web_jav_detail import _source_fields, discovery_cover_url, visible_actors, source_performer_refs
 
 def _identity(connection, kind, name):
@@ -116,22 +118,50 @@ def _library(connection):
     return rows
 
 
+def _metadata_cursor(args, candidates) -> int:
+    return max(0, min(int(args.get("metadata_cursor") or 0), len(candidates)))
+
+
 def _metadata_response(contract, args, candidates, picked, limit, scope):
+    """只读：当前那一轮资料读取的进度。起、停任务走 `w_jav_discovery_metadata`。"""
     if scope != "external":
         return {}
-    cursor = max(0, min(int(args.get("metadata_cursor") or 0), len(candidates)))
-    cohort = picked if picked and not cursor else sorted(candidates, key=lambda row: row["id"])[cursor:cursor + limit]
-    metadata = discovery_metadata(contract)
-    if args.get("metadata_cancel") == "1":
-        job = metadata.cancel(args.get("metadata_job_id"))
-    else:
-        job = metadata.ensure([row["code"] for row in cohort], refresh=args.get("metadata_refresh") == "1",
-                              job_id=args.get("metadata_job_id"))
+    job = discovery_metadata(contract).current()
     if not job:
         return {}
+    cursor = _metadata_cursor(args, candidates)
     return {**_job_response(job),
             "metadata_coverage": sum(row["metadata_state"] in ("ready", "partial", "stale") for row in picked),
             "metadata_next_cursor": cursor + limit if not picked and cursor + limit < len(candidates) else None}
+
+
+def q_jav_discovery_metadata(contract, _args):
+    """发现页资料读取的进度轮询：只读任务快照，不算候选、不打分。"""
+    job = discovery_metadata(contract).current()
+    return _job_response(job) if job else {"metadata_job": None}
+
+
+def w_jav_discovery_metadata(contract, body):
+    """发现页「更新资料」「停止读取」「立即重试」，以及打开页面时补读从没读过的那几部。
+
+    `action`：`start` 只读缓存已过期或从没读过的，`refresh` 整批重读，`cancel` 停下当前这一轮。
+    读哪一批与页面当前排序下的那一页相同（`_ranked`）；GET 不起任务。
+    """
+    action = str(body.get("action") or "start")
+    if action not in ("start", "refresh", "cancel"):
+        raise ValueError("action 只能是 start、refresh 或 cancel")
+    metadata = discovery_metadata(contract)
+    if action == "cancel":
+        job = metadata.cancel(body.get("job_id") or None)
+    else:
+        limit, sort, descending = _ranking_args(body)
+        ranked = _ranked(contract, "external", sort, descending, limit)
+        candidates, picked = ranked["bounded"], ranked["picked"]
+        cursor = _metadata_cursor(body, candidates)
+        cohort = picked if picked and not cursor else sorted(candidates, key=lambda row: row["id"])[cursor:cursor + limit]
+        job = metadata.ensure([row["code"] for row in cohort], refresh=action == "refresh",
+                              job_id=body.get("job_id") or None)
+    return _job_response(job) if job else {"metadata_job": None}
 
 
 def _job_response(job):
@@ -150,14 +180,34 @@ def _metadata_message(job):
     return reasons.get(job.get("stop_reason"), messages.get(job["status"], "作品资料未取得"))
 
 
-def q_jav_discoveries(contract, args):
-    """口味采用 IDF/MMR；资料补齐只处理一次请求确定的有限集合。"""
-    scope = "library" if args.get("scope") == "library" else "external"
+DISCOVERY_SORTS = ("taste", "release_date", "source_score", "duration", "code")
+#: 打分读的账本之外、又写得很勤的表：在线播放心跳、播放记录与搜索历史。打分不读它们。
+RANKING_UNREAD_TABLES = ("follow_playback", "activity_event", "search_history")
+
+
+def _ranking_args(args):
     limit = max(1, min(int(args.get("limit") or 60), 100))
-    with contract.read_connection() as connection, entities.memoized_resolution():
-        strengths, names, evidence = preference_profile(connection, contract.taste_history_store)
-        profile = {"id": 0, "entities": {kind: set(values) for kind, values in strengths.items()}}
-        candidates = _library(connection) if scope == "library" else _external(connection, contract)
+    sort = args.get("sort") if args.get("sort") in DISCOVERY_SORTS else "taste"
+    return limit, sort, args.get("direction") != "asc"
+
+
+def _ranking_inputs(contract, scope):
+    """打分读的账本之外的输入：口味浏览库、资料边车与封面目录（封面决定「官方还没出图」的
+    收起）。`peek()` 的「已过期」随时钟变，另带一个小时档。"""
+    external = scope == "external"
+    return (path_version(contract.taste_history_store),
+            discovery_metadata(contract).revision if external else 0,
+            path_version(contract.cover_root) if external else None,
+            int(time.time() // 3600))
+
+
+def _scored(contract, scope):
+    """候选、口味打分与限定：每个范围一份，各种排序共用。"""
+    def compute():
+        with contract.read_connection() as connection, entities.memoized_resolution():
+            strengths, names, evidence = preference_profile(connection, contract.taste_history_store)
+            profile = {"id": 0, "entities": {kind: set(values) for kind, values in strengths.items()}}
+            candidates = _library(connection) if scope == "library" else _external(connection, contract)
         unique = {}
         for row in candidates:
             key = web_catalog.normalise_code_key(row["code"]) or row["id"]
@@ -167,28 +217,56 @@ def q_jav_discoveries(contract, args):
         for row in candidates:
             row["preference_score"], row["reasons"] = preference_score(row, strengths, names, evidence)
         candidates.sort(key=lambda row: (-row["preference_score"], row["id"]))
-        bounded = candidates[:4000]
-        sort = args.get("sort") if args.get("sort") in ("taste", "release_date", "source_score", "duration", "code") else "taste"
-        picked = rank_related(profile, bounded, limit, seed=f"jav:{scope}",
-                              order_by=None if sort == "taste" else sort, descending=args.get("direction") != "asc",
+        return {"total": len(candidates), "bounded": candidates[:4000], "profile": profile}
+
+    return contract.cached_until_changed(
+        repr(("jav-discoveries", scope)), compute, *_ranking_inputs(contract, scope),
+        tables=contract.ledger_tables_except(RANKING_UNREAD_TABLES), allow_stale=False)
+
+
+def _ranked(contract, scope, sort, descending, limit):
+    """一页推荐：MMR 或按字段排序，按与候选相同的输入版本缓存。
+
+    任务进行中页面会反复来取，原来每次都对几千个候选重做一遍纯 Python 打分。结果是共享对象，
+    调用方先复制再改。
+    """
+    def compute():
+        scored = _scored(contract, scope)
+        picked = rank_related(scored["profile"], scored["bounded"], limit, seed=f"jav:{scope}",
+                              order_by=None if sort == "taste" else sort, descending=descending,
                               relevance_for=lambda row: row["preference_score"])
+        for row in picked:
+            row["score"] = row.pop("related_score")
+            row["taste_score"] = row["score"]
+            row.pop("preference_score", None)
+            row.pop("why", None)
+            row.pop("entities", None)
+        if sort == "taste":
+            picked.sort(key=lambda row: (row["taste_score"], row["id"]), reverse=descending)
+        for rank, row in enumerate(picked, 1):
+            row["rank"] = rank
+        return {"total": scored["total"], "bounded": scored["bounded"], "picked": picked}
+
+    return contract.cached_until_changed(
+        repr(("jav-discoveries", scope, sort, descending, limit)), compute, *_ranking_inputs(contract, scope),
+        tables=contract.ledger_tables_except(RANKING_UNREAD_TABLES), allow_stale=False)
+
+
+def q_jav_discoveries(contract, args):
+    """口味采用 IDF/MMR；只读，资料补齐由 `w_jav_discovery_metadata` 起，进度另有轮询。"""
+    scope = "library" if args.get("scope") == "library" else "external"
+    limit, sort, descending = _ranking_args(args)
+    ranked = _ranked(contract, scope, sort, descending, limit)
+    bounded, total = ranked["bounded"], ranked["total"]
+    picked = [dict(row) for row in ranked["picked"]]
+    with contract.read_connection() as connection, entities.memoized_resolution():
         wanted = wants.wanted_keys(connection, (web_catalog.normalise_code_key(row["code"]) for row in picked))
         refs = web_feeds._discovery_performers(connection, contract, picked) if scope == "external" else {}
         for row in picked:
             actors = row.pop('_source_actors', [])
             if actors:
                 refs[row['id']] = source_performer_refs(contract, connection, actors)
-        for row in picked:
-            row["score"] = row.pop("related_score")
-            row["taste_score"] = row["score"]
-            row.pop("preference_score", None)
             row["wanted"] = web_catalog.normalise_code_key(row["code"]) in wanted
-            row.pop("why", None)
-            row.pop("entities", None)
-        if sort == "taste":
-            picked.sort(key=lambda row: (row["taste_score"], row["id"]), reverse=args.get("direction") != "asc")
-        for rank, row in enumerate(picked, 1):
-            row["rank"] = rank
     if scope == "library":
         web_catalog.attach_card_performers(contract, picked)
         for row in picked:
@@ -206,10 +284,10 @@ def q_jav_discoveries(contract, args):
             row["cover_version"] = contract.cover_version(row["code"])
             row["poster_box"] = contract.poster_box(row["code"])
             row.update(web_feeds.cover_state_fields(states, row["code"]))
-    response = {"scope": scope, "items": picked, "candidate_total": len(candidates), "sort": sort,
+    response = {"scope": scope, "items": picked, "candidate_total": total, "sort": sort,
                 "ranking_method": "mmr" if sort == "taste" else "field-sort",
                 "direction": "asc" if args.get("direction") == "asc" else "desc",
-                "limited": len(candidates) > 4000, "source": "library" if scope == "library" else "known-works"}
+                "limited": total > 4000, "source": "library" if scope == "library" else "known-works"}
     response.update(_metadata_response(contract, args, bounded, picked, limit, scope))
     return response
 
@@ -255,23 +333,18 @@ def q_jav_releases(contract, args):
     出现过的女优、厂牌与标签；每个维度的计数按「文字与其他维度已生效、本维度不计」的行集算，
     计数为 0 的不列。
 
-    筛选结果里还有从没读过来源资料的（`metadata_state` 为 pending），就为它们起一轮资料读取，与「发现」
-    共用同一个有预算的后台任务；读过但没取到的不在此列，不会每次打开都重试。`metadata_job_id` 是轮询。
+    只读：筛选结果里从没读过来源资料的（`metadata_state` 为 pending）只报个数（`metadata_unread`），
+    读取由 `w_jav_release_metadata` 起停，与「发现」共用同一个有预算的后台任务，进度由
+    `/api/jav/discoveries/metadata` 单独轮询。每问一次都把全部候选重算一遍，不该拿它当进度轮询。
     """
     try:
         size = max(1, min(int(args.get("size") or RELEASE_PAGE_SIZE), 100))
         page = max(1, int(args.get("page") or 1))
     except (TypeError, ValueError):
         size, page = RELEASE_PAGE_SIZE, 1
-    sort = args.get("sort") if args.get("sort") in RELEASE_SORTS else "release_date"
-    descending = args.get("direction") != "asc"
-    matches = _release_matcher({facet: str(args.get(facet) or "").strip() for facet in RELEASE_FACETS},
-                               str(args.get("q") or "").strip().casefold())
     with contract.read_connection() as connection, entities.memoized_resolution():
-        rows = _release_order(_release_rows(contract, connection, taste=sort == "taste"), sort, descending,
-                              str(args.get("seed") or ""))
+        rows, shown, matches, sort, descending = _release_listing(contract, connection, args)
         facets = {facet: _release_facet(contract, rows, facet, matches) for facet in RELEASE_FACETS}
-        shown = [row for row in rows if matches(row)]
         picked = shown[(page - 1) * size:page * size]
         wanted = wants.wanted_keys(connection, (web_catalog.normalise_code_key(row["code"]) for row in picked))
     states = feed_followup.cover_states(contract, picked)
@@ -283,7 +356,48 @@ def q_jav_releases(contract, args):
     return {"items": picked, "total": len(shown), "candidate_total": len(rows), "page": page, "size": size,
             "sort": sort, "direction": "desc" if descending else "asc",
             "facets": {"performers": facets["performer"], "studios": facets["studio"], "tags": facets["tag"]},
-            **_release_metadata(contract, shown, args.get("metadata_job_id"))}
+            "metadata_unread": len(_release_unread(shown)), **_current_job(contract)}
+
+
+def _release_listing(contract, connection, args):
+    """新作全集（已排序）与按筛选条件留下的那些；列表与「读取资料」共用，读的是同一批。"""
+    sort = args.get("sort") if args.get("sort") in RELEASE_SORTS else "release_date"
+    descending = args.get("direction") != "asc"
+    matches = _release_matcher({facet: str(args.get(facet) or "").strip() for facet in RELEASE_FACETS},
+                               str(args.get("q") or "").strip().casefold())
+    rows = _release_order(_release_rows(contract, connection, taste=sort == "taste"), sort, descending,
+                          str(args.get("seed") or ""))
+    return rows, [row for row in rows if matches(row)], matches, sort, descending
+
+
+def _release_unread(shown):
+    """从没读过来源资料的那几部；读过但没取到的不在此列，不会每次打开都重试。"""
+    return [row["code"] for row in shown if row.get("metadata_state") == "pending"]
+
+
+def _current_job(contract):
+    job = discovery_metadata(contract).current()
+    return _job_response(job) if job else {}
+
+
+def w_jav_release_metadata(contract, body):
+    """新作页的「读取资料」：`start` 为当前筛选结果里从没读过的那几部起一轮读取，`cancel` 停下当前这一轮。
+
+    与「发现」共用一个任务：一轮在跑时 `start` 只回它的快照。从没读过的作品没有缓存可用，
+    所以按 `refresh` 起，不沿用上一轮那批番号。
+    """
+    action = str(body.get("action") or "start")
+    if action not in ("start", "cancel"):
+        raise ValueError("action 只能是 start 或 cancel")
+    metadata = discovery_metadata(contract)
+    if action == "cancel":
+        job = metadata.cancel(body.get("job_id") or None)
+        return _job_response(job) if job else {"metadata_job": None}
+    with contract.read_connection() as connection, entities.memoized_resolution():
+        _rows, shown, _matches, _sort, _descending = _release_listing(contract, connection, body)
+    unread = _release_unread(shown)
+    job = metadata.ensure(unread, refresh=True) if unread else metadata.current()
+    return _job_response(job) if job else {"metadata_job": None}
 
 
 def _release_rows(contract, connection, *, taste):
@@ -333,12 +447,3 @@ def _release_facet(contract, rows, facet, matches):
         return [{"name": name, "count": count, "has_logo": contract.has_logo(name), "logo_version": contract.logo_version(name)}
                 for name, count in ordered]
     return [{"name": name, "count": count} for name, count in ordered]
-
-
-def _release_metadata(contract, shown, job_id):
-    """筛选结果里从没读过来源资料的那几部起一轮读取；`job_id` 是轮询。没有要读的也没在轮询就不回任务。"""
-    unread = [row["code"] for row in shown if row.get("metadata_state") == "pending"]
-    if not unread and not job_id:
-        return {}
-    job = discovery_metadata(contract).ensure(unread, refresh=bool(unread), job_id=job_id)
-    return _job_response(job) if job else {}

@@ -59,7 +59,8 @@ from .web_downloads import (q_downloads, w_download_cancel, w_download_postproce
 from .web_resource_search import q_resource_search
 from .web_search import q_search_recommendations
 from .web_jav_detail import q_jav_detail, q_jav_resources, q_jav_reviews, w_jav_cover
-from .web_jav_discovery import q_jav_discoveries, q_jav_releases
+from .web_jav_discovery import (q_jav_discoveries, q_jav_discovery_metadata, q_jav_releases,
+                                w_jav_discovery_metadata, w_jav_release_metadata)
 from .web_feeds import (
     q_feed_check,
     q_feed_discoveries,
@@ -105,7 +106,7 @@ from .web_orphan_records import q_orphan_records, w_orphan_attach
 from .web_playlists import q_playlist, q_playlists, w_playlist
 from .web_custom_metadata import q_custom_metadata, w_custom_metadata
 from .web_resource_sync import w_purge_missing, w_resource_sync_apply, w_resource_sync_scan
-from .web_review import q_review, w_review_adopt_official, w_review_decision, w_review_genre
+from .web_review import REVIEW_TABLES, q_review, q_review_counts, w_review_adopt_official, w_review_decision, w_review_genre
 from .web_auto_landings import q_auto_landings, w_auto_landing_revert
 from .web_settings import q_settings, w_settings
 from .web_library_shortcuts import q_library_shortcuts, w_library_shortcuts
@@ -115,7 +116,7 @@ from .web_scraping import (
     q_scraping, q_scraping_amane_bridge, w_scraping_amane_check, w_scraping_amane_rebuild,
     w_scraping_check, w_scraping_check_all, w_scraping_cover, w_scraping_settings,
 )
-from .web_state import WebContract, path_version
+from .web_state import WebContract, path_version, revision_snapshot
 from .web_tasks import q_result_updates, q_tasks
 from .web_timeline_thumbnails import (
     q_media_processing, q_thumbnail_jobs, q_timeline, w_media_processing, w_thumbnail_jobs,
@@ -180,18 +181,29 @@ def _get_ads(contract, args):
     )
 
 
+#: `/api/related` 确定不读的账本表：订阅新作、复核结论，以及在线播放心跳、播放记录与搜索历史
+#: 这几张高频写的表。其余表一律算进版本：推荐卡要的出镜者、关注卡、下载来源散在好几处，
+#: 漏一张，那张表变了之后就一直回旧结果。
+RELATED_UNREAD_TABLES = ("feed_source", "feed_item", "feed_discovery", "feed_discovery_entity",
+                         "review_decision", "review_decision_history", "genre_decision",
+                         "follow_playback", "activity_event", "search_history")
+
+
 def _get_related(contract, args):
     """相关推荐走 LRU 缓存：打分是纯 Python 对几千个候选做 MMR，一次几百毫秒。
 
-    每打开一次资料页都现算太贵，而结果只读不写；写路径（标签、反馈、播放、复核）
-    本来就调 `cache_bust()`，缓存跟着一起作废。上面几个聚合用的是 `cached()`，
-    这里必须用 `cached_lru()`：键跟着浏览过的资产走，键空间不封闭。
+    每打开一次资料页都现算太贵，而结果只读不写。键跟着浏览过的资产走、键空间不封闭，
+    所以用 `cached_lru()`；按读到的账本表版本与图片目录版本核验，不随每次提交清空：
+    后台任务每几秒提交一次时，按提交清空的缓存存不住，几百毫秒的打分也写不回去。
     键里带上 limit——同一个资产要不同条数就是不同结果。
     """
     asset_id = int(args["id"])
     limit = min(int(args.get("limit", "24")), 60)
+    artwork = tuple(path_version(root) for root in (
+        contract.cover_root, contract.avatar_root, contract.logo_root, contract.poster_root))
     return contract.cached_lru(
-        f"related:{asset_id}:{limit}", lambda: q_related(contract, asset_id, limit))
+        f"related:{asset_id}:{limit}", lambda: q_related(contract, asset_id, limit),
+        tables=contract.ledger_tables_except(RELATED_UNREAD_TABLES), inputs=artwork)
 
 
 #: 按账本版本缓存的筛选项口径：状态页与取值有限的几组筛选。
@@ -275,20 +287,15 @@ def _get_taste(contract, args):
 
 
 def _get_review(contract, args):
+    if str(args.get("counts") or "") in {"1", "true"}:
+        return q_review_counts(contract)
     # 账本之外，复核读三处磁盘：抓取脚本写的候选 CSV、卡片封面徽章用的封面目录、
     # 创作者头像与取景用的头像目录。
     payload = contract.cached_until_changed(
         "review", lambda: q_review(contract),
         candidate_root_version(contract.candidate_root),
         path_version(contract.cover_root), path_version(contract.avatar_root),
-        tables=("asset", "asset_entity", "entity", "entity_alias", "entity_redirect",
-                "review_decision", "genre_decision"))
-    # 数据管理页只要一个待复核条数。完整 payload 带着每条候选的全文，实测是
-    # 兆级；卡片上的一个数字不值这趟传输，但计数本身仍来自同一份缓存快照，
-    # 不另立一套口径。
-    if str(args.get("counts") or "") in {"1", "true"}:
-        return {key: payload[key] for key in ("counts", "sources", "skipped_rows")
-                if key in payload}
+        tables=REVIEW_TABLES)
     return payload
 
 
@@ -475,6 +482,7 @@ GET_HANDLERS = {
     "/api/jav/reviews": q_jav_reviews,
     "/api/jav/resources": q_jav_resources,
     "/api/jav/discoveries": q_jav_discoveries,
+    "/api/jav/discoveries/metadata": q_jav_discovery_metadata,
     "/api/jav/releases": q_jav_releases,
     "/api/library-processing": q_library_processing,
     "/api/library-processing/issues": q_library_processing_issues,
@@ -559,6 +567,8 @@ POST_HANDLERS = {
     "/api/scraping/settings": w_scraping_settings,
     "/api/scraping/cover": w_scraping_cover,
     "/api/jav/cover": w_jav_cover,
+    "/api/jav/discoveries/metadata": w_jav_discovery_metadata,
+    "/api/jav/releases/metadata": w_jav_release_metadata,
     "/api/scraping/check": w_scraping_check,
     "/api/scraping/check-all": w_scraping_check_all,
     "/api/scraping/amane-bridge/check": w_scraping_amane_check,
@@ -657,7 +667,8 @@ def dispatch_api_get(contract: WebContract, path, args):
         handler = GET_HANDLERS[path]
     except KeyError as exc:
         raise ContractRouteNotFound(path) from exc
-    return handler(contract, args)
+    with revision_snapshot():
+        return handler(contract, args)
 
 
 def dispatch_api_post(contract: WebContract, path, body):

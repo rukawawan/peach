@@ -5,7 +5,9 @@ import { photoSize } from './../appearance/layout';
 import { $, ROUTE_ENTITIES } from '../core';
 import { fitSkeleton, LOAD_MORE_STATUS, loadingDotsHtml, revealSkeleton } from '../ui-kit';
 import { junkCountSkeletonHtml, junkRoute } from './../junk-queue';
-import { state } from './../shell/index';
+import { state, presentedItem } from './../shell/index';
+import { homeRouteLabel, mediaRouteLabel, postRouteLabel } from '../history/page-title';
+import { subscribeNames } from '../core/entity-names';
 import { catalogCardRatio, catalogHeadProps, catalogSkeletonHtml, clearCatalogGrid, gridTaken, paintCatalogFilter, syncCatalogFilterScreen } from './catalog.js';
 import { followListLayout, followManageParams, indexState, showIndexContainer } from './index.js';
 import { applicationEffects } from './effects';
@@ -150,11 +152,18 @@ loadingState.wantsDiscoveryBars = ()=>$('#catalogFilter').style.display!=='none'
 loadingState.entityShapesReady = null;
 loadingState.ENTITY_SHAPES_WAIT = 400;
 loadingState.syncPageTitle = path=>{
-  const url=new URL(path,location.origin);
-  const pathname=decodeURIComponent(url.pathname);
-  const label=routeMetaOf(pathname)?.title;
-  document.title=label?`${label} · Peach`:'Peach · 蜜桃';
+  const url=writePageTitle(path);
   document.body.dataset.surface=url.pathname;
   paintNav();
 };
+/* 资料页标题是人名：名单晚到、换了中文或日文写法时只重写标题。 */
+subscribeNames(()=>writePageTitle(location.href));
+}
+
+function writePageTitle(path){
+  const url=new URL(path,location.origin);
+  const pathname=decodeURIComponent(url.pathname);
+  const label=mediaRouteLabel(pathname,presentedItem)||postRouteLabel(pathname)||homeRouteLabel(pathname,url.search)||routeMetaOf(pathname)?.title;
+  document.title=label?`${label} · Peach`:'Peach · 蜜桃';
+  return url;
 }

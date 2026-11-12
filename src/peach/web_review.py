@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 import json
 import sqlite3
 import time
@@ -21,7 +22,7 @@ from urllib.parse import quote
 from .avatar_provider import install_entity_avatar
 from .catalog_rules import current_tags, is_korean_mib_code, normalise_code_key
 from .code_creators import collect
-from .entities import resolve_entity, resolve_entity_id, upsert_asset_entity
+from .entities import memoized_resolution, resolve_entity, resolve_entity_id, upsert_asset_entity
 from .field_owners import (
     EXPECTED_REVISION_FIELD,
     owner_label,
@@ -38,6 +39,7 @@ from .metadata_auto_apply import (
     REVIEW_APPLY_LIMIT,
     _apply_metadata_candidate,
     _codes_matching,
+    _candidate_identifies_code,
     _entity_identity_key,
     _fold_genre_decisions,
     _landing_scope,
@@ -45,6 +47,7 @@ from .metadata_auto_apply import (
     _offers_another_stage_name,
     _only_mib_official,
     _parsed_candidates,
+    pinned_asset_ids,
     _row_candidates,
     _split_multi,
     genres_still_pending,
@@ -64,7 +67,7 @@ from .metadata_policy import (
     source_tier,
 )
 from .previews import logo_key
-from .review_csv import CANDIDATE_PREFIX, read_candidates
+from .review_csv import CANDIDATE_PREFIX, candidate_root_version, read_candidates
 
 
 class ReviewContract(Protocol):
@@ -75,6 +78,7 @@ class ReviewContract(Protocol):
     avatar_root: Path
 
     def cache_bust(self) -> None: ...
+    def cached_until_changed(self, key: str, fn, *inputs, tables=()): ...
     def read_connection(self): ...
     def cover_path(self, code: str) -> Path | None: ...
     def has_entity_image(self, kind: str, entity_id) -> bool: ...
@@ -86,6 +90,8 @@ class ReviewContract(Protocol):
 LIVE_CATEGORIES = ("code_creators",)
 #: 复核页的类别全集。页面的 tab 次序由 `app.js` 的 `REVIEW_LABELS` 定，与这里无关。
 REVIEW_CATEGORIES = (*CANDIDATE_PREFIX, *LIVE_CATEGORIES)
+REVIEW_TABLES = ("asset", "asset_tag", "asset_entity", "entity", "entity_alias", "entity_redirect",
+                 "review_decision", "genre_decision")
 #: 复核卡片上那张脸属于哪种实体。页面按同一张表决定 `/entity-image` 的 kind
 #: （`app.js` 的 `ENTITY_REVIEW_CATEGORIES`），两边必须逐字一致：这边判成 creator、
 #: 页面按 performer 取图，就是标志说有图而请求照样 404。不在表里的类别没有这个位置。
@@ -321,6 +327,48 @@ def _queue_rows(contract: ReviewContract, category: str,
     return [row for row in rows if _needs_review(category, row)], source, skipped
 
 
+def _no_tags_left(row: dict, candidate: dict) -> bool:
+    """标签候选按现在的词表读完一个标签也不剩。"""
+    if str(row.get("field") or "").strip() != "tags":
+        return False
+    value = candidate.get("value")
+    return isinstance(value, list) and not current_tags(str(tag) for tag in value)
+
+
+def _empty_tags(row: dict, candidate: dict) -> bool:
+    """既没有可写的标签、也没有待收录 genre 的候选不摆出来。
+
+    还带着未收录 genre 的照常出卡：卡上的「收录」是这些 genre 唯一的入口（#486）。"""
+    return _no_tags_left(row, candidate) and not candidate.get("unmapped_genres")
+
+
+def _repin_file_rows(connection, rows: list[dict]) -> list[dict]:
+    """按文件出的行改挂到那个文件现在的编号；文件已不在库的行不摆出来（#486）。
+
+    永久删除后同一个文件被扫描重新登记，编号就换了。按路径对得上的改挂（`_pinned_asset_id`），
+    卡片上的「通过」与「打开原视频」都指向现在那一条；新编号自己已有同字段的行时，旧行让位。
+    对不上的那些不论点哪个都写不进账本，留在队列里只是一张点了就报错的卡。
+    """
+    keys = {row["item_key"] for row in rows}
+    pinned_rows = [row for row in rows
+                   if row.get("asset_path") and str(row.get("asset_id") or "").strip().isdigit()]
+    pins = dict(zip(map(id, pinned_rows), pinned_asset_ids(connection, pinned_rows)))
+    kept = []
+    for row in rows:
+        if id(row) not in pins:
+            kept.append(row)
+            continue
+        raw, pinned = str(row["asset_id"]).strip(), pins[id(row)]
+        if pinned is None:
+            continue
+        if pinned != int(raw):
+            if f"asset:{pinned}:{str(row.get('field') or '').strip()}" in keys:
+                continue
+            row["asset_id"] = str(pinned)
+        kept.append(row)
+    return kept
+
+
 def _metadata_queue_rows(connection, rows: list[dict],
                          decisions: dict) -> tuple[list[dict], dict[str, str | None]]:
     """元数据字段队列真正该摆在人面前的那些行，以及用到的 genre 决定。
@@ -328,11 +376,22 @@ def _metadata_queue_rows(connection, rows: list[dict],
     每一道都在回答同一个问题：这一行还有没有人能判、值得判的东西。
     """
     genre_decisions = load_genre_decisions(connection)
+    @cache
+    def identifies(code, source, provider_id, content_id, source_url):
+        return _candidate_identifies_code(code, dict(source=source, provider_id=provider_id,
+                                                    content_id=content_id, source_url=source_url))
+    def identifies_candidate(code, candidate):
+        return identifies(code, *(str(candidate.get(key) or '') for key in
+                                  ('source', 'provider_id', 'content_id', 'source_url')))
     for row in rows:
-        row["candidates"] = _row_candidates(row, genre_decisions)
+        # 折掉已收录的 genre 后一个标签也不剩的候选批不了（「标签候选为空」，#486），不摆出来。
+        row["candidates"] = [candidate for candidate in _row_candidates(
+                                 row, genre_decisions, identifies=identifies_candidate)
+                             if not _empty_tags(row, candidate)]
     # 候选全是错配时整行消失：剔完一条不剩，就没有可判的东西了。本来就没有候选
     # 的行照旧留着，它讲的是另一件事（这个番号问过、谁都没给值）。
     rows = [row for row in rows if row["candidates"] or not _parsed_candidates(row)]
+    rows = _repin_file_rows(connection, rows)
     refresh_current_values(connection, rows)
     identity_key = cache(partial(_entity_identity_key, connection))
     # 和账本已有的值比一遍，只把真差异留在队列里。实测 43 条候选里 24 条
@@ -381,13 +440,9 @@ def _attach_review_decisions(rows: list[dict], category: str, decisions: dict,
         row["decision_note"] = decision.get("note", "")
 
 
-def _review_rows(contract: ReviewContract, category: str, *, queue: str | None = 'pending') -> tuple[list[dict], str | None, int]:
-    # 复核卡片只需知道 /cover 能否取图，不加载全库的裁剪和人脸 sidecar。
-    has_cover = cache(lambda code: contract.cover_path(code) is not None)
-    #: 用户对来源 genre 的决定。判「这一行还有没有词等着收录」要用它，而那一步在库
-    #: 连接关掉之后才跑，所以先取出来。
-    genre_decisions: dict[str, str | None] = {}
-    with contract.read_connection() as connection:
+def _read_review_members(contract: ReviewContract, category: str):
+    """精确筛选队列成员，不读取卡片图片、资产旁证或预览。"""
+    with contract.read_connection() as connection, memoized_resolution():
         rows, source, skipped = _queue_rows(contract, category, connection)
         decisions = {
             row["item_key"]: dict(row) for row in connection.execute(
@@ -395,10 +450,25 @@ def _review_rows(contract: ReviewContract, category: str, *, queue: str | None =
                 (category,),
             )
         }
+        genre_decisions = {}
         if category == "metadata_fields":
             rows, genre_decisions = _metadata_queue_rows(connection, rows, decisions)
         _attach_review_decisions(rows, category, decisions, genre_decisions)
-        rows = _select_review_queue(rows, queue)
+    return rows, source, skipped
+
+
+def _review_members(contract: ReviewContract, category: str):
+    return contract.cached_until_changed(
+        'review-members:' + category, lambda: _read_review_members(contract, category),
+        str(contract.candidate_root), candidate_root_version(contract.candidate_root), tables=REVIEW_TABLES)
+
+
+def _review_rows(contract: ReviewContract, category: str, *, queue: str | None = 'pending') -> tuple[list[dict], str | None, int]:
+    # 计数和卡片共用精确成员；卡片附加字段只能改自己的副本。
+    members, source, skipped = _review_members(contract, category)
+    rows = deepcopy(_select_review_queue(members, queue))
+    has_cover = cache(lambda code: contract.cover_path(code) is not None)
+    with contract.read_connection() as connection:
         if category in {"creator_tags", "western_identity"}:
             names = [str(row.get("creator") or "").strip() for row in rows]
             previews = _creator_previews(connection, names, include_unpictured=category == "western_identity")
@@ -747,6 +817,15 @@ def _review_evidence(category: str, row: dict) -> str:
     return ""
 
 
+def q_review_counts(contract: ReviewContract):
+    """入口读数沿用完整队列的成员判据，省去卡片资料投影。"""
+    counts, sources, skipped = {}, {}, {}
+    for category in REVIEW_CATEGORIES:
+        rows, sources[category], skipped[category] = _review_members(contract, category)
+        counts[category] = len(_select_review_queue(rows, 'pending'))
+    return dict(counts=counts, sources=sources, skipped_rows=skipped)
+
+
 def q_review(contract: ReviewContract):
     """复核页只放冲突项（ADR-0052 第五条）。
 
@@ -933,7 +1012,8 @@ def _approve_metadata_with_receipt(connection, group, candidate, now, note, expe
     marks = ",".join("?" * len(asset_ids))
     before = {str(row["id"]): int(row["mutation_revision"]) for row in connection.execute(
         f"SELECT id,mutation_revision FROM asset WHERE id IN ({marks})", asset_ids)}
-    applied = _apply_metadata_candidate(
+    # 只剩待收录 genre 的标签卡：没有可写的标签，「通过」就是结案，不报「标签候选为空」（#486）。
+    applied = 0 if _no_tags_left(group, candidate) else _apply_metadata_candidate(
         connection, group, candidate, now, review_owner(str(candidate.get("source") or "")),
         expected_revision=expected_revision)
     revisions = {

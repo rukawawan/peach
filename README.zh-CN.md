@@ -49,14 +49,13 @@
 - **云下载**：按影片编号查找或提交磁力，下载完成后整理入库。
 - **馆藏管理**：管理标签、重复文件、多版本与分卷；按女优批量永久删除影片，保留人物档案和照片。资料和观看记录保存在本机。
 - **任务中心**：暂停、继续或取消本机后台任务，查看可取得的各任务 CPU、GPU 与下载活动。
-- **新手教程**：按需了解界面和设置，连接同一实例的设备共用教程进度。
 
 ## 下载与使用
 
 | 方式 | 入口 |
 | --- | --- |
-| Windows x64 | [安装版](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-windows-x64-setup.exe) · [免安装版](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-windows-x64.zip) |
-| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.50.0/Peach-0.50.0-macos-x86_64.dmg) |
+| Windows x64 | [安装版](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-windows-x64-setup.exe) · [免安装版](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-windows-x64.zip) |
+| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-macos-x86_64.dmg) |
 | Docker / NAS | [部署说明](docs/DOCKER.md) |
 | 源码运行 | [安装步骤](docs/OPERATIONS.md#从源码运行windowsmacos)，需要 Git、uv 和 Python 3.14+ |
 

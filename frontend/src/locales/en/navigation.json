@@ -1,0 +1,29 @@
+{
+  "sidebar": {
+    "home": "Home",
+    "performers": "Performers",
+    "studios": "Studios",
+    "tags": "Tags",
+    "jav": "JAV",
+    "flagged": "Flagged",
+    "playlists": "Playlists",
+    "following": "Following",
+    "immerse": "Immersive",
+    "manage": "Manage"
+  },
+  "manage": {
+    "stats": "Stats",
+    "taste": "Taste",
+    "review": "Review",
+    "cleanup": "Library tools",
+    "trash": "Trash",
+    "subscriptions": "Subscriptions",
+    "quality": "HD upgrades",
+    "activity": "Tasks",
+    "configuration": "Settings"
+  },
+  "pageTitle": {
+    "search": "Search {{term}}",
+    "portrait": "Vertical"
+  }
+}

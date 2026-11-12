@@ -34,7 +34,7 @@ it('运行中的任务发布确认结果时更新列表，状态与凭据查询�
     const feed = useQuery({ queryKey: ['follow-feed'], queryFn: read });
     return <p>{feed.data}</p>;
   }
-  const host = await mount(<QueryClientProvider client={queryClient}><ResultUpdates /><Feed /></QueryClientProvider>);
+  const host = await mount(<QueryClientProvider client={queryClient}><ResultUpdates openItem={vi.fn()} /><Feed /></QueryClientProvider>);
   await settle();
   expect(read).not.toHaveBeenCalled();
   await act(async () => {
@@ -99,24 +99,23 @@ it('缓慢读取期间的下一项结果排队刷新，不取消读取且不遗�
 
 it('入库通知：首轮只记基线；新到的逐部弹 toast 并可打开，一轮超过 3 部合成一条，服务重启后不补弹', async () => {
   const toaster = await import('../../src/react/toaster');
-  const history = await import('@peach/history');
   const shown = vi.spyOn(toaster, 'showToast').mockImplementation(() => {});
-  const go = vi.spyOn(history, 'shellNavigate').mockImplementation(() => {});
+  const go = vi.fn();
   const { announceIngests } = await import('../../src/react/result-updates');
   const notice = (id: number, kind: 'download' | 'discovered' = 'download', label = `SSIS-${id}`) =>
     ({ id, kind, asset_id: 100 + id, label, at: 0 });
-  let seen = announceIngests(null, { epoch: 'a', items: [notice(1), notice(2)] });
+  let seen = announceIngests(null, { epoch: 'a', items: [notice(1), notice(2)] }, go);
   expect(shown).not.toHaveBeenCalled();
-  seen = announceIngests(seen, { epoch: 'a', items: [notice(1), notice(2), notice(3), notice(4, 'discovered', '<b>x</b>')] });
+  seen = announceIngests(seen, { epoch: 'a', items: [notice(1), notice(2), notice(3), notice(4, 'discovered', '<b>x</b>')] }, go);
   expect(shown.mock.calls.map(([, request]) => request.html)).toEqual(
     ['「SSIS-3」已入库并整理完成', '新文件已入库：「&#60;b&#62;x&#60;/b&#62;」']);
   shown.mock.calls[0]![1].action!.run(document.createElement('button'));
-  expect(go).toHaveBeenCalledWith('/assets/103');
+  expect(go).toHaveBeenCalledWith(103);
   shown.mockClear();
-  seen = announceIngests(seen, { epoch: 'a', items: [5, 6, 7, 8].map(id => notice(id)) });
+  seen = announceIngests(seen, { epoch: 'a', items: [5, 6, 7, 8].map(id => notice(id)) }, go);
   expect(shown.mock.calls.map(([, request]) => [request.html, request.action])).toEqual([['4 部作品已入库', null]]);
   shown.mockClear();
-  announceIngests(seen, { epoch: 'b', items: [notice(1)] });
+  announceIngests(seen, { epoch: 'b', items: [notice(1)] }, go);
   expect(shown).not.toHaveBeenCalled();
-  shown.mockRestore(); go.mockRestore();
+  shown.mockRestore();
 });

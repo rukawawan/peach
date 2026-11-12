@@ -293,6 +293,27 @@ class StreamSessionRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(BufferedFileResponse.chunk_size, 1 << 20)
         self.assertEqual(CancellableFileResponse.chunk_size, 1 << 20)
 
+    async def test_file_reads_do_not_queue_behind_the_shared_thread_pool(self):
+        """同步端点占满 anyio 默认线程时，播放读块走自己的线程，照样读完。"""
+        import os
+        import anyio.to_thread
+        from peach.streaming import BufferedFileResponse
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip.mp4"
+            path.write_bytes(b"0123456789")
+            shared = anyio.to_thread.current_default_thread_limiter()
+            total = shared.total_tokens
+            shared.total_tokens = 1
+            await shared.acquire()
+            try:
+                status, headers, body = await asyncio.wait_for(_collect(
+                    BufferedFileResponse(path, stat_result=os.stat(path)), b"bytes=2-5"), 5)
+            finally:
+                shared.release()
+                shared.total_tokens = total
+        self.assertEqual((status, headers["content-range"], body), (206, "bytes 2-5/10", b"2345"))
+
     async def test_a_spliced_file_serves_ranges_across_the_seam(self):
         """头在边车里、内容在原文件中间，跨接缝的 Range 必须拼出连续的字节。"""
         import tempfile

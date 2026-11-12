@@ -506,13 +506,15 @@ function createOps(props: () => SearchProps, s: Store, menu: () => HTMLElement |
     openRecommendations();
     // 推荐栏的版式不等搜索记录：先照占位画出来，记录回来再补在栏底。
     if (s.recommendations.length && !input().value.trim()) paint();
-    void Promise.all([loadHistory(), loadPool()]).then(() => {
+    const reveal = () => {
       if (!focused()) return;
       // 带着 `?q=` 进来再点回输入框时，框里已经有词，补全该跟着这个词给。这两份数据回来之前
       // 人可能已经敲完字、那个词的补全也问过了，同一个词不再问第二遍。
       paint();
       if (input().value.trim() !== s.asked) refresh();
-    });
+    };
+    void loadHistory().then(reveal);
+    void loadPool().then(reveal);
   };
   return { input: onInput, key, focus, close, pick, peek, remove, pickKind, openPath, prefetch, warm, reshuffle, rotatePlaceholder };
 }

@@ -59,6 +59,13 @@ class RenderTests(unittest.TestCase):
                          (255, 255, 255))
         self.assertEqual(image.getpixel((image.width // 2, 3))[:3], link_marks.NEUTRAL_DISC)
 
+    def test_bundled_site_marks_are_not_bare_single_tone_glyphs(self):
+        """内置站标原样发给页面：透明底纯白或纯黑字形会在某个主题下消失（Iwara 的白字）。"""
+        root = Path(__file__).resolve().parents[1] / "resources" / "site-marks"
+        for path in sorted(root.glob("*.png")):
+            with self.subTest(mark=path.name):
+                self.assertFalse(link_marks.bare_single_tone(link_marks.decode(path.read_bytes())))
+
     def test_a_black_and_white_glyph_is_not_flattened(self):
         """黑白两色都有的字形不是一种深浅：压成一色白字会把里面那层白抹掉。"""
         pixels = {(x, y): (0, 0, 0, 255) if x < 16 else (255, 255, 255, 255)

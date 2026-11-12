@@ -47,6 +47,7 @@ class DownloadPostprocessTests(unittest.TestCase):
             postprocess_state=POSTPROCESS_PENDING))
         self.contract = SimpleNamespace(
             database=self.database, db_path=self.database.db_path,
+            downloads=SimpleNamespace(wake=Mock(), clock=time.time),
             candidate_root=self.root / 'generated',
             download_organize_templates=lambda: {'115': {'file': '{code}'}}, cache_bust=lambda: None)
         self.handle = SimpleNamespace(progress=lambda **_: None)
@@ -65,6 +66,53 @@ class DownloadPostprocessTests(unittest.TestCase):
 
     def run_task(self):
         return post.run(self.contract, post.followup_key(self.task.id), self.handle)
+
+    def test_temporary_failure_is_scheduled_and_only_three_retries_are_allowed(self):
+        from peach.downloads import parse_iso
+        from peach.task_retry import RETRY_DELAYS
+        started = 1_800_000_000.0
+        self.contract.downloads.clock = lambda: started
+        with patch.object(post, '_collect', side_effect=TimeoutError('来源连接超时')):
+            for attempt, delay in enumerate(RETRY_DELAYS, 1):
+                with self.assertRaises(TimeoutError):
+                    self.run_task()
+                task = self.store.get(self.task.id)
+                self.assertEqual((task.postprocess_state, task.postprocess_retries), ('pending', attempt))
+                self.assertEqual(parse_iso(task.next_check_at), started + delay)
+                self.assertEqual(self.store.pending_postprocess(started), [])
+                self.assertEqual([row.id for row in self.store.pending_postprocess(parse_iso(task.next_check_at))], [task.id])
+                started += delay
+            with self.assertRaises(TimeoutError):
+                self.run_task()
+        task = self.store.get(self.task.id)
+        self.assertEqual(task.postprocess_state, 'failed')
+        self.assertIsNone(task.next_check_at)
+        self.assertIn('自动重试 3 次', task.postprocess_detail)
+
+    def test_offline_mount_retries_but_target_collision_stops_immediately(self):
+        with patch.object(post.organize, 'build_plan', return_value={
+                'rows': [{'action': 'skip', 'reason': post.organize.SKIP_OFFLINE}],
+                'reasons': {post.organize.SKIP_OFFLINE: 1}}), self.assertRaises(RuntimeError):
+            self.run_task()
+        self.assertEqual(self.store.get(self.task.id).postprocess_state, 'pending')
+        with patch.object(post.organize, 'build_plan', return_value={
+                'rows': [{'action': 'skip', 'reason': post.organize.SKIP_TARGET_EXISTS}],
+                'reasons': {post.organize.SKIP_TARGET_EXISTS: 1}}), self.assertRaises(RuntimeError):
+            self.run_task()
+        self.assertEqual(self.store.get(self.task.id).postprocess_state, 'failed')
+        self.assertIsNone(self.store.get(self.task.id).next_check_at)
+
+    def test_collection_retry_uses_structured_failure_instead_of_the_error_message(self):
+        log = self.root / 'issues.jsonl'
+        import json
+        state = {'issues_log': str(log), 'issue_count': 1}
+        issue = {'asset_id': self.asset_id, 'severity': 'error', 'retryable': True,
+                 'diagnostics': {'failures': [{'automatic_retry_delay': 900.0}]}}
+        log.write_text(json.dumps(issue) + '\n', encoding='utf-8')
+        self.assertEqual(post._collection_retry_delay(state, self.asset_id), 900)
+        issue['diagnostics'] = {'failures': [{'automatic_retry_delay': None}]}
+        log.write_text(json.dumps(issue) + '\n', encoding='utf-8')
+        self.assertIsNone(post._collection_retry_delay(state, self.asset_id))
 
     def test_existing_unrelated_foreign_key_violation_is_reported_without_failing_the_move(self):
         with self.database.write_transaction() as connection:

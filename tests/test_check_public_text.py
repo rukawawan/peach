@@ -118,7 +118,8 @@ class PublishCommandTests(unittest.TestCase):
         venv = (self.cwd / ".venv").exists()
         result = subprocess.run(argv, input=json.dumps({"cwd": str(self.cwd), "tool_input": {"command": "git status"}}),
                                 capture_output=True, text=True, encoding="utf-8", cwd=self.cwd, timeout=120)
-        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(result.stderr, ("", "WARN `--no-project` was provided, but no project was found\n"))
         self.assertEqual((self.cwd / ".venv").exists(), venv)
 
     def test_unreadable_hook_input_never_blocks(self):

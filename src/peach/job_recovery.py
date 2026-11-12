@@ -189,6 +189,8 @@ def import_legacy_library(db: Path, previous: dict) -> None:
     if run_id is not None:
         store.suspend(run_id)
     request = {'stage': previous.get('requested_stage') or 'all'}
+    if previous.get('library_id'):
+        request['library_id'] = previous['library_id']
     if previous.get('asset_ids'):
         request['asset_ids'] = previous['asset_ids']
     save(db, 'library-processing', previous.get('job_id') or 'library-processing',

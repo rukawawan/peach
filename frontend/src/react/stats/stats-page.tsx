@@ -341,9 +341,6 @@ export function StatsPage(props: StatsProps) {
   const covered = `${fmtCount(data.tag_cov)} / ${data.attribution.videos.toLocaleString()}`;
   return (
     <Page>
-      <p className="text-caption-1-regular text-text-secondary">
-        {`数据库中的当前统计 · ${videos.toLocaleString()} 个视频 · ${fmtSize(bytes)}`}
-      </p>
       <Tabs defaultSelectedKey="inventory" className="flex flex-col gap-4">
         <TabList aria-label="统计视图" className={STAT_STRIP}>
           <MetricTab id="inventory" label="馆藏视频" icon={RiDatabase2Line} accent={0}

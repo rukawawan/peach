@@ -85,6 +85,8 @@ describe('页面滚动定位', () => {
           }] } }));
           await page.route('**/api/resource-sync/scan', route => route.fulfill({ json: { status: 'idle' } }));
           await page.route('**/api/resource-sync/apply', route => route.fulfill({ json: { status: 'idle' } }));
+          await page.reload({ waitUntil: 'load' });
+          await page.locator('#grid [data-media-card]').first().waitFor();
           await page.evaluate(() => {
             const scroll = Element.prototype.scrollIntoView;
             const calls: { id: string; behavior: string | undefined }[] = [];

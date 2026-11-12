@@ -10,6 +10,7 @@
 云下载使用目录查询、目标目录创建、离线提交、离线列表、取消与配额接口。
 代理设置使用 `GetAllCloudApis`、`GetCloudAPIConfig`、`SetCloudAPIConfig`、`GetMountPoints`。
 账号匹配复用推送发现的路径前缀及 CloudDrive 挂载点，只显示已添加媒体库对应的账号。
+容量设置通过 `GetSystemSettings.fileBufferDiskCacheLocation` 自动读取本机缓存目录，需 `allow_get_system_settings` 权限；远程服务的路径不推断成本机路径，保留手动映射。此调用只读，不改 CloudDrive 设置或清理缓存。
 `GetApiTokenInfo` 用于核对权限；凭据复用本机 CredentialStore。
 
 CloudDrive2 地址填写服务入口，例如 `http://127.0.0.1:19798`；媒体目录和 API 令牌分别填写。

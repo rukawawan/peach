@@ -237,7 +237,7 @@ describe('馆藏 JAV 官方预览', () => {
       await frame.getByRole('button', { name: '查看图片', exact: true }).click();
       await retry.waitFor();
       assert.equal(await retry.getAttribute('title'), '来源暂不可用');
-      assert.ok(await page.locator('[data-stage-side-content]').isVisible());
+      assert.ok(await page.locator('[data-item-side] [data-stage-side-content]').isVisible());
       assert.ok(await frame.locator('.video-js').isHidden());
       await frame.getByRole('button', { name: '播放正片', exact: true }).click();
       assert.equal(await retry.count(), 0);

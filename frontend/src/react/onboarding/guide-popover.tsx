@@ -34,7 +34,6 @@ function GuidePopover({ step, position, total, missing, next, previous, close, i
         {entry.hint ? <p className="text-caption-1-regular text-text-secondary">{entry.hint}</p> : null}
       </section> : null}
       <p id="driver-popover-description" className="text-body-regular text-text-secondary">{step.body}</p>
-      {step.surface ? <p className="text-caption-1-regular text-text-secondary">导览期间不自动播放；退出后仍按原来的播放设置使用。</p> : null}
       {step.details?.length ? <Disclosure summary="更多说明"><GuideFieldDetails details={step.details} /></Disclosure> : null}
       {step.scope ? <p className="text-body-2-regular text-text-secondary">{step.scope}</p> : null}
       {missing ? <Note tone="neutral">{step.surface ? '尚未取得可演示的视频或对应控件。请先添加视频，或跳过后稍后重看。' : '当前页面未显示这个入口，可能尚无内容、没有配置权限或仍在加载。可以跳过，稍后重看。'}</Note> : null}

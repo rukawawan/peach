@@ -110,7 +110,7 @@ async function connect(r: Loaded) {
 const settings = (): PanelSettings => ({
   theme: 'system', uiSounds: true, homeGlow: { ...normalizeHomeGlow(null), on: true, preset: 'ash' }, accent: 'blue',
   sidebarOrder: [''], batchSize: 60, defaultSort: 'seed', defaultSortDirection: '', groupCollapse: true,
-  javImage: 'cover', performerNameLanguage: 'zh-CN', feedAutoScroll: true, feedLimit: 12, feedHideGroupCompilations: true, feedHideSoloCompilations: false,
+  javImage: 'cover', performerNameLanguage: 'zh-CN', interfaceLanguage: 'zh-CN', systemLanguage: null, feedAutoScroll: true, feedLimit: 12, feedHideGroupCompilations: true, feedHideSoloCompilations: false,
   feedHideExcerpts: true, hoverDelaySeconds: 5, detailAutoplay: false, miniplayer: true, seekSeconds: 10, longSeekSeconds: 30,
   relatedLimit: 24, searchHistoryLimit: 10, followInitialDays: 30, avatarRefreshDays: 90, faviconRefreshDays: 365,
 });
@@ -206,6 +206,31 @@ describe('设置面板与壳的接缝', () => {
     expect(names.nameLanguage()).toBe(success ? 'ja' : 'zh-CN');
     expect(current.value.performerNameLanguage).toBe(success ? 'ja' : 'zh-CN');
     expect(field.value).toBe(success ? 'ja' : 'zh-CN');
+    expect(failure).toHaveBeenCalledTimes(success ? 0 : 1);
+  });
+  it.each([true, false])('界面语言存进数据库，保存成功=%s 时才交壳对账', async (success) => {
+    const answer = pending<{ ok: boolean; status: number; json(): Promise<unknown> }>();
+    const writes: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      if (init?.body) { writes.push(JSON.parse(init.body)); return answer.answer }
+      return { ok: true, status: 200, json: async () => ({ interfaceLanguage: 'zh-CN' }) };
+    }));
+    const current = await setup();
+    const synced: unknown[] = [];
+    current.host.syncRemote = (saved) => { synced.push(saved.interfaceLanguage) };
+    const failure = vi.fn();
+    current.host.failure = failure;
+    const panel = await open(current, '外观与导航');
+    const field = panel.querySelector<HTMLElement & { value: string }>('#interfaceLanguageSetting > div')!;
+    expect(field.value).toBe('zh-CN');
+    synced.length = 0; // 打开面板时的那一次对账不算
+    await act(async () => { field.value = 'en'; field.dispatchEvent(new Event('change', { bubbles: true })) });
+    expect(writes).toEqual([{ interfaceLanguage: 'en' }]);
+    expect(synced).toEqual([]);
+    await answer.release({ ok: success, status: success ? 200 : 500,
+      json: async () => success ? { interfaceLanguage: 'en' } : { error: '保存失败' } });
+    await settle();
+    expect(synced).toEqual(success ? ['en'] : []);
     expect(failure).toHaveBeenCalledTimes(success ? 0 : 1);
   });
   it('五个分区按使用场景组织，Peach 配置入口遵守设备权限', async () => {

@@ -212,6 +212,9 @@ def _archive_files(archive, directory, candidates, prefix, entries, *, structure
 def _archive_state(archive, directory, entries):
     candidates = [directory / name for name in STATE_NAMES]
     candidates += _recent(directory, 'library-processing-*.issues.jsonl', 8, entries)
+    # 启动时接回的中断任务与更新暂停标记：恢复服务卡住时，看的就是这两处（quan he，11-08）。
+    candidates += _recent(directory, 'job-recovery/*.json', 32, entries)
+    candidates += _recent(directory, 'update-tasks/**/*.json', 16, entries)
     _archive_files(archive, directory, candidates, 'processing', entries, structured=True)
     migrations = _recent(directory, 'update-backups/*/migration.log', 2, entries)
     _archive_files(archive, directory, migrations, 'updates', entries)

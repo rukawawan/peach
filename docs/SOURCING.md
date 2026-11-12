@@ -165,7 +165,7 @@ Wiki 与视频作品资料无关。
 | censored | 其余厂牌番号 | （本机证据认得时）prestige／faleno／dahlia，都不认时 makers → r18dev → dmm → avbase → javbus → javdb | 1pondo（无码片商）、fc2（另一套商品号）、mgstage（对有码号是转售店） |
 | amateur | `300MIUM-1239` 这类三位数字前缀，加 `SIRO`／`STP`／`STN`；本机证据写着带三位前缀的同一个号（`LUXU-688` 的文件是 `259LUXU-688.mp4`） | mgstage → sougouwiki → av_neme → avbase → javbus → javdb → r18dev | makers 与三家片商站（素人号不归它们）；dmm（搜 `MIUM 1239`、`LUXU 1475` 零结果）；av_name（厂牌页只挂最新约 1100 件）。r18dev 垫底：本机快照里它一份素人号都没给过 |
 | uncensored | 日期式番号、`HEYZO-1380`、Tokyo-Hot 的 `n0780` | （证据指着一本道时）1pondo → avbase → javbus → javdb → avsox | r18dev：无码番号在它上面没有 |
-| fc2 | `FC2` 开头的商品号，与没归一的 `FC-43768` 这种短写法 | fc2 → fc2cmadb → fc2ppvdb → javten → javarchive → javdb | r18dev（85 条全空）、avbase 与 javbus（对 FC2 零产出）、fc2club（本机快照零产出，还回 429 进冷却） |
+| fc2 | `FC2` 开头的商品号，与没归一的 `FC-43768` 这种短写法 | javdb → fc2 → fc2cmadb → fc2ppvdb → javten → javarchive | r18dev、avbase 与 javbus 对 FC2 没有有效产出；fc2club 仍可由用户点名 |
 | kmib | `KOREAN_MIB_PREFIXES` 里的前缀 | 一家都不问 | 全部：番号与日本片同形，问回来的是别的作品 |
 | other | 有码形状，但路径带国产标记（`OTHER_SYSTEM_MARKS`：国产、网红、兔子先生、麻豆……）或文件名是欧美片站写法（`wankzvr-elena-koshka-GFE-180`） | 一家都不问，也不问封面 | 全部：Peach 没接这些体系的来源 |
 | unsure | 有码形状，本机证据里有字母段却没有这个号的完整写法（`UWFr85dczsVeysGg.mp4` 读成 `UWFR-085`） | avbase → javbus → javdb，一遍 | 片商站、r18dev、dmm：号多半读错了，官方档只会查空 |
@@ -258,6 +258,8 @@ Wiki 与视频作品资料无关。
 - Prestige 回的日期是 MGS 配信开始日（ABW-032 答 2020-11-11，发行日 2020-12-11），只记在
   `extra['delivery_date']`，发行日留给 r18.dev。
 - 地区限制与站方裸回的 401/403 都算「被挡」：归 `auth` 一档，整站按 403 那一档冷却，不冻进「没有」的记忆。
+- 不经桥的请求在 `SourceTransport` 认回 200 的拒绝说明页（`sources.base.refusal_page`，判据与 amane 一致，
+  另加 JavDB 对日本出口的版权说明页）：地区限制固定停 15 分钟、不翻倍，换出口后很快重试；封禁页按 403 翻倍。
 - dmm、giga、kin8 不进官方档，理由与数据见 ADR-0048 与 `build/agent-verification/amane-official-stage.md`。
 - fc2ppvdb.com 旧域已关（ADR-0043 修订）；新站 fc2ppv-db.com 由 Peach 自写解析器接回 FC2 链（ADR-0060），不经桥。
 - 经代理的实测记录在 `build/agent-verification/amane-chain-realtest.json`；那一轮 airav 的搜索地址回 404。
@@ -305,9 +307,9 @@ FC2 五站依次问、资料取齐即停、封面问到底的流程在 `LibraryM
 
 ## FC2 作品资料与封面
 
-FC2 不是 JAV：番号是卖家自己的投稿号，JAV 目录站拿它去查，要么没有，要么撞上别的片（r18.dev、AVBase、
-JavBus 对 FC2 都给不出东西，javdb 收了一部分但配额紧）。所以库内采集（`peach.library_processing`）对 FC2 番号
-只问下面五站，按顺序：
+FC2 按投稿商品号核对身份。资料先走现有匿名 JavDB 接口，可取标题、演员、日期、标签和封面地址；网页登录限制不等于匿名目录没有资料。只有缺字段或演员身份未确认时，才继续下面五站（[ADR-0150](adr/0150-fc2-javdb-first-with-confirmed-cast.md)）。FC2 卖家不作为厂牌，空厂牌不单独触发补问。封面仍按既有图源与质量规则验证。
+
+JavDB 没给演员、给了企划名义，或名字没有本机身份依据时，继续问专站。已确认别名沿用现有规范实体解析；单有 JavDB 演员编号或一个看似人名的字符串不作为确认依据。未确认名义保留为候选，不直接建立规范演员关联。
 
 1. **发行方商品页** `adult.contents.fc2.com/article/<video_id>/`（`peach.sources.fc2`，不要凭据）。资料在
    `ld+json` 的 Product 里，一次请求给标题、说明、卖家、商品标签、时长、販売日和封面原图。
@@ -451,9 +453,9 @@ minnano-av 也在 Cloudflare 后面，但对 HTTP 客户端是间歇拦截：202
   60 秒），同一请求交给下一家；三家都在冷却才整源停。签名常量从网页前端读不到时改用 App 那一套签名与请求参数，
   一小时后再回头读网页前端。
 - 详情页那一路（视频预览）的主机间隔由用户定：`library_processing.SOURCE_INTERVALS` 里 `javdb.com` 与
-  `jdbstatic.com` 都是 3 秒，两个主机要一起改。这份间隔由 `SOURCE_LIMITER` 整个进程共用，问同一主机仍按一条队排。
-- **FC2 的商品号在三家里只问 javdb**（`community_catalog.community_sources_for`）。本机来源证据里 AVBase 与 JavBus
-  对 FC2 一份都没给过；javdb 能补约一半的演员与发行日，厂牌、标签、封面不给，所以它问得慢却砍不掉。
+  `jdbstatic.com` 都是 3 秒，两个主机要一起改。这份间隔由 `SOURCE_LIMITER` 整个进程共用，问同一主机仍按一条队排；
+  补女优资料取 javdb 女优页、详情页视频预告和订阅源也排在这条队里，几条同时跑合计仍是每分钟 20 页。
+- **FC2 的商品号在综合索引中只问 JavDB**（`community_catalog.community_sources_for`）。匿名接口能够提供完整作品元数据；FC2 先查它，字段不足再查专站。AVBase 与 JavBus 不进入 FC2 默认链。
 - 一轮采集的长短约等于 javdb 请求数乘接口间隔。`HostLimiter` 等的是「距上次满 N 秒」，别家的
   往返落在这个窗口里被吸收，所以跳过两家省的是配额和撞 Cloudflare 的次数，不是时间；改成并行也省不出时间。
 

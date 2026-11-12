@@ -84,6 +84,10 @@
   --control-h-compact:32px; /* 紧凑档：行操作、卡片悬浮动作、卡内次级操作、筛选条 */
   --control-h:36px; /* 默认档：表单字段与同组按钮、页面与分区操作、页签外框、导航 */
   --control-h-large:40px; /* 大档：顶栏搜索与图标键、播放器控制条、首页厂牌胶囊 */
+  /* 旧模板与 React 新作卡共用窄卡头像几何，避免两条渲染路径各自漂移。 */
+  --media-avatar-tight:30px;
+  --media-avatar-tight-step:8px;
+  --media-avatar-tight-max:64px;
   /* 框体上下两条横条的统一高度。写成变量是因为它同时管数据管理的卡片、链接管理
      和资源同步：这三处任何一处单独调，页面上就会出现两种「同一种条」。 */
   --fieldset-bar-h:52px;

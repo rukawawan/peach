@@ -482,10 +482,73 @@ def _resource_orphan_plan(
     }
 
 
+def _purged_cache_plan(contract: ResourceSyncContract, purged: Sequence[tuple[int, str | None]]) -> dict:
+    """只算这一次永久删除的资产留下的可重建产物，形状同 `_resource_orphan_plan`。
+
+    按 id 生成的文件与目录直接按名字认，只有海报帧与转码缓存要把各自目录列一次；快照随
+    账本行由 `_finish_purge` 删掉。封面按封面键认，还有别的行或库外清单用着就留下。
+    """
+    files: list[tuple[str, Path, int]] = []
+    cleanup_dirs: set[Path] = set()
+    ids = {int(asset_id) for asset_id, _code in purged}
+    if not ids or not contract.resource_cleanup_enabled:
+        return {"files": files, "dirs": cleanup_dirs}
+
+    def managed(root):
+        return root is not None and _managed_cache_root(contract, root) and root.is_dir()
+
+    for root, kind, pattern in (
+        (contract.poster_root, "posters", re.compile(r"^(\d+)_\d+\.jpg$")),
+        (contract.transcode_root, "transcodes", re.compile(r"^(\d+)-.+\.(?:mp4|mp4hdr)$")),
+    ):
+        if managed(root):
+            for path in root.iterdir():
+                match = pattern.match(path.name)
+                if match and int(match.group(1)) in ids and path.is_file():
+                    _cache_file(path, kind, files)
+    for root, kind in ((contract.photo_root, "photo-thumbs"), (contract.avatar_root, "asset-avatars")):
+        if managed(root):
+            for asset_id in ids:
+                if (root / f"{asset_id}.jpg").is_file():
+                    _cache_file(root / f"{asset_id}.jpg", kind, files)
+    from .timeline_sheets import sheet_dir
+    for root, kind, folder in ((contract.stream_root, "stream-segments", lambda root, asset_id: root / str(asset_id)),
+                               (contract.timeline_root, "timeline", sheet_dir)):
+        if managed(root):
+            for asset_id in ids:
+                directory = folder(root, asset_id)
+                if directory.is_dir():
+                    cleanup_dirs.add(directory)
+                    for path in directory.rglob("*"):
+                        if path.is_file():
+                            _cache_file(path, kind, files)
+    if managed(contract.cover_root):
+        from .western_artwork import artwork_key
+        _active_ids, active_codes, _snapshots = _cache_owners(contract)
+        for key in {artwork_key(int(asset_id), code) for asset_id, code in purged} - active_codes:
+            for name in (f"{key}.jpg", f"{key}.face.json", f"{key}{jav_poster_crop.SIDECAR_SUFFIX}"):
+                if (contract.cover_root / name).is_file():
+                    _cache_file(contract.cover_root / name, "covers", files)
+    return {"files": files, "dirs": cleanup_dirs}
+
+
+def clean_purged_caches(contract: ResourceSyncContract, purged: Sequence[tuple[int, str | None]]) -> dict:
+    """永久删除之后，只清这几部留下的可重建产物；回执形状同 `clean_resource_orphans`。
+
+    原先删完一批要把整个派生目录扫一遍（快照目录几万个文件），而这一步排在删除请求里。
+    其他原因留下的孤儿由资源同步那一轮的 `clean_resource_orphans` 兜底。
+    """
+    return _apply_cleanup(_purged_cache_plan(contract, purged))
+
+
 def clean_resource_orphans(contract: ResourceSyncContract, *, progress=None, checkpoint=None, resume_state=None) -> dict:
     if progress:
         progress(checked=0, total=None, message="正在核对可重建缓存清单")
-    plan = _resource_orphan_plan(contract)
+    return _apply_cleanup(_resource_orphan_plan(contract), progress=progress, checkpoint=checkpoint,
+                          resume_state=resume_state)
+
+
+def _apply_cleanup(plan: dict, *, progress=None, checkpoint=None, resume_state=None) -> dict:
     previous = (resume_state or {}).get('cache_checkpoint') or {}
     removed = previous.get('cache_removed', 0)
     reclaimed = previous.get('bytes_reclaimed', 0)

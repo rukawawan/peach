@@ -134,6 +134,8 @@
   min-width: 0;
   margin: 0 0 9px;
 }
+/* 「正在补全」夹在标题和身份行之间，上下都隔标题下的那 9px。 */
+.peach-react [data-entity-identity] > [data-pending-work] { margin-bottom: 9px; }
 .peach-react [data-entity-title] h2 {
   margin: 0;
   font-size: 24px;
@@ -638,7 +640,7 @@
   .peach-react [data-entity-portrait] { width: 96px; }
   .peach-react [data-entity-identity] { width: 100%; }
   .peach-react [data-entity-foot] { padding: 10px 16px; }
-  .peach-react [data-entity-title] { justify-content: center; }
+  .peach-react :is([data-entity-title], [data-entity-identity] > [data-pending-work]) { justify-content: center; }
   /* 这枚开关紧挨着名字，画的仍是 32px，命中区由一层伸出去、不着墨的方块补到 44px。 */
   .peach-react [data-namepick-toggle] { position: relative; }
   .peach-react [data-namepick-toggle]::after {

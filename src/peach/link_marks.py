@@ -201,6 +201,12 @@ def single_tone(image, body) -> bool:
             or sum(shade > 0.75 for shade in shades) >= share)
 
 
+def bare_single_tone(image) -> bool:
+    """透明底上只有一种深浅的字形：原样显示时，浅色或深色主题总有一边看不见。"""
+    body, from_alpha = _body_pixels(image)
+    return bool(body) and from_alpha and single_tone(image, body)
+
+
 def _circle(side: int):
     from PIL import Image, ImageDraw
 

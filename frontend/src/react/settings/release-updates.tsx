@@ -13,6 +13,7 @@ import { Note } from '../components/note';
 import { Progress } from '../components/progress';
 import { StatusLabel } from '../components/status-label';
 import { DockerUpdateProgress, useDockerUpdate } from './docker-update';
+import { RELEASE_NOTICE_EVENT } from '../release-notice';
 import { CommandSteps, ErrorText, ExternalLink, Fact, FactList, Footer, Help, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
 
@@ -143,6 +144,7 @@ export function ReleaseUpdates({ initial, initialJob }: { initial: ReleaseState;
         <ExternalLink href="https://github.com/peach-mitao/peach">GitHub</ExternalLink>
         <ExternalLink href={data.release_url || RELEASES_URL}>查看发布页</ExternalLink>
       </div>}>
+        <Button variant="ghost" onClick={() => document.dispatchEvent(new Event(RELEASE_NOTICE_EVENT))}>本版更新说明</Button>
         <Button variant={job.state === 'ready' || oneClick || (data.state === 'available' && data.installation === '独立测试包') ? 'secondary' : 'primary'}
           disabled={running || rebuilding} onClick={check} {...busyProps(action.busy === 'check')}>检查更新</Button>
         {container.job.state === 'done'

@@ -25,10 +25,10 @@ export const REVIEW_KEY = ['review'] as const;
 export const REVIEW_LABELS = {
   metadata_fields: '元数据字段',
   creator_tags: '创作者标签',
-  studio_logos: '厂牌 Logo',
-  performer_avatars: '女优头像',
-  western_identity: '西方身份回配',
   code_creators: '番号目录存疑',
+  western_identity: '西方身份回配',
+  performer_avatars: '女优头像',
+  studio_logos: '厂牌 Logo',
   fc2_markings: 'FC2 评论标记',
   fc2_similarity: 'FC2 跨号相似',
   video_endcards: '片尾/出处证据',
@@ -50,7 +50,7 @@ export const ENTITY_REVIEW_KINDS: Partial<Record<ReviewCategory, string>> = {
   creator_tags: 'creator', western_identity: 'creator',
 };
 
-/** 一页 20 张。接口一次给整条队列，卡的是把几百张候选表单一次画进 DOM。 */
+/** 默认每页 20 张；接口读取整条队列，页面按所选数量挂载候选表单。 */
 export const REVIEW_PAGE_SIZE = 20;
 
 export interface CatalogEvidence { display_value?: string; warnings?: string[] }
@@ -222,14 +222,14 @@ export function filterReviewRows(
 
 export interface ReviewWindow { page: number; pages: number; rows: ReviewRow[] }
 
-/** 当前这一页是哪二十行。页码越界时收回到最后一页，不画空列表。 */
-export function reviewWindow(rows: ReviewRow[], page: number): ReviewWindow {
-  const pages = pageCount(rows.length, REVIEW_PAGE_SIZE);
+/** 按每页数量切片，页码越界时收回到最后一页。 */
+export function reviewWindow(rows: ReviewRow[], page: number, pageSize = REVIEW_PAGE_SIZE): ReviewWindow {
+  const pages = pageCount(rows.length, pageSize);
   const current = clampPage(page, pages);
   return {
     page: current,
     pages,
-    rows: rows.slice((current - 1) * REVIEW_PAGE_SIZE, current * REVIEW_PAGE_SIZE),
+    rows: rows.slice((current - 1) * pageSize, current * pageSize),
   };
 }
 

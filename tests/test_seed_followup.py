@@ -75,6 +75,20 @@ class PlanTests(Case):
         second = self.plan(since_entity_id=10 ** 9)[0].key
         self.assertNotEqual(first, second)
 
+    def test_an_unchanged_pack_is_parsed_once_while_history_is_checked_every_round(self):
+        """升级补修每分钟问一次：包没变就不再整包解析、校验；导入历史照旧每轮核对。"""
+        with mock.patch.object(seed_validation, "validate", wraps=seed_validation.validate) as validated:
+            first = self.plan(since_entity_id=10 ** 9)
+            second = self.plan(since_entity_id=10 ** 9)
+        self.assertEqual(first, second)
+        self.assertEqual(validated.call_count, 1)
+        with self.database.write_transaction() as connection:
+            connection.execute(
+                "INSERT INTO seed_pack_history(version,revision,content_sha256,withdrawals_json,imported_at)"
+                " VALUES(?,0,'another-content','[]',?)", (VERSION, STAMP))
+        with self.assertRaisesRegex(ValueError, "同版本种子内容与已导入历史不同"):
+            self.plan(since_entity_id=10 ** 9)
+
     def test_without_a_pack_nothing_is_planned(self):
         with self.database.read_connection() as connection:
             self.assertEqual(seed_followup.plan(connection, since_entity_id=0,

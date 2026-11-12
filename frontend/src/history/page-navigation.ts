@@ -1,5 +1,6 @@
 import { peachHistory, isOverlayPath, isPreferencePath, routeMetaOf, type Navigation } from './index';
 import { routeScrollBehavior, scrollToAnchor } from '../ui-kit/anchor-scroll';
+import { portraitColumn } from './page-title';
 
 interface Visit {
   left: number;
@@ -69,7 +70,7 @@ function trackElementScroll(target: Element | null): void {
 const page = (path: string) => !isOverlayPath(path) && !isPreferencePath(path) && path !== '/immerse' && path !== '/wall';
 const identity = (location: typeof active.location) => {
   const query = new URLSearchParams(location.search);
-  return `${location.pathname}:${query.get('jav') === '1'}:${query.get('orient') === '竖屏'}`;
+  return `${location.pathname}:${query.get('jav') === '1'}:${portraitColumn(query)}`;
 };
 const address = (location: typeof active.location) => {
   const query = new URLSearchParams(location.search);
@@ -82,7 +83,7 @@ function columnKeys(location: typeof active.location): string[] {
   if (!page(location.pathname)) return [];
   if (location.pathname === '/') {
     const query = new URLSearchParams(location.search);
-    return [query.get('jav') === '1' ? 'jav' : query.get('orient') === '竖屏' ? 'shorts' : ''];
+    return [query.get('jav') === '1' ? 'jav' : portraitColumn(query) ? 'shorts' : ''];
   }
   const meta = routeMetaOf(location.pathname);
   return [...(meta?.nav ? [meta.nav] : []), ...(meta?.section ? ['manage', meta.section] : [])];

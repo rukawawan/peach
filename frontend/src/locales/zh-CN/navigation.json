@@ -1,0 +1,29 @@
+{
+  "sidebar": {
+    "home": "首页",
+    "performers": "艺人",
+    "studios": "厂牌",
+    "tags": "标签",
+    "jav": "JAV",
+    "flagged": "已标记",
+    "playlists": "播放列表",
+    "following": "关注",
+    "immerse": "沉浸模式",
+    "manage": "管理"
+  },
+  "manage": {
+    "stats": "统计",
+    "taste": "口味",
+    "review": "人工复核",
+    "cleanup": "数据管理",
+    "trash": "回收站",
+    "subscriptions": "关注管理",
+    "quality": "高清版",
+    "activity": "任务中心",
+    "configuration": "Peach 配置"
+  },
+  "pageTitle": {
+    "search": "搜索 {{term}}",
+    "portrait": "竖屏"
+  }
+}

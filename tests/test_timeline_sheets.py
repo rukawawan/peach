@@ -15,6 +15,17 @@ from support.ledger import fresh_ledger
 
 
 class SheetGeometryTests(unittest.TestCase):
+    def test_invalidated_display_geometry_keeps_images_but_requires_rebuilding(self):
+        directory = timeline_sheets.sheet_dir(self.root, 5)
+        directory.mkdir(parents=True)
+        sheet = directory / '000.jpg'
+        sheet.write_bytes(b'old frame geometry')
+        meta = {'interval': 10, 'frames': 2, 'sheets': 1, 'invalidated_by': 'display-dimensions-1'}
+        (directory / 'meta.json').write_text(json.dumps(meta), encoding='utf-8')
+        self.assertEqual(timeline_sheets.read_meta(self.root, 5), meta)
+        self.assertFalse(timeline_sheets.is_current(self.root, 5, 10))
+        self.assertEqual(sheet.read_bytes(), b'old frame geometry')
+
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="timeline-geometry-"))
         self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
@@ -153,6 +164,18 @@ class QueueTests(unittest.TestCase):
 
 
 class GenerateLibraryTests(unittest.TestCase):
+    def test_capacity_denial_during_frames_pauses_without_completing_the_asset(self):
+        guard = MagicMock()
+        guard.check.side_effect = [None, None, DiskSpaceDenied('capacity')]
+        def build(*args, active, **kwargs):
+            self.assertTrue(active())
+            active()
+            self.fail('capacity denial must leave the frame loop')
+        with patch.object(timeline_sheets, 'build', side_effect=build):
+            state = self._run(guard=guard)
+        self.assertEqual(state['stopped'], 'capacity')
+        self.assertEqual((state['done'], state['made'], state['failed']), (0, 0, 0))
+
     def test_resume_keeps_counters_and_does_not_build_committed_assets(self):
         saved = dict(completed_assets=[1], done=1, made=1, skipped=0, failed=0)
         built = []

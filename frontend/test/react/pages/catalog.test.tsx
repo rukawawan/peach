@@ -270,6 +270,6 @@ it('三个筛选态与垃圾文件的侧栏键与标签就是 `STATE_ROUTES` 与
   for (const [key, path] of Object.entries(r.core.STATE_ROUTES)) {
     expect(r.routeMetaOf(path)).toEqual({ nav: key, title: r.core.STATE_LABELS[key] });
   }
-  expect(r.routeMetaOf('/trash')).toEqual({ section: 'trash' });
+  expect(r.routeMetaOf('/trash')).toEqual({ section: 'trash', title: '回收站' });
   expect(r.routeMetaOf('/')).toEqual({});
 });

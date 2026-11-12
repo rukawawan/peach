@@ -21,7 +21,7 @@ import { SourceMark } from '../settings/section';
 import { DataTableFrame } from '../components/data-table-frame';
 import { DataTableFooter, DataTableSort } from '../components/table-controls';
 import { RetryNote } from '../components/grid-reveal';
-import { LibraryCompletionPrompt, missingPreviewIds } from '../library-processing/library-completion';
+import { LibraryCompletionPrompt, meteredPreviewIds, missingPreviewIds } from '../library-processing/library-completion';
 import { completionRowRemembered, rememberCompletionRow } from '../library-processing/completion-row';
 import { catalogParams } from './catalog-grid';
 import type { CatalogGridProps, MediaItem, MediaPage } from './types';
@@ -82,6 +82,7 @@ export function CatalogListPage(props: CatalogGridProps) {
   const items = result.data?.items || [];
   const total = Number(result.data?.total || 0);
   const missing = props.filters?.state === 'trash' ? [] : missingPreviewIds(items, props.layout.javImage);
+  const metered = props.filters?.state === 'trash' ? [] : meteredPreviewIds(items, props.layout.javImage);
   const [completionReserved] = useState(completionRowRemembered);
   useEffect(() => { if (result.data && !result.isPlaceholderData) rememberCompletionRow(missing.length > 0) },
     [result.data, result.isPlaceholderData, missing.length]);
@@ -186,7 +187,7 @@ export function CatalogListPage(props: CatalogGridProps) {
     </div>
     {result.isPending
       ? completionReserved ? <i data-completion-skeleton="" aria-hidden="true" className="skeleton-sheen" /> : null
-      : <LibraryCompletionPrompt className="" assetIds={missing} />}
+      : <LibraryCompletionPrompt className="" assetIds={missing} meteredIds={metered} />}
     {result.isError ? <RetryNote message={requestErrorMessage(result.error)} onRetry={() => void result.refetch()} /> : null}
     <DataTableFrame follow preferences={preferences} onRowClick={props.selectMode ? id => { if (!result.isPlaceholderData) props.actions.toggleSelection(Number(id), false) } : undefined}>
       <Table aria-label="作品列表" size="sm"

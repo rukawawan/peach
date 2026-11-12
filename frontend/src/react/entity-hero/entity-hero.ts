@@ -6,6 +6,7 @@
 import { brandIcon, foldName, linkMarkUrl, officialLinkText } from '@peach/legacy/core';
 
 import type { FeedNew } from '../feed-new/feed-new';
+import type { PendingWorkItem } from '../components/pending-work';
 
 /** 一条外链，形状同 `/api/entity` 的 `links[]`。 */
 export interface HeroLink {
@@ -77,6 +78,8 @@ export interface HeroFollow {
 /** `/api/entity` 里资料卡读到的那些字段。 */
 export interface EntityHeroData {
   favorite?: boolean;
+  /** 这位名下还在排队或正在跑的资料补全。 */
+  pending_work?: PendingWorkItem[];
   company_profile?: Partial<Record<'legal_name' | 'founded' | 'launched' | 'country' | 'location' | 'operator' | 'parent' | 'group' | 'distributor', { value: string; source_url: string; evidence?: string }>>;
   identity_labels?: string[];
   external_refs?: { provider: string; external_kind: string; external_id: string }[];
@@ -146,6 +149,8 @@ export interface EntityHeroProps {
   entity: EntityHeroData;
   /** 这一页的新作（`feed-new/feed-new.ts` 取回来的条目与壳拼好的整行 HTML）。 */
   feedNew: FeedNew | null;
+  feedError?: string;
+  retryFeed?(): void;
   /** 壳在 `#index` 里留给新作那一行的 `section.feednew[data-feed-new]`。 */
   feedHost: HTMLElement | null;
   /** 这一页是不是 JAV 语境（`entityJavLayout`）。 */

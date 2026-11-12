@@ -103,7 +103,7 @@ export const SETTING_CHAPTERS: GuideChapter[] = [
     ['seek', '快进 / 快退', '设置每次跳转的秒数，按自己的观看习惯调整。', '#seekSecondsSetting'],
   ]) },
   { id: 'jav-settings', kind: 'settings', title: PREFERENCE_SECTIONS.jav, summary: '封面与新作筛选。', steps: fields('jav', [
-    ['names', '女优名称', '选择中文或日文名称；偏好跟随馆藏，其他设备读取同一份设置。', '#performerNameLanguageSetting', shared],
+    ['names', '女优名称', '选择中文或日文名称。', '#performerNameLanguageSetting', shared],
     ['image', '默认图片', '选择官方封面或预览图作为卡片的默认图像。', '#javImageSetting'],
     ['limit', '新作显示数量', '控制新作区域一次展示的数量。', '#feedLimitSetting'],
     ['scroll', '自动滚动', '控制新作区域是否自动滚动。', '#feedAutoScrollSetting'],

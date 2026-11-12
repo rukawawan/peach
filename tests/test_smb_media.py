@@ -46,6 +46,18 @@ class _Resource:
 
 
 class SmbMediaTests(unittest.TestCase):
+    def test_system_smb_walk_roots_and_resumed_directories_are_not_listed(self):
+        root = smb_media.SmbResource('fixture', 'R:/Media', 'smb://files.invalid/media', (),
+                                     SmbConnection('files.invalid', 'media'))
+        with patch.object(smb_media.SmbResource, '_transport') as connect:
+            self.assertEqual(list(scan._walk(root / '.snapshots')), [])
+        connect.assert_not_called()
+        transport = SimpleNamespace(close=lambda: None)
+        with patch.object(smb_media.SmbResource, '_transport', return_value=transport), \
+                patch.object(smb_media.SmbResource, 'scandir') as listed:
+            self.assertEqual(list(scan._walk(root, [str(root / '.snapshots')])), [])
+        listed.assert_not_called()
+
     def tearDown(self):
         smb_media.close_bridge()
 

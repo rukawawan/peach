@@ -4,6 +4,7 @@
 [data-pill-nav]>[data-pill-thumb]{position:absolute;left:0;top:0;pointer-events:none;z-index:0;background:var(--hover);border-radius:var(--control-radius);transition:transform 300ms cubic-bezier(.34,1.2,.64,1),width 300ms cubic-bezier(.34,1.2,.64,1),height 300ms cubic-bezier(.34,1.2,.64,1)}
 [data-pill-nav]>:is(button,[role="tab"]){position:relative;z-index:1}
 [data-pill-nav]:has(>[data-pill-thumb])>[data-pill-selected],
+.peach-react [data-board-tab-list][data-pill-nav]:has(>[data-pill-thumb])>button[aria-selected="true"],
 body #stats [data-section-items][data-pill-nav]:has(>[data-pill-thumb])>[data-pill-selected],
 [data-manage-menu][data-pill-nav]:has(>[data-pill-thumb])>button[aria-pressed="true"]{background:transparent}
 .peach-react [data-search-tabs][data-pill-nav]>[data-pill-thumb]{background:var(--picked)}

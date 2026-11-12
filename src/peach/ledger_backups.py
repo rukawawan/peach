@@ -62,7 +62,7 @@ PURPOSE_LABELS = {
     MANUAL_PURPOSE: "手动备份", RESTORE_PURPOSE: "恢复前另存",
     "migrate": "迁移前", "schema": "迁移前", "upgrade": "自动修复前",
     "organize": "整理前", "download": "下载后整理前", "tag-management": "标签管理前",
-    "auto-landing-revert": "撤回自动写入前",
+    "auto-landing-revert": "撤回自动写入前", "sar": "显示尺寸补测前",
 }
 
 ORGANIZE_DIRNAME = "organize-backups"
@@ -162,13 +162,18 @@ def orphan_sidecars(directory: Path, pattern: re.Pattern[str] = BACKUP_PATTERN) 
     return sorted(found)
 
 
-def integrity(db: Path) -> str:
+def integrity(db: Path, *, foreign_keys: bool = False) -> str:
     try:
         connection = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     except sqlite3.Error as exc:
         return f"无法打开：{exc}"
     try:
-        return str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        result = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        if result == 'ok' and foreign_keys:
+            broken = connection.execute('PRAGMA foreign_key_check').fetchall()
+            if broken:
+                return f'外键检查发现 {len(broken)} 条失效引用'
+        return result
     except sqlite3.Error as exc:
         return f"检查失败：{exc}"
     finally:
@@ -441,6 +446,12 @@ def _carry_operational(live: Path, saved: Path) -> None:
             names = ", ".join(f'"{name}"' for name in shared)
             connection.execute("DELETE FROM main.task_run")
             connection.execute(f"INSERT INTO main.task_run ({names}) SELECT {names} FROM saved.task_run")
+            connection.execute(
+                "UPDATE main.download_task SET postprocess_run_id=NULL WHERE postprocess_run_id IS NOT NULL "
+                "AND NOT EXISTS(SELECT 1 FROM main.task_run t WHERE t.id=postprocess_run_id "
+                "AND t.task_key='download-postprocess' AND ("
+                "t.mutex_key='download-ingest:'||main.download_task.id OR "
+                "t.followup_key='download-postprocess:'||main.download_task.id))")
         if columns("main", "ledger_revision") and columns("saved", "ledger_revision"):
             connection.execute(
                 "UPDATE main.ledger_revision SET n = max(n, coalesce((SELECT s.n FROM saved.ledger_revision s "
@@ -478,7 +489,7 @@ def restore(live: Path, backup: Path, *, migrations_dir: Path, progress=None,
         if pending:
             report(stage="把备份迁到当前结构")
             migration_upgrade(staging, migrations_dir)
-        check = integrity(staging)
+        check = integrity(staging, foreign_keys=True)
         if check != "ok":
             raise BackupRejected(f"备份迁到当前结构后没有通过完整性检查：{check}")
         healthy = live.is_file() and integrity(live) == "ok"
@@ -512,7 +523,7 @@ def restore(live: Path, backup: Path, *, migrations_dir: Path, progress=None,
                     "state": "replacing", "backup": str(backup), "saved": str(saved) if saved else "",
                     "started_at": time.time()}, ensure_ascii=False))
                 _replace_file(staging, live)
-            check = integrity(live)
+            check = integrity(live, foreign_keys=True)
             if check != "ok":
                 raise BackupRejected(f"恢复后的账本没有通过完整性检查：{check}")
         except Exception as exc:

@@ -220,6 +220,8 @@ class HttpxTransport:
         timeout: float,
         max_bytes: int,
     ) -> HttpResponse:
+        from .processing_control import checkpoint as processing_checkpoint
+        processing_checkpoint('network')
         method = request.method
         url = httpx.URL(request.url)
         headers = dict(request.headers)
@@ -324,6 +326,8 @@ class CurlCffiTransport:
         timeout: float,
         max_bytes: int,
     ) -> HttpResponse:
+        from .processing_control import checkpoint as processing_checkpoint
+        processing_checkpoint('network')
         from .processing_traffic import unobserved
         unobserved('浏览器指纹传输流量未观测')
         chunks: list[bytes] = []

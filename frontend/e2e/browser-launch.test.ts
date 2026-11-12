@@ -1,26 +1,29 @@
-/* 真实浏览器启动契约：Windows 回环规避项与 Playwright 默认特性必须同时生效。 */
+/* 真实浏览器启动契约：隔离 E2E 沿用 Playwright 默认禁用特性，其中必须含 Windows 回环规避项。 */
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { chromium, type Browser } from 'playwright-core';
 import { launch, requiredEnv } from './harness.ts';
 
 async function disabledFeatures(browser: Browser): Promise<Set<string>> {
-  const page = await browser.newPage();
+  const session = await browser.newBrowserCDPSession();
   try {
-    await page.goto('chrome://version');
-    const command = await page.locator('#command_line').innerText();
-    const value = [...command.matchAll(/--disable-features=(\S+)/g)].at(-1);
+    const { arguments: args } = await session.send('Browser.getBrowserCommandLine');
+    const value = args.filter(arg => arg.startsWith('--disable-features=')).at(-1);
     assert.ok(value, 'Chrome 必须公开实际启动的禁用特性');
-    return new Set(value[1].replaceAll('"', '').split(','));
-  } finally { await page.close(); }
+    return new Set(value.slice('--disable-features='.length).replaceAll('"', '').split(','));
+  } finally { await session.detach(); }
 }
 
-it('回环网络规避只用于 Windows，且保留当前 Playwright 的全部默认特性', async () => {
+it('隔离 E2E 浏览器保留 Playwright 的全部默认禁用特性，其中包含回环网络规避', async t => {
+  // 只为本用例开启启动参数的只读协议观测，两个真实浏览器使用同一观测参数。
+  const launchChromium = chromium.launch.bind(chromium);
+  t.mock.method(chromium, 'launch', (options: Parameters<typeof chromium.launch>[0] = {}) =>
+    launchChromium({ ...options, args: [...(options.args ?? []), '--enable-automation'] }));
   const baseline = await chromium.launch({ headless: true, executablePath: requiredEnv('PEACH_E2E_CHROME') });
   let expected: Set<string>;
   try { expected = await disabledFeatures(baseline); }
   finally { await baseline.close(); }
-  if (process.platform === 'win32') expected.add('TcpPortRandomizationWin');
+  assert.ok(expected.has('TcpPortRandomizationWin'), 'Playwright 默认参数必须规避 Chromium 572515601');
   const browser = await launch();
   try { assert.deepEqual(await disabledFeatures(browser), expected); }
   finally { await browser.close(); }

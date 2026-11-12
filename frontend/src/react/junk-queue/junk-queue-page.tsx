@@ -24,6 +24,7 @@ import { spriteGlyph } from '../components/sprite-glyph';
 import { JunkCard } from './junk-card';
 import { JunkCount } from './junk-count';
 import { fetchJunkPage, junkQueryKey, type JunkPage, type JunkQueueProps, type JunkRoute } from './junk-queue';
+import { t } from '../../i18n';
 
 const CheckGlyph = spriteGlyph('check');
 
@@ -105,9 +106,9 @@ function JunkBody({ props, data, pending, error, retry }: {
     if (!items.length) {
       const dismissed = props.view === 'dismissed';
       return (
-        <EmptyState icon={CheckGlyph} title={dismissed ? '没有已排除的文件' : '没有待判断的垃圾文件'}
-          actions={dismissed ? <ButtonLink size="small" href="/junk-files">查看待判断</ButtonLink> : undefined}>
-          {dismissed ? '点“不是垃圾”的资源会保留在这里，可随时重新判断。' : '当前分类没有待检查文件。'}
+        <EmptyState icon={CheckGlyph} title={dismissed ? t('cleanup:junk.emptyExcluded') : t('cleanup:junk.emptyUndecided')}
+          actions={dismissed ? <ButtonLink size="small" href="/junk-files">{t('cleanup:junk.viewUndecided')}</ButtonLink> : undefined}>
+          {dismissed ? t('cleanup:junk.emptyExcludedBody') : t('cleanup:junk.emptyUndecidedBody')}
         </EmptyState>
       );
     }
@@ -123,7 +124,7 @@ function JunkBody({ props, data, pending, error, retry }: {
         {/* 队列一次只取前 200 条：露到底了还有没取的，说清楚是截断而不是全部。 */}
         {shown.length >= items.length && Number(data.total || 0) > items.length
           ? <p data-junk-truncated="" className="py-6 text-center text-caption-1-regular text-text-secondary">
-              {`显示前 ${items.length.toLocaleString()} 条，共 ${Number(data.total).toLocaleString()} 条；处理掉这些后，其余的会补上来。`}
+              {t('cleanup:junk.truncated', { shown: items.length.toLocaleString(), count: Number(data.total) })}
             </p>
           : null}
       </>

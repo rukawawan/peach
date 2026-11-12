@@ -71,6 +71,19 @@ class SweepTests(unittest.TestCase):
     def test_the_retention_is_half_a_year(self):
         self.assertEqual(log_retention.RETENTION, timedelta(days=183))
 
+    def test_idle_logs_of_finished_processes_go_and_the_rest_stay(self):
+        entry = b'{"stage": "entry", "pid": 1}\n'
+        touch(self.logs / "crash-11.log", NOW, b"")
+        touch(self.logs / "errors-11.log", NOW, entry)
+        touch(self.logs / "crash-12.log", NOW, b"Fatal Python error: Segmentation fault\n")
+        touch(self.logs / "errors-12.log", NOW, entry + b'{"stage": "logging", "message": "x"}\n')
+        touch(self.logs / "crash-13.log", NOW, b"")
+        touch(self.logs / "errors-13.log", NOW, entry)
+        actions = log_retention.sweep(self.logs, now=NOW, alive=lambda pid: pid == 13)
+        self.assertEqual(actions, ["removed 2 idle process logs"])
+        self.assertEqual(sorted(path.name for path in self.logs.iterdir()),
+                         ["crash-12.log", "crash-13.log", "errors-12.log", "errors-13.log"])
+
 
 if __name__ == "__main__":
     unittest.main()

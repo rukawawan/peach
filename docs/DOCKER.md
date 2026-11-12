@@ -136,9 +136,34 @@ VAAPI 尝试顺序为硬件解码加 `scale_vaapi` / `h264_vaapi`、软件解码
 
 `ffmpeg -hwaccels` 列出构建支持的硬件加速方式，`ffmpeg -h decoder=h264` 等列出对应解码器支持的硬件设备。VAAPI 解码通过普通解码器的硬件加速接口启用，`ffmpeg -decoders` 中没有名为 `vaapi` 的解码器不代表缺少 VAAPI 解码支持。参数含义见 [FFmpeg 官方文档](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options)。目标 GPU 的实际解码、GPU 占用与播放效果需要在部署机器上验证。
 
+## 健康检查与容器日志
+
+镜像的 `HEALTHCHECK` 每 30 秒请求一次 `/healthz?ready=1`，超时 5 秒，启动后 60 秒内的失败不计，连续 3 次失败判为不健康。`compose.yaml` 的 `healthcheck` 只写时间参数，检查命令仍用镜像里的；它的值覆盖镜像的设置，`.env` 不填时与镜像相同。容器标准输出的日志由 `logging` 指定，默认 `json-file`，单个文件 10 MB，保留 3 个。Peach 自己的运行日志写在 `/data/logs`，诊断报告读取那里，不受这两项影响。
+
+| 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `PEACH_HEALTHCHECK_INTERVAL` | `30s` | 两次健康检查的间隔 |
+| `PEACH_HEALTHCHECK_TIMEOUT` | `5s` | 单次检查的超时 |
+| `PEACH_HEALTHCHECK_START_PERIOD` | `60s` | 启动宽限期，期间的失败不计入重试 |
+| `PEACH_HEALTHCHECK_RETRIES` | `3` | 连续失败几次判为不健康 |
+| `PEACH_LOG_DRIVER` | `json-file` | 日志驱动，只能是 `json-file` 或 `local` |
+| `PEACH_LOG_MAX_SIZE` | `10m` | 单个日志文件的上限 |
+| `PEACH_LOG_MAX_FILE` | `3` | 保留的日志文件数 |
+
+dockerd 每做一次健康检查，都会重写容器的 `config.v2.json` 并 fsync；2026-11-08 在 btrfs 系统盘的 NAS 上观察到每次约写入 1 MB。单块 SSD、btrfs 系统盘或群晖等写入敏感的宿主机，可以在 `.env` 中拉长检查间隔，并把日志驱动改为压缩存储的 `local`：
+
+```dotenv
+PEACH_HEALTHCHECK_INTERVAL=60s
+PEACH_LOG_DRIVER=local
+PEACH_LOG_MAX_SIZE=5m
+PEACH_LOG_MAX_FILE=2
+```
+
+间隔越长，Peach 停止响应后被标为不健康就越晚。低于 25 版的 Docker Engine 在容器启动后等满一个间隔才做第一次检查，启用 Watchtower 时它随之晚一些启动。`local` 驱动的日志仍可用 `docker compose logs` 查看。群晖 Container Manager 默认的 `db` 驱动等其他驱动不接受上面的大小参数，需要在 `compose.override.yaml` 中改写 `logging`。修改后运行 `docker compose up -d` 重建容器才生效。不用 Compose 时，`docker run` 的 `--health-interval` 等参数与 `--log-driver`、`--log-opt` 是同样的设置。
+
 ## amane 刮削站点
 
-镜像随附按 `tools/amane-bridge/uv.lock` 构建的 amane `0.20.0` 独立环境，位于 `/app/amane-runtime`，通过 `PEACH_AMANE_RUNTIME` 定位。全新 `/data` 卷可直接调用刮削站点，无需在首次运行时安装依赖。桥通过独立子进程调用，站点请求仍使用所选连接方式。
+镜像随附按 `tools/amane-bridge/uv.lock` 构建的 amane `0.22.1` 独立环境，位于 `/app/amane-runtime`，通过 `PEACH_AMANE_RUNTIME` 定位。全新 `/data` 卷可直接调用刮削站点，无需在首次运行时安装依赖。桥通过独立子进程调用，站点请求仍使用所选连接方式。
 
 运行环境与镜像一起更新，`manifest.json` 记录固定 revision、版本和解释器相对路径。镜像构建阶段与最终运行阶段都会执行 `bridge.py --self-check`，离线载入运行时与全部 Peach 开放站点类。此检查不发站点请求；来源网络是否可达需在部署环境验证。环境损坏时重新拉取并创建对应镜像，保留 `/data` 卷。
 

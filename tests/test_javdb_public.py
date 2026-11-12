@@ -24,6 +24,56 @@ from support.ledger import fresh_ledger
 
 
 class PublicProtocolTests(unittest.TestCase):
+    @staticmethod
+    def editions():
+        common = {'number': 'EXM-001', 'duration': 120, 'series_id': 'Series',
+                  'actors': [{'id': 'Actor', 'gender': 0}]}
+        return [{**common, 'id': 'Special', 'origin_title': '【FANZA限定】サンプル作品 生写真3枚付き'},
+                {**common, 'id': 'Regular', 'origin_title': 'サンプル作品'}]
+
+    def test_fanza_photo_bonus_uses_the_regular_edition_after_detail_validation_in_both_orders(self):
+        for rows in (self.editions(), self.editions()[::-1]):
+            api = PublicAPI(sleeper=lambda _: None)
+            details = {row['id']: {'movie': row} for row in rows}
+            with patch.object(api, '_rows', return_value=rows), patch.object(
+                    api, '_json', side_effect=lambda path, details=details: details[path.rsplit('/', 1)[-1]]) as detail:
+                movie = api.movie('EXM-001')
+                self.assertEqual(movie['id'], 'Regular')
+                self.assertEqual(api.movie('EXM-001'), movie)
+            self.assertEqual(detail.call_count, 2)
+
+    def test_fanza_missing_or_conflicting_work_evidence_keeps_the_identity_ambiguous(self):
+        conflicts = ({'origin_title': '別の作品'}, {'duration': 121}, {'duration': None},
+                     {'actors': []}, {'actors': [{'id': 'Other', 'gender': 0}]},
+                     {'series_id': 'Other'}, {'origin_title': '【FANZA限定】サンプル作品 未知の特典'})
+        for conflict in conflicts:
+            with self.subTest(conflict=conflict):
+                rows = self.editions()
+                details = [dict(rows[0]), {**rows[1], **conflict}]
+                api = PublicAPI(sleeper=lambda _: None)
+                with patch.object(api, '_rows', return_value=rows), patch.object(
+                        api, '_json', side_effect=lambda path, details=details: {'movie': next(
+                            movie for movie in details if movie['id'] == path.rsplit('/', 1)[-1])}):
+                    with self.assertRaisesRegex(PublicSourceUnavailable, '多个作品'):
+                        api.movie('EXM-001')
+
+    def test_cached_ambiguous_ids_can_be_resolved_without_invalidating_other_movies(self):
+        from peach.javdb_identity import cache_key
+        from peach.jav_cache import PublicSnapshots
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            snapshots = PublicSnapshots(root)
+            snapshots.save(cache_key('movie-id:EXM-001'), ['Special', 'Regular'], None)
+            other = snapshots.save(cache_key('movie-id:EXM-002'), ['Other'], None)
+            rows = self.editions()
+            api = PublicAPI(cache_root=root, sleeper=lambda _: None)
+            with patch.object(api, '_rows', return_value=rows), patch.object(
+                    api, '_json', side_effect=lambda path: {'movie': next(
+                        movie for movie in rows if movie['id'] == path.rsplit('/', 1)[-1])}):
+                self.assertEqual(api.movie('EXM-001')['id'], 'Regular')
+            self.assertEqual(snapshots.load(cache_key('movie-id:EXM-001')).value, ['Regular'])
+            self.assertEqual(snapshots.load(cache_key('movie-id:EXM-002')), other)
+
     def test_same_number_source_ids_are_ambiguous_in_both_orders(self):
         rows = [{'id': 'XeYkdb', 'number': 'MIKR-023', 'maker_name': 'MOODYZ', 'release_date': '2025-06-17',
                  'duration': 120, 'actors': [{'id': 'ActorA', 'name': '甲'}]},

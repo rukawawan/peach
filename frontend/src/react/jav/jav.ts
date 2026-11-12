@@ -81,7 +81,7 @@ export function coverArrived(code: string, result: CoverNow): void {
   for (const key of ['jav-releases', 'jav-discoveries']) queryClient.setQueriesData({ queryKey: [key] }, patch);
 }
 export interface DiscoveryMetadataJob {
-  job_id: string; status: 'running' | 'complete' | 'stopped' | 'failed'; completed: number; total: number;
+  job_id: string; status: 'running' | 'complete' | 'stopped' | 'failed' | 'cancelling' | 'cancelled'; completed: number; total: number;
   failed: number; requests: number; bytes: number; stop_reason?: string; message?: string;
 }
 export interface DiscoveryResult {
@@ -90,47 +90,72 @@ export interface DiscoveryResult {
 }
 export const discoveryKey = (scope: DiscoveryScope, sort: DiscoverySort = 'taste', direction: DiscoveryDirection = 'desc') =>
   ['jav-discoveries', scope, sort, direction] as const;
+/** 推荐列表只读：资料读取由 `controlDiscoveryMetadata` 起停，进度由 `fetchDiscoveryMetadata` 单独轮询。 */
 export function fetchDiscoveries(scope: DiscoveryScope, signal: AbortSignal, options: {
-  sort?: DiscoverySort; direction?: DiscoveryDirection; jobId?: string; refreshMetadata?: boolean; cancelMetadata?: boolean;
+  sort?: DiscoverySort; direction?: DiscoveryDirection;
 } = {}) {
   const params = new URLSearchParams({ scope, limit: '100', sort: options.sort || 'taste', direction: options.direction || 'desc' });
-  if (options.jobId) params.set('metadata_job_id', options.jobId);
-  if (options.refreshMetadata) params.set('metadata_refresh', '1');
-  if (options.cancelMetadata) params.set('metadata_cancel', '1');
   return apiGet<DiscoveryResult>(`/api/jav/discoveries?${params}`, signal);
+}
+
+export const DISCOVERY_METADATA_KEY = ['jav-discovery-metadata'] as const;
+/** 资料读取进行中，推荐与新作列表隔这么久重取一次，把读到的标签与评分带上来；进度条另按任务轮询走。 */
+export const DISCOVERY_REFRESH_MS = 15000;
+export type DiscoveryMetadataStatus = Pick<DiscoveryResult, 'metadata_job' | 'poll_after_ms'>;
+/** 资料读取进度：只读任务快照，不重算推荐。 */
+export const fetchDiscoveryMetadata = (signal: AbortSignal) =>
+  apiGet<DiscoveryMetadataStatus>('/api/jav/discoveries/metadata', signal);
+/** `start` 只读过期或从没读过的，`refresh` 整批重读，`cancel` 停下当前这一轮。读的是当前排序下那一页。 */
+export function controlDiscoveryMetadata(action: 'start' | 'refresh' | 'cancel', options: {
+  sort?: DiscoverySort; direction?: DiscoveryDirection; jobId?: string;
+}, signal?: AbortSignal) {
+  return apiSend<DiscoveryMetadataStatus>('/api/jav/discoveries/metadata', {
+    action, limit: 100, sort: options.sort || 'taste', direction: options.direction || 'desc', job_id: options.jobId || '',
+  }, 'POST', signal);
 }
 
 /** 新作分区的筛选与排序：都写在地址栏里，刷新与返回原样恢复。`seed` 只在换一批时有值。 */
 export interface ReleaseFilters {
-  page: number; performer: string; studio: string; tag: string; q: string;
+  page: number; size: number; performer: string; studio: string; tag: string; q: string;
   sort: ReleaseSort; dir: DiscoveryDirection; seed: string;
 }
 export interface ReleaseFacetPerformer extends FaceRef { name: string; count: number; source_actor_id?: string; source_avatar?: boolean }
 export interface ReleaseFacetStudio { name: string; count: number; has_logo: boolean; logo_version?: string }
-/** `/api/jav/releases`：一页新作，加只取自订阅新作的筛选项。 */
+/** `/api/jav/releases`：一页新作，加只取自订阅新作的筛选项。只读：`metadata_unread` 是筛选结果里
+ *  从没读过来源资料的部数，读取由 `controlReleaseMetadata` 起停。 */
 export interface ReleaseResult {
   items: Discovery[]; total: number; candidate_total: number; page: number; size: number;
   facets: { performers: ReleaseFacetPerformer[]; studios: ReleaseFacetStudio[]; tags: { name: string; count: number }[] };
-  metadata_job?: DiscoveryMetadataJob | null; poll_after_ms?: number;
+  metadata_unread?: number; metadata_job?: DiscoveryMetadataJob | null; poll_after_ms?: number;
 }
 export const RELEASE_PAGE_SIZE = 24;
+export const RELEASE_PAGE_SIZES = [10, 20, 24, 50, 100] as const;
 export function releaseFilters(search: string): ReleaseFilters {
   const params = new URLSearchParams(search);
   const sort = params.get('sort');
   const seed = params.get('seed') || '';
-  return { page: Math.max(1, Math.floor(Number(params.get('page'))) || 1), performer: params.get('performer') || '',
+  const page = Number(params.get('page'));
+  const size = RELEASE_PAGE_SIZES.find(value => value === Number(params.get('size'))) || RELEASE_PAGE_SIZE;
+  return { page: Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1, size, performer: params.get('performer') || '',
     studio: params.get('studio') || '', tag: params.get('tag') || '', q: (params.get('q') || '').trim(),
     sort: sort === 'random' && seed ? 'random' : RELEASE_SORTS.find(([key]) => key === sort)?.[0] || 'release_date',
     dir: params.get('dir') === 'asc' ? 'asc' : 'desc', seed };
 }
 export const releaseKey = (filters: ReleaseFilters) =>
-  ['jav-releases', filters.page, filters.performer, filters.studio, filters.tag, filters.q, filters.sort, filters.dir, filters.seed] as const;
-export function fetchReleases(filters: ReleaseFilters, signal: AbortSignal, jobId = '') {
-  const params = new URLSearchParams({ page: String(filters.page), size: String(RELEASE_PAGE_SIZE),
+  ['jav-releases', filters.page, filters.size, filters.performer, filters.studio, filters.tag, filters.q, filters.sort, filters.dir, filters.seed] as const;
+const RELEASE_FILTER_KEYS = ['performer', 'studio', 'tag', 'q', 'seed'] as const;
+export function fetchReleases(filters: ReleaseFilters, signal: AbortSignal) {
+  const params = new URLSearchParams({ page: String(filters.page), size: String(filters.size),
     sort: filters.sort, direction: filters.dir });
-  for (const key of ['performer', 'studio', 'tag', 'q', 'seed'] as const) if (filters[key]) params.set(key, filters[key]);
-  if (jobId) params.set('metadata_job_id', jobId);
+  for (const key of RELEASE_FILTER_KEYS) if (filters[key]) params.set(key, filters[key]);
   return apiGet<ReleaseResult>(`/api/jav/releases?${params}`, signal);
+}
+/** 新作页的资料读取：`start` 读当前筛选结果里从没读过的那几部，`cancel` 停下当前这一轮。
+ *  与「发现」共用一个任务，进度同样由 `fetchDiscoveryMetadata` 轮询。 */
+export function controlReleaseMetadata(action: 'start' | 'cancel', filters: ReleaseFilters, jobId = '', signal?: AbortSignal) {
+  const body: Record<string, string> = { action, sort: filters.sort, direction: filters.dir, job_id: jobId };
+  for (const key of RELEASE_FILTER_KEYS) if (filters[key]) body[key] = filters[key];
+  return apiSend<DiscoveryMetadataStatus>('/api/jav/releases/metadata', body, 'POST', signal);
 }
 
 export function discoveryArtwork(item: Discovery, layout: 'big' | 'small', javImage: unknown): string {

@@ -131,7 +131,7 @@ export function TunnelSettings({ revision: initialRevision, initial, receipt }: 
         {state.error ? <ErrorText>{state.error}</ErrorText> : null}
         {action.error ? <ErrorText>{action.error}</ErrorText> : null}
       </Stack>
-      <Footer status={state.enabled ? 'Peach 重启后自动恢复。' : undefined}>
+      <Footer>
         <Button variant={state.named_available ? 'secondary' : 'primary'} onClick={toggle} {...busyProps(action.busy === 'toggle')}>
           {active ? '停止公网入口' : '启动公网入口'}
         </Button>

@@ -11,7 +11,7 @@ import { api } from '@peach/legacy/core';
 import { queryClient } from '../query';
 
 /** `/api/feeds/discoveries` 的回话：条目与最近一轮取封面断在连接上的部数。 */
-export interface FeedDiscoveries { items?: FeedNewItem[]; cover_network?: number }
+export interface FeedDiscoveries { items?: FeedNewItem[]; cover_network?: number; error?: string }
 
 /** 一行里的一部：判有没有、哪几部的封面还在排队（这一行的一键插队只管这几部）。 */
 export interface FeedNewItem { id: number; code?: string; has_cover?: boolean; cover_url?: string | null; cover_state?: CoverState | null }
@@ -29,42 +29,23 @@ export type FeedRowHtml = (data: FeedDiscoveries | null, allHref?: string) => st
 /** 资料页那一行用实体 id，首页那一行不分人。 */
 export const feedNewKey = (entityId: number | null) => ['feed-new', entityId ?? 'home'] as const;
 
-const FEED_SKELETON_CARDS = 8;
-const FEED_COVER_WAIT = 1500;
-
-/** 把一段 HTML 里头 `count` 张图先取进缓存，最多等 `ms` 毫秒。插进页面时它们已经 `complete`，
- *  遗留层的等待微光不再给它们挂上。 */
-export function preloadImages(html: string, count: number, ms: number): Promise<unknown> {
-  const probe = document.createElement('template');
-  probe.innerHTML = html;
-  const loads = [...probe.content.querySelectorAll('img[src]')].slice(0, count).map((source) => {
-    const img = new Image();
-    img.referrerPolicy = source.getAttribute('referrerpolicy') || '';
-    img.src = source.getAttribute('src') || '';
-    return img.decode().catch(() => {});
-  });
-  return Promise.race([Promise.all(loads), new Promise((resolve) => { setTimeout(resolve, ms) })]);
-}
-
 /** 拉取由定时器做，页面只读已经发现的那些：进这一页顺手发一轮请求，等于把每次刷新都变成对别人
- *  服务器的一次拉取。骨架还占着时（首屏）先把头几张封面取到手再整行换掉：否则骨架退场、真卡进来，
- *  封面格里又是一轮微光，同一行等了两遍。慢的那几张不等满，到点照换。
+ *  服务器的一次拉取。条目返回后立即显示文字与操作，封面在各自的图片格里继续等待。
  *  一行取几部按设置弹窗「新作显示数量」（`feedLimit`），改了由壳作废两行的查询重取。 */
-export async function fetchFeedNew(entityId: number | null, rowHtml: FeedRowHtml, preload: boolean): Promise<FeedNew> {
+export async function fetchFeedNew(entityId: number | null, rowHtml: FeedRowHtml): Promise<FeedNew> {
   const query = new URLSearchParams({ limit: String(appSettingsStore().value.feedLimit) });
   if (entityId) query.set('entity', String(entityId));
-  const data = await (api(`/api/feeds/discoveries?${query}`).catch(() => null) as Promise<FeedDiscoveries | null>);
-  const ok = data && !(data as { error?: string }).error ? data : null;
-  const items = ok?.items || [];
+  const data = await api(`/api/feeds/discoveries?${query}`) as FeedDiscoveries;
+  if (data.error) throw new Error(data.error);
+  const items = data.items || [];
   // 首页那一行在行尾带「查看全部新作」，资料页那一行只列这个人的，不带。
-  const html = rowHtml(ok, entityId ? '' : '/jav?tab=releases');
-  if (preload && items.length) await preloadImages(html, FEED_SKELETON_CARDS, FEED_COVER_WAIT);
+  const html = rowHtml(data, entityId ? '' : '/jav?tab=releases');
   return { items, html, fetching: items.some(item => item.cover_state === 'fetching') };
 }
 
-export const feedNewOptions = (entityId: number | null, rowHtml: FeedRowHtml, preload = false) => ({
+export const feedNewOptions = (entityId: number | null, rowHtml: FeedRowHtml) => ({
   queryKey: feedNewKey(entityId),
-  queryFn: () => fetchFeedNew(entityId, rowHtml, preload),
+  queryFn: () => fetchFeedNew(entityId, rowHtml),
   staleTime: Infinity,
   refetchInterval: (query: { state: { data?: FeedNew } }) => query.state.data?.fetching ? 2000 : false,
 });
@@ -92,10 +73,8 @@ export interface FeedNewProps {
   };
 }
 
-/** 每次进目录页都是新的一趟（与资料页同一口径）：先清掉上一次的缓存，骨架还占着就连头几张
- *  封面一起等。 */
+/** 每次进入目录页读取最新条目；图片不阻挡条目返回。 */
 export async function prefetchFeedNew(props: FeedNewProps): Promise<void> {
   queryClient.removeQueries({ queryKey: feedNewKey(null) });
-  await queryClient.fetchQuery(feedNewOptions(null, props.helpers.feedRowHtml,
-    props.host.getAttribute('aria-busy') === 'true'));
+  await queryClient.prefetchQuery(feedNewOptions(null, props.helpers.feedRowHtml));
 }

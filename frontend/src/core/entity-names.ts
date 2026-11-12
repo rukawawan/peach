@@ -58,8 +58,3 @@ export function entityDisplayName(kind: string, name: string, id?: number | null
   for (const char of name) written.push(char === '々' ? written.at(-1) || char : glyphs[char] || char);
   return written.join('');
 }
-export function nameFallback(kind: string, name: string, id?: number | null): string {
-  const row = entityWriting(kind, name, id);
-  if (!row || (language === 'ja' ? row.ja : row.zh_cn)) return '';
-  return language === 'ja' ? '暂无已核对的日文原文，保留当前名称' : '暂无已核对的中文写法，保留当前名称';
-}

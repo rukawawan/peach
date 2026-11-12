@@ -2,6 +2,8 @@
  * 名称格、艺人格与媒体库格标记（`catalog-list.css`）。分页与排序在分区里：表头点得开的四列对应新作接口的排序键。 */
 import { useState, type MouseEvent } from 'react';
 import { Button } from '@/components/base/buttons/button';
+import { Checkbox } from '@/components/base/checkbox/checkbox';
+import { useJavSelection } from './jav-selection';
 import { Table, TableBody, TableCell, TableColumn, TableHeader, TableRow } from '@/components/base/table/table';
 import { ChevronSortDown } from '@/components/foundations/icons/chevrons';
 import { entityPath, fmtDur, leadingGraphemes } from '@peach/legacy/core';
@@ -36,11 +38,16 @@ export function ReleaseTable({ items, waiting, filters, studios, javImage, readO
   navigate(path: string): void; onTag(tag: string): void; onSort(key: ReleaseSort, dir: DiscoveryDirection): void;
   wanting(item: Discovery): boolean; onWant(item: Discovery): void; onResource(item: Discovery): void;
 }) {
+  const selection = useJavSelection();
   const preferences = useTablePreferences('jav-releases', releaseColumns, KEYS);
   const shown = releaseColumns.filter(column => column.required || preferences.visibility[column.id] !== false);
   const active = Object.entries(RELEASE_SORT_COLUMNS).find(([, key]) => key === filters.sort)?.[0];
   const logos = new Map(studios.map(studio => [studio.name, studio]));
-  const open = (item: Discovery) => (event: MouseEvent) => { event.preventDefault(); navigate(`/works/${encodeURIComponent(item.code)}`) };
+  const open = (item: Discovery) => (event: MouseEvent) => {
+    event.preventDefault();
+    if (selection?.mode || event.shiftKey || event.ctrlKey || event.metaKey) selection?.toggle(item, event.shiftKey);
+    else navigate(`/works/${encodeURIComponent(item.code)}`);
+  };
   const cell = (id: string, item: Discovery) => {
     const name = item.performer_refs?.[0]?.name || item.performers.split(/[,，、;/]/)[0] || '';
     switch (id) {
@@ -93,7 +100,10 @@ export function ReleaseTable({ items, waiting, filters, studios, javImage, readO
       <Table aria-label="新作列表" size="sm"
         sortDescriptor={active ? { column: active, direction: filters.dir === 'asc' ? 'ascending' : 'descending' } : undefined}
         onSortChange={next => { const key = RELEASE_SORT_COLUMNS[String(next.column)]; if (key) onSort(key, next.direction === 'ascending' ? 'asc' : 'desc') }}>
-        <TableHeader>{shown.map(column => <TableColumn key={column.id} id={column.id} isRowHeader={column.id === 'name'}
+        <TableHeader>{selection?.mode ? <TableColumn id="selection" width={44} aria-label="选择作品">
+          <Checkbox slot={null} aria-label="全选本页作品" isSelected={selection.all} isIndeterminate={selection.mixed}
+            isDisabled={waiting || !items.length} onChange={selection.selectPage} />
+        </TableColumn> : null}{shown.map(column => <TableColumn key={column.id} id={column.id} isRowHeader={column.id === 'name'}
           allowsSorting={column.id in RELEASE_SORT_COLUMNS} {...preferences.columnProps(column.id)}>
           {({ sortDirection }) => <>
             <span className="flex items-center gap-0.5">{column.label}
@@ -106,9 +116,12 @@ export function ReleaseTable({ items, waiting, filters, studios, javImage, readO
         <TableBody renderEmptyState={() => '没有符合条件的新作'}>
           {/* 等数据时在真实表格里画骨架行，格子与路由骨架同一份。 */}
           {waiting ? Array.from({ length: 6 }, (_, index) => <TableRow key={`skeleton-${index}`} id={`skeleton-${index}`} data-list-skeleton-row="" aria-hidden="true">
+            {selection?.mode ? <TableCell /> : null}
             {shown.map(column => <TableCell key={column.id}><span dangerouslySetInnerHTML={{ __html: catalogListSkeletonCellHtml(column.id) }} /></TableCell>)}
             <TableCell data-table-space="" />
           </TableRow>) : items.map(item => <TableRow key={item.id} id={String(item.id)} data-catalog-row="" data-release-row="">
+            {selection?.mode ? <TableCell><Checkbox slot={null} aria-label={`选择 ${item.code}`}
+              isSelected={selection.selected.has(item.code)} onChange={() => selection.toggle(item)} /></TableCell> : null}
             {shown.map(column => <TableCell key={column.id}>{cell(column.id, item)}</TableCell>)}
             <TableCell data-table-space="" />
           </TableRow>)}

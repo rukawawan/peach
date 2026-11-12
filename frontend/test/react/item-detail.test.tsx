@@ -84,6 +84,19 @@ async function show(shown: DetailItem, patch: Partial<ItemDetailProps> = {}) {
   return { host, props: given, actions: given.actions as ActionMocks };
 }
 
+describe('补全中', () => {
+  it('刚入库还在补资料时标出在跑的那一项，重取到补完就收起', async () => {
+    const fetcher = serve(() => ({ ok: true }), { '/api/item?id=1': item(1) });
+    const busy = [{ task_key: 'download-postprocess', label: '云下载后处理', status: 'running' }];
+    const { host } = await show(item(1, { pending_work: busy }));
+    expect(host.querySelector('[data-pending-work]')?.textContent).toBe('正在补全：云下载后处理');
+    await act(async () => { await queryClient.refetchQueries({ queryKey: itemKey(1) }) });
+    await settle();
+    expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('/api/item?id=1'))).toBe(true);
+    expect(host.querySelector('[data-pending-work]')).toBeNull();
+  });
+});
+
 describe('标签身份', () => {
   it('详情显示完整制服名与角色名', async () => {
     serve();

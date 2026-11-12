@@ -83,7 +83,10 @@ def q_downloads(contract, args) -> dict:
         raise ValueError("下载任务分页位置无效") from None
     if before_id is not None and before_id < 1:
         raise ValueError("下载任务分页位置无效")
-    snapshot = _service(contract).snapshot(limit, before_id=before_id)
+    page = int(args.get('page') or 1)
+    if page < 1 or (before_id is not None and page != 1):
+        raise ValueError('下载任务页码无效')
+    snapshot = _service(contract).snapshot(limit, before_id=before_id, page=page)
     _attach_library_artwork(contract, snapshot["tasks"])
     return snapshot
 

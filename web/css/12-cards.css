@@ -224,15 +224,15 @@ body .card:focus-within{background:var(--hover);box-shadow:0 0 0 8px var(--hover
    焦点环不被这一层裁掉。子元素把指针接回来；资料页新作那一行
    的卡整块放行指针（见 `.feednewcard`），不接回来。 */
 body[data-density="dense"] .grid>.card{padding-top:7px}
-body[data-density="dense"] .card .meta{--card-meta-block:calc(2.7em + 36px)}
-body[data-density="dense"] .card .mtext{display:grid;grid-template-rows:1.35em 1.35em 30px;
+body[data-density="dense"] .card:not(.feednewcard) .meta{--card-meta-block:calc(2.7em + 36px)}
+body[data-density="dense"] .card:not(.feednewcard) .mtext{display:grid;grid-template-rows:1.35em 1.35em 30px;
   gap:3px;margin:-4px;padding:4px;height:calc(var(--card-meta-block) + 8px);overflow:hidden;pointer-events:none}
 body[data-density="dense"] .card:not(.feednewcard) .mtext>*{pointer-events:auto}
-body[data-density="dense"] .card .meta .t{display:block;max-width:100%;min-height:1.35em;overflow:hidden;
+body[data-density="dense"] .card:not(.feednewcard) .meta .t{display:block;max-width:100%;min-height:1.35em;overflow:hidden;
   -webkit-line-clamp:unset;white-space:nowrap;text-overflow:ellipsis}
-body[data-density="dense"] .card .meta .s{height:1.35em;min-height:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
-body[data-density="dense"] .card .meta .who{flex:0 1 auto}
-body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
+body[data-density="dense"] .card:not(.feednewcard) .meta .s{height:1.35em;min-height:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+body[data-density="dense"] .card:not(.feednewcard) .meta .who{flex:0 1 auto}
+body[data-density="dense"] .card:not(.feednewcard) .meta .size{flex:none;white-space:nowrap}
 
 .srow{display:flex;gap:13px;overflow-x:auto;padding-bottom:7px}
 
@@ -258,6 +258,13 @@ body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
 /* 这一行的一键插队（提示条或进度条）同理；没有排队的就整块不占位。 */
 [data-feed-cover-queue]:not(:empty){margin-bottom:20px}
 .feednewcard{flex:none;width:168px}
+/* 横排新作固定为窄卡，头像占位与 React 窄卡使用同一紧叠尺寸。 */
+.feednewcard .mavstack{--media-avatar-gaps:max(1,calc(var(--media-avatar-count) - 1));
+  position:relative;display:block;width:calc(var(--media-avatar-tight) + 7px + var(--media-avatar-tight-step) * (var(--media-avatar-count) - 1));
+  max-width:min(var(--media-avatar-tight-max),max(45px,24%));height:38px;margin:-4px -2px -2px;padding:0}
+.feednewcard .mavstack .mav{position:absolute;top:6px;width:var(--media-avatar-tight);height:var(--media-avatar-tight);margin:0;
+  left:calc(5px + (100% - var(--media-avatar-tight) - 7px) / var(--media-avatar-gaps) * var(--media-avatar-index))}
+.feednewcard .mavstack .mav+.mav{margin-left:0}
 /* 首页那一行行尾的「查看全部新作」：和卡同宽、只占封面那一格的高，底色与圆角同旁边新作卡的封面格，
    一排看下来是同一种格子；字和箭头排成一行，与分页「下一页」那颗键同一个写法。悬停换到同一组令牌的
    悬停档。 */
@@ -295,12 +302,17 @@ body[data-density="dense"] .card .meta .size{flex:none;white-space:nowrap}
 .feednewcard:hover .feednewtools button,.feednewcard:focus-within .feednewtools button{pointer-events:auto}
 .feednewtools button{width:32px;height:32px}
 .feednewtools button svg{width:17px;height:17px}
+@media(hover:none),(pointer:coarse){
+  .feednewcard .feednewtools{opacity:1}
+  .feednewcard .feednewtools button{pointer-events:auto}
+}
 /* 「想要」按下时星形填实：同一颗键既是开关也是读数。 */
 .feednewtools button[aria-pressed="true"] svg{fill:currentColor}
 .feednewcard .meta .t{font-size:var(--fs-sm)}
 /* 番号整段不折行；比卡还宽的长串在卡边收成省略号，不被标题块的溢出裁成半个字。 */
 /* 出演名单与完整日期分行，窄卡中的姓名仍有自己的宽度。 */
-.feednewcard .meta .s{display:grid;gap:0;white-space:nowrap;min-height:2lh}
+.feednewcard .meta .s{display:grid;grid-auto-rows:minmax(1.35em,auto);gap:2px;
+  line-height:1.35;white-space:nowrap;min-height:calc(2lh + 2px)}
 .feednewcard .meta .s>span{min-width:0}
 .feednewcard .meta .s>.feednewperformers{overflow:hidden;text-overflow:ellipsis}
 /* 占位卡直接套真卡的 `.t` 与 `.s`：标题块是两行 2.7em，下面那行放一个零宽字符，行高

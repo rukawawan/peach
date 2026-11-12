@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import DEFAULT, Mock, patch
-from contextlib import closing
+from contextlib import closing, contextmanager
 
 from filelock import FileLock
 from PIL import Image
@@ -90,6 +90,127 @@ def _archive_pages(url):
 
 
 class LibraryNfoTests(unittest.TestCase):
+    def _fc2_metadata_session(self, name, *, known=False, mirror=True, catalog='r18dev'):
+        from peach.entities import normalize_entity_name
+        from peach.library_processing import _MissCache, _RemoteSession
+        db = LedgerDatabase(fresh_ledger(self.root))
+        with db.write_transaction() as connection:
+            connection.execute("INSERT INTO asset(id,location,path,name,code,medium) VALUES(1,?,?,?,?,'video')",
+                               ('local', 'B:\\a.mp4', 'FC2-PPV-1234567.mp4', 'FC2-PPV-1234567'))
+        if known:
+            with db.write_transaction() as connection:
+                identity = connection.execute(
+                    "INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at) "
+                    "VALUES('performer',?,?,?,?)", ('春野あや', normalize_entity_name('春野あや'), '2024', '2024')).lastrowid
+                connection.execute('INSERT INTO entity_alias(entity_id,alias,normalized_alias,source,confidence) VALUES(?,?,?,?,1)',
+                                   (identity, name, normalize_entity_name(name), 'user:manual'))
+                connection.execute('INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id,last_synced_at) VALUES(?,?,?,?,?)',
+                                   (identity, catalog, 'performer', '101', '2024'))
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True)
+        provider = stub_provider()
+        payload = dict(id='FC2-PPV-1234567', title='作品标题', maker='', release_date='2024-01-01',
+                       actresses=[{'japanese_name': name}] if name else [], genres=['素人'],
+                       javdb_rule=2, source_id='Example')
+        provider.community.side_effect = None
+        provider.community.return_value = [('javdb', payload)]
+        provider.fc2.return_value = ([('fc2cmadb', dict(payload, actresses=[{'japanese_name': '春野あや'}]))]
+                                     if mirror else [])
+        session = _RemoteSession(config, lambda: provider, _MissCache(self.root / 'misses.json'),
+                                 retrying=True, database=db)
+        return session, provider, payload, db
+
+    def test_fc2_uses_complete_javdb_metadata_for_a_confirmed_performer(self):
+        session, provider, _payload, _db = self._fc2_metadata_session('春野あや', known=True)
+        found = session._metadata({'id': 1, 'name': 'FC2-PPV-1234567.mp4', 'path': 'B:\\a.mp4'},
+                                  'FC2-PPV-1234567', ['title','studio','performers','release_date'],
+                                  update=lambda **_: None, issue=Mock())
+        self.assertEqual([source for source, _, _ in found], ['javdb'])
+        provider.fc2.assert_not_called()
+
+    def test_fc2_resolves_a_confirmed_alias_before_deciding_to_stop(self):
+        session, provider, _payload, _db = self._fc2_metadata_session('あやちゃん', known=True)
+        session._metadata({'id': 1, 'name': 'FC2-PPV-1234567.mp4', 'path': 'B:\\a.mp4'},
+                          'FC2-PPV-1234567', ['performers'], update=lambda **_: None, issue=Mock())
+        provider.fc2.assert_not_called()
+
+    def test_fc2_missing_or_unconfirmed_javdb_names_continue_to_specialists(self):
+        for name in ('', 'Chisa', 'みおちゃん'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
+                previous = self.root
+                self.root = Path(folder).resolve()
+                try:
+                    session, provider, _payload, _db = self._fc2_metadata_session(name)
+                    found = session._metadata({'id': 1, 'name': 'FC2-PPV-1234567.mp4', 'path': 'B:\\a.mp4'},
+                                              'FC2-PPV-1234567', ['performers'],
+                                              update=lambda **_: None, issue=Mock())
+                    self.assertEqual([source for source, _, _ in found], ['javdb', 'fc2cmadb'])
+                    provider.fc2.assert_called_once()
+                finally:
+                    self.root = previous
+
+    def test_an_unconfirmed_fc2_javdb_name_stays_a_review_candidate(self):
+        session, _provider, payload, database = self._fc2_metadata_session('Chisa', mirror=False)
+        groups = {}
+        row = dict(id=1, name='FC2-PPV-1234567.mp4', path='B:\\a.mp4', size=8)
+        library_processing._merge_candidates(groups, row, 'FC2-PPV-1234567', 'javdb', payload,
+                                             self.root / 'source.json', {}, database=database)
+        candidate = json.loads(groups['asset:1:performers']['candidates_json'])[0]
+        self.assertTrue(candidate['requires_review'])
+        from peach.metadata_auto_apply import metadata_auto_apply_candidate
+        group = {**groups['asset:1:performers'], 'candidates': [candidate]}
+        with database.read_connection() as connection:
+            self.assertIsNone(metadata_auto_apply_candidate(connection, group))
+        specialist = dict(payload, actresses=[{'japanese_name': '春野あや'}])
+        library_processing._merge_candidates(groups, row, 'FC2-PPV-1234567', 'fc2cmadb', specialist,
+                                             self.root / 'specialist.json', {}, database=database)
+        group = {**groups['asset:1:performers'],
+                 'candidates': json.loads(groups['asset:1:performers']['candidates_json'])}
+        with database.read_connection() as connection:
+            chosen = metadata_auto_apply_candidate(connection, group)
+        self.assertEqual(chosen['source'], 'fc2cmadb')
+
+    def test_a_javdb_actor_id_alone_does_not_confirm_an_fc2_name(self):
+        session, provider, _payload, _database = self._fc2_metadata_session('Chisa', known=True, catalog='javdb')
+        session._metadata({'id': 1, 'name': 'FC2-PPV-1234567.mp4', 'path': 'B:\\a.mp4'},
+                          'FC2-PPV-1234567', ['performers'], update=lambda **_: None, issue=Mock())
+        provider.fc2.assert_called_once()
+
+    def test_a_confirmed_fc2_alias_keeps_the_existing_automatic_candidate(self):
+        _session, _provider, payload, database = self._fc2_metadata_session('あやちゃん', known=True)
+        groups = {}
+        row = dict(id=1, name='FC2-PPV-1234567.mp4', path='B:\\a.mp4', size=8)
+        library_processing._merge_candidates(groups, row, 'FC2-PPV-1234567', 'javdb', payload,
+                                             self.root / 'source.json', {}, database=database)
+        candidate = json.loads(groups['asset:1:performers']['candidates_json'])[0]
+        self.assertFalse(candidate.get('requires_review', False))
+        from peach.metadata_auto_apply import metadata_auto_apply_candidate
+        with database.read_connection() as connection:
+            chosen = metadata_auto_apply_candidate(connection, {
+                **groups['asset:1:performers'], 'candidates': [candidate]})
+        self.assertEqual(chosen['source'], 'javdb')
+
+    def test_old_completed_receipts_retry_only_fc2_rows_without_cast(self):
+        from peach.entities import normalize_entity_name
+        from peach.library_processing import _LibraryCheckpoints
+        database = LedgerDatabase(fresh_ledger(self.root))
+        rows = [{'id': value, 'path': f'R:\\{value}.mp4'} for value in (1, 2, 3)]
+        with database.write_transaction() as connection:
+            for row, code in zip(rows, ('FC2-PPV-1234567','ABW-123','FC2-PPV-1234568')):
+                connection.execute('INSERT INTO asset(id,location,path,name,code) VALUES(?,?,?,?,?)',
+                                   (row['id'], 'local', row['path'], f"{row['id']}.mp4", code))
+            identity = connection.execute(
+                "INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at) "
+                "VALUES('performer',?,?,?,?)", ('春野あや', normalize_entity_name('春野あや'), '2024', '2024')).lastrowid
+            connection.execute('INSERT INTO asset_entity(asset_id,entity_id,role,source,confidence) VALUES(?,?,?,?,1)',
+                               (3, identity, 'performer', 'user:manual'))
+        keys = [library_processing._checkpoint_key(row) for row in rows]
+        previous = dict(processing_rule=upgrade_rules.PROCESSING, completed_metadata=keys, completed_previews=keys)
+        current = {}
+        checkpoints = _LibraryCheckpoints(current, previous, database, database.db_path)
+        self.assertEqual([row['id'] for _, row in checkpoints.remaining_metadata(rows)], [1])
+        self.assertEqual(set(current['completed_previews']), set(keys))
+        self.assertEqual(set(current['completed_metadata']), set(keys[1:]))
+
     def test_javdb_candidate_keeps_its_verified_rule_and_source_identity(self):
         from peach.library_processing import _merge_candidates
         from peach.javdb_identity import current_candidate
@@ -367,7 +488,8 @@ class LibraryNfoTests(unittest.TestCase):
         provider = stub_provider()
         provider.query.return_value = {'id': 'ABW-358', 'title': '已保存资料'}
         provider.cover.return_value = False
-        with patch('peach.library_processing.CANDIDATE_FLUSH_SECONDS', 0):
+        with patch('peach.library_processing.CANDIDATE_FLUSH_SECONDS', 0), \
+                patch('peach.library_processing.CANDIDATE_FLUSH_COST_RATIO', 0):
             result = process_library(config, db, self.root / 'generated', self.root / 'covers',
                                      stage='metadata', provider_factory=lambda: provider)
         self.assertEqual(len(result['completed_metadata']), 1)
@@ -375,6 +497,41 @@ class LibraryNfoTests(unittest.TestCase):
         process_library(config, db, self.root / 'generated', self.root / 'covers', stage='metadata',
                         provider_factory=lambda: provider, resume_state=result)
         provider.query.assert_not_called()
+
+    @windows_ledger_roots
+    def test_a_slow_candidate_file_is_rewritten_no_more_often_than_its_cost_allows(self):
+        """候选表整份写一次越久，两次写之间隔得越开：处理线程不能一半时间都在写文件。"""
+        media = self.root / 'media'
+        media.mkdir()
+        db = fresh_ledger(self.root)
+        with closing(sqlite3.connect(db)) as connection, connection:
+            for number in range(1, 9):
+                (media / f'ABW-35{number}.mp4').write_bytes(b'video')
+                connection.execute("INSERT INTO asset(path,name,location,medium,code) VALUES(?,?,'local','video',?)",
+                                   (str(media / f'ABW-35{number}.mp4'), f'ABW-35{number}.mp4', f'ABW-35{number}'))
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True,
+                             locations={'local': (str(media),)})
+        provider = stub_provider()
+        provider.query.side_effect = lambda code, *args, **kwargs: {'id': code, 'title': f'{code} 资料'}
+        provider.cover.return_value = False
+        writes = []
+        real_write = library_processing.write_rows
+
+        def slow_write(*args, **kwargs):
+            started = time.monotonic()
+            time.sleep(0.2)
+            real_write(*args, **kwargs)
+            writes.append((started, time.monotonic()))
+
+        with patch('peach.library_processing.CANDIDATE_FLUSH_SECONDS', 0), \
+                patch('peach.library_processing.CANDIDATE_FLUSH_COST_RATIO', 20), \
+                patch('peach.library_processing.write_rows', side_effect=slow_write):
+            process_library(config, db, self.root / 'generated', self.root / 'covers',
+                            stage='metadata', provider_factory=lambda: provider)
+        # 每次写耗时约 0.2 秒、倍数取 20：节流的写之间至少隔 4 秒，八部片采完用不了这么久，
+        # 只剩第一次节流写与几处收尾的强制写。倍数不起作用时每采一部片就写一次。
+        self.assertLessEqual(len(writes), 5, writes)
+        self.assertTrue(read_rows(self.root / 'generated/library-metadata-field-candidates.csv'))
 
     @windows_ledger_roots
     def test_library_policy_decides_which_network_steps_run(self):
@@ -446,6 +603,7 @@ class LibraryNfoTests(unittest.TestCase):
             except BaseException as exc:
                 errors.append(exc)
         with patch('peach.library_processing.CANDIDATE_FLUSH_SECONDS', 0), \
+                patch('peach.library_processing.CANDIDATE_FLUSH_COST_RATIO', 0), \
                 patch('peach.library_processing._enrich_finished_performers',
                       return_value={'aliases': 0, 'avatars': 0, 'conflicts': 0, 'failed': 0}):
             thread = threading.Thread(target=run)
@@ -1201,6 +1359,49 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual({call.args[0] for call in provider.query.call_args_list}, {'ABW-358', 'SSIS-057'})
 
     @windows_ledger_roots
+    def test_spent_source_budget_stops_remote_rows_with_one_summary(self):
+        """整趟采集预算到顶后，后面要出网的行一家都不问，只记一条汇总，留给重试接着采。"""
+        from peach.scraping_access import BUDGET_SPENT
+        media = self.root / 'media'
+        media.mkdir()
+        for name in ('ABW-358', 'SSIS-057', 'SSIS-058'):
+            (media / f'{name}.mp4').write_bytes(b'video')
+        db = fresh_ledger(self.root)
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True, locations={'local': (str(media),)})
+        provider = stub_provider()
+        provider.query.return_value = {'id': 'ABW-358', 'title': '作品资料'}
+        provider.cover.return_value = False
+        # 第一部问完预算就到顶。
+        provider.budget_spent.side_effect = lambda: BUDGET_SPENT['seconds'] if provider.query.called else ''
+        generated, covers = self.root / 'generated', self.root / 'covers'
+
+        process_library(config, db, generated, covers, stage='scan')
+        result = process_library(config, db, generated, covers, provider_factory=Mock(return_value=provider),
+                                 stage='metadata', database=LedgerDatabase(db))
+
+        self.assertEqual(len({call.args[0] for call in provider.query.call_args_list}), 1)
+        self.assertEqual(result['budget_skipped'], 2)
+        summary = [issue for issue in result['issue_preview'] if issue['message'].startswith('本趟采集时间已用完')]
+        self.assertEqual([issue['message'] for issue in summary],
+                         ['本趟采集时间已用完，还有 2 部没问外部来源，再跑一次接着采。'])
+        self.assertTrue(result['error'].startswith('本趟采集时间已用完，还有 2 部'))
+        asked = {call.args[0] for call in provider.query.call_args_list}
+        with closing(sqlite3.connect(db)) as connection:
+            unasked = {row_id for row_id, code in connection.execute('SELECT id,code FROM asset')
+                       if code not in asked}
+        self.assertEqual(len(unasked), 2)
+        self.assertLessEqual(unasked, set(result['retryable_asset_ids']))
+        self.assertLessEqual(unasked, set(result['paused_asset_ids']))
+
+        fresh = stub_provider()
+        fresh.query.return_value = {'id': 'SSIS-057', 'title': '作品资料'}
+        fresh.cover.return_value = False
+        process_library(config, db, generated, covers, provider_factory=Mock(return_value=fresh),
+                        database=LedgerDatabase(db), retry_ids=result['retryable_asset_ids'])
+        self.assertLessEqual({code for code in ('ABW-358', 'SSIS-057', 'SSIS-058') if code not in asked},
+                             {call.args[0] for call in fresh.query.call_args_list})
+
+    @windows_ledger_roots
     def test_local_nfo_fields_keep_remote_differences_for_review(self):
         """本地字段优先补空，在线不同值保留为覆盖复核候选。"""
         from PIL import Image
@@ -1668,6 +1869,18 @@ class LibraryNfoTests(unittest.TestCase):
                                      route=('fc2cmadb', 'javarchive'), known=known)
                 self.assertEqual([source for source, _ in found], sources)
                 self.assertFalse([url for url in asked if 'fc2cmadb.com' not in url], '官方页与 JavArchive 都不再问')
+
+    def test_a_cached_answer_skips_non_cast_sources_and_reaches_the_mirror(self):
+        from peach import metadata_routes
+        known = [{'id': 'FC2-PPV-3232110', 'title': '缓存标题', 'actresses': []}]
+        asked = []
+        provider, pages = self._live_fc2_provider(asked)
+        with patch('peach.jav_cover_fetch._fetch', side_effect=pages):
+            found = provider.fc2('FC2-PPV-3232110', required=('performers',),
+                                 route=metadata_routes.FC2_STAGE, known=known)
+        self.assertEqual([source for source, _ in found], ['fc2cmadb'])
+        self.assertTrue(asked)
+        self.assertTrue(all('fc2cmadb.com' in url for url in asked))
 
     def test_the_cover_step_asks_the_rest_of_the_chain_for_more_image_sources(self):
         """答上的那一档给的地址下不下得来图，这一层判不出来，所以图源要凑齐再挑。"""
@@ -2168,6 +2381,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual((state['issue_count'], state['paused_count']), (2, 2))
         self.assertEqual(state['error'], '2 项都卡在来源限流上，等一会儿再跑一次。')
         self.assertEqual(state['retryable_asset_ids'], [1], '等来源放开之后重试仍然有意义')
+        self.assertEqual(state['paused_asset_ids'], [1], '升级补全据此把这部片延后而不是判失败')
 
     def test_the_two_kinds_are_counted_apart_in_the_line_that_sums_them_up(self):
         from peach.library_processing import issue_summary
@@ -2908,6 +3122,32 @@ class LibraryWatchdogTests(unittest.TestCase):
         return provider
 
     @windows_ledger_roots
+    def test_library_selection_limits_scan_collection_and_completion(self):
+        from dataclasses import replace
+        from peach.media_libraries import libraries
+        first, second = self.root / 'first', self.root / 'second'
+        first.mkdir()
+        second.mkdir()
+        (first / 'ABW-204.mp4').write_bytes(b'video')
+        (second / 'ABW-205.mp4').write_bytes(b'video')
+        config = replace(self._config(first), locations={'local': (str(first), str(second))})
+        library_id = libraries(config)[0]['id']
+        db = fresh_ledger(self.root)
+        provider = self._provider()
+        scanned = process_library(config, db, self.root / 'generated', self.root / 'covers',
+                                  stage='scan', library_id=library_id, provider_factory=lambda: provider)
+        with closing(sqlite3.connect(db)) as connection:
+            self.assertEqual([row[0] for row in connection.execute('SELECT name FROM asset')], ['ABW-204.mp4'])
+        self.assertEqual(scanned['library_id'], library_id)
+        self.assertEqual(len(scanned['asset_ids']), 1)
+        collected = process_library(config, db, self.root / 'generated', self.root / 'covers',
+                                    stage='collect', library_id=library_id, provider_factory=lambda: provider)
+        self.assertEqual(collected['total'], 1)
+        self.assertEqual(collected['library_id'], library_id)
+        with self.assertRaisesRegex(ValueError, '媒体库'):
+            process_library(config, db, self.root / 'generated', self.root / 'covers', library_id='missing')
+
+    @windows_ledger_roots
     def test_empty_incremental_sync_completes_without_metadata_queries(self):
         media = self.root/'media'
         media.mkdir()
@@ -2994,6 +3234,10 @@ class LibraryWatchdogTests(unittest.TestCase):
         contract = Mock()
         contract.db_path = self.root / 'database/ledger.db'
         contract.library_processing_job.snapshot.return_value = None
+        from peach.repository import LedgerDatabase
+        contract.db_path.parent.mkdir()
+        fresh_ledger(contract.db_path.parent)
+        contract.database = LedgerDatabase(contract.db_path)
         with patch('peach.web_library_processing.settings_file.active', return_value=config):
             self.assertEqual(q_library_processing(contract, {})['issues_log'], str(log))
 
@@ -3376,6 +3620,13 @@ class LibraryWatchdogTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs['stage'], 'all')
             w_library_processing(contract, {'incremental':True})
             self.assertTrue(run.call_args.kwargs['incremental'])
+            from peach.media_libraries import libraries
+            library_id = libraries(config)[0]['id']
+            initial = w_library_processing(contract, {'library_id': library_id, 'incremental': True})
+            self.assertEqual(run.call_args.kwargs['library_id'], library_id)
+            self.assertEqual(initial['library_id'], library_id)
+            with self.assertRaisesRegex(ValueError, '媒体库'):
+                w_library_processing(contract, {'library_id': 'missing'})
             with self.assertRaisesRegex(ValueError, '开关值'):
                 w_library_processing(contract, {'incremental':'true'})
             with self.assertRaisesRegex(ValueError, '只支持扫描或同步'):
@@ -3485,6 +3736,48 @@ class LibraryPreviewCompletionTests(unittest.TestCase):
         self.assertEqual(second['previews'], 0)
         self.assertEqual(second['status'], 'complete')
         capture.assert_not_called()
+
+    def cloud_clip(self, *, cost):
+        """把 2 号放进真实可读的网盘挂载目录，目录的流量保护按 `cost` 设。"""
+        from dataclasses import replace
+        mount = self.root / 'unmounted-cloud'
+        mount.mkdir(exist_ok=True)
+        (mount / 'clip-2.mp4').write_bytes(b'video')
+        self.config = replace(self.config, media_costs={self.ledger_roots['pikpak']: cost})
+        self.enterContext(patch('peach.settings_file.active', return_value=self.config))
+
+    def test_unprotected_cloud_directory_gets_previews_like_local(self):
+        self.cloud_clip(cost='free')
+        with patch('peach.library_processing.FFmpegResolver', return_value=self.resolver), \
+                patch('peach.frame_capture.capture_with_retry', return_value=True), \
+                patch('peach.frame_capture.tile_frames', side_effect=self.make_tile):
+            result = self.run_processing(stage='previews')
+        self.assertEqual((result['status'], result['previews']), ('complete', 2))
+        with self.database.read_connection() as connection:
+            snapshot = connection.execute('SELECT snapshot_path FROM asset WHERE id=2').fetchone()[0]
+        self.assertTrue(Path(snapshot).is_relative_to(self.root / 'generated' / 'snapshots' / 'pikpak'))
+
+    def test_protected_directory_is_read_only_with_an_explicit_grant(self):
+        self.cloud_clip(cost='metered')
+        with patch('peach.library_processing.FFmpegResolver', return_value=self.resolver), \
+                patch('peach.frame_capture.capture_with_retry', return_value=True) as capture, \
+                patch('peach.frame_capture.tile_frames', side_effect=self.make_tile):
+            skipped = self.run_processing(stage='previews', asset_ids=[2])
+            self.assertEqual((skipped['previews'], capture.call_count), (0, 0))
+            granted = self.run_processing(stage='previews', asset_ids=[2], allow_metered=True)
+        self.assertEqual((granted['status'], granted['previews']), ('complete', 1))
+        self.assertTrue(granted['allow_metered'])
+
+    def test_metered_grant_only_covers_named_videos_for_previews(self):
+        from peach.web_library_processing import _metered_grant
+        self.assertTrue(_metered_grant({'allow_metered': True}, 'previews', [2]))
+        self.assertFalse(_metered_grant({}, 'previews', None))
+        for body, stage, ids in (({'allow_metered': True}, 'collect', [2]),
+                                 ({'allow_metered': True}, 'all', [2]),
+                                 ({'allow_metered': True}, 'previews', None),
+                                 ({'allow_metered': 'yes'}, 'previews', [2])):
+            with self.subTest(stage=stage, ids=ids), self.assertRaises(ValueError):
+                _metered_grant(body, stage, ids)
 
     def test_one_video_reuses_decode_probe_for_all_nine_frames(self):
         from peach import frame_capture, hardware_transcode
@@ -4024,39 +4317,56 @@ class ProcessingLockTests(unittest.TestCase):
     def test_a_running_background_collection_yields_to_a_user_run_at_its_next_checkpoint(self):
         config, db, database = self.config, self.db, self.database
         entered, proceed = threading.Event(), threading.Event()
+        stopping = threading.Event()
 
-        def query(*_args, **_kwargs):
-            if not entered.is_set():
-                entered.set()
-                proceed.wait(10)
-            return {}
+        processing_lock = library_processing._processing_lock
+
+        @contextmanager
+        def pause_background(config, *, background, active):
+            with processing_lock(config, background=background, active=active) as locked_active:
+                if background:
+                    entered.set()
+                    proceed.wait()
+                yield locked_active
 
         provider = stub_provider()
-        provider.query.side_effect = query
+        provider.query.return_value = {}
         background, user = [], []
 
         def run(sink, **options):
             try:
                 sink.append(process_library(config, db, self.root / 'generated', self.root / 'covers',
-                                            provider_factory=lambda: provider, database=database, **options))
+                                            provider_factory=lambda: provider, database=database,
+                                            active=lambda: not stopping.is_set(), **options))
             except Exception as error:
                 sink.append(error)
 
         with patch('peach.library_processing.LOCK_RETRY_SECONDS', 0.01), \
+                patch('peach.library_processing._processing_lock', pause_background), \
                 patch('peach.library_processing._enrich_finished_performers',
                       return_value={'aliases': 0, 'avatars': 0, 'conflicts': 0, 'failed': 0}):
             first = threading.Thread(target=run, args=(background,), kwargs=dict(
                 asset_ids=[1, 2], stage='collect', state_file=self.root / 'state/upgrade-repairs/1.json'))
+            threads = [first]
             first.start()
-            self.assertTrue(entered.wait(10))
-            second = threading.Thread(target=run, args=(user,))
-            second.start()
-            deadline = time.monotonic() + 10
-            while not library_processing._foreground_waiting() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            proceed.set()
-            first.join(30)
-            second.join(30)
+            try:
+                self.assertTrue(entered.wait(10), f'后台处理尚未取得锁，实际结果：{background!r}')
+                second = threading.Thread(target=run, args=(user,))
+                second.start()
+                threads.append(second)
+                deadline = time.monotonic() + 10
+                while not library_processing._foreground_waiting() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(library_processing._foreground_waiting())
+                proceed.set()
+                for thread in threads:
+                    thread.join(30)
+                    self.assertFalse(thread.is_alive())
+            finally:
+                stopping.set()
+                proceed.set()
+                for thread in threads:
+                    thread.join()
         self.assertIsInstance(background[0], ProcessingBusy)
         self.assertIsInstance(user[0], dict)
         self.assertNotEqual(user[0].get('outcome'), 'interrupted')

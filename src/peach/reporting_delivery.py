@@ -44,6 +44,11 @@ def _record(permit, event_id, result):
         if status != "queued" and previous.get("event_id") != event_id:
             return
         row = {"status": status, "event_id": event_id, "at": datetime.now(timezone.utc).isoformat()}
+        last_sent = previous.get('last_sent_at') or (previous.get('at') if previous.get('status') == 'accepted' else None)
+        if status == 'accepted':
+            last_sent = row['at']
+        if last_sent:
+            row['last_sent_at'] = last_sent
         if result.get("reason") in REASONS:
             row["reason"] = result["reason"]
         code = result.get("status_code")
@@ -58,5 +63,13 @@ def snapshot(config):
     state = _read(config.directory("state") / "remote-reporting-delivery.json")
     if state.get("revision") != consent(config)["revision"]:
         return {}
-    return {kind: {key: row[key] for key in ("status", "reason", "status_code", "at") if key in row}
-            for kind in ("usage", "errors") if isinstance(row := state.get(kind), dict)}
+    result = {}
+    for kind in ('usage', 'errors'):
+        row = state.get(kind)
+        if not isinstance(row, dict):
+            continue
+        result[kind] = {key: row[key] for key in ('status', 'reason', 'status_code', 'at') if key in row}
+        last_sent = row.get('last_sent_at') or (row.get('at') if row.get('status') == 'accepted' else None)
+        if last_sent:
+            result[kind]['last_sent_at'] = last_sent
+    return result

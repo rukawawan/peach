@@ -38,14 +38,15 @@ import {
   LINK_PRUNE_KEY, LINKS_KEY, pruneText, startLinkCheck, startLinkPrune,
   type LinkCheckState, type LinkPruneState, type LinkRow,
 } from './links';
+import { t } from '../../i18n';
 
 const RETRY = spriteGlyph('rotate-cw');
 
-const GONE_HINT = '站点返回 404 或 410，确认这个地址不存在。';
+const GONE_HINT = t('cleanup:links.goneHint');
 /* 这一组大多是站点拒绝程序访问或一次抖动，换个时间再问一次就通了。 */
-const UNCLEAR_HINT = '站点拒绝程序访问或一次临时故障都会落在这里。链接保留，可勾选后单独重试。';
-const PRUNE_HINT = '删除前会逐条重验一次；此操作不可撤销。';
-const DISCONNECTED = '暂时无法读取进度，正在重新连接…';
+const UNCLEAR_HINT = t('cleanup:links.unclearHint');
+const PRUNE_HINT = t('cleanup:links.pruneHint');
+const DISCONNECTED = t('cleanup:shared.reconnecting');
 
 const count = (value: number | undefined) => Number(value || 0).toLocaleString();
 
@@ -70,7 +71,7 @@ function LinkTable(
 ) {
   if (!items.length) return null;
   const columns: DataColumn<LinkRow>[] = [
-    { id: 'entity', label: 'Peach 资料', width: 180, min: 128, value: (item) => item.entity,
+    { id: 'entity', label: t('cleanup:links.columnEntry'), width: 180, min: 128, value: (item) => item.entity,
       render: (item) => <a className="flex min-w-24 items-center gap-2 text-text-secondary hover:text-text-primary hover:underline"
         href={item.entity_id && item.entity_kind ? entityPath(item.entity_kind, item.entity, item.entity_id) : undefined} data-link-identity="">
         <span data-link-avatar="" className={`relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background-quaternary-default text-caption-1-medium text-text-primary ${LEGACY_AVATAR_IMG}`}
@@ -81,19 +82,19 @@ function LinkTable(
           }) }} />
         <span className="min-w-0 wrap-anywhere">{item.entity}</span>
       </a> },
-    { id: 'kind', label: '类型', width: 128, value: (item) => LINK_KINDS[item.link_kind] || item.link_kind,
+    { id: 'kind', label: t('cleanup:shared.type'), width: 128, value: (item) => LINK_KINDS[item.link_kind] || item.link_kind,
       render: (item) => LINK_KINDS[item.link_kind] || item.link_kind },
-    { id: 'label', label: '链接名称', min: 128, value: (item) => item.label || '',
+    { id: 'label', label: t('cleanup:links.columnName'), min: 128, value: (item) => item.label || '',
       render: (item) => <span className="flex min-w-24 items-center gap-2" data-link-name="">
         <span className="min-w-0 wrap-anywhere">{item.label || new URL(item.url).hostname}</span></span> },
-    { id: 'note', label: '结果', width: 320, min: 192, value: (item) => item.note,
+    { id: 'note', label: t('cleanup:links.columnResult'), width: 320, min: 192, value: (item) => item.note,
       render: (item) => <div className="min-w-0 w-full" data-link-result={confirmed ? 'gone' : 'unclear'}>
         {/^(?:HTTP\s+)?[1-5]\d{2}$/.test(item.note.trim())
           ? <StatusLabel tone={confirmed || /^(?:HTTP\s+)?5\d{2}$/.test(item.note.trim()) ? 'error' : 'warning'} data-link-code="">{item.note.trim()}</StatusLabel>
-          : <div className="flex flex-col items-start gap-1"><StatusLabel tone={confirmed ? 'error' : 'warning'}>{confirmed ? '地址已失效' : '未取得结论'}</StatusLabel>
+          : <div className="flex flex-col items-start gap-1"><StatusLabel tone={confirmed ? 'error' : 'warning'}>{confirmed ? t('cleanup:links.dead') : t('cleanup:links.inconclusive')}</StatusLabel>
               <ErrorExcerpt text={item.note} className="tabular-nums text-text-secondary" /></div>}
       </div> },
-    { id: 'url', label: '地址', width: 360, min: 180, value: (item) => item.url,
+    { id: 'url', label: t('cleanup:links.columnUrl'), width: 360, min: 180, value: (item) => item.url,
       render: (item) => <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.url} data-link-address=""
         className="flex min-w-0 items-center gap-1 text-text-secondary hover:text-text-primary">
         <SiteMark linkId={item.id} />
@@ -104,8 +105,8 @@ function LinkTable(
   return (
     <div className={RESULT_SECTION} data-link-results={confirmed ? 'gone' : 'unclear'}>
       <DataTable label={title} items={items} columns={columns} rowId={(item) => String(item.id)}
-        description={hint} unit="条链接" panel={false} footerActions={footer}
-        rowLabel={(item) => `${item.entity} 的${item.label || item.url}`}
+        description={hint} unit={t('cleanup:links.unit')} panel={false} footerActions={footer}
+        rowLabel={(item) => t('cleanup:links.rowLabel', { entity: item.entity, link: item.label || item.url })}
         selected={picked.map(String)} onSelected={(ids) => onPick(ids.map(Number))}
         actions={() => children} />
     </div>
@@ -140,6 +141,7 @@ export function LinkManager() {
 
   const running = check.running || check.start.isPending;
   const removing = prune.running || prune.start.isPending;
+  const actionsReady = !!check.job && !!prune.job;
   const done = state?.status === 'complete';
   const gone = state?.gone ?? [];
   const unclear = state?.unclear ?? [];
@@ -150,15 +152,15 @@ export function LinkManager() {
   const hosts = (info?.top_hosts ?? []).slice(0, 3);
 
   const run = (retry?: readonly number[]) => {
-    if (running || (retry && !retry.length)) return;
+    if (!actionsReady || running || (retry && !retry.length)) return;
     check.start.mutate(retry ? { retry, checkId } : {});
   };
   const removeGone = (ids?: number[]) => {
-    if (removing || !gone.length) return;
+    if (!actionsReady || removing || !gone.length) return;
     void confirmModal({
-      title: '删除失效链接',
-      body: `将删除 ${ids?.length ?? gone.length} 条失效链接。删除前会再次检查，删除后无法恢复。`,
-      confirmLabel: '删除失效链接',
+      title: t('cleanup:links.deleteDead'),
+      body: t('cleanup:links.deleteDeadBody', { count: ids?.length ?? gone.length }),
+      confirmLabel: t('cleanup:links.deleteDead'),
       danger: true,
       onConfirm: () => prune.start.mutateAsync({ checkId, ids }),
     });
@@ -170,45 +172,45 @@ export function LinkManager() {
   let progress: ReactNode = null;
   let result: ReactNode = null;
   if (pruned?.status === 'failed') {
-    result = <Note tone="error" title="链接清理未完成">{pruned.error || '请查看任务记录，核对已处理的链接。'}</Note>;
+    result = <Note tone="error" title={t('cleanup:links.pruneIncomplete')}>{pruned.error || t('cleanup:links.checkTaskLog')}</Note>;
   } else if (pruned && !gone.length && !unclear.length) {
-    result = <Note tone="success" title="完成">{pruneText(pruned)}</Note>;
+    result = <Note tone="success" title={t('cleanup:links.pruneDone')}>{pruneText(pruned)}</Note>;
   } else if (startError) {
-    result = <Note tone="error" title="检查失败">{errorMessage(startError)}</Note>;
+    result = <Note tone="error" title={t('cleanup:links.checkFailed')}>{errorMessage(startError)}</Note>;
   } else if (check.query.isError && state) {
-    result = <Note tone="neutral" title="任务状态">{DISCONNECTED}</Note>;
+    result = <Note tone="neutral" title={t('cleanup:shared.taskStatus')}>{DISCONNECTED}</Note>;
   } else if (state?.status === 'failed') {
-    result = <Note tone="error" title="检查失败">{state.error || '检查失败'}</Note>;
+    result = <Note tone="error" title={t('cleanup:links.checkFailed')}>{state.error || t('cleanup:links.checkFailed')}</Note>;
   } else if (state && state.status !== 'idle') {
     progress = <>
       {state.status === 'running'
         ? <TaskProgress embedded label={checkLine(state)} value={Math.min(state.checked || 0, state.total || 0)} total={state.total} />
         : null}
       {removing
-        ? <TaskProgress embedded label={prune.job?.message || '正在重验并删除失效链接'}
+        ? <TaskProgress embedded label={prune.job?.message || t('cleanup:links.pruning')}
             value={Math.min(prune.job?.checked || 0, prune.job?.total || 0)} total={prune.job?.total} />
         : null}
     </>;
-    const pickedLabel = `立即重试所选（${selectedRetryable.length}）`;
+    const pickedLabel = t('cleanup:links.retrySelected', { count: selectedRetryable.length });
     result = done || gone.length || unclear.length ? (
       <div className={RESULT_PANEL}>
-        {pruned?.status === 'complete' ? <Note tone="success" title="完成">{pruneText(pruned)}</Note> : null}
-        <LinkTable title="地址已失效" items={gone} hint={GONE_HINT} picked={gonePicked} onPick={setGonePicked} confirmed
+        {pruned?.status === 'complete' ? <Note tone="success" title={t('cleanup:links.pruneDone')}>{pruneText(pruned)}</Note> : null}
+        <LinkTable title={t('cleanup:links.dead')} items={gone} hint={GONE_HINT} picked={gonePicked} onPick={setGonePicked} confirmed
           footer={done && gone.length ? <>
             <p className="mr-auto min-w-0 text-caption-1-regular text-text-secondary">{PRUNE_HINT}</p>
             <Button variant="danger" {...busyProps(removing)} onClick={() => removeGone()}>
-              {`删除 ${gone.length} 条失效链接`}
+              {t('cleanup:links.deleteDeadCount', { count: gone.length })}
             </Button>
           </> : null}>
           <Button variant="danger" size="small" disabled={!done || !selectedGone.length}
             {...busyProps(removing)} onClick={() => removeGone(selectedGone)}>
-            {`删除所选（${selectedGone.length}）`}
+            {t('cleanup:links.deleteSelected', { count: selectedGone.length })}
           </Button>
         </LinkTable>
-        <LinkTable title="本次未访问成功" items={unclear} hint={UNCLEAR_HINT}
+        <LinkTable title={t('cleanup:links.unreached')} items={unclear} hint={UNCLEAR_HINT}
           picked={picked} onPick={setPicked} footer={retryable.length
             ? <Button variant="primary" leadingIcon={RETRY} {...busyProps(running)}
-                onClick={() => run(retryable.map((item) => item.id))}>{`立即重试全部（${retryable.length}）`}</Button>
+                onClick={() => run(retryable.map((item) => item.id))}>{t('cleanup:links.retryAll', { count: retryable.length })}</Button>
             : null}>
           {retryable.length
             ? <>
@@ -218,7 +220,7 @@ export function LinkManager() {
             : null}
         </LinkTable>
         {done && !gone.length && !unclear.length
-          ? <p className={`${RESULT_SECTION} text-body-regular text-notification-success-foreground`}>全部链接均可访问。</p>
+          ? <p className={`${RESULT_SECTION} text-body-regular text-notification-success-foreground`}>{t('cleanup:links.allReachable')}</p>
           : null}
       </div>
     ) : null;
@@ -227,25 +229,25 @@ export function LinkManager() {
   return (
     <section id="link-manager" aria-labelledby="link-manager-title" className="flex scroll-mt-20 flex-col gap-4">
       <Fieldset layout="stack" labelledBy="link-manager-title" footer={
-        <Button data-link-check="" leadingIcon={LinkCheckIcon} {...busyProps(running)} onClick={() => run()}>
-          {running ? '检查中' : done ? '重新检查' : '检查死链'}
+        <Button data-link-check="" leadingIcon={LinkCheckIcon} disabled={!actionsReady} {...busyProps(running)} onClick={() => run()}>
+          {running ? t('cleanup:links.checking') : done ? t('cleanup:links.checkAgain') : t('cleanup:links.checkLinks')}
         </Button>
       }>
-        <FieldsetTitle id="link-manager-title" gap="small">链接管理</FieldsetTitle>
+        <FieldsetTitle id="link-manager-title" gap="small">{t('cleanup:tools.links')}</FieldsetTitle>
         {stats.isError
-          ? <Note tone="error" title="链接统计读取失败">{errorMessage(stats.error)}</Note>
+          ? <Note tone="error" title={t('cleanup:links.statsLoadFailed')}>{errorMessage(stats.error)}</Note>
           : info
             ? <>
                 <div className="link-stat-grid mt-4 gap-x-8 gap-y-3">
-                  <Stat label="链接总数" value={count(info.total)}
-                    note={`分布在 ${count(info.entities)} 个女优、厂牌与系列`} />
+                  <Stat label={t('cleanup:links.totalLinks')} value={count(info.total)}
+                    note={t('cleanup:links.entitySpread', { count: Number(info.entities || 0) })} />
                   {Object.entries(info.by_kind ?? {}).map(([kind, value]) => (
                     <Stat key={kind} label={LINK_KINDS[kind] || kind} value={count(value)} />
                   ))}
                 </div>
                 {hosts.length
                   ? <div className="mt-4 flex min-w-0 flex-col gap-0.5">
-                      <span className="text-caption-1-regular text-text-secondary">主要站点</span>
+                      <span className="text-caption-1-regular text-text-secondary">{t('cleanup:links.topSites')}</span>
                       <div className="flex min-w-0 flex-wrap gap-x-5 gap-y-2">
                         {hosts.map(([host, n]) => <span key={host} data-top-host="" className="inline-flex min-w-0 max-w-full items-center gap-1.5">
                           <a href={`https://${host}`} target="_blank" rel="noopener noreferrer"

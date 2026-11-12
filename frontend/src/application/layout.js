@@ -1,4 +1,5 @@
 /* layout 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
+import { javCardPage } from '../jav-controls';
 import { DIRECT_MANAGE_NAV, MANAGE_MENU_SECTIONS, MANAGE_SECTIONS, NAV_CATALOG, OPTIONAL_SIDEBAR_ITEMS, SIDEBAR_ITEMS, getManageMenuSections } from './navigation-items';
 import { FOLLOW_INITIAL_RANGE_OPTIONS } from './initial-follow-ranges';
 import { noteHtml, revealTexts } from '../ui-kit';
@@ -217,7 +218,7 @@ export function mountManageHeader(){
     }
     if(event.target.closest?.('[data-empty-trash]'))emptyTrash();
   });
-  loadManageHeader({root,openManage,openDataCleanup:()=>navigationState.navigatePath('/data-cleanup'),emptyTrash})
+  loadManageHeader({root,store:preferencesState.settingsStore,openManage,openPath:path=>navigationState.navigatePath(path),emptyTrash})
     .then(()=>paintManageHeader()).catch(()=>{});
 }
 
@@ -394,8 +395,10 @@ export function syncHeaderActions(){
     setSelectMode(false,true);
   const entity=parts.length>1&&Object.prototype.hasOwnProperty.call(ROUTE_ENTITIES,parts[0]);
   const catalog=isCatalogPath(path)||path==='/trash';
-  const canSelect=catalog||entity||path==='/tags'||path==='/follow';
-  const canDensity=catalog||entity||path==='/follow';
+  const javCards=javCardPage(path,location.search);
+  if(path==='/jav'&&selectMode)setSelectMode(false,true);
+  const canSelect=catalog||entity||path==='/tags'||path==='/follow'||javCards;
+  const canDensity=catalog||entity||path==='/follow'||javCards;
   $('#selectMode').hidden=!canSelect;$('#density').hidden=!canDensity;
   syncPhotoWalls();
   if(!canSelect&&selectMode)setSelectMode(false,true);
@@ -449,7 +452,7 @@ applicationEffects.handler($('#filterBtn'), 'onclick', ()=>openDrawer(!$('#drawe
 layoutState.SIDEBAR_ITEMS = SIDEBAR_ITEMS;
 layoutState.MANAGE_SECTIONS = MANAGE_SECTIONS;
 layoutState.MANAGE_MENU_SECTIONS = MANAGE_MENU_SECTIONS;
-layoutState.manageMenuSections = ()=>getManageMenuSections(runtimeConfigurable===true);
+layoutState.manageMenuSections = ()=>getManageMenuSections(runtimeConfigurable===true,preferencesState.appSettings.manageOrder);
 layoutState.OPTIONAL_SIDEBAR_ITEMS = OPTIONAL_SIDEBAR_ITEMS;
 layoutState.NAV_CATALOG = NAV_CATALOG;
 layoutState.DIRECT_MANAGE_NAV = DIRECT_MANAGE_NAV;

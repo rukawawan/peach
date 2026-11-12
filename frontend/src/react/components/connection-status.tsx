@@ -13,9 +13,9 @@ const TEXT: Record<ConnectionTone, string> = {
   error: 'text-text-error-primary',
 };
 
-/** 连接状态使用圆点；任务结果和配置状态使用 Chip。 */
+/** 连接状态使用圆点；任务结果和配置状态使用 Chip。`online` 为 `null` 或没给都是「未检测」。 */
 export function ConnectionStatus({ online, tone, children }: {
-  online?: boolean; tone?: ConnectionTone; children?: ReactNode;
+  online?: boolean | null; tone?: ConnectionTone; children?: ReactNode;
 }) {
   const color = tone ?? (online === true ? 'success' : online === false ? 'warning' : 'neutral');
   return <span data-mount={online === true ? 'online' : online === false ? 'offline' : 'unknown'}

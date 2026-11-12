@@ -13,6 +13,25 @@
   ],
   "sources": [
     {
+      "id": "skullet-skeleton",
+      "cadence": "monthly",
+      "name": "Skullet 骨架与内容显示",
+      "url": "https://raw.githubusercontent.com/lochie/skullet/main/packages/skullet/README.md",
+      "snapshot": "docs/reference-snapshots/upstream/skullet-skeleton.md",
+      "checked_on": "2026-11-07",
+      "sha256": "c4eaf0d9b7eb8d7d322404fded6d4cb3d5421a5d59533beb2775cbc4142e4dde",
+      "git": {
+        "repository": "https://github.com/lochie/skullet.git",
+        "ref": "refs/heads/main",
+        "revision": "770cba428e6954977fd97938f0f06a7cade2fc2d"
+      },
+      "role": "只读概览采用自动测量和形状记忆；馆藏、表格与播放器保留专用骨架，内容就绪即显示。",
+      "consumers": [
+        "docs/reference-snapshots/skullet-content-first.md",
+        "docs/REUSE.md"
+      ]
+    },
+    {
       "id": "open-claude-ui-design-manual",
       "cadence": "monthly",
       "name": "Open Claude UI 完整设计手册",
@@ -612,12 +631,12 @@
       "name": "amane 内容路由与站点特性",
       "url": "https://raw.githubusercontent.com/sqzw-x/amane/main/docs/dev/content-routes.md",
       "snapshot": "docs/reference-snapshots/upstream/amane-content-routes.md",
-      "checked_on": "2026-11-04",
-      "sha256": "c2414e9fe7cb9287aba12c69dc4fb5a5e9ecda2d1638787fd5a78c31e4ef7d80",
+      "checked_on": "2026-11-09",
+      "sha256": "4a5df74548e336933cf674a2689018d7d7af03ba374042753942e8b6d71898ed",
       "git": {
         "repository": "https://github.com/sqzw-x/amane.git",
         "ref": "refs/heads/main",
-        "revision": "f6c1cc9f54bca0fa5381a26d4b2e259df7f58a0a"
+        "revision": "1177fc57ee75a35032b4c0306f617cc255862bb3"
       },
       "role": "按内容类型给一条有序来源链的原则，以及逐站的领域判断：javdb 没有国产分区且不解析 plot、javbus 欧美目录不可用、kin8 从任意番号抽数字拼详情会误匹配、mgstage 不进有码默认表否则有码号也会去问它、单厂牌 API 对每个候选 SKU 都发请求、DMM 与厂牌官网的日期是 SKU 分层不必相等。Peach 只取可迁移的原则与站点判断，链上成员限于自己已接解析器的来源；候选与人工复核的契约、不落盘 NFO 是 Peach 自己的边界，上游没有这两条。",
       "consumers": [
@@ -653,12 +672,12 @@
       "name": "OpenAver 说明",
       "url": "https://raw.githubusercontent.com/slive777/OpenAver/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-openaver.md",
-      "checked_on": "2026-11-04",
-      "sha256": "a5fb54461e7c40f54bb22b76e30b4ad9e0b51019c14223e9b67da81bb75ddc56",
+      "checked_on": "2026-11-09",
+      "sha256": "67a12824a53414dbe5ea56557189608fd9650f6633e1530867f6d7ec0aade96f",
       "git": {
         "repository": "https://github.com/slive777/OpenAver.git",
         "ref": "refs/heads/main",
-        "revision": "118f19330c49414a6b9dfa94581e3f731e4f8e5f"
+        "revision": "32134b0ced66b4dbd8bf9da614a49900f73b7442"
       },
       "role": "同类本地影片管理器的 README 信息结构：页头几条粗体承诺、规格速览表、截图表与常见问题。Peach 只借结构，不复制文案、截图、功能承诺与免责声明条款。",
       "consumers": [
@@ -790,12 +809,12 @@
       "name": "SakuraMedia 客户端说明",
       "url": "https://raw.githubusercontent.com/tinypinglite/sakuramedia/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-sakuramedia.md",
-      "checked_on": "2026-11-04",
-      "sha256": "b28e349d3998b227990fb5f451630d6edfa1a8af11cd645a8cd5bbb707b8712b",
+      "checked_on": "2026-11-09",
+      "sha256": "08cbf2c7951781200721687bfe0239caf73dab7d94d69005f4e1ecfecf87902a",
       "git": {
         "repository": "https://github.com/tinypinglite/sakuramedia.git",
         "ref": "refs/heads/main",
-        "revision": "24b3309aec04c264232b646c659cb2838b3b4109"
+        "revision": "a8df1bd5357c6cbe8e331b81babecf19c9526582"
       },
       "role": "README 的主图、折叠截图与安装导航；诊断提示、播放交互和多端客户端仅作产品行为证据，不复制源码、文案或功能承诺。",
       "consumers": [
@@ -830,12 +849,12 @@
       "name": "JavBoss 说明",
       "url": "https://raw.githubusercontent.com/Solr159/JavBoss/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-javboss.md",
-      "checked_on": "2026-11-04",
-      "sha256": "064736f78373cbe6ba37ca8ebdf393870410aabb8b33089031df227b08160b93",
+      "checked_on": "2026-11-09",
+      "sha256": "3ce8fd3fe1db04440c05deb8bf797abf627dec62be0d2b2e70a70a58071cb291",
       "git": {
         "repository": "https://github.com/Solr159/JavBoss.git",
         "ref": "refs/heads/main",
-        "revision": "52203845fb4164ef62daeed38a461f820e89e10b"
+        "revision": "902368c642639a3190b4f99e6ff3473b19f77214"
       },
       "role": "JavBoss（GPL-3.0）只作流程证据：CloudDrive2 gRPC 离线下载的提交、轮询与 infohash 对账（ADR-0089），NFO 里 `javboss` 类型的番号字段，以及待办第 58 条的来源缺陷台账。Peach 不复制代码，只提交到已挂载的网盘目录、不拉回本地。",
       "consumers": [
@@ -1028,12 +1047,12 @@
       "name": "Atlas 说明",
       "url": "https://raw.githubusercontent.com/Zoroaaa/Atlas/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-atlas.md",
-      "checked_on": "2026-11-05",
-      "sha256": "898f4a5bcee9eef0a3de8d5fe05d7507eaea363b5d13159a779258bdd33c3b3b",
+      "checked_on": "2026-11-09",
+      "sha256": "e74da65a1884a89d997d561abbb9c8a8a15c35663056b5f5e954f13dedc5d144",
       "git": {
         "repository": "https://github.com/Zoroaaa/Atlas.git",
         "ref": "refs/heads/main",
-        "revision": "bce9533a7b546aa633c7a29f38174fe8b9f3c855"
+        "revision": "febd50ee0e907c356fb5570ecffa692196830763"
       },
       "role": "Atlas 的 `backend/src/services/jav-utils.ts` `parseMagnets` 只解析 JavBus 一家，作待办第 43 条磁力取法的第二份证据；其余「磁力搜索」只是跳转链接。",
       "consumers": []

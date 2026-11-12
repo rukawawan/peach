@@ -4,13 +4,17 @@ import time
 import httpx
 from PIL import Image
 from .http import HttpRequest
-from .scraping_access import SOURCES, SourcePaused, SourceTransport, record_source_check
+from .scraping_access import SOURCES, SourcePaused, SourceRefused, SourceTransport, record_source_check
 
 MOBILE_BROADBAND_HINT = "中国移动宽带直连 DMM 图片主机常在握手后被断开，请把 DMM / FANZA 的连接方式设成 Peach 代理。"
 
 
 def _connection_failure(exc, label):
     """来源连接异常对应可操作的诊断说明。"""
+    if isinstance(exc, SourceRefused):
+        # 地区限制与出口封禁：原话里写着要换出口，不只是「稍后重试」。
+        return {"ok": False, "kind": "auth", "reason": exc.reason,
+                "message": f"{exc}。", "error_type": type(exc).__name__}
     if isinstance(exc, SourcePaused):
         detail, message = "cooldown", "来源正在冷却，请稍后重试。"
     elif isinstance(exc, httpx.ProxyError):

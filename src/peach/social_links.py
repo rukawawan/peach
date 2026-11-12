@@ -71,6 +71,13 @@ def host_of(url: str) -> str:
     return (urlsplit(url).hostname or "").casefold().removeprefix("www.")
 
 
+def is_lit_share_image(url: str) -> bool:
+    """lit.link 的 ogp 图是带姓名与站点标识的分享海报。"""
+    parts = urlsplit(url)
+    return (parts.hostname == "prd.storage.lit.link"
+            and re.fullmatch(r"/images/creators/[^/]+/ogp/[^/]+", parts.path) is not None)
+
+
 def is_archive(url: str) -> bool:
     """这条链接是不是指向网页存档里的快照。"""
     return under(host_of(url), ARCHIVE_HOSTS)
