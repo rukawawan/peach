@@ -29,6 +29,23 @@ class MediaIoTests(unittest.TestCase):
         self.assertEqual([(entry.name, entry.stat().st_size) for entry in entries], [(source.name, len(raw))])
         self.assertEqual(media_io.directory_files(self.root), {source.name: source})
 
+    def test_fixed_local_disk_directories_are_read_without_a_child_process(self):
+        source = self.root / '影片.mp4'
+        source.write_bytes(b'video')
+        with patch.object(media_io, '_fixed_local_drive', return_value=True), \
+                patch.object(media_io.subprocess, 'run', side_effect=AssertionError('不该起子进程')):
+            entries = media_io.directory_entries(self.root, file_identity=True)
+        self.assertEqual([(entry.name, entry.stat().st_size) for entry in entries], [(source.name, 5)])
+        with patch.object(media_io, '_fixed_local_drive', return_value=True):
+            with self.assertRaises(OSError):
+                media_io.directory_entries(self.root / '不存在')
+
+    def test_only_windows_drive_letters_count_as_fixed_local_disks(self):
+        with patch.object(media_io.os, 'name', 'posix'):
+            self.assertFalse(media_io._fixed_local_drive('D:\\Downloads'))
+        with patch.object(media_io.os, 'name', 'nt'):
+            self.assertFalse(media_io._fixed_local_drive('\\\\nas\\share'))
+
     def test_native_file_identity_survives_the_reader_process_boundary(self):
         source = self.root/'影片.mp4'
         source.write_bytes(b'video')

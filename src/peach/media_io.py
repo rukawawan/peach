@@ -16,6 +16,32 @@ TIMEOUT_SECONDS = 20.0
 OPERATIONS = ('directory', 'files', 'nfo', 'art', 'online', 'resolve', 'stat')
 
 
+#: Windows `GetDriveTypeW` 的本机固定磁盘（内置与 USB 硬盘都报这个）。
+_DRIVE_FIXED = 3
+_FIXED_DRIVES: dict[str, bool] = {}
+
+
+def _fixed_local_drive(path) -> bool:
+    """Windows 本机固定磁盘上的路径：直接在本进程读，不为每个目录起一个子进程。
+
+    子进程是给网盘挂载和网络共享兜底的，它们会无限期卡住；本机硬盘不会。打包版里每起一次
+    子进程都要启动一遍 Peach 程序，扫一个几千个文件夹的库要多花几十分钟，看着像卡住。
+    """
+    if os.name != 'nt':
+        return False
+    anchor = Path(str(path)).anchor
+    if len(anchor) < 2 or anchor[1] != ':':
+        return False
+    key = anchor[:2].upper()
+    if key not in _FIXED_DRIVES:
+        try:
+            import ctypes
+            _FIXED_DRIVES[key] = ctypes.windll.kernel32.GetDriveTypeW(key + '\\') == _DRIVE_FIXED
+        except (AttributeError, OSError):
+            _FIXED_DRIVES[key] = False
+    return _FIXED_DRIVES[key]
+
+
 def _request(operation, path, *, value='', timeout=None):
     from .smb_media import resolve
     remote = resolve(path)
@@ -26,6 +52,11 @@ def _request(operation, path, *, value='', timeout=None):
                 raise TimeoutError(errno.ETIMEDOUT, '媒体读取已超过期限')
             remote = replace(remote, connection=replace(remote.connection, timeout=min(remote.connection.timeout, timeout)))
         return _read(operation, remote, value)
+    if operation == 'directory' and _fixed_local_drive(path):
+        try:
+            return _read(operation, Path(path), value)
+        except OSError as error:
+            raise OSError(error.errno, str(error), str(path)) from error
     command = ([sys.executable, 'media-read'] if getattr(sys, 'frozen', False)
                else [sys.executable, '-m', 'peach.media_io'])
     try:
