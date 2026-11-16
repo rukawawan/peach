@@ -18,7 +18,7 @@ import grpc
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.empty_pb2 import Empty
 
-from . import organize
+from . import interface_text, organize
 from .task_retry import TRANSIENT_STATUS, RetryableIOError, transient_delay
 from .downloads_clouddrive import CloudDriveClient, SERVICE, discover
 from .downloads import CLOUDDRIVE_CREDENTIAL, DownloadSettings
@@ -28,6 +28,8 @@ from . import downloads_clouddrive_pb2 as pb
 from .peach_proxy import http_client
 from .scripting import open_readonly
 from .push_discovery import CloudPrefix, PushDiscoverySettings, map_cloud_path, normalise_prefix
+from .os_errors import UserFileExistsError, UserFileNotFoundError
+from .user_messages import UserFacingError, UserOSError, UserValueError
 
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_FILES = 10000
@@ -41,10 +43,17 @@ REJECTED_CODES = frozenset({grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.PE
 
 
 class UnconfirmedMove(SystemExit):
-    """原件与目标都在或都不在、成员不符或目录读不到：状态未知，保留意图并停止当前进程。"""
+    """原件与目标都在或都不在、成员不符或目录读不到：状态未知，保留意图并停止当前进程。
+
+    仍是 `SystemExit`（停进程的语义不变），说明文字按 zh-CN 从资源渲染；换成带 code 的类型见延后清单。"""
+
+    CODE = "errors.organizeClouddrive.moveUnconfirmed"
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or interface_text.text(f"server:{self.CODE}"))
 
 
-class MoveNotExecuted(FileNotFoundError):
+class MoveNotExecuted(UserFacingError, FileNotFoundError):
     """官方目录确认原件仍在、目标未出现：本条未执行，可记失败后继续下一条。"""
 
 
@@ -109,24 +118,24 @@ class PikPakPaths:
     def __post_init__(self):
         root = PureWindowsPath(self.root)
         if not root.is_absolute() or root.drive.startswith('\\\\') or '..' in root.parts:
-            raise ValueError('PikPak 媒体根必须是已声明的 Windows 格式绝对路径')
+            raise UserValueError('errors.organizeClouddrive.pikpakRootInvalid')
         for path in (self.remote, self.dav_root):
             if path and (not path.startswith('/') or any(
                     part in ('.', '..') or '\\' in part or ':' in part
                     or any(ord(char) < 32 for char in part) for part in path.split('/'))):
-                raise ValueError('PikPak 云端目录格式无效')
+                raise UserValueError('errors.organizeClouddrive.cloudDirectoryInvalid')
         if normalise_prefix(self.remote) == '/':
-            raise ValueError('PikPak 云端前缀不能是 CloudDrive 总根目录')
+            raise UserValueError('errors.organizeClouddrive.cloudPrefixIsRoot')
 
     def relative(self, path: str) -> tuple[str, ...]:
         item = PureWindowsPath(path)
         if not item.is_absolute() or '..' in item.parts or any(
                 ':' in part or any(ord(char) < 32 for char in part) for part in item.parts[1:]):
-            raise ValueError('路径越出已声明的 PikPak 来源')
+            raise UserValueError('errors.organizeClouddrive.pathOutsideSource')
         try:
             return item.relative_to(PureWindowsPath(self.root)).parts
         except ValueError:
-            raise ValueError('路径越出已声明的 PikPak 来源') from None
+            raise UserValueError('errors.organizeClouddrive.pathOutsideSource') from None
 
     def cloud_path(self, path: str) -> str:
         return normalise_prefix(self.remote) + ''.join('/' + part for part in self.relative(path))
@@ -141,11 +150,11 @@ def _configured_paths(sample_path: str, roots, prefixes) -> PikPakPaths:
     candidates = [PureWindowsPath(root) for root in roots.get('pikpak', ())
                   if sample.is_relative_to(PureWindowsPath(root))]
     if not candidates:
-        raise ValueError('认证样本不属于已声明的 PikPak 媒体根')
+        raise UserValueError('errors.organizeClouddrive.sampleOutsideRoot')
     root = max(candidates, key=lambda item: len(item.parts))
     matches = [entry for entry in prefixes if PureWindowsPath(entry.root) == root]
     if len(matches) != 1:
-        raise ValueError('请在推送发现中为该 PikPak 媒体根配置唯一的 CloudDrive 路径前缀')
+        raise UserValueError('errors.organizeClouddrive.prefixNotUnique')
     mapping = PikPakPaths(str(root), matches[0].prefix)
     mapping.relative(sample_path)
     return mapping
@@ -165,7 +174,7 @@ class PikPakDav:
         self.listing = listing
         self.move_remote = move_remote
         if not 1 <= confirm_attempts <= 4:
-            raise ValueError('移动确认次数越出预算')
+            raise ValueError('confirm_attempts must be between 1 and 4')
         self.confirm_attempts = confirm_attempts
 
     def url(self, path: str) -> str:
@@ -175,22 +184,22 @@ class PikPakDav:
         try:
             with self.http.stream(method, self.url(path), **kwargs) as response:
                 if response.status_code in TRANSIENT_STATUS:
-                    error = httpx.HTTPStatusError('WebDAV 暂时不可用',
+                    error = httpx.HTTPStatusError('WebDAV temporarily unavailable',
                         request=httpx.Request(method, self.url(path)), response=response)
-                    raise RetryableIOError('WebDAV 暂时不可用：' + str(response.status_code),
-                                           after=transient_delay(error) or 0)
+                    raise RetryableIOError('errors.organizeClouddrive.webdavUnavailable',
+                                           {'status': response.status_code}, after=transient_delay(error) or 0)
                 chunks, size = [], 0
                 for chunk in response.iter_bytes():
                     size += len(chunk)
                     if size > MAX_RESPONSE:
-                        raise ValueError('WebDAV 响应超过预算')
+                        raise UserValueError('errors.organizeClouddrive.webdavResponseTooLarge')
                     chunks.append(chunk)
                 return response.status_code, b''.join(chunks)
         except httpx.HTTPError as error:
             delay = transient_delay(error)
             if delay is not None:
-                raise RetryableIOError('WebDAV 网络应答未取得', after=delay) from None
-            raise OSError('WebDAV 网络应答未取得') from None
+                raise RetryableIOError('errors.organizeClouddrive.webdavNoResponse', after=delay) from None
+            raise UserOSError('errors.organizeClouddrive.webdavNoResponse') from None
 
     def list(self, path):
         self.url(path)
@@ -201,7 +210,7 @@ class PikPakDav:
         while pending:
             parent = pending.pop()
             if parent in visited or len(visited) >= MAX_FILES:
-                raise ValueError('WebDAV 目录遍历超过预算或循环')
+                raise UserValueError('errors.organizeClouddrive.webdavTreeTooLarge')
             visited.add(parent)
             for entry in self.list(parent):
                 if entry['directory']:
@@ -209,7 +218,7 @@ class PikPakDav:
                 else:
                     files.append(entry)
             if len(files) > MAX_FILES:
-                raise ValueError('WebDAV 文件成员超过预算')
+                raise UserValueError('errors.organizeClouddrive.webdavTooManyFiles')
         return files
 
     def ensure_parent(self, path):
@@ -225,11 +234,11 @@ class PikPakDav:
         matches = [r for r in listing if PureWindowsPath(r['path']) == parent]
         if matches:
             if not matches[0]['directory']:
-                raise ValueError('目标父路径不是目录')
+                raise UserValueError('errors.organizeClouddrive.targetParentNotDirectory')
             return
         status, _ = self.request('MKCOL', str(parent))
         if status != 201:
-            raise OSError('WebDAV 创建父目录失败：HTTP ' + str(status))
+            raise UserOSError('errors.organizeClouddrive.webdavMkcolFailed', {'status': status})
         self.refresh(grandparent)
 
     def submit_move(self, source, target):
@@ -242,16 +251,16 @@ class PikPakDav:
         self.url(target)
         old, new = PureWindowsPath(source), PureWindowsPath(target)
         if old.parent != new.parent and old.name != new.name:
-            raise ValueError('官方接口只接受同父改名或保留名称的移动；跨父改名须先拆成两步')
+            raise UserValueError('errors.organizeClouddrive.crossParentRename')
         old_parent, new_parent = str(old.parent), str(new.parent)
         entries = self.list(old_parent)
         found = [r for r in entries if PureWindowsPath(r['path']) == PureWindowsPath(source)]
         if len(found) != 1:
-            raise FileNotFoundError('WebDAV 来源未取得')
+            raise UserFileNotFoundError('errors.organizeClouddrive.webdavSourceNotFound')
         before = self.tree(source) if found[0]['directory'] else found
         self.ensure_parent(target)
         if any(PureWindowsPath(r['path']) == PureWindowsPath(target) for r in self.list(new_parent)):
-            raise FileExistsError('WebDAV 目标已存在')
+            raise UserFileExistsError('errors.organizeClouddrive.webdavTargetExists')
         try:
             response_status = self.submit_move(source, target)
         except OSError:
@@ -267,7 +276,7 @@ class PikPakDav:
                 raise
             except (UnconfirmedMove, OSError, ValueError):
                 if final:
-                    raise UnconfirmedMove('移动状态未确认，保留意图回执并停止；不重复操作、不写数据库') from None
+                    raise UnconfirmedMove() from None
                 time.sleep(2)
 
     def confirm_move(self, source, target, source_entry, before, response_status, *, final=True):
@@ -280,13 +289,13 @@ class PikPakDav:
             still_present = any(PureWindowsPath(r['path']) == PureWindowsPath(source) for r in old_listing)
             if still_present and not arrived:
                 if response_status == REJECTED or final:
-                    raise MoveNotExecuted('官方接口拒绝或未执行移动，原件已确认留在原处')
-                raise ValueError('移动请求仍可能在服务端处理')
+                    raise MoveNotExecuted('errors.organizeClouddrive.moveNotExecuted')
+                raise ValueError('move may still be in progress on the server')
             after = self.tree(target) if source_entry['directory'] else arrived
             expected = {(str(PureWindowsPath(target, *PureWindowsPath(r['path']).parts[len(PureWindowsPath(source).parts):])), r['size'])
                         for r in before}
             if still_present or len(arrived) != 1 or arrived[0]['directory'] != source_entry['directory'] or expected != {(r['path'], r['size']) for r in after}:
-                raise ValueError('移动状态或完整成员不符')
+                raise ValueError('move state or member listing does not match')
             for parent in {old_parent, new_parent}:
                 self.refresh(parent)
             if source_entry['directory']:
@@ -294,19 +303,19 @@ class PikPakDav:
         except MoveNotExecuted:
             raise
         except Exception:
-            raise UnconfirmedMove('移动状态未确认，保留意图回执并停止；不重复操作、不写数据库') from None
+            raise UnconfirmedMove() from None
 
 
 def _cloud_listing(cloud, path, mapping):
     """逐层完整读取官方目录元数据并校验来源、父目录与重名。"""
     relative = mapping.relative(path)
     if len(relative) > 32:
-        raise ValueError('官方目录路径超过层级预算')
+        raise UserValueError('errors.organizeClouddrive.cloudPathTooDeep')
     previous = None
     for depth in range(len(relative) + 1):
         parent = PureWindowsPath(mapping.root, *relative[:depth])
         if previous is not None and not any(PureWindowsPath(row['path']) == parent and row['directory'] for row in previous):
-            raise FileNotFoundError('官方父目录未列出所需目录')
+            raise UserFileNotFoundError('errors.organizeClouddrive.cloudParentMissing')
         request = ListRequest(path=mapping.cloud_path(str(parent)), forceRefresh=True)
         call = cloud.channel.unary_stream(SERVICE + 'GetSubFiles',
             request_serializer=ListRequest.SerializeToString, response_deserializer=ListReply.FromString)
@@ -318,15 +327,16 @@ def _cloud_listing(cloud, path, mapping):
                     name = PureWindowsPath(map_cloud_path(member.fullPathName,
                         (CloudPrefix(mapping.remote, mapping.root),)))
                     if name.parent != parent or str(name).casefold() in seen or member.size < 0:
-                        raise ValueError('官方目录成员越界、重名或体积无效')
+                        raise UserValueError('errors.organizeClouddrive.cloudListingInvalid')
                     seen.add(str(name).casefold())
                     rows.append(dict(path=str(name),size=member.size,directory=member.isDirectory))
                 if len(rows) > MAX_FILES:
-                    raise ValueError('官方目录成员超过预算')
+                    raise UserValueError('errors.organizeClouddrive.cloudListingTooLarge')
         except grpc.RpcError as error:
-            kind = RetryableIOError if error.code() in {
-                grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.ABORTED} else OSError
-            raise kind('官方完整目录未取得：' + error.code().name) from None
+            params = {'status': error.code().name}
+            if error.code() in {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.ABORTED}:
+                raise RetryableIOError('errors.organizeClouddrive.cloudListingUnavailable', params) from None
+            raise UserOSError('errors.organizeClouddrive.cloudListingUnavailable', params) from None
         finally:
             stream.cancel()
         previous = rows
@@ -348,7 +358,7 @@ def _move_remote(cloud, source, target, mapping):
     old_remote, new_remote = mapping.cloud_path(source), mapping.cloud_path(target)
     if (old.name != new.name or old.parent == new.parent
             or PureWindowsPath(mapping.root) in (old, new)):
-        raise ValueError('官方移动来源、父目录或文件名不符')
+        raise UserValueError('errors.organizeClouddrive.moveMismatch')
     request = MoveRequest(theFilePaths=[old_remote],
                           destPath=str(PurePosixPath(new_remote).parent),
                           conflictPolicy=2, moveAcrossClouds=False, handleConflictRecursively=False)
@@ -368,7 +378,7 @@ def _rename_remote(cloud, source, target, mapping):
     old_remote = mapping.cloud_path(source)
     mapping.relative(target)
     if old.parent != new.parent or PureWindowsPath(mapping.root) in (old, new):
-        raise ValueError('官方改名只支持已声明来源内的同父目录')
+        raise UserValueError('errors.organizeClouddrive.renameOutsideParent')
     stub = cloud.channel.unary_unary(SERVICE + 'RenameFile',
         request_serializer=RenameRequest.SerializeToString, response_deserializer=pb.FileOperationResult.FromString)
     try:
@@ -390,7 +400,7 @@ def _refresh_listing(cloud, path, mapping):
              timeout=15, metadata=(('authorization', 'Bearer ' + cloud.token),))
     except grpc.RpcError as error:
         if error.code() != grpc.StatusCode.NOT_FOUND:
-            raise OSError('目录缓存刷新未取得：' + error.code().name) from None
+            raise UserOSError('errors.organizeClouddrive.refreshFailed', {'status': error.code().name}) from None
     return _cloud_listing(cloud, path, mapping)
 
 
@@ -408,20 +418,20 @@ def _download_headers(cloud, sample_path, mapping):
                          metadata=(('authorization', 'Bearer ' + cloud.token),))
         except grpc.RpcError as error:
             if error.code() != grpc.StatusCode.NOT_FOUND:
-                raise ValueError('既有 CloudDrive 直链认证未取得') from None
+                raise UserValueError('errors.organizeClouddrive.directLinkAuthMissing') from None
             if index == 0:
                 paths.extend(p for p in _fallback_samples(mapping) if p != sample_path)
             continue
         url = urlsplit(reply.directUrl)
         if url.hostname != 'dav.mypikpak.com' or url.scheme not in ('http', 'https') or url.username or url.query or unquote(url.path) != relative:
-            raise ValueError('既有直链来源或路径不符')
+            raise UserValueError('errors.organizeClouddrive.directLinkMismatch')
         headers = dict(reply.additionalHeaders)
         if not any(k.casefold() == 'authorization' for k in headers):
-            raise ValueError('既有 WebDAV 认证未取得')
+            raise UserValueError('errors.organizeClouddrive.webdavAuthMissing')
         if reply.userAgent:
             headers['User-Agent'] = reply.userAgent
         return headers
-    raise ValueError('既有 CloudDrive 认证样本未取得')
+    raise UserValueError('errors.organizeClouddrive.authSampleMissing')
 
 
 @contextmanager
@@ -431,21 +441,21 @@ def pikpak_renames(sample_path: str, roots):
     mapping = _configured_paths(sample_path, roots, prefixes)
     credential = CredentialStore(SECRETS_DIR).load(CLOUDDRIVE_CREDENTIAL)
     if not credential or not credential.values.get('token'):
-        raise ValueError('既有 CloudDrive 令牌未取得')
+        raise UserValueError('errors.organizeClouddrive.tokenMissing')
     address = DownloadSettings(STATE_DIR).load().clouddrive_address or discover()
     with CloudDriveClient(address, credential.values['token'], timeout=15) as cloud:
         info = cloud.find(mapping.remote)
         if info is None or info.CloudAPI.name.casefold() != 'webdav':
-            raise ValueError('既有 PikPak WebDAV 来源未取得')
+            raise UserValueError('errors.organizeClouddrive.webdavSourceMissing')
         account_root = info.CloudAPI.path if info.CloudAPI.HasField('path') else ''
         if not account_root and info.isCloudRoot:
             account_root = mapping.remote
         if not account_root:
-            raise ValueError('CloudDrive 未返回 WebDAV 账号根目录')
+            raise UserValueError('errors.organizeClouddrive.accountRootMissing')
         try:
             tail = PurePosixPath(mapping.remote).relative_to(PurePosixPath(account_root))
         except ValueError:
-            raise ValueError('CloudDrive 路径前缀不属于返回的账号根目录') from None
+            raise UserValueError('errors.organizeClouddrive.prefixOutsideAccountRoot') from None
         mapping = PikPakPaths(mapping.root, mapping.remote, '/' + '/'.join(tail.parts))
         headers = _download_headers(cloud, sample_path, mapping)
         with http_client(root=SECRETS_DIR, headers=headers, timeout=20, follow_redirects=False) as http:

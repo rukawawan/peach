@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.catalog_rules import is_jav_code   # noqa: E402
 from peach.config import STATE_DIR   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
 from peach.page_cache import HttpStatusError, Site   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
@@ -49,7 +50,10 @@ JP_FIELD = re.compile(r"JP:\s*(?:</[a-z]+>)?\s*([^<]{1,60})")
 ALT_FIELD = re.compile(r"Alt:\s*(?:</[a-z]+>)?\s*([^<]{1,160})")
 TAG = re.compile(r"<[^>]+>")
 
-OK, HELD, AMBIGUOUS, MISSING = "ok", "已有", "需人工消歧", "未取得"
+#: 复核 CSV `verdict` 列：可收、账本已有、对上多位要人消歧、没取到。
+OK, HELD, AMBIGUOUS, MISSING = "ok", "held", "ambiguous", "missed"
+#: 汇总里不是判定的两项计数：账本里没有番号可以当入口、番号页上的人一位都没对上。
+NO_CODES, UNMATCHED = "no-codes", "unmatched"
 
 
 # ---------------------------------------------------------------- 解析
@@ -162,8 +166,8 @@ def harvest(site: Site, connection: sqlite3.Connection, performers: list[dict],
         held = {name_key(name) for name in ledger_names.get(entity_id, ()) if name_key(name)}
         codes = codes_of(connection, entity_id, codes_per_performer)
         if not codes:
-            rows.append(row(**base, verdict=MISSING, evidence="账本里没有 JAV 番号可做入口"))
-            stats["无番号入口"] += 1
+            rows.append(row(**base, verdict=MISSING, evidence=t("harvest_javdatabase_names.noCodes")))
+            stats[NO_CODES] += 1
             continue
         notes: list[str] = []
         matched = False
@@ -175,7 +179,7 @@ def harvest(site: Site, connection: sqlite3.Connection, performers: list[dict],
                 continue
             links = idol_links(page)
             if not links:
-                notes.append(f"{code}: 作品页没有 idol 链接")
+                notes.append(t("harvest_javdatabase_names.noIdolLinks", code=code))
                 continue
             for idol_url in links:
                 if idol_url not in seen_idol:
@@ -193,11 +197,12 @@ def harvest(site: Site, connection: sqlite3.Connection, performers: list[dict],
                 display = next((value for field, value in names if field == "romaji"), "")
                 where = f"{movie_url} → {idol_url}"
                 if len(owners) > 1:
-                    others = "、".join(ledger_names[other][0] for other in sorted(owners)
-                                      if ledger_names.get(other))
+                    others = [ledger_names[other][0] for other in sorted(owners)
+                              if ledger_names.get(other)]
                     rows.append(row(**base, code=code, movie_url=movie_url, idol_url=idol_url,
                                     idol_name=display, verdict=AMBIGUOUS,
-                                    evidence=f"{where}；页面名字同时对上：{others}"))
+                                    evidence=t("harvest_javdatabase_names.matchedSeveral",
+                                               where=where, names=others)))
                     stats[AMBIGUOUS] += 1
                     matched = True
                     continue
@@ -215,24 +220,25 @@ def harvest(site: Site, connection: sqlite3.Connection, performers: list[dict],
                 break
         if not matched:
             rows.append(row(**base, code=" ".join(codes), verdict=MISSING,
-                            evidence="；".join(notes) or "作品页上的 idol 都对不上账本这个人"))
-            stats["未对上"] += 1
+                            evidence=(t("common.clauseSeparator").join(notes)
+                                      or t("harvest_javdatabase_names.noIdolMatched"))))
+            stats[UNMATCHED] += 1
     return rows, stats
 
 
 # ---------------------------------------------------------------- 入口
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=t("harvest_javdatabase_names.description"))
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--min-assets", type=int, default=1)
-    parser.add_argument("--codes", type=int, default=2, help="每人最多用几个番号做入口")
+    parser.add_argument("--codes", type=int, default=2, help=t("harvest_javdatabase_names.codesHelp"))
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--only", help="只查这些 entity_id（逗号分隔），用来先跑小批")
+    parser.add_argument("--only", help=t("harvest_javdatabase_names.onlyHelp"))
     parser.add_argument("--interval", type=float, default=1.5)
     parser.add_argument("--timeout", type=float, default=30.0)
-    parser.add_argument("--refresh", action="store_true", help="忽略缓存重抓")
+    parser.add_argument("--refresh", action="store_true", help=t("harvest_javdatabase_names.refreshHelp"))
     parser.add_argument("--cache-dir", type=Path, default=STATE_DIR / "javdatabase-names")
     parser.add_argument("--lock", type=Path, default=STATE_DIR / ".javdatabase-names.lock")
     return parser
@@ -261,8 +267,8 @@ def run(args: argparse.Namespace, site: Site | None = None) -> int:
     rows.sort(key=lambda item: (order.get(item["verdict"], 9), -int(item["assets"]),
                                 str(item["entity_id"])))
     write_rows(args.output, FIELDS, rows)
-    print({"复核行": len(rows), **stats, "取页": site.fetched, "命中缓存": site.cached,
-           "重试": site.retried, "output": str(args.output)})
+    print({t("harvest_javdatabase_names.reviewRows"): len(rows), **stats, t("harvest_javdatabase_names.fetched"): site.fetched, t("harvest_javdatabase_names.cached"): site.cached,
+           t("harvest_javdatabase_names.retried"): site.retried, "output": str(args.output)})
     return 0
 
 

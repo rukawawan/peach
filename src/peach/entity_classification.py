@@ -4,18 +4,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from . import interface_text
+from .catalog_vocabulary import AMATEUR_TAG
 from .entry_links import EXTERNAL_KIND, JAV_DIRECTORIES
+from .user_messages import UserValueError
 
+#: 各维度认得的取值；显示名在 `server:identity.classification.<维度>.<取值>`（ADR-0159）。
 VALUES = {
-    'identity': {'person':'个人', 'account':'发布账号', 'organization':'机构',
-                 'platform':'平台', 'collection':'合集目录', 'release':'作品标识', 'unknown':'身份待核验'},
-    'occupation': {'adult_performer':'成人出演者', 'amateur_performer':'非职业出演者', 'model':'模特', 'actor':'演员',
-                   'artist':'艺术创作者', 'animator':'动画作者', 'content_creator':'内容创作者'},
-    'market': {'japanese_av':'日本 AV', 'western_adult':'西方成人发行'},
-    'account_role': {'seller':'卖家', 'publisher':'发布者', 'studio':'发行厂牌'},
+    'identity': ('person', 'account', 'organization', 'platform', 'collection', 'release', 'unknown'),
+    'occupation': ('adult_performer', 'amateur_performer', 'model', 'actor', 'artist', 'animator',
+                   'content_creator'),
+    'market': ('japanese_av', 'western_adult'),
+    'account_role': ('seller', 'publisher', 'studio'),
 }
-CATEGORIES = {'japanese_av': '女优', 'amateur': '素人', 'western': '西方',
-              'blogger': '网黄博主', 'seller': '卖家', 'animation': '动画作者'}
+#: 人物分类的 id；名字在 `server:identity.category.<id>`（ADR-0159）。
+CATEGORIES = ('japanese_av', 'amateur', 'western', 'blogger', 'seller', 'animation')
 #: observed 只属于代码判据（ADR-0052 决策一）：`source:` 是抓取器从来源页解析出的事实，
 #: `script:fc2-seller@` 由 FC2 作品页快照的卖家字段解析，`script:creator-identity-wiki@` 由查创作者
 #: 身份后继按页名直取资料站、按作品表结构判定（ADR-0098）。研究与检索结论只写 candidate。
@@ -58,22 +61,22 @@ def write_claim(connection, *, entity_id, facet, value, source, evidence,
                 source_url='', status='candidate', confidence=0.5, checked_at=None):
     """目录、检索与研究推断保持 candidate，代码判据事实使用 observed，用户复核使用 approved。"""
     if facet not in VALUES or value not in VALUES[facet]:
-        raise ValueError('未知身份分类')
+        raise ValueError("unknown identity classification")
     if status not in {'candidate','observed','approved','rejected'}:
-        raise ValueError('未知断言状态')
+        raise ValueError("unknown claim status")
     if not source or not evidence or not 0 <= confidence <= 1:
-        raise ValueError('断言缺少来源、证据或有效置信度')
+        raise ValueError("claim is missing a source, evidence, or valid confidence")
     if status == 'approved' and not source.startswith(('user:', 'review:')):
-        raise ValueError('approved 只属于用户复核')
+        raise ValueError("approved is reserved for user review")
     if status == 'observed' and urlsplit(source_url).scheme != 'https':
-        raise ValueError('公开事实需要 HTTPS 来源')
+        raise ValueError("public facts need an HTTPS source")
     if status == 'observed' and not source.startswith(CODE_SOURCES):
-        raise ValueError('observed 只属于代码判据来源')
+        raise ValueError("observed is reserved for code-rule sources")
     # 脚本不覆盖同来源上的用户复核。
     old = connection.execute('SELECT status FROM entity_classification WHERE entity_id=? AND facet=? AND value=? AND source=?',
                              (entity_id,facet,value,source)).fetchone()
     if old and old[0] == 'approved' and status != 'approved':
-        raise ValueError('不能覆盖已复核断言')
+        raise UserValueError("errors.entityClassification.reviewedClaim")
     connection.execute('INSERT INTO entity_classification VALUES(?,?,?,?,?,?,?,?,?) '
                        'ON CONFLICT(entity_id,facet,value,source) DO UPDATE SET source_url=excluded.source_url,'
                        'evidence=excluded.evidence,status=excluded.status,confidence=excluded.confidence,checked_at=excluded.checked_at',
@@ -95,7 +98,11 @@ def classifications(connection, entity_ids):
     columns = [column[0] for column in cursor.description]
     for raw in cursor:
         row = dict(zip(columns,raw))
-        row['label'] = VALUES.get(row['facet'], {}).get(row['value'], row['value'])
+        if row['value'] in VALUES.get(row['facet'], ()):
+            row['label_code'] = f"identity.classification.{row['facet']}.{row['value']}"
+            row['label'] = interface_text.text(f"server:{row['label_code']}")
+        else:
+            row['label'] = row['value']
         result[row.pop('entity_id')].append(row)
     return result
 
@@ -123,10 +130,10 @@ def category_predicates(column='e.id', kind_column='e.kind', connection=None):
     # 视觉模型读画面得出的标签（`vision*` 来源，含复核页整批通过的创作者风格标签）只描述观感，
     # 不参与身份判定；刮削、文件名、用户与发行元数据来源照收。
     amateur_release = ("COALESCE(av.code,'') LIKE 'FC2-PPV-%' "
-                       f"OR EXISTS (SELECT 1 FROM asset_tag t WHERE t.asset_id=av.id AND t.tag='素人' "
+                       f"OR EXISTS (SELECT 1 FROM asset_tag t WHERE t.asset_id=av.id AND t.tag='{AMATEUR_TAG}' "
                        f"AND t.source NOT LIKE '{MODEL_TAG_SOURCE_PREFIX}%') "
                        "OR EXISTS (SELECT 1 FROM asset_entity ta JOIN entity te ON te.id=ta.entity_id "
-                       "WHERE ta.asset_id=av.id AND te.kind='tag' AND te.canonical_name='素人' "
+                       f"WHERE ta.asset_id=av.id AND te.kind='tag' AND te.canonical_name='{AMATEUR_TAG}' "
                        f"AND ta.source NOT LIKE '{MODEL_TAG_SOURCE_PREFIX}%')")
     only_amateur_releases = f"{work('1')} AND NOT {work(f'NOT ({amateur_release})')}"
     amateur = (f"({claim('occupation', 'amateur_performer')} OR ({only_amateur_releases})) "
@@ -162,7 +169,7 @@ def summaries(connection, entity_ids):
     for row in rows:
         categories = [key for key, matched in zip(predicates, row[1:]) if matched]
         result[row[0]] = {'identity_categories': categories,
-                          'identity_labels': [CATEGORIES[key] for key in categories]}
+                          'identity_labels': [interface_text.text(f'server:identity.category.{key}') for key in categories]}
     return result
 
 
@@ -240,7 +247,7 @@ def transfer(connection, source_id, target_id):
         old = connection.execute('SELECT source_url,evidence,status,confidence,checked_at FROM entity_classification WHERE entity_id=? AND facet=? AND value=? AND source=?',
                                  (target_id,*row[:3])).fetchone()
         if old and tuple(old)[:-1] != tuple(row[3:-1]):
-            raise ValueError('实体分类来源冲突，需先复核')
+            raise UserValueError("errors.entityClassification.classificationConflict")
         connection.execute('INSERT OR IGNORE INTO entity_classification VALUES(?,?,?,?,?,?,?,?,?)', (target_id,*row))
         if old and row[-1] > old[-1]:
             connection.execute('UPDATE entity_classification SET checked_at=? '
@@ -253,5 +260,5 @@ def transfer(connection, source_id, target_id):
             continue
         old = connection.execute('SELECT * FROM entity_identity_link WHERE left_id=? AND right_id=? AND relation=? AND source=?', row[:4]).fetchone()
         if old and tuple(old) != tuple(row):
-            raise ValueError('身份关联来源冲突，需先复核')
+            raise UserValueError("errors.entityClassification.identityLinkConflict")
         connection.execute('INSERT OR IGNORE INTO entity_identity_link VALUES(?,?,?,?,?,?,?,?)', row)

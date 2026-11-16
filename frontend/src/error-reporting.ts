@@ -1,5 +1,6 @@
 /* 浏览器异常只记录到当前 Peach 主机。失败不再生成新的错误请求。 */
 import { browserDiagnostics, detailedBrowserDiagnostics, playbackDiagnostics } from './browser-diagnostics';
+import { t } from './i18n';
 let installed = false;
 const errorNames = new Set(['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError', 'EvalError', 'AggregateError', 'DOMException']);
 /* 正式包的文件名：主包入口、页面包与主包按页拆出的 chunk（ADR-0118），与服务端 `diagnostic_browser.SHIPPED` 同一口径。 */
@@ -25,7 +26,7 @@ export function installErrorReporting(): void {
   if (!/^\/(?:login|setup)(?:\/|$)/.test(location.pathname)) {
     void detailedBrowserDiagnostics().then(browser => fetch('/api/diagnostics/client-error', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-      body: JSON.stringify({ kind: 'context', message: '浏览器环境快照', browser }),
+      body: JSON.stringify({ kind: 'context', message: t('shell:errorReport.browserSnapshot'), browser }),
     })).catch(() => {});
   }
   let start = Date.now();
@@ -55,7 +56,7 @@ export function installErrorReporting(): void {
     }).catch(() => {});
   };
   window.addEventListener('error', event => send('error', event.error, event.message, event));
-  window.addEventListener('unhandledrejection', event => send('unhandledrejection', event.reason, 'Promise 未处理的异常'));
+  window.addEventListener('unhandledrejection', event => send('unhandledrejection', event.reason, t('shell:errorReport.unhandledRejection')));
   document.addEventListener('error', event => {
     const target = event.target;
     const video = target instanceof HTMLMediaElement ? target
@@ -63,6 +64,6 @@ export function installErrorReporting(): void {
     const failure = (target as (HTMLElement & { error?: unknown }) | null)?.error || (event as ErrorEvent).error;
     if (!video || !failure) return;
     const evidence = playbackDiagnostics(video, failure);
-    send('media', `媒体播放失败（${evidence.code}）`, '', undefined, evidence);
+    send('media', t('shell:errorReport.mediaPlaybackFailed', { code: evidence.code }), '', undefined, evidence);
   }, true);
 }

@@ -1,8 +1,10 @@
 import datetime
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,6 +65,12 @@ class ContextBudgetTests(unittest.TestCase):
         finally:
             self.checker.BUDGET_CHANGES = original
         self.assertTrue(any("是上调" in problem for problem in problems), problems)
+
+    def test_problems_follow_the_local_language(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"PEACH_LANGUAGE": "en"}):
+            problems = self.checker.check_line_budgets(Path(tmp))
+        self.assertIn("AGENTS.md: file missing", problems)
 
     def test_budget_above_ceiling_is_reported(self):
         original = dict(self.checker.BUDGET_CHANGES)

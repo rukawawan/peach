@@ -17,6 +17,7 @@ import { Button, Menu, MenuItem, MenuSection, MenuTrigger, Popover, Separator } 
 import { MENU_POPOVER_SURFACE } from '@/components/base/dropdown/menu-styles';
 
 import { Glyph } from './glyph';
+import { t } from '../../i18n';
 
 export function NamePicker({ current, choices, onChoose, onAddAlias }: {
   current: string;
@@ -28,16 +29,16 @@ export function NamePicker({ current, choices, onChoose, onAddAlias }: {
   const toggle = useRef<HTMLButtonElement>(null);
   /* title 给壳的提示条用（board-controls 只认 [title]），和旧资料卡那枚一样悬停就出字。
      react-aria 的 Button 不收 title，挂载后直接写到节点上；提示条收起时会把它放回来。 */
-  useEffect(() => { toggle.current?.setAttribute('title', '名字与别名') }, []);
+  useEffect(() => { toggle.current?.setAttribute('title', t('catalog:namePicker.title')) }, []);
   return (
     <MenuTrigger isOpen={open} onOpenChange={setOpen}>
-      <Button ref={toggle} data-namepick-toggle="" aria-label="名字与别名">
+      <Button ref={toggle} data-namepick-toggle="" aria-label={t('catalog:namePicker.title')}>
         <Glyph name="chevron-down" />
       </Button>
       {/* 离按钮 8px：旧锚定菜单 wireAnchoredMenu 就是 anchor.bottom + 8，另两枚弹层也是 8。 */}
       <Popover placement="bottom start" offset={8} containerPadding={8} className={MENU_POPOVER_SURFACE}
         data-namepick-menu="">
-        <Menu aria-label="名字与别名" data-namepick-list="">
+        <Menu aria-label={t('catalog:namePicker.title')} data-namepick-list="">
           <MenuSection selectionMode="single" disallowEmptySelection selectedKeys={[current]}
             onSelectionChange={(keys) => {
               const chosen = [...(keys as Set<string>)][0];
@@ -51,8 +52,8 @@ export function NamePicker({ current, choices, onChoose, onAddAlias }: {
           </MenuSection>
           <Separator data-namepick-rule="" />
           <MenuSection>
-            <MenuItem id="alias" textValue="添加别名" data-namepick-alias="" onAction={onAddAlias}>
-              <Glyph name="plus" /><span>添加别名…</span>
+            <MenuItem id="alias" textValue={t('catalog:namePicker.addAlias')} data-namepick-alias="" onAction={onAddAlias}>
+              <Glyph name="plus" /><span>{t('catalog:namePicker.addAliasMenu')}</span>
             </MenuItem>
           </MenuSection>
         </Menu>

@@ -49,7 +49,9 @@ export interface EntityPageData extends EntityHeroData {
 export interface PhotoPage {
   error?: string;
   id?: number | string;
+  /** 图集标题是目录名；取不到目录名时是固定说法，旁边带 `title_code`。 */
   title?: string;
+  title_code?: string;
   total?: number;
   sample_total?: number;
   sets?: (EntityCodeSet & { kind?: string })[];

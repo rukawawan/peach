@@ -67,10 +67,31 @@ class _Target(AppKit.NSObject):
         try:
             handler()
         except Exception:
-            LOGGER.exception("菜单项处理失败")
+            LOGGER.exception("Menu item handler failed")
 
     def invoke_(self, sender) -> None:
         self._dispatch(sender)
+
+
+class _Delegate(AppKit.NSObject, protocols=[objc.protocolNamed("NSApplicationDelegate")]):
+    """应用已在运行时再从 Finder、启动台或程序坞点开，系统不起新进程，只给这个进程发 reopen。
+
+    附件应用没有窗口，不接这个事件就什么也不发生；菜单栏图标被折叠时用户就再也找不到入口。
+    """
+
+    def initWithReopen_(self, reopen):
+        self = objc.super(_Delegate, self).init()
+        if self is None:
+            return None
+        self._reopen = reopen
+        return self
+
+    def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _visible):
+        try:
+            self._reopen()
+        except Exception:
+            LOGGER.exception("Reopen handler failed")
+        return False
 
 
 @dataclass(frozen=True)
@@ -92,11 +113,17 @@ class MenuBarApp:
         image: Image.Image,
         tooltip: str,
         items: list[tuple[object, Callable[[], None] | Submenu | None]],
+        *,
+        reopen: Callable[[], None] | None = None,
     ):
         self.app = AppKit.NSApplication.sharedApplication()
         # 附件应用：只在菜单栏出现，不占 Dock、不进 ⌘Tab。bundle 里 LSUIElement 也声明了
         # 一次，但直接从终端跑时只有这句管用。
         self.app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        # NSApplication 对委托只持弱引用，由这里持有。
+        self._delegate = _Delegate.alloc().initWithReopen_(reopen) if reopen else None
+        if self._delegate is not None:
+            self.app.setDelegate_(self._delegate)
 
         self._items = items
         self._handlers: dict[int, Callable[[], None]] = {}
@@ -171,7 +198,7 @@ class MenuBarApp:
         看着像「没放上去」其实只是早了一步。
         """
         def report() -> None:
-            LOGGER.info("菜单栏状态项位置：%s", self.placement())
+            LOGGER.info("Menu bar status item position: %s", self.placement())
 
         AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
             1.0, False, lambda _timer: report())

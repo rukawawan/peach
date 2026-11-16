@@ -10,7 +10,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from peach import media_configuration as media_config, onboarding, settings_file
+from peach import interface_text, media_configuration as media_config, onboarding, settings_file
 
 
 class ConfigurationIsolationTests(unittest.TestCase):
@@ -67,7 +67,12 @@ class ConfigurationIsolationTests(unittest.TestCase):
                 emit = stack.enter_context(patch.object(routes.error_reporting, "event"))
                 result = routes.snapshot(self.config)
                 self.assertEqual(list(result["section_errors"]), [failed])
-                self.assertEqual(len(result["section_errors"][failed]["error_id"]), 32)
+                issue = result["section_errors"][failed]
+                self.assertEqual(len(issue["error_id"]), 32)
+                self.assertTrue(issue["title"].endswith("未取得"))
+                self.assertEqual(issue["title"], interface_text.text(f"server:{issue['title_code']}", issue["title_params"]))
+                self.assertEqual(issue["title_params"]["section"], interface_text.text(f"server:{issue['section_code']}"))
+                self.assertEqual(issue["message"], interface_text.text(f"server:{issue['message_code']}"))
                 self.assertNotIn("private-detail", str(result))
                 self.assertEqual(result["media_dirs"], [])
                 self.assertEqual(result["port"], 8900)
@@ -173,7 +178,7 @@ class MediaConfigurationTests(unittest.TestCase):
         roots, _, errors = media_config.validate(
             [{"location": "local", "path": "/media/movies"}], windows=False, config=config)
         self.assertEqual(roots, {})
-        self.assertIn("无法自动配置", errors[0])
+        self.assertIn("无法自动配置", str(errors[0]))
 
     def test_configuration_uses_the_automatic_prefix_for_library_name_and_cost(self):
         from peach import routes_configuration
@@ -295,6 +300,17 @@ class MediaConfigurationTests(unittest.TestCase):
         self.assertIn("版本", present)
         self.assertEqual(missing["FFmpeg"]["download_label"], "下载 FFmpeg")
         self.assertEqual(missing["untrunc"]["download_label"], "下载 untrunc")
+        self.assertEqual(missing["FFmpeg"]["value"], "未找到 FFmpeg、ffprobe；转码、媒体信息与缩略图需要 FFmpeg 工具包。")
+        self.assertEqual(missing["untrunc"]["value"],
+                         f"未安装；缺索引的 MP4 需要它才修得了。解压到 {tools / 'untrunc'}。")
+        # 项名、取值与链接文字都带 code，英文界面拿到英文。
+        english = {key: interface_text.text(f"server:{missing['FFmpeg'][f'{key}_code']}",
+                                            missing["FFmpeg"][f"{key}_params"], "en")
+                   for key in ("value", "download_label")}
+        self.assertEqual(english, {
+            "value": "FFmpeg and ffprobe not found. Transcoding, media info and thumbnails need the FFmpeg tools.",
+            "download_label": "Download FFmpeg"})
+        self.assertEqual(interface_text.text(f"server:{present['版本']['term_code']}", None, "en"), "Version")
         self.assertEqual({term: (row.get("install_tool"), "download_url" in row) for term, row in installable.items()
                           if term in ("FFmpeg", "untrunc")},
                          {"FFmpeg": ("ffmpeg", False), "untrunc": ("untrunc", False)})
@@ -324,7 +340,8 @@ class MediaConfigurationTests(unittest.TestCase):
         ], windows=True)
         self.assertEqual(roots, {})
         self.assertEqual(mounts, {})
-        self.assertIn("映射为 Windows 盘符", errors[0])
+        self.assertIn("映射为 Windows 盘符", str(errors[0]))
+        self.assertTrue(errors[0].code.startswith("errors.mediaConfiguration."))
         with patch.object(media_config, "mount_dependencies", return_value=[]):
             roots, mounts, errors = media_config.validate([
                 {"location": "115", "path": r"Z:\视频"},
@@ -423,15 +440,16 @@ class MediaConfigurationTests(unittest.TestCase):
 
     def test_setup_local_source_reports_native_directory_error_first(self):
         from peach.routes_pages import _setup_media_source_errors
+        from peach.user_messages import UserValueError
 
         def missing_directory(_path):
-            raise ValueError("目录不存在：/missing")
+            raise UserValueError("errors.onboarding.mediaDirMissing", {"path": "/missing"})
 
         errors = _setup_media_source_errors(
             ["/missing"], ["local"],
             ["Windows 中的对应路径必须包含盘符，例如 B:\\"], missing_directory,
         )
-        self.assertEqual(errors, ["目录不存在：/missing"])
+        self.assertEqual([str(error) for error in errors], ["目录不存在，或者不是目录：/missing。先建好再填。"])
 
     def test_completion_facts_and_entry_leave_out_mounts_and_internals(self):
         from peach.routes_pages import _setup_destination

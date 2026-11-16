@@ -405,7 +405,6 @@ CONTENT_GENRES: dict[str, str] = {
     # FC2 标题开头的 `【無】`、`【モ無し】` 是無修正的省写，卖家原样搬进标签。
     "無": "无码", "モ無し": "无码",
     "ASMR": "ASMR", "音声": "ASMR", "音声作品": "ASMR",
-    "4K": "4K",
     "Virtual Reality": "VR", "VR": "VR", "VR Exclusive": "VR", "High-Quality VR": "VR",
     "8KVR": "VR", "VR専用": "VR",
     "Compilation": "合集", "Omnibus": "合集", "Actress Best Compilation": "合集",
@@ -583,8 +582,9 @@ PROFILE_GENRES: dict[str, tuple[str, ...]] = {
 #: 来源确实返回、但描述的不是内容的 genre。画质、载体、发行方式、促销企划和
 #: 「单体作品／AV女優」这类演员编成都归这里：排除是判断，不是遗漏。
 NON_CONTENT_GENRES: frozenset[str] = frozenset({
-    # 画质与载体
-    "Hi-Def", "HD High Definition", "FULL HD 1080P", "iPhone/iPad Movie",
+    # 画质与载体。来源的 `4K` 说的是官方出过 4K 版，手里这份文件常是 1080p；
+    # 文件自己的画质由探测写进 `ctx_quality`，卡片与播放器角标都读实际尺寸。
+    "4K", "Hi-Def", "HD High Definition", "FULL HD 1080P", "iPhone/iPad Movie",
     "Streaming Video", "ハイビジョン", "フルハイビジョン(FHD)", "高画質",
     "Blu-ray（ブルーレイ）", "DVD", "スマホ対応", "4K撮影",
     # 发行与促销

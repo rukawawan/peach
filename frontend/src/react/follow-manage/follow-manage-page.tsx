@@ -38,6 +38,7 @@ import {
 import { SourceList } from './source-list';
 import { MeasuredReading } from './measured-reading';
 import { FOLLOW_MANAGE_NAV as TABS } from './manage-route';
+import { t } from '../../i18n';
 
 type TabKey = (typeof TABS)[number][0];
 
@@ -101,10 +102,10 @@ export function FollowManagePage(props: FollowManageProps) {
   return (
     <Page>
       {readOnly ? (
-        <Note tone="warning" title="本机只能浏览"
+        <Note tone="warning" title={t('follow:followManagePage.readOnly')}
           extra={writerUrl
             ? <p className="text-body-2-regular">
-                <ExternalLink href={writerUrl}>前往写入端管理关注</ExternalLink>
+                <ExternalLink href={writerUrl}>{t('follow:followManagePage.goToPrimary')}</ExternalLink>
               </p>
             : undefined}>
           {readOnlyMessage}
@@ -112,7 +113,7 @@ export function FollowManagePage(props: FollowManageProps) {
       ) : null}
 
       {/* 前四张是关注，后两张是 JAV 订阅源：订了几位、拉回来的新作还有几条没看。 */}
-      <div className={STAT_STRIP_SIX} aria-label="关注概览">
+      <div className={STAT_STRIP_SIX} aria-label={t('follow:followManagePage.overview')}>
         <MeasuredReading field="creators" figure={follow.data ? groups.length : undefined} failed={follow.isError} />
         <MeasuredReading field="enabled" figure={follow.data ? enabled : undefined} total={sources.length} failed={follow.isError} />
         <MeasuredReading field="failed" figure={follow.data ? broken : undefined} failed={follow.isError} />
@@ -123,7 +124,7 @@ export function FollowManagePage(props: FollowManageProps) {
 
       <div className="flex flex-col gap-6">
         <div data-section-nav>
-          <SortableBoardTabs group="follow" label="关注管理区域" value={tab} panelPrefix="follow" sectionItems
+          <SortableBoardTabs group="follow" label={t('follow:followManagePage.sectionTabs')} value={tab} panelPrefix="follow" sectionItems
             tabs={TABS.map(([value, label]) => ({ value, label }))} className=""
             itemClassName="cursor-pointer whitespace-nowrap" onChange={next => {
               setSelected(new Set()); setFeedSelected(new Set()); setTab(next); go({ tab: next });
@@ -157,14 +158,14 @@ export function FollowManagePage(props: FollowManageProps) {
               setPage(1);
               savePreference({ pageSize: next });
               go({ page: 1 });
-            }} /> : follow.isError ? <Note tone="error">关注列表未取得</Note>
-            : <div role="status" aria-label="正在读取关注列表" data-skeleton="" className="skeleton-sheen h-32 rounded-lg" />}
+            }} /> : follow.isError ? <Note tone="error">{t('follow:followManagePage.listFailed')}</Note>
+            : <div role="status" aria-label={t('follow:followManagePage.listLoading')} data-skeleton="" className="skeleton-sheen h-32 rounded-lg" />}
         </div> : null}
 
         {tab === 'add' ? <div role="tabpanel" id="follow-panel-add" aria-labelledby="follow-tab-add" className="flex flex-col gap-8">
           {credentials.data && follow.data ? <AddSource data={data} credentials={creds} readOnly={readOnly} toast={toast} />
-            : credentials.isError || follow.isError ? <Note tone="error">关注或凭据状态未取得</Note>
-            : <div role="status" aria-label="正在读取关注凭据" data-skeleton="" className="skeleton-sheen h-32 rounded-lg" />}
+            : credentials.isError || follow.isError ? <Note tone="error">{t('follow:followManagePage.credentialsFailed')}</Note>
+            : <div role="status" aria-label={t('follow:followManagePage.credentialsLoading')} data-skeleton="" className="skeleton-sheen h-32 rounded-lg" />}
           <AddFeed readOnly={readOnly} toast={toast}
             onAdded={() => { void feeds.refetch(); setTab('list'); go({ tab: 'list' }) }} />
           {follow.data ? <AliasManager groups={data.author_aliases || []} readOnly={readOnly} toast={toast}
@@ -176,7 +177,7 @@ export function FollowManagePage(props: FollowManageProps) {
         </div> : null}
 
       </div>
-      <div><ButtonLink variant="secondary" href="/settings/subscriptions">来源与订阅设置{pending ? `（${pending}）` : ''}</ButtonLink></div>
+      <div><ButtonLink variant="secondary" href="/settings/subscriptions">{pending ? t('follow:followManagePage.feedSettingsPending', { count: pending }) : t('follow:followManagePage.feedSettings')}</ButtonLink></div>
     </Page>
   );
 }

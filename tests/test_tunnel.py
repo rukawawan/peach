@@ -768,13 +768,16 @@ class NamedTunnelRouteTests(unittest.TestCase):
             self.save({"enabled": False, "mode": "named", "hostname": "peach.example.com/admin"})
         self.assertEqual(raised.exception.status_code, 400)
         self.assertIn("hostname", raised.exception.detail["errors"])
+        self.assertEqual(raised.exception.detail["error_codes"]["hostname"]["code"],
+                         raised.exception.detail["message_code"])
 
     def test_a_standalone_package_refuses_to_store_the_named_mode(self):
         with mock.patch.object(routes_configuration.distribution, "standalone", return_value=True):
             with self.assertRaises(HTTPException) as raised:
                 routes_configuration.tunnel_changes(self.config, {"mode": "named"})
         self.assertEqual(raised.exception.status_code, 400)
-        self.assertEqual(raised.exception.detail, tunnel.STANDALONE_NAMED_ERROR)
+        self.assertEqual((raised.exception.detail["message"], raised.exception.detail["message_code"]),
+                         (tunnel.STANDALONE_NAMED_ERROR, "errors.tunnel.standaloneQuickOnly"))
 
     def test_a_standalone_package_reports_that_the_named_mode_is_unavailable(self):
         with mock.patch.object(routes_configuration.distribution, "standalone", return_value=True):
@@ -1105,7 +1108,9 @@ class AccessTunnelInterlockTests(unittest.TestCase):
         response, write = self.save(manager)
         manager.stop.assert_called_once_with()
         self.assertFalse(write.call_args.args[0].tunnel.enabled)
-        self.assertIn("临时远程链接", json.loads(response.body)["tunnel_notice"])
+        body = json.loads(response.body)
+        self.assertIn("临时远程链接", body["tunnel_notice"])
+        self.assertEqual(body["tunnel_notice_code"], "labels.configuration.tunnelStopped")
 
     def test_disabling_the_password_without_a_tunnel_changes_nothing(self):
         manager = self.manager("stopped")

@@ -8,6 +8,7 @@ import { addWant, invalidateWants } from '../wants/wants';
 import { busyProps, useAction } from '../settings/use-action';
 import { JavBatchResources } from './jav-batch-resources';
 import type { Discovery } from './jav';
+import { t } from '../../i18n';
 
 function subscribeDensity(notify: () => void) {
   const observer = new MutationObserver(notify);
@@ -99,25 +100,25 @@ export function JavSelectionProvider({ children, readOnly, receipt }: {
       for (const item of eligible) {
         signal.throwIfAborted();
         try { await addWant({ code: item.code }, signal) }
-        catch (error) { throw Error(`已加入 ${completed} 部；${item.code} 未完成：${errorMessage(error)}`) }
+        catch (error) { throw Error(t('catalog:javSelection.wantPartialFailed', { count: completed, code: item.code, error: errorMessage(error) })) }
         signal.throwIfAborted();
         completed++;
         setPicked(current => { const next = new Map(current); next.delete(item.code); return next });
       }
       return completed;
     } finally { void invalidateWants() }
-  }, count => receipt(`已加入想要 ${count} 部`)) };
+  }, count => receipt(t('catalog:javSelection.wantAdded', { count }))) };
   return <Context.Provider value={{ dense, mode, selected, toggle, visible, selectPage, all: summary.all, mixed: summary.mixed }}>
     <div data-jav-selection="" data-select-mode={mode ? '' : undefined} className="flex min-w-0 flex-col gap-4">
       {children}
     </div>
-    <SelectionDock visible={mode} count={`已选 ${picked.size} 部`} label="作品批量操作">
+    <SelectionDock visible={mode} count={t('catalog:javSelection.selectedCount', { count: picked.size })} label={t('catalog:javSelection.dockLabel')}>
       {action.error ? <p role="alert" className="w-full px-2 text-caption-1-regular text-text-error-primary">{action.error}</p> : null}
       <Button size="small" variant="secondary" disabled={!page.length || !!action.busy} onClick={selectPage}>
-        <span data-copy-key={`jav.selection.page.${summary.all ? 'clear' : 'all'}`}>{summary.all ? '取消本页' : '全选本页'}</span></Button>
-      <Button size="small" variant="secondary" disabled={readOnly || !eligible.length} {...busyProps(action.busy === 'want')} onClick={want}>加入想要</Button>
-      <Button size="small" variant="secondary" disabled={!picked.size || !!action.busy} onClick={() => setResources([...picked.values()])}>查找资源</Button>
-      <Button size="small" variant="ghost" onClick={close}>取消选择</Button>
+        <span data-copy-key={`jav.selection.page.${summary.all ? 'clear' : 'all'}`}>{summary.all ? t('catalog:javSelection.deselectPage') : t('catalog:javSelection.selectPage')}</span></Button>
+      <Button size="small" variant="secondary" disabled={readOnly || !eligible.length} {...busyProps(action.busy === 'want')} onClick={want}>{t('catalog:javSelection.addToWants')}</Button>
+      <Button size="small" variant="secondary" disabled={!picked.size || !!action.busy} onClick={() => setResources([...picked.values()])}>{t('catalog:shared.searchTorrents')}</Button>
+      <Button size="small" variant="ghost" onClick={close}>{t('catalog:javSelection.exit')}</Button>
     </SelectionDock>
     <JavBatchResources items={resources} close={() => setResources(null)} readOnly={readOnly} receipt={receipt} />
   </Context.Provider>;

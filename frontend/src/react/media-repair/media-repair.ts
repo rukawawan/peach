@@ -5,6 +5,7 @@
 import { apiGet } from '../../api';
 import { queryClient } from '../query';
 import { t } from '../../i18n';
+import { stageText } from '../../core/server-text';
 
 export const MEDIA_REPAIR_URL = '/api/media-repair';
 export const MEDIA_REPAIR_KEY = ['media-repair'] as const;
@@ -14,6 +15,7 @@ export interface MediaRepairState {
   status: string;
   library: string;
   stage: string;
+  stage_code?: string;
   checked: number;
   total: number;
   found: number;
@@ -55,13 +57,13 @@ export function statusLine(state: MediaRepairState): string {
   if (state.status === 'running') {
     // 服务端偶尔报出超过总数的已查数，按总数封顶。
     const where = state.total ? `${count(Math.min(state.checked || 0, state.total))} / ${count(state.total)}` : t('cleanup:mediaRepair.preparing');
-    return state.stage === '修复' && state.message
+    return state.stage_code === 'mediaRepair.repair' && state.message
       ? t('cleanup:mediaRepair.repairingProgress', { progress: where, name: state.message })
-      : `${state.stage || t('cleanup:mediaRepair.scanStage')} ${where}`;
+      : t('cleanup:mediaRepair.stageProgress', { stage: stageText(state) || t('cleanup:mediaRepair.scanStage'), progress: where });
   }
   if (state.status === 'complete' && (state.repaired || state.failed)) {
     return state.failed
-      ? t('cleanup:mediaRepair.repairedWithFailures', { count: Number(state.repaired || 0), failed: count(state.failed) })
+      ? t('cleanup:mediaRepair.repairedWithFailures', { count: Number(state.repaired || 0), failed: Number(state.failed) })
       : t('cleanup:mediaRepair.repairedDone', { count: Number(state.repaired || 0) });
   }
   return '';

@@ -64,7 +64,7 @@ class ParseTests(unittest.TestCase):
                          ("social", "X @alice_710_"))
         self.assertEqual(self.module.classify("https://x.com/foo"), ("social", "X @foo"))
         self.assertEqual(self.module.classify("http://official.nax-pro.com/model/"),
-                         ("official", "官方网站"))
+                         ("official", "official-site"))
 
     def test_an_agency_page_is_labelled_with_the_agency_name(self):
         """域名归属未知时才退回事务所名：那时它至少没有和已知事实矛盾。
@@ -104,7 +104,7 @@ class ParseTests(unittest.TestCase):
             ("social", "Linktree @sawa_sasaki"))
         self.assertEqual(
             self.module.classify("http://kawakami-yuu.livedoor.biz/", "Ys Promotion"),
-            ("social", "博客"))
+            ("social", "blog"))
 
     def test_a_blog_is_social_not_an_official_site(self):
         """`blog.livedoor.jp/kaede_fuyutuki/` 是本人的博客，不是公式站。
@@ -113,7 +113,7 @@ class ParseTests(unittest.TestCase):
         """
         self.assertEqual(
             self.module.classify("http://blog.livedoor.jp/kaede_fuyutuki/", "T-POWERS"),
-            ("social", "博客"))
+            ("social", "blog"))
 
     def test_a_lookalike_host_is_not_taken_for_the_real_platform(self):
         """`notx.com` 不是 x.com。后缀匹配必须落在点边界上。"""

@@ -3,6 +3,7 @@ import { islandGlyph } from './island-skeleton';
 import type { EntitySortKey, SegmentOption } from './react/entity-filter/entity-filter';
 import { SEGMENTED_GLASS_TRACK, SEGMENT_GLASS } from './react/components/segmented';
 import { catalogView } from './react/catalog-grid/catalog-view';
+import { t } from './i18n';
 
 interface Layout { name: string; label: string; value: string; options: readonly SegmentOption[] }
 const icon = (name: string) => name.startsWith('ri-')
@@ -19,7 +20,7 @@ export function filterControlsSkeletonHtml(sorts: readonly EntitySortKey[], layo
   const view = catalogView();
   const params = new URLSearchParams(location.search);
   const sizes = layout && view === 'cards' ? segments(layout.label, layout.value, layout.options) : '';
-  const folder = folders ? `<button type="button" data-folder-mode-toggle="" aria-label="文件夹模式" aria-pressed="${params.get('browse') === 'folders' || !!params.get('folder')}" ${FILTER_WAITING}>${icon('ri-folder-3-line')}</button>` : '';
-  return `<span data-entity-sorts=""><button type="button" data-entity-batch="" data-filter-action="" aria-label="换一批" ${FILTER_WAITING}>${icon('shuffle')}</button>${sizes}${segments('馆藏显示方式', view, [['cards','卡片','ri-layout-grid-line'],['list','列表','ri-list-unordered']])}${folder}${sorts.map(sort =>
+  const folder = folders ? `<button type="button" data-folder-mode-toggle="" aria-label="${t('catalog:catalogFolders.folderMode')}" aria-pressed="${params.get('browse') === 'folders' || !!params.get('folder')}" ${FILTER_WAITING}>${icon('ri-folder-3-line')}</button>` : '';
+  return `<span data-entity-sorts=""><button type="button" data-entity-batch="" data-filter-action="" aria-label="${t('catalog:entityFilter.shuffle')}" ${FILTER_WAITING}>${icon('shuffle')}</button>${sizes}${segments(t('catalog:catalogList.viewMode'), view, [['cards',t('catalog:catalogList.viewCards'),'ri-layout-grid-line'],['list',t('catalog:catalogList.viewList'),'ri-list-unordered']])}${folder}${sorts.map(sort =>
     `<button type="button" data-entity-sort="${esc(sort.key)}" aria-pressed="${sort.pressed}" ${FILTER_WAITING}>${esc(sort.label)}${sort.dir ? icon(sort.dir === 'asc' ? 'arrow-up' : 'arrow-down') : ''}</button>`).join('')}</span>`;
 }

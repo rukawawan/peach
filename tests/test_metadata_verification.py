@@ -231,8 +231,9 @@ class VerificationSettlementTests(unittest.TestCase):
 
     def test_human_approved_tags_grow_and_keep_the_human_record(self):
         asset_id = self.asset("ROYD-083", tags=("中出内射", "辣妹"))
+        # 旧映射留在候选里的来源 `4K` 说的是发行版本，并集不补。
         key = self.row("ROYD-083", "tags", "中出内射、辣妹",
-                       ("makers", ["中出内射", "辣妹", "痴女"]))
+                       ("makers", ["中出内射", "辣妹", "痴女", "4K"]))
         human = {"candidate_key": "earlier", "source": "dmm", "user_note": "批量复核"}
         with contextlib.closing(sqlite3.connect(self.db_path)) as connection, connection:
             connection.execute("INSERT INTO review_decision(category,item_key,status,note,updated_at)"

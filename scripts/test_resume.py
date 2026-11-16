@@ -7,8 +7,13 @@ import json
 import os
 from itertools import combinations
 from pathlib import Path
+import sys
 import re
 import time
+
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 from . import change_impact
 
@@ -290,44 +295,44 @@ def validate_cached_results(rows: dict, valid_seconds: float):
     for row in rows.values():
         if (not isinstance(row, dict) or row.get('outcome') != 'pass'
                 or type(row.get('at')) not in (int, float) or not 0 <= now - row['at'] < valid_seconds):
-            raise ValueError('恢复计划的成功证明不可用')
+            raise ValueError(t("test_resume.cachedProofUnusable"))
 
 
 def validate_child_plan(root: Path, data: dict, *, state: str, valid_seconds: float) -> dict:
     if not isinstance(data, dict) or data.get('state') != state:
-        raise ValueError('恢复计划不属于当前输入快照')
+        raise ValueError(t("test_resume.otherSnapshot"))
     expected, selected, cached = data.get('expected'), data.get('external'), data.get('cached')
     if not all(isinstance(value, dict) for value in (expected, selected, cached)):
-        raise ValueError('恢复计划格式无效')
+        raise ValueError(t("test_resume.badFormat"))
     if expected.keys() != selected.keys() or not set(expected) <= set(EXTERNAL.values()):
-        raise ValueError('恢复计划测试容器无效')
+        raise ValueError(t("test_resume.badContainers"))
     universe = set()
     for module, names in expected.items():
         actual = external_files(root, module)
         if not isinstance(names, list) or set(names) != actual or not isinstance(selected[module], list):
-            raise ValueError('恢复计划测试集合与当前文件不符')
+            raise ValueError(t("test_resume.fileSetMismatch"))
         active = set(selected[module])
         if not active <= actual or active & cached.keys() or actual - active != actual & cached.keys():
-            raise ValueError('恢复计划缺少被省略文件的成功证明')
+            raise ValueError(t("test_resume.missingFileProof"))
         universe.update(actual)
     if not set(cached) <= universe:
-        raise ValueError('恢复计划包含容器外的证明')
+        raise ValueError(t("test_resume.proofOutsideContainers"))
     validate_cached_results(cached, valid_seconds)
     containers = data.get('containers', {})
     if not isinstance(containers, dict) or not set(containers) <= set(CONTAINERS):
-        raise ValueError('恢复计划的容器证明无效')
+        raise ValueError(t("test_resume.badContainerProof"))
     validate_cached_results(containers, valid_seconds)
     universe, active_cases = data.get('case_universe', ()), data.get('cases', ())
     case_cached = data.get('case_cached', {})
     if (not isinstance(case_cached, dict) or not set(active_cases) <= set(universe)
             or set(case_cached) != set(universe) - set(active_cases)):
-        raise ValueError('恢复计划缺少被省略用例的成功证明')
+        raise ValueError(t("test_resume.missingCaseProof"))
     validate_cached_results(case_cached, valid_seconds)
     active = set().union(*map(set, selected.values())) if selected else set()
     allowed = {case for case in containers if container_files(root, case)
                and container_files(root, case) <= cached.keys() and not container_files(root, case) & active}
     if set(data.get('skip_cases', ())) != allowed:
-        raise ValueError('恢复计划不能省略未验证的 Python 用例')
+        raise ValueError(t("test_resume.unverifiedPythonSkipped"))
     return data
 
 

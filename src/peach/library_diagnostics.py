@@ -10,6 +10,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from . import interface_text
 from .catalog_rules import normalise_code_key, release_code_from_text
 from .metadata_policy import MAKER_SOURCES
 from .metadata_routes import AMANE_STAGE, ROUTES
@@ -41,11 +42,31 @@ def inventory(root):
         return None
 
 
-def group(label, rows=None):
+#: 库健康各分组的显示名（ADR-0159）；文字在语言资源里。
+GROUP_CODES = {"identification": "labels.libraryDiagnostics.group.identification",
+               "metadata": "labels.libraryDiagnostics.group.metadata",
+               "cover": "labels.libraryDiagnostics.group.cover",
+               "duration": "labels.libraryDiagnostics.group.duration"}
+#: 读本地文件失败的问题记录不算识别失败；问题记录里写的是这句的 code 或它的中文原句。
+LOCAL_ACCESS_CODES = frozenset({"errors.libraryProcessing.mediaInaccessible"})
+
+
+def _text(code, params=None):
+    return interface_text.text(f"server:{code}", params)
+
+
+def _local_access(row):
+    if row.get("message_code") in LOCAL_ACCESS_CODES:
+        return True
+    return row.get("message") in {_text(code) for code in LOCAL_ACCESS_CODES}
+
+
+def group(key, rows=None):
+    label = {"label": _text(GROUP_CODES[key]), "label_code": GROUP_CODES[key]}
     if rows is None:
-        return {"label": label, "status": "unknown", "count": None, "items": [], "truncated": False}
+        return {**label, "status": "unknown", "count": None, "items": [], "truncated": False}
     ordered = sorted(rows, key=lambda row: row["id"])
-    return {"label": label, "status": "ok", "count": len(ordered), "items": ordered[:LIMIT],
+    return {**label, "status": "ok", "count": len(ordered), "items": ordered[:LIMIT],
             "truncated": len(ordered) > LIMIT}
 
 
@@ -78,7 +99,7 @@ def failures(config):
                 if action == "querying_metadata":
                     result["metadata"].add(asset_id)
                 # reading_local 的其余资产问题由 NFO 解析与番号冲突分支产生。
-                elif action == "reading_local" and row.get("message") not in {"媒体文件不可访问", "本地封面无法读取"}:
+                elif action == "reading_local" and not _local_access(row):
                     result["identification"].add(asset_id)
         return result, timestamp(state.get("finished_at") or state.get("started_at"))
     except FileNotFoundError:
@@ -98,8 +119,7 @@ def _library_item(row):
 
 
 def library(settings, config):
-    groups = {key: group(label) for key, label in (("identification", "识别失败"),
-              ("metadata", "补资料失败"), ("cover", "缺封面"), ("duration", "缺时长"))}
+    groups = {key: group(key) for key in GROUP_CODES}
     try:
         with closing(sqlite3.connect(settings.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
             connection.execute("PRAGMA query_only=ON")
@@ -109,45 +129,59 @@ def library(settings, config):
     except (sqlite3.Error, OSError):
         return {"groups": groups, "issue_at": None}
     assets = {row[0]: _library_item(row) for row in rows}
-    groups["duration"] = group("缺时长", [assets[row[0]] for row in rows if not row[2] or row[2] <= 0])
+    groups["duration"] = group("duration", [assets[row[0]] for row in rows if not row[2] or row[2] <= 0])
     covers, posters = inventory(settings.cover_root), inventory(settings.poster_root)
     if covers is not None and posters is not None:
         missing = [assets[row[0]] for row in rows
                    if (normalise_code_key(row[1]).casefold() not in covers if row[1]
                        else f"{row[0]}_4" not in posters)]
-        groups["cover"] = group("缺封面", missing)
+        groups["cover"] = group("cover", missing)
     failed, issue_at = failures(config)
     if failed is not None:
-        for key, label in (("identification", "识别失败"), ("metadata", "补资料失败")):
-            groups[key] = group(label, [assets[value] for value in failed[key] if value in assets])
+        for key in ("identification", "metadata"):
+            groups[key] = group(key, [assets[value] for value in failed[key] if value in assets])
+    _attach_libraries(config, groups)
     return {"groups": groups, "issue_at": issue_at}
 
 
+def _attach_libraries(config, groups):
+    """媒体库列与作品列表同一个归属：只给下发的条目按路径补 `library_id`，不扫全库。"""
+    from .media_identity import ownership
+    for item in {item["id"]: item for value in groups.values() for item in value["items"]}.values():
+        item["library_id"] = ownership(config, item["path"]).get("library_id", "")
+
+
+#: 来源检查失败原因的显示文字（ADR-0159），值是 `labels.libraryDiagnostics.source` 下的 code。
 SOURCE_CHECK_REASONS = {
-    "proxy": "代理连接失败", "timeout": "来源连接超时", "network": "来源连接未取得",
-    "auth_required": "来源要求登录或拒绝当前出口", "cloudflare_challenge": "来源要求人机验证",
-    "cloudflare_blocked": "来源拦截当前出口", "ip_banned": "来源拦截当前出口",
-    "geo_restricted": "来源限制当前地区", "rate_limited": "来源正在限流",
-    "server_error": "来源服务异常", "parse_error": "资料解析失败",
-    "not_found": "上次查询未命中", "cooldown": "来源正在冷却",
+    "proxy": "labels.libraryDiagnostics.source.proxy", "timeout": "labels.libraryDiagnostics.source.timeout",
+    "network": "labels.libraryDiagnostics.source.network",
+    "auth_required": "labels.libraryDiagnostics.source.authRequired",
+    "cloudflare_challenge": "labels.libraryDiagnostics.source.challenge",
+    "cloudflare_blocked": "labels.libraryDiagnostics.source.blocked",
+    "ip_banned": "labels.libraryDiagnostics.source.blocked",
+    "geo_restricted": "labels.libraryDiagnostics.source.geoRestricted",
+    "rate_limited": "labels.libraryDiagnostics.source.rateLimited",
+    "server_error": "labels.libraryDiagnostics.source.serverError",
+    "parse_error": "labels.libraryDiagnostics.source.parseError",
+    "not_found": "labels.libraryDiagnostics.source.notFound", "cooldown": "labels.libraryDiagnostics.source.cooling",
 }
 
 
 def _source_health(cooling, failed, fresh, recent, connection_ok, reason_key, *, has_success, has_check):
-    """来源诊断优先报告冷却与失败，再报告解析和连接证据。"""
+    """来源诊断优先报告冷却与失败，再报告解析和连接证据。返回状态与原因的 code。"""
     if cooling:
-        return "warning", "来源正在冷却"
+        return "warning", "labels.libraryDiagnostics.source.cooling"
     if failed:
-        return "warning", SOURCE_CHECK_REASONS.get(reason_key, "来源未取得资料")
+        return "warning", SOURCE_CHECK_REASONS.get(reason_key, "labels.libraryDiagnostics.source.failed")
     if fresh:
-        return "ok", "资料解析通过"
+        return "ok", "labels.libraryDiagnostics.source.parsed"
     if has_success:
-        return "stale", "曾解析成功，近期解析状态待复查"
+        return "stale", "labels.libraryDiagnostics.source.parsedBefore"
     if recent and connection_ok:
-        return "unknown", "连接检查通过；解析状态未取得"
+        return "unknown", "labels.libraryDiagnostics.source.connectedOnly"
     if has_check:
-        return "stale", "已有检查记录，解析状态待复查"
-    return "unchecked", "尚无检查或解析记录，可在来源和凭证中检查连接"
+        return "stale", "labels.libraryDiagnostics.source.checkedBefore"
+    return "unchecked", "labels.libraryDiagnostics.source.unchecked"
 
 
 def _profile_success(settings):
@@ -204,7 +238,7 @@ def sources(settings, config, *, now=None):
                                         has_success=bool(stamp), has_check=bool(last))
         result.append({"source": key, "label": SOURCES[key]["label"],
                        "status": status,
-                       "reason": reason, "last_check_at": timestamp(last.get("checked_at")),
+                       "reason": _text(reason), "reason_code": reason, "last_check_at": timestamp(last.get("checked_at")),
                        "elapsed_s": last.get("elapsed_s"), "last_success_at": stamp,
                        "cooldown_until": datetime.fromtimestamp(until, timezone.utc).isoformat() if cooling else None})
     return result

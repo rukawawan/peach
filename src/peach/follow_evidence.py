@@ -19,6 +19,8 @@ import threading
 import time
 from contextlib import nullcontext
 from pathlib import Path
+from .coded_text import Said
+from .user_messages import UserValueError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ LOGGER = logging.getLogger(__name__)
 KEEP = 3
 #: 存量清退在 `ledger_upgrade_repair` 里的行 id 前缀；可以做多次，后缀是执行时刻。
 RECEIPT_PREFIX = 'follow-evidence-reclaim-'
-#: 删除这一轮在任务中心（`task_runs.TASK_LABELS`）的键。
+#: 删除这一轮在任务中心（`task_runs.TASK_KEYS`）的键。
 TASK_KEY = 'follow-evidence-reclaim'
 
 
@@ -98,7 +100,7 @@ def remove(doomed, pace=None) -> tuple[int, int]:
         except FileNotFoundError:
             continue
         except OSError as error:
-            LOGGER.warning('关注快照删不掉：%s（%s）', path, error)
+            LOGGER.warning('Could not delete follow snapshot: %s (%s)', path, error)
             continue
         files += 1
         freed += size
@@ -155,9 +157,9 @@ class Reclaim:
         with self._lock:
             phase = self._state['phase']
             if phase == 'running':
-                raise ValueError('正在清理，请等这一次做完')
+                raise UserValueError("errors.followEvidence.running")
             if phase != 'ready':
-                raise ValueError('还在统计能清理的文件，请稍后再试')
+                raise UserValueError("errors.followEvidence.estimating")
             self._state = {'phase': 'running', 'done': 0, 'total': int(self._state.get('files') or 0)}
             self.worker = threading.Thread(target=self._run, name='follow-evidence-reclaim', daemon=True)
             self.worker.start()
@@ -180,7 +182,7 @@ class Reclaim:
         try:
             state = self._count()
         except Exception as error:  # noqa: BLE001 — 估算失败只影响这一项的读数
-            LOGGER.exception('关注快照估算失败')
+            LOGGER.exception('Follow snapshot estimate failed')
             state = {'phase': 'failed', 'error': str(error)}
         with self._lock:
             self._state = state
@@ -192,7 +194,7 @@ class Reclaim:
         try:
             return call(*args, **kwargs)
         except Exception:  # noqa: BLE001
-            LOGGER.warning('关注快照清理没记进任务中心', exc_info=True)
+            LOGGER.warning('Failed to record follow snapshot cleanup in the task center', exc_info=True)
             return None
 
     def _run(self) -> None:
@@ -203,7 +205,8 @@ class Reclaim:
         error = None
         status = 'succeeded'
         run = self._task(lambda: self.runs.start(TASK_KEY, trigger='manual', mutex_key=TASK_KEY,
-                                                 total=self._state.get('total') or None, label='删除旧快照'))
+                                                 total=self._state.get('total') or None,
+                                                 label=Said('labels.followEvidence.runLabel')))
         run_id = getattr(run, 'id', None)
 
         def pace(done_here: int) -> None:
@@ -223,9 +226,9 @@ class Reclaim:
                     with self._lock:
                         self._state['done'] = removed
         except Cancelled:
-            status, error = 'cancelled', '用户停止任务'
+            status, error = 'cancelled', Said('labels.followEvidence.stoppedByUser')
         except Exception as exc:  # noqa: BLE001 — 删了多少照实记进历史
-            LOGGER.exception('关注快照清理中断')
+            LOGGER.exception('Follow snapshot cleanup interrupted')
             status, error = 'failed', str(exc)
         self._task(lambda: self.runs.progress(run_id, current=removed, throttle=0))
         self._task(lambda: self.runs.finish(run_id, status, error='' if status == 'cancelled' else error or '',
@@ -236,9 +239,9 @@ class Reclaim:
                 connection.execute('INSERT INTO ledger_upgrade_repair(id,applied_at,result_json) VALUES(?,?,?)',
                                    (f'{RECEIPT_PREFIX}{time.time_ns()}', str(time.time()), json.dumps(result)))
         except Exception as exc:  # noqa: BLE001
-            LOGGER.exception('关注快照清理结果没记进历史')
+            LOGGER.exception('Failed to record follow snapshot cleanup in the repair history')
             error = error or str(exc)
-        LOGGER.info('关注快照清理：删除 %s 个文件，%s 字节%s', removed, freed, f'，中断：{error}' if error else '')
+        LOGGER.info('Follow snapshot cleanup: removed %s files, %s bytes%s', removed, freed, f', interrupted: {error}' if error else '')
         # 做完重新估算：中断了的，剩下的照常等用户再点一次；删干净的，这一项改报上一次删了多少。
         with self._lock:
             self._state = {'phase': 'idle'}

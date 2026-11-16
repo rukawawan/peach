@@ -29,7 +29,9 @@ from .media_sources import cost_for
 from .strm import skip_background_read
 from .processing_control import current_control, checkpoint
 from .catalog_rules import is_local_extra
+from .catalog_vocabulary import LANDSCAPE, LENGTH_BANDS, PORTRAIT, QUALITY_BANDS
 from . import junk, record_rehome
+from .user_messages import UserValueError
 
 #: 一次探测最多等多久。ffprobe 只读文件头，网盘上实测一两秒。
 TIMEOUT_SECONDS = 20.0
@@ -46,15 +48,12 @@ _UNMEASURED = f"medium='video' AND duration IS NULL AND location=? AND {ACTIVE_A
 def context_fields(width: int, height: int, duration: float) -> tuple[str | None, str | None, str | None]:
     orientation = quality = length = None
     if width and height:
-        orientation = "竖屏" if height > width else "横屏"
+        orientation = PORTRAIT if height > width else LANDSCAPE
         longest = max(width, height)
-        quality = (
-            "4K" if longest >= 3000 else "2K" if longest >= 1900
-            else "1080P" if longest >= 1300 else "720P" if longest >= 900
-            else "低画质"
-        )
+        # 画质与时长档按 `catalog_vocabulary` 的次序：由高到低、由短到长。
+        quality = QUALITY_BANDS[next((index for index, floor in enumerate((3000, 2000, 1800, 1200)) if longest >= floor), 4)]
     if duration and duration > 0:
-        length = "速食" if duration < 300 else "短" if duration < 900 else "中" if duration < 2400 else "长"
+        length = LENGTH_BANDS[next((index for index, ceiling in enumerate((300, 900, 2400)) if duration < ceiling), 3)]
     return length, orientation, quality
 
 
@@ -79,7 +78,7 @@ def probe_file(ffprobe: str, path: str, timeout: float = TIMEOUT_SECONDS) -> tup
     media_input(path)
     from .processing_traffic import CURRENT as TRAFFIC, media_statistics
     if skip_background_read(path):
-        raise ValueError('STRM 和 ISO 不执行视频探测')
+        raise UserValueError('errors.mediaProbe.strmIsoNotProbed')
     from .smb_media import input_url
     path = input_url(path)
     result = run_task_process(

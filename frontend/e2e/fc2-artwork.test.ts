@@ -17,7 +17,10 @@ describe('FC2 合集与封面取景', () => {
         const parts = await opened.page.evaluate(async (id) =>
           (await fetch(`/api/parts?id=${id}`)).json(), ITEM.part);
         const labels = ['本篇', '特典 1', '特典 3'];
-        parts.items = parts.items.map((item, index) => ({ ...item, part_label: labels[index] }));
+        const coded = [{ part_label_code: 'labels.catalogParts.main' },
+          { part_label_code: 'labels.catalogParts.bonus', part_label_params: { number: 1 } },
+          { part_label_code: 'labels.catalogParts.bonus', part_label_params: { number: 3 } }];
+        parts.items = parts.items.map((item, index) => ({ ...item, part_label: labels[index], ...coded[index] }));
         await opened.page.route('**/api/parts?*', (route) => route.fulfill({ json: parts }));
         await opened.page.reload({ waitUntil: 'load' });
         await opened.page.locator('#stage .partlabel').waitFor();

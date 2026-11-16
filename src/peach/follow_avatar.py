@@ -60,7 +60,7 @@ def profile_avatar_tiers(service: str, handle: str, *,
     """
     pattern = _PROFILE_HANDLE_RES.get(service)
     if pattern is None or not pattern.fullmatch(str(handle or "")):
-        raise FollowSourceError("不支持这个社交资料")
+        raise FollowSourceError("errors.followAvatar.unsupportedProfile")
     request = transport or HttpxTransport()
     if service == "twitter":
         return _x_avatar_tiers(handle, request)
@@ -71,10 +71,10 @@ def profile_avatar_tiers(service: str, handle: str, *,
             "Accept": "text/html", "User-Agent": USER_AGENT,
         }), 15.0, MAX_PROFILE_BYTES)
         if page.status != 200:
-            raise FollowSourceError(f"lit.link 资料页返回 HTTP {page.status}")
+            raise FollowSourceError("errors.followAvatar.litlinkHttpStatus", {"status": page.status})
         image = lit_link_avatar_url(page.body.decode("utf-8", "replace"))
         if not image:
-            raise FollowSourceError("lit.link 资料页没有本人头像")
+            raise FollowSourceError("errors.followAvatar.litlinkNoAvatar")
         return [image]
     return _patreon_avatar_tiers(handle, request)
 
@@ -88,10 +88,10 @@ def _x_avatar_tiers(handle: str, request: HttpTransport) -> list[str]:
         MAX_PROFILE_BYTES,
     )
     if page.status != 200:
-        raise FollowSourceError(f"X 资料页返回 HTTP {page.status}")
+        raise FollowSourceError("errors.followAvatar.xHttpStatus", {"status": page.status})
     image = meta_content(page.body.decode("utf-8", "replace"), "og:image")
     if not image.startswith("https://pbs.twimg.com/profile_images/"):
-        raise FollowSourceError("X 资料页没有本人头像")
+        raise FollowSourceError("errors.followAvatar.xNoAvatar")
     return twimg_tiers(image)
 
 
@@ -105,7 +105,7 @@ def _patreon_avatar_tiers(handle: str, request: HttpTransport) -> list[str]:
         MAX_PROFILE_BYTES,
     )
     if response.status != 200:
-        raise FollowSourceError(f"Patreon 资料返回 HTTP {response.status}")
+        raise FollowSourceError("errors.followAvatar.patreonHttpStatus", {"status": response.status})
     try:
         campaigns = json.loads(response.body.decode("utf-8")).get("data") or []
         urls = next(
@@ -115,12 +115,12 @@ def _patreon_avatar_tiers(handle: str, request: HttpTransport) -> list[str]:
         )
         tiers = [str(urls.get(size) or "") for size in ("original", "default_large", "default")]
     except (StopIteration, AttributeError, KeyError, TypeError, ValueError) as error:
-        raise FollowSourceError("Patreon 资料里没有这个创作者") from error
+        raise FollowSourceError("errors.followAvatar.patreonCreatorMissing") from error
     trusted = [tier for tier in tiers
                if (parsed := urllib.parse.urlsplit(tier)).scheme == "https"
                and _PATREON_AVATAR_HOST_RE.fullmatch(parsed.hostname or "")]
     if not trusted:
-        raise FollowSourceError("Patreon 资料没有可信的头像地址")
+        raise FollowSourceError("errors.followAvatar.patreonNoTrustedAvatar")
     return trusted
 
 
@@ -147,7 +147,7 @@ def resolve_official_profile(service: str, user_id: str, *,
     """
     identity = str(user_id or "")
     if service != "fanbox":
-        raise FollowSourceError("不支持这个官方头像来源")
+        raise FollowSourceError("errors.followAvatar.unsupportedOfficialSource")
     request = transport or HttpxTransport()
     if _USER_ID_RE.fullmatch(identity):
         expected_user_id = identity
@@ -157,7 +157,7 @@ def resolve_official_profile(service: str, user_id: str, *,
         expected_user_id = ""
         creator_id = identity
     else:
-        raise FollowSourceError("不支持这个官方头像来源")
+        raise FollowSourceError("errors.followAvatar.unsupportedOfficialSource")
 
     creator_origin = f"https://{creator_id}.fanbox.cc"
     api_url = "https://api.fanbox.cc/creator.get?" + urllib.parse.urlencode(
@@ -172,7 +172,7 @@ def resolve_official_profile(service: str, user_id: str, *,
         MAX_PROFILE_BYTES,
     )
     if response.status != 200:
-        raise FollowSourceError(f"FANBOX 官方资料返回 HTTP {response.status}")
+        raise FollowSourceError("errors.followAvatar.fanboxProfileHttpStatus", {"status": response.status})
     try:
         body = (json.loads(response.body.decode("utf-8")) or {}).get("body") or {}
         user = body.get("user") or {}
@@ -180,13 +180,13 @@ def resolve_official_profile(service: str, user_id: str, *,
         returned_user_id = str(user.get("userId") or "")
         name = str(user.get("name") or creator_id).strip()
     except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise FollowSourceError("FANBOX 官方资料格式不符") from error
+        raise FollowSourceError("errors.followAvatar.fanboxProfileMalformed") from error
     parsed = urllib.parse.urlsplit(avatar)
     if ((expected_user_id and returned_user_id != expected_user_id)
             or not _USER_ID_RE.fullmatch(returned_user_id)
             or parsed.scheme != "https"
             or parsed.hostname != "pixiv.pximg.net"):
-        raise FollowSourceError("FANBOX 官方资料没有可信的头像地址")
+        raise FollowSourceError("errors.followAvatar.fanboxProfileNoTrustedAvatar")
     return OfficialProfile(
         user_id=returned_user_id, creator_id=creator_id, name=name,
         url=creator_origin + "/", avatar_url=avatar,
@@ -204,7 +204,7 @@ def _creator_id_for_user(user_id: str, request: HttpTransport) -> str:
         MAX_PROFILE_BYTES,
     )
     if page.status != 200:
-        raise FollowSourceError(f"FANBOX 官方页面返回 HTTP {page.status}")
+        raise FollowSourceError("errors.followAvatar.fanboxPageHttpStatus", {"status": page.status})
     try:
         soup = BeautifulSoup(page.body, "html.parser")
         metadata_node = soup.find("meta", attrs={"name": "metadata"})
@@ -214,9 +214,9 @@ def _creator_id_for_user(user_id: str, request: HttpTransport) -> str:
             or ""
         )
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise FollowSourceError("FANBOX 官方页面没有可用的创作者资料") from error
+        raise FollowSourceError("errors.followAvatar.fanboxPageNoProfile") from error
     if not _CREATOR_ID_RE.fullmatch(creator_id):
-        raise FollowSourceError("FANBOX 官方页面没有可用的创作者 id")
+        raise FollowSourceError("errors.followAvatar.fanboxPageNoCreatorId")
     return creator_id
 
 

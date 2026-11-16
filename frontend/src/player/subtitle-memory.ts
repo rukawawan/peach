@@ -1,6 +1,7 @@
 /* 每部视频的字幕会话；详情、小窗和沉浸播放共享服务端记忆。 */
 import type { VjsPlayer } from './types';
 import { playerMemory } from './memory';
+import { t } from '../i18n';
 
 interface SavedTrack { key: string; name: string; text: string }
 
@@ -54,7 +55,7 @@ export class SubtitleSession {
   }
   private failed(error: unknown) {
     if (this.cleanup.signal.aborted) return;
-    this.error = error instanceof Error ? error.message : '字幕记忆未保存，请重试';
+    this.error = error instanceof Error ? error.message : t('catalog:subtitleMemory.saveFailed');
     this.changed();
   }
   private save(value: { selected: string | null; track?: SavedTrack }) {
@@ -77,7 +78,7 @@ export class SubtitleSession {
         try {
           if (this.has(track.key)) continue;
           const response = await fetch(track.src, { signal });
-          if (!response.ok) throw new Error(`字幕未恢复：${track.name}`);
+          if (!response.ok) throw new Error(t('catalog:subtitleMemory.restoreFailed', { name: track.name }));
           await this.attach(await response.text(), track.name, track.key, signal);
         } catch (error) { failure = error }
       }
@@ -107,18 +108,18 @@ export class SubtitleSession {
     const node = document.createElement('track'); node.id = key; node.kind = 'subtitles'; node.label = name; node.src = url;
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => finish(new Error('字幕加载超时，请重试')), 15_000);
+        const timer = setTimeout(() => finish(new Error(t('catalog:subtitleMemory.timedOut'))), 15_000);
         const finish = (error?: Error) => {
           clearTimeout(timer); node.removeEventListener('load', loaded); node.removeEventListener('error', failed); signal.removeEventListener('abort', aborted);
           if (error) reject(error); else resolve();
         };
-        const loaded = () => finish(), failed = () => finish(new Error(`字幕时间轴无法读取：${name}`));
-        const aborted = () => finish(new DOMException('字幕加载已取消', 'AbortError'));
+        const loaded = () => finish(), failed = () => finish(new Error(t('catalog:subtitleMemory.unreadable', { name })));
+        const aborted = () => finish(new DOMException(t('catalog:subtitleMemory.canceled'), 'AbortError'));
         node.addEventListener('load', loaded); node.addEventListener('error', failed); signal.addEventListener('abort', aborted, { once: true });
         if (signal.aborted) { aborted(); return }
         this.video.append(node); node.track.mode = 'hidden';
       });
-      if (signal.aborted || this.player.isDisposed()) throw new DOMException('字幕加载已取消', 'AbortError');
+      if (signal.aborted || this.player.isDisposed()) throw new DOMException(t('catalog:subtitleMemory.canceled'), 'AbortError');
       this.imported.set(key, { node, url }); this.apply(); this.changed();
     } catch (error) { node.remove(); URL.revokeObjectURL(url); throw error }
   }

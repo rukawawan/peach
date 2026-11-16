@@ -1,0 +1,41 @@
+name: 安装固定版本 FFmpeg
+description: 按版本缓存 Windows runner 的 FFmpeg；未命中时下载，失败等待后重试一次
+inputs:
+  ffmpeg-version:
+    description: 精确版本号；setup-ffmpeg 按精确版本先查 tool cache，命中时不联网
+    required: true
+runs:
+  using: composite
+  steps:
+    # setup-ffmpeg 每次都从 GitHub Release 下载上百 MB 的 7z，下载源偶发 504 会让整个作业红。
+    # 它对精确版本先查 tool cache，所以把那一层目录按版本缓存起来，命中时完全不联网。
+    - name: 恢复 FFmpeg 缓存
+      id: restore
+      uses: actions/cache/restore@v6.1.0
+      with:
+        path: ${{ runner.tool_cache }}/ffmpeg
+        key: ffmpeg-${{ inputs.ffmpeg-version }}-${{ runner.os }}-${{ runner.arch }}
+    - name: 安装 FFmpeg
+      id: first
+      continue-on-error: true
+      uses: FedericoCarboni/setup-ffmpeg@v3
+      with:
+        ffmpeg-version: ${{ inputs.ffmpeg-version }}
+        github-token: ${{ github.token }}
+    - name: 下载失败后等待
+      if: steps.first.outcome == 'failure'
+      shell: pwsh
+      run: Start-Sleep -Seconds 30
+    - name: 重试安装 FFmpeg
+      if: steps.first.outcome == 'failure'
+      uses: FedericoCarboni/setup-ffmpeg@v3
+      with:
+        ffmpeg-version: ${{ inputs.ffmpeg-version }}
+        github-token: ${{ github.token }}
+    # 安装成功就立刻保存，不等作业结束：用例失败的作业同样留下缓存。
+    - name: 保存 FFmpeg 缓存
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6.1.0
+      with:
+        path: ${{ runner.tool_cache }}/ffmpeg
+        key: ffmpeg-${{ inputs.ffmpeg-version }}-${{ runner.os }}-${{ runner.arch }}

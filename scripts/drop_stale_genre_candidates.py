@@ -21,6 +21,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import GENERATED_DIR
+from peach.interface_text import dev as t, list_separator, local_language
 from peach.library_processing import FIELDS
 from peach.review_csv import read_rows, write_rows
 from peach.stale_candidates import is_english, stale_genre_rows, without
@@ -29,9 +30,9 @@ CANDIDATES = GENERATED_DIR / "library-metadata-field-candidates.csv"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="摘掉 genre 还停在英文的资料候选")
+    parser = argparse.ArgumentParser(description=t("drop_stale_genre_candidates.description"))
     parser.add_argument("--candidates", type=Path, default=CANDIDATES)
-    parser.add_argument("--apply", action="store_true", help="真的改文件；默认只报数")
+    parser.add_argument("--apply", action="store_true", help=t("drop_stale_genre_candidates.applyHelp"))
     return parser
 
 
@@ -39,18 +40,18 @@ def run(args: argparse.Namespace) -> int:
     rows = read_rows(args.candidates)
     stale = stale_genre_rows(rows)
     words = sorted({word for row in stale for word in _words(row)})
-    print(f"候选 {len(rows)} 行，其中 genre 停在英文的 {len(stale)} 行")
-    print(f"涉及资产 {len({row['asset_id'] for row in stale})} 个、英文词 {len(words)} 个")
-    print("  " + "、".join(words[:20]) + ("…" if len(words) > 20 else ""))
+    print(t("drop_stale_genre_candidates.found", rows=len(rows), stale=len(stale)))
+    print(t("drop_stale_genre_candidates.scope", assets=len({row["asset_id"] for row in stale}), words=len(words)))
+    print("  " + list_separator(local_language()).join(words[:20]) + ("…" if len(words) > 20 else ""))
 
     if args.apply:
         backup = args.candidates.with_suffix(".pre-japanese-genres.csv")
         shutil.copy2(args.candidates, backup)
         write_rows(args.candidates, FIELDS, without(rows, stale), atomic=True)
-        print(f"已备份 → {backup}")
-        print("已摘掉。下一趟「只采集」会重抓这批片子的 genre。")
+        print(t("drop_stale_genre_candidates.backedUp", backup=backup))
+        print(t("drop_stale_genre_candidates.dropped"))
     else:
-        print("这是预览：候选文件未改。确认后再加 --apply。")
+        print(t("drop_stale_genre_candidates.preview"))
     return 0
 
 

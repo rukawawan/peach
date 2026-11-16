@@ -6,10 +6,11 @@ import { MENU_POPOVER_SURFACE } from '@/components/base/dropdown/menu-styles';
 import { cx } from '@/utils/cx';
 import { MenuDialog } from './menu-dialog';
 import { SelectionActions, type SelectionAction } from './selection-actions';
+import { t } from '../../i18n';
 
 /** 多选弹层的选项靠近触发器，操作区随实际展开方向放在远端。 */
 export function SelectionPopover({ label, triggerLabel, leadingIcon, items, onChange, actions,
-  actionLayout = 'inline', empty = '暂无可选项' }: {
+  actionLayout = 'inline', empty = t('shell:selectionPopover.empty') }: {
   label: string;
   triggerLabel: string;
   leadingIcon?: ButtonProps['leadingIcon'];

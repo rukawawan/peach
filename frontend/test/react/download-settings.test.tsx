@@ -40,6 +40,16 @@ it('无效的已保存地址保留在表单中，修正保存后清除配置提�
   expect(host.textContent).not.toContain('云下载配置需要检查');
 });
 
+it('设置块的问题带 code 时按 code 取当前语言的文字，没有 code 的照原文', async () => {
+  const host = await mount(<DownloadSettings initial={{
+    ...state(), problems: ['旧版服务端的原句', '只有原文的一句'],
+    problem_codes: [{ code: 'labels.downloadsChannels.clouddriveTokenUnreadable', params: {} }, { code: '', params: {} }],
+  } as DownloadSettingsState} receipt={vi.fn()} />);
+  expect(host.textContent).toContain('CloudDrive2 令牌无法读取，请重新填写。');
+  expect(host.textContent).not.toContain('旧版服务端的原句');
+  expect(host.textContent).toContain('只有原文的一句');
+});
+
 const unfilled = () => state({
   config: { clouddrive_address: 'http://127.0.0.1:19798', targets: {}, pikpak_root: '', wait_hours: 168 },
   pikpak_roots: ['A:\\'],
@@ -128,7 +138,7 @@ it('检查报出缺的权限、目标目录与剩余配额，保存与账号密�
   await settle();
   expect(host.textContent).toContain('缺 取消离线任务');
   expect(host.textContent).toContain('/115/云下载 可以离线下载');
-  expect(host.textContent).toContain('本月还剩 1497 条，共 1500 条');
+  expect(host.textContent).toContain('本月还剩 1,497 条，共 1,500 条');
   expect(host.textContent).not.toContain('探测到');
 });
 
@@ -253,7 +263,7 @@ it('地址和令牌都已保存时一打开就按已保存的配置检查，检�
   await settle();
   expect(host.textContent).not.toContain('正在检查 CloudDrive2');
   expect(host.textContent).toContain('/115/云下载 可以离线下载');
-  expect(host.textContent).toContain('本月还剩 1497 条，共 1500 条');
+  expect(host.textContent).toContain('本月还剩 1,497 条，共 1,500 条');
 });
 
 it('没有保存令牌或地址时打开不检查', async () => {
@@ -289,7 +299,7 @@ it('目标目录留空保存后直接渲染响应里的检查报告，服务端�
   expect(host.textContent).toContain('已根据媒体库目录填入 /115open/云下载');
   expect(host.textContent).not.toContain('/115open/云下载，保存配置后生效');
   expect(host.textContent).toContain('/115open/云下载 可以离线下载');
-  expect(host.textContent).toContain('本月还剩 1497 条，共 1500 条');
+  expect(host.textContent).toContain('本月还剩 1,497 条，共 1,500 条');
 });
 
 it('保存时推出的目录不存在，照常保存其他字段，目录填回表单标成无效并给出新建键', async () => {

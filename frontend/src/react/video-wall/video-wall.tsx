@@ -14,12 +14,13 @@ import { busyProps } from '../settings/busy-props';
 import { useWallCamera } from './use-wall-camera';
 import { expandedWallTiles, finiteWallTile, visibleWallTiles, wallTileAt, WallExploration, type WallCamera, type WallTile } from './wall-layout';
 import { WALL_REFLOW_SPRING } from './wall-motion';
-import { chooseItem, fetchQueue, nextPart, partLabel, queueKey, type QueueItem, type QueueRef } from '../item-detail/item-detail';
+import { chooseItem, editionLabel, fetchQueue, nextPart, partLabel, queueKey, type QueueItem, type QueueRef } from '../item-detail/item-detail';
 import { WallControls } from './wall-controls';
 import { WallQueue } from './wall-queue';
 import { Shuffle } from '../entity-filter/entity-filter-page';
 import { exitWall, unfilteredWallAddress } from './wall-route';
 import { removeWallBootSkeleton } from './wall-boot';
+import { t } from '../../i18n';
 import './video-wall.css';
 
 interface VideoWallProps {
@@ -278,7 +279,7 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
     try { await actions.watchLater(activeItem, on => setLater({ id: activeItem.id, on })) }
     finally { setLaterBusy(false) }
   };
-  const label = (item: MediaItem) => helpers.displayName(item, String(item.name || item.code || '未命名视频'));
+  const label = (item: MediaItem) => helpers.displayName(item, String(item.name || item.code || t('catalog:immerse.untitled')));
   const current = activeItem || selected;
   useLayoutEffect(() => {
     const node = codeTitle.current;
@@ -305,20 +306,21 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
     document.fonts.addEventListener('loadingdone', fit);
     return () => { live = false; observer.disconnect(); document.fonts.removeEventListener('loadingdone', fit) };
   }, [current?.code, selectedKey, playing, starting, covered]);
+  const tileNumber = String((activeTile?.index || 0) + 1).padStart(2, '0');
   const focusContent = selected && current ? <>
     <div data-wall-focus-backdrop="" aria-hidden="true"><WallArtwork item={selected} image={image} big /></div>
     <div data-wall-scene=""><WallArtwork item={selected} image={image} big /></div>
     <div ref={playerFrame} data-wall-player="" hidden={!playing && !starting} />
     <div data-wall-expanded-shade="" aria-hidden="true" />
-    <span data-wall-number="">{playing ? '正在播放 · ' : ''}{String((activeTile?.index || 0) + 1).padStart(2, '0')}</span>
+    <span data-wall-number="">{playing ? t('catalog:videoWall.nowPlaying', { number: tileNumber }) : tileNumber}</span>
     <div data-wall-focus-head=""><b ref={codeTitle} data-wall-code={current.code ? '' : undefined}>{current.code || label(current)}</b>
       {current.code ? <strong>{label(current).startsWith(current.code) ? label(current).slice(current.code.length).trim() : label(current)}</strong> : null}
-      <span>{current.performers?.join(' · ') || current.creator || '未归属'}</span>
-      {group ? <small>{[(current as QueueItem).edition_label, (current as QueueItem).part_label ? partLabel((current as QueueItem).part_label) : ''].filter(Boolean).join(' · ')}</small> : null}
+      <span>{current.performers?.join(' · ') || current.creator || t('catalog:shared.uncredited')}</span>
+      {group ? <small>{[editionLabel(current as QueueItem), partLabel(current as QueueItem)].filter(Boolean).join(' · ')}</small> : null}
     </div>
-    <button type="button" data-wall-focus-close="" aria-label="收起作品" title="收起" onClick={() => close()}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x" /></svg></button>
+    <button type="button" data-wall-focus-close="" aria-label={t('catalog:videoWall.collapseVideo')} title={t('catalog:shared.collapse')} onClick={() => close()}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x" /></svg></button>
     {error || (groupRef && groupQuery.error && !group) ? <div data-wall-play-error=""><Note tone="error">{error || requestErrorMessage(groupQuery.error)}</Note>
-      {groupQuery.error && !group ? <Button size="small" variant="ghost" onClick={() => void groupQuery.refetch()}>立即重试</Button> : null}</div> : null}
+      {groupQuery.error && !group ? <Button size="small" variant="ghost" onClick={() => void groupQuery.refetch()}>{t('catalog:shared.retryNow')}</Button> : null}</div> : null}
     <WallControls item={current} playing={playing} frame={playerFrame} starting={starting} pendingGroup={!!groupRef && groupQuery.isPending}
       grouped={!!groupRef} queueOpen={queueOpen} queueReady={!!tracks.length && (!groupRef || !!group)}
       hasPrevious={trackIndex > 0} hasNext={trackIndex >= 0 && trackIndex < tracks.length - 1}
@@ -335,11 +337,11 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
       if (queueOpen) setQueueOpen(false); else if (selected) close(); else if (searchOpen) closeSearch(); else exitWall();
     }}>
     <div data-wall-bar="">
-      <button type="button" data-wall-back="" aria-label="退出播放墙" title="返回" onClick={exitWall}>
+      <button type="button" data-wall-back="" aria-label={t('catalog:videoWall.exit')} title={t('catalog:shared.back')} onClick={exitWall}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left" /></svg>
       </button>
       {!finite && (hasMore || items.length > 0) ? <div data-wall-refresh=""><Shuffle busy={busy} onPress={() => void fresh()} /></div> : null}
-      <button type="button" data-wall-round="" data-wall-image="" aria-label="显示视频缩略图" title={image === 'thumbnail' ? '改回封面' : '显示视频缩略图'}
+      <button type="button" data-wall-round="" data-wall-image="" aria-label={t('catalog:videoWall.showThumbnails')} title={image === 'thumbnail' ? t('catalog:videoWall.showCovers') : t('catalog:videoWall.showThumbnails')}
         aria-pressed={image === 'thumbnail'} onClick={() => setImage(image === 'thumbnail' ? 'cover' : 'thumbnail')}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-gallery-thumbnails" /></svg>
       </button>
@@ -353,20 +355,20 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
         saveView(); peachHistory.push(`/wall?${params}`); setSearchOpen(false);
       }}>
         <button ref={searchButton} type={searchOpen ? 'submit' : 'button'} data-wall-round=""
-          aria-label={searchOpen ? '搜索' : '打开搜索'} title="搜索" aria-expanded={searchOpen}
+          aria-label={searchOpen ? t('catalog:shared.search') : t('catalog:videoWall.openSearch')} title={t('catalog:shared.search')} aria-expanded={searchOpen}
           onClick={event => { if (!searchOpen) { event.preventDefault(); setSearchOpen(true) } }}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search" /></svg>
         </button>
-        {searchOpen ? <input type="search" name="q" aria-label="搜索播放墙" placeholder="搜索作品" autoFocus
+        {searchOpen ? <input type="search" name="q" aria-label={t('catalog:videoWall.searchLabel')} placeholder={t('catalog:videoWall.searchPlaceholder')} autoFocus
           defaultValue={new URLSearchParams(location.search).get('q') || ''}
           onBlur={event => { if (!event.currentTarget.value.trim() && !event.currentTarget.form?.contains(event.relatedTarget as Node | null)) setSearchOpen(false) }} /> : null}
       </form>
       {finite ? <aside data-wall-filter-notice="" className="ui-project-banner" role="status">
-        <div><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-info" /></svg><p>当前仅显示筛选结果</p></div>
-        <Button size="small" variant="ghost" onClick={() => peachHistory.push(unfilteredWallAddress())}>清除筛选</Button>
+        <div><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-info" /></svg><p>{t('catalog:videoWall.filteredOnly')}</p></div>
+        <Button size="small" variant="ghost" onClick={() => peachHistory.push(unfilteredWallAddress())}>{t('catalog:shared.clearFilters')}</Button>
       </aside> : null}
     </div>
-    <div ref={camera.viewport} data-wall-viewport="" tabIndex={0} role="region" aria-label="播放墙，拖动或方向键浏览"
+    <div ref={camera.viewport} data-wall-viewport="" tabIndex={0} role="region" aria-label={t('catalog:videoWall.viewportLabel')}
       aria-busy={loading || freshFrom !== null || (busy && pendingTiles) || undefined} data-skeleton={loading ? 'wall' : undefined}
       {...(loading || freshFrom !== null ? {} : camera.handlers)} onClick={event => {
         if (selected && event.target instanceof Element && !event.target.closest('[data-wall-tile]')) {
@@ -400,7 +402,7 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
             data-wall-tile={tile.key} data-wall-id={item.id}
             data-wall-focus={focused ? '' : undefined} data-playing={focused && (playing || starting) ? '' : undefined}
             role={focused ? 'group' : 'button'} tabIndex={focused ? -1 : 0}
-            aria-label={focused ? label(item) : `展开 ${label(item)}`} aria-expanded={focused ? undefined : false}
+            aria-label={focused ? label(item) : t('catalog:videoWall.expandItem', { title: label(item) })} aria-expanded={focused ? undefined : false}
             initial={reducedMotion || session ? false : { opacity:0, transform:landing ? 'translateY(-68.4px) scale(.88)' : 'scale(.94)' }}
             animate={{ opacity:1, transform:'translateY(0px) scale(1)' }}
             whileHover={hoverable && !reducedMotion && !focused && entranceDone
@@ -424,16 +426,16 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
               <WallArtwork item={item} image={image} ratio={rect.width / rect.height} />
               <span data-wall-tile-shade="" aria-hidden="true" />
               <span data-wall-number="">{String(tile.index + 1).padStart(2, '0')}</span>
-              <span data-wall-copy=""><b>{item.code || label(item)}</b><span>{item.performers?.join(' · ') || item.creator || item.studio || '未归属'}</span></span>
+              <span data-wall-copy=""><b>{item.code || label(item)}</b><span>{item.performers?.join(' · ') || item.creator || item.studio || t('catalog:shared.uncredited')}</span></span>
               {item.duration ? <span data-wall-duration="">{fmtDur(item.duration)}</span> : null}
-              {Number(item.leave_ratio) > 0 ? <span data-wall-progress="" style={{ '--wall-progress': `${Math.min(100, Number(item.leave_ratio) * 100)}%` } as CSSProperties} aria-label="观看进度" /> : null}
+              {Number(item.leave_ratio) > 0 ? <span data-wall-progress="" style={{ '--wall-progress': `${Math.min(100, Number(item.leave_ratio) * 100)}%` } as CSSProperties} aria-label={t('catalog:catalogList.watchProgress')} /> : null}
               <motion.span data-wall-dim="" animate={{ opacity:selected ? .65 : 0 }} transition={{ duration:reducedMotion ? 0 : .24 }} />
             </>}
           </motion.article>;
         })}
       </div>
     </div>
-    {!loading && queryError ? <div data-wall-error=""><Note tone="error">{queryError}</Note><Button size="small" variant="ghost" onClick={retry}>立即重试</Button></div> : null}
+    {!loading && queryError ? <div data-wall-error=""><Note tone="error">{queryError}</Note><Button size="small" variant="ghost" onClick={retry}>{t('catalog:shared.retryNow')}</Button></div> : null}
     {!loading && !queryError && !items.length ? <div data-wall-empty="" onClick={async event => {
       const control = (event.target as Element).closest('[data-wall-load-more]');
       if (!control || busy || moreFlight.current) return;
@@ -441,8 +443,8 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
       try { await more() } finally { setActionBusy(control, false) }
     }} dangerouslySetInnerHTML={{ __html:emptyHtml }} /> : null}
     {hasMore && finite && items.length > 0 ? <div data-wall-footer=""><Button size="small" variant="secondary" {...busyProps(busy)} onClick={() => void more()}>
-      {busy ? <span dangerouslySetInnerHTML={{ __html:spinnerHtml() }} /> : null}载入更多</Button></div> : null}
-    {moreError ? <div data-wall-error=""><Note tone="error">{moreError}</Note><Button size="small" variant="ghost" {...busyProps(busy)} onClick={() => void more()}>立即重试</Button></div> : null}
+      {busy ? <span dangerouslySetInnerHTML={{ __html:spinnerHtml() }} /> : null}{t('catalog:shared.loadMore')}</Button></div> : null}
+    {moreError ? <div data-wall-error=""><Note tone="error">{moreError}</Note><Button size="small" variant="ghost" {...busyProps(busy)} onClick={() => void more()}>{t('catalog:shared.retryNow')}</Button></div> : null}
   </div>;
   return createPortal(wall, portal);
 }

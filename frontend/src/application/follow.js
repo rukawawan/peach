@@ -25,6 +25,7 @@ import { disposeStage, mediaState, stageExit, urlResume } from './media.js';
 import { clearOverlayBackground, holdOverlayBackground, overlayState, takeOverlayReturn } from './../history/overlay';
 import { presentPost } from '../history/page-title';
 import { loadingState } from './loading.js';
+import { t } from '../i18n';
 export const followState = { followFilter: undefined, followAuthors: undefined, followProviders: undefined, followTags: undefined, followWorks: undefined, followMediaView: undefined, FOLLOW_FEED_SORTS: undefined, FOLLOW_RANDOM_SORT: undefined, followSort: undefined, followDir: undefined, followSeed: undefined, followDurMin: undefined, followDurMax: undefined, followContentSkeletonHtml: undefined, followSkeletonHtml: undefined, followFeedHelpers: undefined, followFeedActions: undefined, followFeedProps: undefined, followFeedShell: undefined, followDetailActions: undefined, FOLLOW_MANAGE_TABS: undefined, followSidebarFilters: undefined };
 
 export function followCheckToast(report){
@@ -32,7 +33,7 @@ export function followCheckToast(report){
   const failed=rows.filter(r=>!r.ok).length;
   receiptsState.toast({text:checkReceipt(report)},
     {warn:!!failed,timeout:failed?8000:6000,sound:failed?'warning':'success',
-     action:{label:'查看',run:()=>enterFollow(true)}});
+     action:{label:t('shell:shared.view'),run:()=>enterFollow(true)}});
 }
 
 export function followViewPath(){return pathForFollow(followView())}
@@ -127,7 +128,7 @@ followState.followFeedActions = {
   checkReport:report=>followCheckToast(report),
 };
 followState.followFeedShell = {
-  skeleton:()=>followState.followSkeletonHtml('正在读取关注内容'),
+  skeleton:()=>followState.followSkeletonHtml(t('shell:skeleton.loadingFollowing')),
   /* 关注详情底下没画着列表（深链进来，或后退前进落到压在列表上的详情、中间去过别的页）：让出 `#stats`，
      不画列表，等关掉详情再按地址打开。关注详情已经开着（组内换条）就不动。 */
   ground:()=>{

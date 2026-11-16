@@ -72,6 +72,10 @@ def cli_commands() -> frozenset[str]:
     return subcommands()
 
 
+#: 父进程限时读取媒体与配套图片时拉起的短命子进程（`media_io`、`local_poster`）。
+READ_HELPERS = frozenset({"media-read", "local-image"})
+
+
 def wants_cli(argv: list[str]) -> bool:
     return len(argv) > 1 and argv[1] in cli_commands()
 
@@ -136,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         remote_reporting.disable_for_process()
         error_reporting.install(Path(tempfile.gettempdir()) / "Peach" / "logs")
         return relocate_data(Path(argv[2]), int(argv[3]))
+    if len(argv) > 1 and argv[1] in READ_HELPERS:
+        # 父进程每读一次媒体就起一个：失败由父进程归类上报，自己不发统计，退出时也不提交计数。
+        from peach import remote_reporting
+        remote_reporting.disable_for_process()
     error_reporting.install()
     if len(argv) in (2, 3) and argv[1] == "--diagnostic-report":
         from peach.support_bundle import save_bundle

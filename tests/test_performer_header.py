@@ -127,8 +127,8 @@ class HeaderTests(Case):
     def test_display_writings_keep_stage_names_and_raw_aliases_separate(self):
         aliases = [('楓カレン', 'avdb'), ('田中柠檬', 'user:alias'),
                    ('田中レモン', 'avdb'), ('かえでかれん', 'r18:performer'),
-                   ('Kaede Karen', 'r18:performer'), ('FC2', 'user:alias'),
-                   ('楓カレン（旧名）', 'user:alias')]
+                   ('Kaede Karen', 'r18:performer'), ('FC2', 'avdb'),
+                   ('楓カレン（旧名）', 'avdb')]
         entity_id = self.entity('枫花恋', *aliases)
         profile = {'kana': 'かえでかれん', 'raw': {'名前': '楓カレン', '別名': [
             '楓カレン （かえでかれん / Kaede Karen）',
@@ -270,6 +270,54 @@ class ApiTests(Case):
         shapes = q_entity_shapes(contract, {})
         parts = {item["id"]: item["parts"] for item in shapes["entities"]}
         self.assertIn("facts", parts[shinoda])
+
+    def test_aliases_the_user_added_show_in_both_name_languages(self):
+        """手添的别名在名称菜单和名字那一行里两种语言都列；采集来的读音、罗马字、括号写法照旧不列。"""
+        added = ["ゆうちゃん", "篠田小优", "Yuu S", "篠田（旧）"]
+        scraped = ["Yu Shinoda", "しのだゆう", "篠田ゆう（企画）", "FC2"]
+        (self.root / "logos").mkdir()
+        (self.root / "avatars").mkdir()
+        contract = rm_web.WebContract(self.db, avatar_root=self.root / "avatars",
+                                      logo_root=self.root / "logos")
+        for profiled in (True, False):
+            canonical = "篠田优" if profiled else "新人优"
+            with self.subTest(profile=profiled):
+                person = self.entity(canonical, ("篠田ゆう", "avdb"), ("Yu Shinoda", "avdb"),
+                                     ("しのだゆう", "r18:performer"), ("篠田ゆう（企画）", "avdb"),
+                                     ("FC2", "avdb"))
+                with self.connection:
+                    self.connection.execute(
+                        "INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id)"
+                        " VALUES(?,'javdb','performer',?)", (person, f"sample-{person}"))
+                if profiled:
+                    self.land(person, SHINODA)
+                for alias in added:
+                    receipt = rm_web.w_entity_alias(
+                        contract, {"kind": "performer", "name": canonical, "alias": alias})
+                    self.assertTrue(receipt["added"])
+                page = rm_web.q_entity(contract, {"kind": "performer", "name": canonical})
+                display = page["name_display"]
+                for language in ("zh-CN", "ja"):
+                    labels = [choice["label"] for choice in display["choices"][language]]
+                    values = [choice["value"] for choice in display["choices"][language]]
+                    groups = display["groups"][language]
+                    line = [entry["name"] for group in groups["groups"] for entry in group["names"]]
+                    for alias in added:
+                        self.assertIn(alias, labels, language)
+                        self.assertIn(alias, values, language)
+                        self.assertIn(alias, line, language)
+                    for alias in scraped:
+                        self.assertNotIn(alias, labels, language)
+                        self.assertNotIn(alias, line, language)
+                    self.assertEqual(groups["total"], len(line))
+                    self.assertEqual(len(line), len(set(line)), language)
+                if profiled:
+                    # 资料页上的名义照旧在前，手添的接在「其它」组里。
+                    ja = display["groups"]["ja"]
+                    self.assertEqual(ja["shown"], ["篠田ゆう", "篠崎ゆう子", "桧山彩音"])
+                    self.assertEqual((ja["groups"][-1]["label"],
+                                      sorted(entry["name"] for entry in ja["groups"][-1]["names"])),
+                                     ("其它", sorted(added)))
 
 
 if __name__ == "__main__":

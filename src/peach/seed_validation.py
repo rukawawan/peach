@@ -101,7 +101,7 @@ def digest(pack: dict) -> str:
 def url_key(value: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("种子链接必须是无凭据的 HTTP(S) 地址")
+        raise ValueError("seed links must be HTTP(S) URLs without credentials")
     return canonical_url(value)
 
 
@@ -132,9 +132,9 @@ def _profile(value: dict) -> None:
     for key, item in value["fields"].items():
         if key == "tags":
             if not isinstance(item, list) or any(type(tag) is not str for tag in item):
-                raise ValueError("种子资料 tags 必须是字符串数组")
+                raise ValueError("seed profile tags must be an array of strings")
         elif key not in PROFILE_COLUMNS or (item is not None and type(item) is not (int if key in numeric else str)):
-            raise ValueError(f"种子资料列无效：{key}")
+            raise ValueError(f"invalid seed profile column: {key}")
     if value["source_url"]:
         url_key(value["source_url"])
 
@@ -143,18 +143,18 @@ def _validate_withdrawal(value: dict) -> None:
     field, old = value["field"], value["value"]
     if field == "alias":
         if type(old) is not str or not normalize_entity_name(old):
-            raise ValueError("撤销别名需要精确写法")
+            raise ValueError("alias withdrawal needs the exact spelling")
         if normalize_entity_name(old) == normalize_entity_name(value["identity"]["name"]):
-            raise ValueError("被撤销别名不能同时作为身份锚点")
+            raise ValueError("a withdrawn alias cannot also be the identity anchor")
     elif field == "ref":
         Ref.model_validate(old)
         if ref_key(old) in {ref_key(ref) for ref in value["identity"].get("refs", [])}:
-            raise ValueError("被撤销编号不能同时作为身份锚点")
+            raise ValueError("a withdrawn ref cannot also be the identity anchor")
     elif field == "link":
         if not isinstance(old, dict) or set(old) != {"kind", "url"} or old["kind"] not in {"official", "social"}:
-            raise ValueError("撤销链接需要用途与精确地址")
+            raise ValueError("link withdrawal needs a kind and the exact URL")
         if type(old["url"]) is not str:
-            raise ValueError("撤销链接地址必须是字符串")
+            raise ValueError("withdrawn link URL must be a string")
         url_key(old["url"])
     elif field == "profile":
         Profile.model_validate(old)
@@ -163,23 +163,23 @@ def _validate_withdrawal(value: dict) -> None:
         Pointer.model_validate(old)
     kind = value["identity"]["kind"]
     if not normalize_entity_name(value["identity"]["name"]) or any(ref["provider"] == "stash" for ref in value["identity"].get("refs", [])):
-        raise ValueError("撤销需要有效的独立身份锚点")
+        raise ValueError("withdrawal needs a valid standalone identity anchor")
     if field in {"profile", "agency"} and kind != "performer" or field == "maker" and kind != "studio":
-        raise ValueError("撤销字段与实体类型不符")
+        raise ValueError("withdrawal field does not match the entity kind")
 
 
 def _validate_header(pack: dict, *, verify_hash: bool) -> None:
     """校验原始对象与版本头，保证后续检查可按已声明格式读取字段。"""
     if type(pack) is not dict or type(pack.get("format")) is not int:
-        raise ValueError("种子包必须是带整数 format 的对象")
+        raise ValueError("seed pack must be an object with an integer format")
     parsed = Pack.model_validate(pack)
     if pack["format"] == 1 and {"revision", "content_sha256", "withdrawals"} & pack.keys():
-        raise ValueError("格式 1 不接受格式 2 字段")
+        raise ValueError("format 1 does not accept format 2 fields")
     if pack["format"] == 2:
         if parsed.revision is None or type(parsed.content_sha256) is not str or "withdrawals" not in pack:
-            raise ValueError("格式 2 需要 revision、content_sha256 与累计 withdrawals")
+            raise ValueError("format 2 needs revision, content_sha256 and cumulative withdrawals")
         if verify_hash and pack["content_sha256"] != digest(pack):
-            raise ValueError("种子内容摘要不符")
+            raise ValueError("seed content digest mismatch")
 
 
 def _validate_counts(pack: dict) -> None:
@@ -194,31 +194,31 @@ def _validate_counts(pack: dict) -> None:
         for field, counter in (("profile", "profiles"), ("agency", "memberships"), ("maker", "makers")):
             counts[counter] += bool(item.get(field))
     if counts != pack["counts"]:
-        raise ValueError("种子计数与包内容不一致")
+        raise ValueError("seed counts do not match the pack contents")
 
 
 def _validate_item(item: dict, *, index: int, format_number: int, names: dict, refs: dict) -> None:
     """校验单项身份和事实，并把名称、编号登记到共享占用表。"""
     kind, identity = item["kind"], item.get("identity")
     if format_number == 2 and identity is None:
-        raise ValueError("格式 2 的实体必须声明独立身份锚点")
+        raise ValueError("format 2 entities must declare a standalone identity anchor")
     if identity and (identity["kind"] != kind or normalize_entity_name(identity["name"]) != normalize_entity_name(item["name"])):
-        raise ValueError("实体与身份锚点不一致")
+        raise ValueError("entity does not match its identity anchor")
     for name in [item["name"], *(alias["alias"] for alias in item["aliases"])]:
         key = kind, normalize_entity_name(name)
         if not key[1] or names.setdefault(key, index) != index:
-            raise ValueError(f"种子内身份名称冲突：{name}")
+            raise ValueError(f"identity name conflict within the seed: {name}")
     for ref in [*item["refs"], *((identity or {}).get("refs", []))]:
         if ref["provider"] == "stash" or refs.setdefault(ref_key(ref), index) != index:
-            raise ValueError("种子内来源编号身份冲突或使用本机编号")
+            raise ValueError("source ref identity conflict within the seed, or a local ref is used")
     for link in item["links"]:
         url_key(link["url"])
     if item.get("profile"):
         _profile(item["profile"])
     if (item.get("profile") or item.get("agency")) and kind != "performer":
-        raise ValueError("资料与事务所归属只适用于女优")
+        raise ValueError("profile and agency apply to performers only")
     if item.get("maker") and kind != "studio":
-        raise ValueError("片商归属只适用于厂牌")
+        raise ValueError("maker applies to studios only")
 
 
 def _validate_items(pack: dict) -> None:
@@ -248,18 +248,18 @@ def _validate_withdrawal_conflicts(pack: dict) -> None:
     for withdrawal in pack.get("withdrawals", []):
         _validate_withdrawal(withdrawal)
         if withdrawal["id"] in identifiers:
-            raise ValueError("撤销 id 重复")
+            raise ValueError("duplicate withdrawal id")
         identifiers.add(withdrawal["id"])
         keys = identity_keys(withdrawal["identity"])
         if sum(bool(keys & anchor) for anchor in anchors) > 1:
-            raise ValueError("撤销身份锚点在包内指向多个实体")
+            raise ValueError("withdrawal identity anchor points to several entities in the pack")
         field = withdrawal["field"]
         old = fact_key(field, withdrawal["value"])
         for item, anchor in zip(pack["entities"], anchors):
             if not keys & anchor:
                 continue
             if any(fact_key(field, value) == old for value in _asserted_values(item, field)):
-                raise ValueError("同一包同时断言与撤销同一事实")
+                raise ValueError("the pack both asserts and withdraws the same fact")
 
 
 def _validate_maker_graph(pack: dict) -> None:
@@ -269,7 +269,7 @@ def _validate_maker_graph(pack: dict) -> None:
         current, visited = start, set()
         while current in studios and studios[current].get("maker"):
             if current in visited:
-                raise ValueError("种子片商归属成环")
+                raise ValueError("seed maker chain forms a cycle")
             visited.add(current)
             current = normalize_entity_name(studios[current]["maker"]["name"])
 
@@ -284,5 +284,5 @@ def validate(pack: dict, *, verify_hash: bool = True) -> dict:
         _validate_maker_graph(pack)
         canonical(pack)
     except (ValidationError, TypeError, KeyError, OverflowError) as exc:
-        raise ValueError(f"种子包结构无效：{exc}") from exc
+        raise ValueError(f"invalid seed pack structure: {exc}") from exc
     return pack

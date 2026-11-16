@@ -72,7 +72,7 @@ class DownloadPostprocessTests(unittest.TestCase):
         from peach.task_retry import RETRY_DELAYS
         started = 1_800_000_000.0
         self.contract.downloads.clock = lambda: started
-        with patch.object(post, '_collect', side_effect=TimeoutError('来源连接超时')):
+        with patch.object(post, '_collect', side_effect=TimeoutError('connect timed out')):
             for attempt, delay in enumerate(RETRY_DELAYS, 1):
                 with self.assertRaises(TimeoutError):
                     self.run_task()
@@ -88,6 +88,12 @@ class DownloadPostprocessTests(unittest.TestCase):
         self.assertEqual(task.postprocess_state, 'failed')
         self.assertIsNone(task.next_check_at)
         self.assertIn('自动重试 3 次', task.postprocess_detail)
+        # 说明连同 code 一起落库，读回来照样能按界面语言显示（迁移 0056）。
+        from peach import interface_text
+        payload = task.payload()
+        self.assertEqual(payload['postprocess_detail_code'], 'labels.downloads.postprocessRetriesExhausted')
+        self.assertEqual(interface_text.text(f"server:{payload['postprocess_detail_code']}", payload['postprocess_detail_params'], 'en'),
+                         'Still not finished after 3 automatic retries; TimeoutError: connect timed out')
 
     def test_offline_mount_retries_but_target_collision_stops_immediately(self):
         with patch.object(post.organize, 'build_plan', return_value={
@@ -244,9 +250,9 @@ class DownloadPostprocessTests(unittest.TestCase):
         self.contract.task_runs = Mock()
         notices = IngestNotices()
         for failed_stage in ('_collect', '_organize'):
-            with self.subTest(stage=failed_stage), patch.object(post, failed_stage, side_effect=RuntimeError('模拟阶段失败')), \
+            with self.subTest(stage=failed_stage), patch.object(post, failed_stage, side_effect=RuntimeError('simulated stage failure')), \
                     patch.object(post, 'NOTICES', notices):
-                with self.assertRaisesRegex(RuntimeError, '模拟阶段失败'):
+                with self.assertRaisesRegex(RuntimeError, 'simulated stage failure'):
                     self.run_task()
                 self.assertEqual(self.store.get(self.task.id).postprocess_state, 'failed')
                 self.contract.task_runs.enqueue_followups.assert_not_called()

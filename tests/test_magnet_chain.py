@@ -33,7 +33,7 @@ class MagnetChainTests(unittest.TestCase):
                       date='', attributes=[], source='JavDB', source_url='https://example.test/work', origins=['JavDB'])
                  for index in range(10)]
         links.append({**links[0], 'id': 'ed2k:example', 'protocol': 'ed2k', 'info_hash': '',
-                      'uri': 'ed2k://|file|ABC-123|1234|' + 'a' * 32 + '|/', 'source': 'JavDB 评论'})
+                      'uri': 'ed2k://|file|ABC-123|1234|' + 'a' * 32 + '|/', 'source': 'javdb-comments'})
         direct = _normalise({'uri': item(HASH_A)['uri'], 'size': '8 GiB'}, CHAIN[0], 'ABC-123')
         with patch('peach.magnet_chain.search', return_value={'items': [direct], 'linked_resources': links}):
             shown = fetch(Path('.'), 'ABC-123')['items']
@@ -62,11 +62,13 @@ class MagnetChainTests(unittest.TestCase):
     def test_wishlist_candidates_have_display_and_download_fields(self):
         from peach.wants_magnets import fetch
         candidate = _normalise({'uri': item(HASH_A)['uri'], 'size': '2 GiB',
-                                'attributes': ['中字']}, CHAIN[1], 'ABC-123')
+                                'attributes': ['chinese-subtitles']}, CHAIN[1], 'ABC-123')
+        # JavDB 磁链的中字属性是 id，名字里没写中字也算中字。
+        self.assertTrue(candidate['chinese'])
         with patch('peach.magnet_chain.search', return_value={'items': [candidate]}):
             result = fetch(Path('.'), 'ABC-123')['items'][0]
         self.assertEqual(result['protocol'], 'magnet')
-        self.assertEqual(result['attributes'], ['中字'])
+        self.assertEqual(result['attributes'], ['chinese-subtitles'])
         self.assertEqual(result['size'], '2 GiB')
 
     def test_unavailable_sources_without_results_use_the_failure_cooldown(self):
@@ -109,11 +111,30 @@ class MagnetChainTests(unittest.TestCase):
     def test_javdb_identity_ambiguity_is_reported_with_source_ids(self):
         from peach.javdb_public import PublicIdentityAmbiguous
         from peach.magnet_chain import Fetcher, search
-        ambiguous = PublicIdentityAmbiguous('同番号对应多个作品，请核对来源身份：Aa1、Bb2')
+        ambiguous = PublicIdentityAmbiguous('errors.javdbPublic.identityAmbiguous', {'identities': 'Aa1、Bb2'})
         with patch.object(Fetcher, 'manko', return_value=[]), patch.object(Fetcher, 'sukebei', return_value=[]), \
                 patch('peach.magnet_chain.PUBLIC_API.movie', side_effect=ambiguous):
             result = search(Path('.'), 'ABC-123', transport=object(), stop_on_preferred=False)
         self.assertEqual(result['warnings'], ['JavDB：同番号对应多个作品，请核对来源身份：Aa1、Bb2'])
+
+    def test_unanswered_sources_are_listed_with_their_cooldown_but_an_unlisted_code_is_an_answer(self):
+        from peach.javdb_public import PublicNotFound
+        from peach.magnet_chain import Fetcher, search
+        from peach.scraping_access import SourcePaused, pause_source
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        pause_source(root, 'javdb', retry_after=600)
+        with patch.object(Fetcher, 'manko', return_value=[]), patch.object(Fetcher, 'sukebei', return_value=[]), \
+                patch.object(Fetcher, 'javdb', side_effect=SourcePaused('errors.scrapingAccess.coolingDown')):
+            paused = search(root, 'ABC-123', transport=object())
+        self.assertEqual((paused['state'], paused['unfetched_sources']), ('error', ['JavDB']))
+        self.assertGreater(paused['retry_after'], 590)
+        with patch.object(Fetcher, 'manko', return_value=[]), patch.object(Fetcher, 'sukebei', return_value=[]), \
+                patch('peach.magnet_chain.PUBLIC_API.movie', side_effect=PublicNotFound('errors.javdbPublic.notFound')):
+            unlisted = search(root, 'ABC-123', transport=object())
+        self.assertEqual((unlisted['unfetched_sources'], unlisted['retry_after']), ([], None))
+        self.assertEqual(len(unlisted['warnings']), 1)
 
     def test_base91_decodes_the_api_envelope_payload(self):
         # basE91 官方示例：编码后的这一段解回 ASCII "test"。

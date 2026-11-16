@@ -11,11 +11,14 @@ from collections import OrderedDict
 from pathlib import Path
 
 from . import timeline_sheets, timeline_sources
+from .coded_text import coded
 from .config import FFMPEG_DIR, STATE_DIR
 from .ffmpeg import FFmpegResolver
 from .fsutil import atomic_path
 from .storage_budget import CapacityGuard
 from .media_processing_policy import metadata_only
+from .task_stages import stage as stage_fields
+from .user_messages import UserValueError
 
 MODE_PATH = STATE_DIR / 'timeline-thumbnails.json'
 
@@ -158,7 +161,7 @@ def q_thumbnail_jobs(contract, _args):
             'job_id': state.get('job_id') or '',
             'total': state.get('total') or 0, 'done': state.get('done') or 0,
             'made': state.get('made') or 0, 'skipped': state.get('skipped') or 0,
-            'failed': state.get('failed') or 0, 'stopped': state.get('stopped') or ''}
+            'failed': state.get('failed') or 0, **coded('stopped', state.get('stopped') or '')}
 
 
 def _with_progress(fields: dict) -> dict:
@@ -171,16 +174,16 @@ def w_thumbnail_jobs(contract, body):
     事，走数据管理页那条清理链，不在切换开关时顺手做掉。"""
     mode = str((body or {}).get('mode') or timeline_sheets.OFF)
     if mode not in timeline_sheets.MODES:
-        raise ValueError('采集密度无效')
+        raise UserValueError("api.timelineThumbnails.invalidMode")
     if mode != timeline_sheets.OFF and metadata_only(contract.follow_state_root):
-        raise ValueError('视频预览生成已关闭，请先在媒体库设置中开启')
+        raise UserValueError("api.timelineThumbnails.previewsDisabled")
     write_mode(mode)
     if mode == timeline_sheets.OFF:
         contract.thumbnail_job.stop(resume=False)
         return q_thumbnail_jobs(contract, {})
     choice = FFmpegResolver(FFMPEG_DIR).ffmpeg()
     if choice is None:
-        raise ValueError('未找到 ffmpeg，无法采集缩略图')
+        raise UserValueError("api.timelineThumbnails.ffmpegMissing")
     interval = timeline_sheets.INTERVALS[mode]
     root = contract.timeline_root
 
@@ -197,16 +200,17 @@ def w_thumbnail_jobs(contract, body):
             checkpoint=lambda **fields: contract.thumbnail_job.checkpoint(job_id, **fields))
         # 磁盘触线停下来的那一轮不能记成完成：队列后面还剩几千部，而页面上「完成」
         # 和「跑完了」是同一个意思。按停是用户自己做的，不算故障。
-        stopped = str(result.get('stopped') or '')
+        # 磁盘闸门那句带 code（`Said`），失败原因随它按界面语言显示。
+        stopped = result.get('stopped') or ''
         failed = bool(stopped) and stopped != timeline_sheets.STOPPED_BY_USER
         contract.thumbnail_job.update(
             job_id, **_with_progress(result), completed_at=time.time(),
             status='failed' if failed else 'complete',
-            error=stopped if failed else '')
+            **coded('error', stopped if failed else ''))
 
     contract.thumbnail_job.start(work, restart=True, recovery={'mode': mode},
                                  initial={'mode': mode, 'interval': interval,
-                                          'stage': '采集缩略图', 'checked': 0,
+                                          **stage_fields('thumbnails.fetch'), 'checked': 0,
                                           'total': 0, 'done': 0, 'made': 0,
                                           'skipped': 0, 'failed': 0, 'stopped': ''})
     return q_thumbnail_jobs(contract, {})

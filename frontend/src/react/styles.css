@@ -44,6 +44,7 @@
 @import "../ui-kit/motion.css";
 @import "../core/core.css";
 @import "../ui-kit/markup.css";
+@import "../ui-kit/activity-motion.css";
 @import "../ui-kit/controls.css";
 @import "../ui-kit/select-field.css";
 @import "../ui-kit/scroll.css";
@@ -58,7 +59,6 @@
 @import "../board-controls.css";
 @import "./settings/configuration-page.css";
 @import "./library-processing/processing-effort.css";
-@import "../jobs.css";
 @import "../pagination.css";
 
 @source "./";
@@ -251,18 +251,6 @@
   @media (width < 901px) {
     grid-template-columns: var(--container-duplicate-cover-narrow) minmax(0, 1fr) auto auto;
   }
-}
-
-/* 后台任务仍在推进、又说不出总量时的 Loading Dots。工具类里没有 animation-delay 这一档，
- * 三颗点的错相写成一个函数式 utility：类名照常由 Tailwind 生成，也就不必写任意值。
- * 减少动效由 `web/css/01-base.css` 的全局规则统一关掉。 */
-@keyframes peach-dot-wave {
-  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
-}
-@utility dot-wave-* {
-  animation: peach-dot-wave 1.2s ease-in-out infinite;
-  animation-delay: calc(--value(integer) * 150ms);
 }
 
 /* Skeleton 的微光，与遗留层 `web/css/09-skeleton.css` 同一套实测值（Geist Skeleton，

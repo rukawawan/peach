@@ -20,14 +20,17 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .catalog_rules import normalise_code_key, release_code_from_text
+from .coded_text import Said, coded, columns, restored
+from .content_words import COMPILATION_TITLE, DMM_HOURS, DMM_MINUTES, JAVDB_WORK_COUNT
 from .entities import normalize_entity_name
+from .user_messages import UserValueError
 
 #: JavDB 演员页当伪 Feed 抓。它按发行日排在前面，所以「还没发行的作品」会先出现。
 KIND_JAVDB_ACTOR = "javdb-actor"
 #: DMM 按女优编号列的片单（GraphQL）。预购排在最前，番号是官方 `makerContentId`。
 KIND_DMM_ACTRESS = "dmm-actress"
 
-KIND_LABELS = {KIND_JAVDB_ACTOR: "JAV 订阅", KIND_DMM_ACTRESS: "JAV 订阅 · DMM"}
+KIND_LABELS = {KIND_JAVDB_ACTOR: "labels.feeds.kind.javdbActor", KIND_DMM_ACTRESS: "labels.feeds.kind.dmmActress"}
 
 #: DMM 片单那一类的订阅地址：用户点得开的女优片单页，同时是 `feed_source.url` 的去重键。
 #: 拉取不 GET 它，而是按地址里的编号问 GraphQL。
@@ -71,13 +74,12 @@ _TAGS = re.compile(r"<[^>]+>")
 #: 演员页标题栏：站上这一页挂在哪个名字下，和页面自报的作品数。一位女优常有两页，
 #: 本名一页、旧艺名一页（森日向子的另一页挂在「白石アイリ」下），名字是区分两行的唯一线索。
 _JAVDB_ACTOR_NAME = re.compile(r'<span class="actor-section-name">([^<]*)</span>')
-_JAVDB_WORK_COUNT = re.compile(r'<span class="section-meta">\s*(\d+)\s*部影片\s*</span>')
+_JAVDB_WORK_COUNT = re.compile(JAVDB_WORK_COUNT)
 
 #: 合集的标题记号：精选、总集、连发。`BEST` 前后不许紧挨字母，`BESTIE` 那种词不算。
-_COMPILATION_TITLE = re.compile(
-    r"(?<![A-Za-z])BEST(?![A-Za-z])|ベスト|総集編|傑作選|\d+\s*連発")
-_HOURS = re.compile(r"(\d+)\s*時間")
-_MINUTES = re.compile(r"(\d{3,})\s*分")
+_COMPILATION_TITLE = re.compile(COMPILATION_TITLE)
+_HOURS = re.compile(DMM_HOURS)
+_MINUTES = re.compile(DMM_MINUTES)
 #: 片长到这个数就是剪辑合集：单部新片两到三小时，四小时起是把旧片拼起来卖。
 COMPILATION_MINUTES = 240
 #: 出演人数到这个数就是合集：正常共演两三人，合集一列就是十几二十个名字。
@@ -251,7 +253,7 @@ def parse_dmm_actress(works) -> ParsedFeed:
 
 def dmm_actress_url(actress_id: str) -> str:
     if not _DMM_ACTRESS_ID.match(str(actress_id or "")):
-        raise ValueError("DMM 女优编号只认数字")
+        raise UserValueError("errors.feeds.dmmActressIdDigits")
     return DMM_ACTRESS_PAGE.format(id=actress_id)
 
 
@@ -287,7 +289,7 @@ def normalize_url(value: object) -> str:
     """
     url = str(value or "").strip()
     if not url.startswith("https://"):
-        raise ValueError("订阅地址必须以 https:// 开头")
+        raise UserValueError("errors.feeds.httpsRequired")
     return url
 
 
@@ -301,7 +303,7 @@ def add_source(connection: sqlite3.Connection, *, url: str, name: str = "",
     """登记一条订阅，类型按地址认。地址重复直接拒绝——同一个源订两遍只会让同一条新作出现两次。"""
     address = normalize_url(url)
     if connection.execute("SELECT 1 FROM feed_source WHERE url=?", (address,)).fetchone():
-        raise ValueError("这个订阅地址已经在列表里了")
+        raise UserValueError("errors.feeds.duplicateUrl")
     cursor = connection.execute(
         "INSERT INTO feed_source(kind,name,url,entity_id,enabled,interval_minutes,"
         "created_at) VALUES(?,?,?,?,1,?,?)",
@@ -412,7 +414,7 @@ def sources(connection: sqlite3.Connection) -> list[dict]:
     return [{
         "id": int(row["id"]),
         "kind": row["kind"],
-        "kind_label": KIND_LABELS.get(row["kind"], row["kind"]),
+        **coded("kind_label", Said(KIND_LABELS[row["kind"]]) if row["kind"] in KIND_LABELS else row["kind"]),
         "name": row["entity_name"] or row["name"] or "",
         "page_name": row["name"] or "",
         "url": row["url"],
@@ -422,7 +424,7 @@ def sources(connection: sqlite3.Connection) -> list[dict]:
         "interval_minutes": int(row["interval_minutes"]),
         "last_fetched_at": row["last_fetched_at"],
         "next_fetch_at": row["next_fetch_at"],
-        "last_error": row["last_error"],
+        **coded("last_error", restored(row["last_error"], row["last_error_code"], row["last_error_params"])),
         "last_seen_count": int(row["last_seen_count"]),
         "last_new_count": int(row["last_new_count"]),
         "seen": int(row["seen"] or 0),
@@ -463,14 +465,15 @@ def settle(connection: sqlite3.Connection, source_id: int, *, error: str | None 
     失败也按同一间隔排下一次，不做指数退避——退避要么在这里写第二套判据，要么让一个
     临时挡回来的源沉默半天。下次时间在所有返回路径上都写，任何一种结局都不会让源卡住。
     `retry_at` 是来源冷却的结束时刻：被整站挡回来的不是这个源的错，冷却一过就该再拉。
+    `error` 是 `Said` 时旁边一并存下 code 与参数，界面按当前语言显示。
     """
     moment = now or datetime.now(timezone.utc)
     upcoming = retry_at or next_fetch(source_id, moment, interval_minutes)
     connection.execute(
-        "UPDATE feed_source SET last_error=?,last_fetched_at=?,next_fetch_at=?,"
-        "etag=COALESCE(?,etag),last_modified=COALESCE(?,last_modified),"
+        "UPDATE feed_source SET last_error=?,last_error_code=?,last_error_params=?,last_fetched_at=?,"
+        "next_fetch_at=?,etag=COALESCE(?,etag),last_modified=COALESCE(?,last_modified),"
         "name=COALESCE(?,name),last_seen_count=?,last_new_count=? WHERE id=?",
-        (error, stamp(moment), stamp(upcoming),
+        (error, *columns(error), stamp(moment), stamp(upcoming),
          etag, last_modified, page_name or None, int(seen), int(new), int(source_id)))
 
 

@@ -9,6 +9,7 @@ import m3u8
 
 from .fsutil import atomic_write_text
 from .http import public_https_url
+from .user_messages import UserValueError
 
 PLAYLIST_REFRESH_SECONDS = 300
 
@@ -17,10 +18,10 @@ def rewrite_hls(body: bytes, url: str, register) -> bytes:
     """用已声明的 m3u8 模型投影全部媒体引用，地址登记策略由消费者提供。"""
     text = body.decode('utf-8-sig')
     if not text.lstrip().startswith('#EXTM3U'):
-        raise ValueError('播放列表未取得')
+        raise UserValueError('errors.previewCache.playlistNotFetched')
     playlist = m3u8.loads(text, uri=url)
     if playlist.content_steering:
-        raise ValueError('暂不支持 Content Steering 播放列表')
+        raise UserValueError('errors.previewCache.contentSteering')
     nested = [*playlist.playlists, *playlist.iframe_playlists, *playlist.image_playlists, *playlist.media]
     objects = [*playlist.segments, *nested, *playlist.keys, *playlist.session_keys,
                *playlist.session_data, *playlist.segment_map, *playlist.rendition_reports,
@@ -42,7 +43,7 @@ class PreviewCache:
     def register(self, code: str, url: str, *, identity: str = "", playlist: bool | None = None,
                  media_type: str = "") -> str:
         if not public_https_url(url):
-            raise ValueError("预览来源不可用")
+            raise UserValueError("errors.previewCache.sourceUnavailable")
         ref = hashlib.sha256((identity or url).encode()).hexdigest()
         path = self.cache.folder("preview:" + code) / (ref + ".source.json")
         value = {"url": url, "playlist": playlist if playlist is not None else urlsplit(url).path.lower().endswith(".m3u8")}
@@ -59,7 +60,7 @@ class PreviewCache:
     def source(self, code: str, ref: str) -> dict:
         ref = ref.removesuffix(".m3u8")
         if len(ref) != 64 or any(char not in "0123456789abcdef" for char in ref):
-            raise ValueError("预览对象不存在")
+            raise UserValueError("errors.previewCache.objectMissing")
         path = self.cache.folder("preview:" + code) / (ref + ".source.json")
         return json.loads(path.read_text(encoding="utf-8"))
 
@@ -68,7 +69,7 @@ class PreviewCache:
         def download():
             body = fetch(url)
             if not body.decode("utf-8").removeprefix(chr(0xFEFF)).lstrip().startswith("#EXTM3U"):
-                raise ValueError("预览清单未取得")
+                raise UserValueError("errors.previewCache.manifestNotFetched")
             return body
         generation = hashlib.sha256(url.encode()).hexdigest()
         body = self.cache.bytes(f"preview:{code}:{ref}:playlist:{generation}", download,

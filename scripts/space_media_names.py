@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT / 'src'))
 
 from peach import organize
 from peach.config import GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.platform import location_roots, resolve_root, root_online, translate_ledger_path
 from peach.review_csv import read_rows, write_rows
 from peach.scripting import add_ledger_write_args, open_for_write, open_readonly
@@ -105,7 +106,7 @@ def spaced_name(name, language):
     stem = TOKEN.sub(words, original)
     stem = re.sub(r'([,;!])(?=[A-Za-z])', r'\1 ', stem)
     if re.sub(r'\s', '', stem) != re.sub(r'\s', '', original):
-        raise ValueError('英文分词改变了内容字符')
+        raise ValueError(t('space_media_names.charactersChanged'))
     return stem + path.suffix
 
 
@@ -113,9 +114,9 @@ def plan(connection, root):
     canonical_root = str(PureWindowsPath(root))
     owner, index, _ = resolve_root(canonical_root + '\\_', location_roots())
     if not owner or index < 0 or not root_online(translate_ledger_path(canonical_root)):
-        raise ValueError('目录不在在线馆藏来源内')
+        raise ValueError(t('space_media_names.directoryOffline'))
     if organize.unverified_location(owner):
-        raise ValueError(f'来源 {owner} 的挂载改名无法核验云端结果，不出分词计划')
+        raise ValueError(t('space_media_names.unverifiedNoPlan', location=owner))
     language = model()
     result, claimed = [], set()
     for row in connection.execute('SELECT id,path,name,size FROM asset WHERE location=? AND disposal IS NULL AND medium=\'video\' ORDER BY id', (owner,)):
@@ -126,7 +127,7 @@ def plan(connection, root):
             continue
         target = str(PureWindowsPath(row['path']).with_name(new))
         if len(target) > organize.MAX_PATH or target.casefold() in claimed:
-            raise ValueError('分词目标重名或路径过长')
+            raise ValueError(t('space_media_names.targetClash'))
         claimed.add(target.casefold())
         result.append(dict(asset_id=row['id'], location=owner, current_path=row['path'], target_path=target,
                            action='rename', reason='', size=row['size'], original_name=row['name'], new_name=new))
@@ -152,36 +153,36 @@ def recompute_batch(connection, root, log_path):
         row = connection.execute('SELECT location,path,size FROM asset WHERE id=? AND disposal IS NULL',
                                  (int(entry['asset_id']),)).fetchone()
         held = PureWindowsPath(row['path']) if row else None
-        reason = ('已不在库' if held is None
-                  else '文件名已不是批次写下的名字' if held.name != current.name
-                  else '不在 --root 指定的目录' if str(held.parent).casefold() != canonical_root.casefold()
+        reason = (t('space_media_names.skipGone') if held is None
+                  else t('space_media_names.skipRenamed') if held.name != current.name
+                  else t('space_media_names.skipOutsideRoot') if str(held.parent).casefold() != canonical_root.casefold()
                   else '')
         if reason:
             skipped.append(dict(asset_id=int(entry['asset_id']), path=str(held or current), reason=reason))
             continue
         target = str(held.with_name(new))
         if len(target) > organize.MAX_PATH or target.casefold() in claimed:
-            raise ValueError('分词目标重名或路径过长')
+            raise ValueError(t('space_media_names.targetClash'))
         claimed.add(target.casefold())
         result.append(dict(asset_id=int(entry['asset_id']), location=row['location'],
                            current_path=row['path'], target_path=target, action='rename',
-                           reason='按修正后的分词重算', size=row['size'],
+                           reason=t('space_media_names.recomputed'), size=row['size'],
                            original_name=held.name, new_name=new))
     return result, skipped
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t('space_media_names.description'))
     add_ledger_write_args(parser)
     parser.add_argument('--root', required=True)
     parser.add_argument('--review-csv', type=Path)
     parser.add_argument('--recompute-batch', type=Path,
-                        help='已执行的分词批次日志；只出重算计划，不能与 --apply 同用')
+                        help=t('space_media_names.recomputeBatchHelp'))
     parser.add_argument('--out', type=Path, default=GENERATED_DIR / 'english-name-spacing.csv')
     args = parser.parse_args(argv)
     if args.recompute_batch:
         if args.apply:
-            parser.error('--recompute-batch 只出计划；执行用 --apply --review-csv')
+            parser.error(t('space_media_names.recomputeNoApply'))
         with closing(open_readonly(args.db)) as connection:
             rows, skipped = recompute_batch(connection, args.root, args.recompute_batch)
         write_rows(args.out, FIELDS, rows, atomic=True)
@@ -195,7 +196,7 @@ def main(argv=None):
         print(json.dumps(dict(planned=len(rows), review=str(args.out)), ensure_ascii=False))
         return 0
     if not args.review_csv:
-        parser.error('--apply 必须给 --review-csv，消费已冻结的原名与目标名')
+        parser.error(t('space_media_names.applyNeedsReview'))
     rows = read_rows(args.review_csv)
     seen = set()
     with closing(open_readonly(args.db)) as connection:
@@ -206,18 +207,18 @@ def main(argv=None):
             target = PureWindowsPath(row['target_path'])
             location, index, _ = resolve_root(str(source), location_roots())
             if location != row['location'] or index < 0 or not root_online(translate_ledger_path(str(source.parent))):
-                raise ValueError('英文文件名不在在线馆藏来源内')
+                raise ValueError(t('space_media_names.fileOffline'))
             if organize.unverified_location(location):
-                raise ValueError(f'来源 {location} 的挂载改名无法核验云端结果，整批未执行')
+                raise ValueError(t('space_media_names.unverifiedNotRun', location=location))
             if asset_id in seen or held is None or tuple(held) != (str(source), int(row['size'])):
-                raise ValueError('英文文件名复核已失效')
+                raise ValueError(t('space_media_names.reviewStale'))
             if str(source.parent).casefold() != str(PureWindowsPath(args.root)).casefold() or source.parent != target.parent:
-                raise ValueError('英文分词只能在指定目录内改名')
+                raise ValueError(t('space_media_names.outsideRoot'))
             if row['action'] != 'rename' or re.sub(r'\s', '', source.name) != re.sub(r'\s', '', target.name):
-                raise ValueError('英文文件名复核改变了内容字符')
+                raise ValueError(t('space_media_names.reviewCharactersChanged'))
             native = translate_ledger_path(str(source))
             if native.is_symlink() or not native.is_file() or native.stat().st_size != int(row['size']):
-                raise ValueError('英文文件体积或类型变化')
+                raise ValueError(t('space_media_names.fileChanged'))
             seen.add(asset_id)
     connection = open_for_write(args)
     try:
@@ -225,7 +226,7 @@ def main(argv=None):
         count = connection.execute('SELECT count(*) FROM asset').fetchone()[0]
         result = organize.apply_plan(connection, rows, generated_root=GENERATED_DIR)
         if connection.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or {tuple(r) for r in connection.execute('PRAGMA foreign_key_check')} - baseline or connection.execute('SELECT count(*) FROM asset').fetchone()[0] != count:
-            raise RuntimeError('英文文件名核验失败')
+            raise RuntimeError(t('space_media_names.verifyFailed'))
         print(json.dumps(result, ensure_ascii=False))
         return 1 if result['failed'] else 0
     finally:

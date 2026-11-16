@@ -13,27 +13,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import follow_evidence, system_file_repair
+from . import follow_evidence, interface_text, system_file_repair
 from .media_sources import CLOUD_LOCATIONS
 
-#: 列给用户看的修复：标题、一句做了什么、是否自动执行。顺序就是页面顺序。
+#: 列给用户看的修复：id 与是否自动执行，顺序就是页面顺序。标题与一句说明在
+#: `server:repairCenter.items.<id>`（ADR-0159），响应里同层的中文按 zh-CN 渲染。
 ITEMS = (
-    ('catalog', '资料与番号整理', '按新规则修正番号、标题等自动写入的资料，你手动改过的不动', 'auto'),
-    ('display-local', '本地视频显示尺寸', '重新读取本机与局域网视频的文件头，修正横竖屏判断', 'auto'),
-    ('display-cloud', '网盘视频显示尺寸', '要逐部读取网盘里的视频，网盘缓存和流量会增加，确认后才开始', 'confirm'),
-    ('system-files', '系统附属文件', 'NAS 系统目录里的缩略图、macOS 的 ._ 附属文件等移出馆藏，文件本身不删', 'auto'),
-    ('garbled-people', '乱码人物', '解除早期采集乱码留下的人物关联，重新补采演员', 'auto'),
-    ('dangling-candidates', '失效的复核候选', '资产删除后留下的候选改挂到同一文件的新编号，对不上的撤下', 'auto'),
-    ('javdb-entries', '人物页的 JavDB 入口', '和作品署名同为有码或同为无码的同名演员页不再给入口，订着它的订阅停用', 'auto'),
-    ('follow-evidence', '关注抓取的旧快照', '每个关注来源只留最近 3 份原始快照和条目引用的那几份，其余删除，删除后不能恢复', 'confirm'),
+    ('catalog', 'auto'), ('display-local', 'auto'), ('display-cloud', 'confirm'), ('system-files', 'auto'),
+    ('garbled-people', 'auto'), ('dangling-candidates', 'auto'), ('javdb-entries', 'auto'),
+    ('resolution-tags', 'auto'), ('video-medium', 'auto'), ('quality-bands', 'auto'), ('interface-text', 'auto'), ('follow-evidence', 'confirm'),
 )
-#: 历史里的规则：账本行 id 的前缀、名字、计哪个字段（`None` 为资料整理的改动合计）。
+#: 历史里的规则：账本行 id 的前缀、计哪个字段（`None` 为资料整理的改动合计）。
+#: 前缀去掉末尾的连字符就是规则 id，名字在 `server:repairCenter.history.<id>`。
 RULES = (
-    ('catalog-', '资料与番号整理', None), ('verification-settlement-', '核查差异结算', ('applied',)),
-    ('studio-unbounded-misses-', '厂牌查询缓存', ('released',)), ('stale-filename-codes-', '清除误认的番号', ('cleared',)),
-    ('dangling-candidates-', '失效的复核候选', ('repinned', 'withdrawn')),
-    ('javdb-actor-records-', '人物页的 JavDB 入口', ('hidden', 'disabled_feeds')),
-    (follow_evidence.RECEIPT_PREFIX, '清理关注抓取的旧快照', ('files',)),
+    ('catalog-', None), ('verification-settlement-', ('applied',)),
+    ('studio-unbounded-misses-', ('released',)), ('stale-filename-codes-', ('cleared',)),
+    ('dangling-candidates-', ('repinned', 'withdrawn')),
+    ('javdb-actor-records-', ('hidden', 'disabled_feeds')),
+    ('source-resolution-tags-', ('tags',)),
+    ('video-medium-', ('video',)),
+    ('quality-resolution-', ('assets',)),
+    ('interface-text-codes-', ('rows', 'attempts')),
+    (follow_evidence.RECEIPT_PREFIX, ('files',)),
 )
 #: 资料整理回执里不算「改动」的计数：重新探测、转人工与来源快照失效只是排队或让缓存重取，不是改了资料。
 _NOT_CHANGES = ('probe_retry', 'text_review', 'text_snapshots_invalidated')
@@ -56,6 +57,12 @@ def _latest(rows, key):
         if key in result:
             return result[key]
     return None
+
+
+def _receipt_fact(rows, prefix: str, *fields: str) -> dict:
+    """按账本行 id 前缀取最新一次补修回执：有就是做完了，`changed` 为这几个字段的条数合计。"""
+    result = next((result for row_id, _, result in rows if row_id.startswith(prefix)), {})
+    return {'state': 'done' if result else 'none', 'changed': sum(_count(result.get(field)) for field in fields)}
 
 
 def _touched(fact: dict) -> bool:
@@ -88,15 +95,17 @@ def _history(rows, backup_directories) -> list[dict]:
         rule = next((rule for rule in RULES if row_id.startswith(rule[0])), None)
         if rule is None:
             continue
-        if rule[2] is None:
+        if rule[1] is None:
             changed = _count({key: value for key, value in result.get('local', {}).get('changed', {}).items()
                               if key not in _NOT_CHANGES})
         else:
-            changed = sum(_count(result.get(key)) for key in rule[2])
+            changed = sum(_count(result.get(key)) for key in rule[1])
         if not changed:
             continue
         backups = list({row['name']: row for row in _backups(result, backup_directories)}.values())
-        history.append({'id': row_id, 'title': rule[1], 'at': applied_at, 'changed': changed, 'backups': backups})
+        rule_id = rule[0].rstrip('-')
+        history.append({'id': row_id, 'rule': rule_id, 'title': interface_text.text(f'server:repairCenter.history.{rule_id}'),
+                        'at': applied_at, 'changed': changed, 'backups': backups})
     return history
 
 
@@ -161,8 +170,6 @@ def snapshot(connection, receipt: dict, *, cloud_pending: int, backup_directorie
     included = bool(display.get('cloud_included_at'))
     isolated = _latest(rows, system_file_repair.RULE) or {}
     garbled = _latest(rows, 'garbled_people') or {}
-    dangling = next((result for row_id, _, result in rows if row_id.startswith('dangling-candidates-')), {})
-    javdb_entries = next((result for row_id, _, result in rows if row_id.startswith('javdb-actor-records-')), {})
     facts = {
         'catalog': {'state': local.get('state') or ('done' if local else 'none'),
                     'changed': _count({key: value for key, value in local.get('changed', {}).items()
@@ -172,12 +179,15 @@ def snapshot(connection, receipt: dict, *, cloud_pending: int, backup_directorie
         'display-cloud': _display_cloud(cloud_pending, included, cloud_done, cloud_total),
         'system-files': {'state': 'done' if isolated else 'none', 'changed': _count(isolated.get('isolated'))},
         'garbled-people': {'state': 'done' if garbled else 'none', 'changed': _count(garbled.get('links'))},
-        'dangling-candidates': {'state': 'done' if dangling else 'none',
-                                'changed': _count(dangling.get('repinned')) + _count(dangling.get('withdrawn'))},
-        'javdb-entries': {'state': 'done' if javdb_entries else 'none',
-                          'changed': _count(javdb_entries.get('hidden')) + _count(javdb_entries.get('disabled_feeds'))},
+        'dangling-candidates': _receipt_fact(rows, 'dangling-candidates-', 'repinned', 'withdrawn'),
+        'javdb-entries': _receipt_fact(rows, 'javdb-actor-records-', 'hidden', 'disabled_feeds'),
+        'resolution-tags': _receipt_fact(rows, 'source-resolution-tags-', 'tags'),
+        'quality-bands': _receipt_fact(rows, 'quality-resolution-', 'assets'),
+        'video-medium': _receipt_fact(rows, 'video-medium-', 'video'),
+        'interface-text': _receipt_fact(rows, 'interface-text-codes-', 'rows', 'attempts'),
         'follow-evidence': _follow_evidence(follow_evidence_status, rows),
     }
-    items = [{'id': key, 'title': title, 'summary': summary, 'mode': mode, **facts[key]}
-             for key, title, summary, mode in ITEMS if _touched(facts[key])]
+    items = [{'id': key, 'title': interface_text.text(f'server:repairCenter.items.{key}.title'),
+              'summary': interface_text.text(f'server:repairCenter.items.{key}.summary'), 'mode': mode, **facts[key]}
+             for key, mode in ITEMS if _touched(facts[key])]
     return {'items': items, 'history': _history(rows, backup_directories)}

@@ -23,6 +23,7 @@ from . import avatar_cover_face, avatar_picker, avwikidb, face_match
 from .avatar_followup import MAX_KEPT_FACES, NEAR_DUPLICATE
 from .avatar_provider import AvatarCandidateCache, inspect_avatar
 from .catalog_rules import normalise_code_key
+from .task_outcomes import part
 
 #: 馆外封面原图的缓存目录（`provider-cache/performer-avatars/` 下）。
 COVER_CACHE = "offsite-cover"
@@ -35,14 +36,12 @@ MAX_IMAGE_BYTES = 8 << 20
 #: DMM 图片主机按来源页放行。
 REFERER = "https://www.dmm.co.jp/"
 
-UNFETCHED = "未取得"
-
 
 @dataclass
 class Outcome:
-    """这一档的结论。`winner` 是 None 时 `reason` 说为什么没装。"""
+    """这一档的结论。`winner` 是 None 时 `reason` 说为什么没装（`task_outcomes` 的段落）。"""
 
-    reason: str
+    reason: list
     winner: avatar_cover_face.CoverFace | None = None
     faces: list = field(default_factory=list)
     urls: dict = field(default_factory=dict)
@@ -152,23 +151,23 @@ def find(pages, actor: str, skip: set[str], probe, matcher, transport,
             works += [work for work in avwikidb.single_works(html, actor)
                       if work["code"] not in listed]
     except (Blocked, Unavailable) as error:
-        return Outcome(f"avwikidb 单人作品{UNFETCHED}：{error}", unavailable=True)
+        return Outcome([part("offsiteUnfetched", error=str(error))], unavailable=True)
     if not works:
-        return Outcome("avwikidb 上没有她的单人作品")
+        return Outcome([part("offsiteNoWorks")])
     cache = AvatarCandidateCache(Path(providers_root) / COVER_CACHE)
     faces, urls = listed_faces(works, skip, probe,
                                lambda url: fetch_cover(transport, cache, url))
     if not faces:
-        return Outcome(f"馆外 {len(urls)} 部单人作品封面上没有能截的脸", urls=urls)
+        return Outcome([part("offsiteNoFace", count=len(urls))], urls=urls)
     agreed, scores = agreeing(faces, matcher)
     if matcher.unavailable:
-        return Outcome(f"比对模型不可用：{matcher.unavailable}", faces=faces, urls=urls,
+        return Outcome([part("matchModelUnavailable", reason=str(matcher.unavailable))], faces=faces, urls=urls,
                        unavailable=True)
     evidence = {"avwikidb": actor, "codes": [face.code for face in agreed], "scores": scores}
     if len({face.code for face in agreed}) < AGREE_WORKS:
-        return Outcome(f"馆外单人作品封面只截到 {len(faces)} 张脸，凑不齐两部互证",
+        return Outcome([part("offsiteFacesUnconfirmed", count=len(faces))],
                        faces=faces, urls=urls, evidence=evidence)
-    return Outcome("", winner=agreed[0], faces=faces, urls=urls, evidence=evidence)
+    return Outcome([], winner=agreed[0], faces=faces, urls=urls, evidence=evidence)
 
 
 def origin(face, url: str, evidence: dict) -> tuple[bytes, dict] | None:

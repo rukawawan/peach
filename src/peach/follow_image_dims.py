@@ -179,5 +179,5 @@ def probe_image_dims(transport: HttpTransport, url: str, headers: Mapping[str, s
         raise ImageDimsUnavailable(f"HTTP {response.status}")
     dims = dims_from_header(response.body[:budget])
     if dims is None:
-        raise ImageDimsUnavailable("文件头里没有认出尺寸")
+        raise ImageDimsUnavailable("no dimensions recognized in the file header")
     return dims

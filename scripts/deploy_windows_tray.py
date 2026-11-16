@@ -33,6 +33,7 @@ import httpx
 
 from peach import __version__
 from peach.config import LOG_DIR, STATE_DIR
+from peach.interface_text import dev as t
 from peach.tray import build_service_specs
 from peach.windows_restart import restart_tray
 from peach.windows_update import WindowsUpdateInstaller
@@ -63,7 +64,7 @@ def serving_identity(*, timeout: float = 60.0,
     """
     spec = next(spec for spec in build_service_specs() if spec.name == "https")
     deadline = time.monotonic() + timeout
-    last = "没有回话"
+    last = t("deploy_windows_tray.noAnswer")
     while True:
         try:
             response = httpx.get(spec.health_url, timeout=5.0, verify=spec.verify,
@@ -110,14 +111,14 @@ def deploy(
 
     status = _git(run, root, "status", "--porcelain")
     if status.returncode != 0:
-        return _outcome(False, "checkout", f"读不到检出状态：{status.stderr.strip()}")
-    if status.stdout.strip():
         return _outcome(False, "checkout",
-                        "检出不干净：生产二进制只从干净的检出里打，先提交或清理再来。")
+                        t("deploy_windows_tray.statusUnreadable", error=status.stderr.strip()))
+    if status.stdout.strip():
+        return _outcome(False, "checkout", t("deploy_windows_tray.checkoutDirty"))
     commit = _git(run, root, "rev-parse", "HEAD").stdout.strip()
     branch = _git(run, root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if not commit:
-        return _outcome(False, "checkout", "读不到 HEAD 提交号。")
+        return _outcome(False, "checkout", t("deploy_windows_tray.headUnreadable"))
     fields = {"commit": commit, "branch": branch, "target": str(target)}
 
     installer = installer or WindowsUpdateInstaller(
@@ -127,17 +128,17 @@ def deploy(
         built = installer.build_staged_tray(commit)
         if built is None:
             return _outcome(False, "build",
-                            f"新托盘构建失败，生产入口未动；日志见 {installer.log_path}。",
+                            t("deploy_windows_tray.buildFailed", log=installer.log_path),
                             **fields)
         staged = built
     staged = staged.resolve()
     if not staged.is_file():
-        return _outcome(False, "build", f"暂存包不存在：{staged}", **fields)
+        return _outcome(False, "build", t("deploy_windows_tray.stagedMissing", path=staged), **fields)
     fields["staged"] = str(staged)
 
     if not installer.packaged_migrations_pass(staged):
         return _outcome(False, "validate",
-                        f"暂存包没通过打包迁移资源检查，生产入口未动；日志见 {installer.log_path}。",
+                        t("deploy_windows_tray.migrationsFailed", log=installer.log_path),
                         **fields)
 
     # 指纹只能在这里取：换二进制走的是 `os.replace`，暂存包被搬走，换完就没这个文件了。
@@ -157,8 +158,9 @@ def deploy(
     if served is None or "error" in served:
         detail = (served or {}).get("error")
         return _outcome(False, "verify",
-                        "新托盘已就位，但生产 HTTPS 口的 /healthz 没在期限内回话"
-                        + (f"；最后一次：{detail}" if detail else "") + "。",
+                        t("deploy_windows_tray.healthzSilent")
+                        + (t("deploy_windows_tray.lastAttempt", detail=detail) if detail else "")
+                        + t("deploy_windows_tray.sentenceEnd"),
                         **fields)
     fields["version"] = served["version"]
     fields["served_commit"] = served["build_commit"]
@@ -174,30 +176,29 @@ def deploy(
     if served["build_commit"] is not None:
         if served["build_commit"] != commit:
             return _outcome(False, "verify",
-                            f"新托盘已就位，但 /healthz 报的构建是 "
-                            f"{served['build_commit']}，不是这次打的 {commit[:8]}。",
+                            t("deploy_windows_tray.wrongBuild", served=served["build_commit"],
+                              commit=commit[:8]),
                             **fields)
     else:
         landed = digest(target)
         fields["target_digest"] = landed
         if landed != built:
             return _outcome(False, "verify",
-                            f"新托盘已就位，但生产入口的指纹是 {landed[:12]}，"
-                            f"不是这次打的 {built[:12]}。",
+                            t("deploy_windows_tray.wrongDigest", landed=landed[:12], built=built[:12]),
                             **fields)
     return _outcome(True, "verify",
-                    f"生产入口已换成 {commit[:8]} 打出的托盘，/healthz 报 {served['version']}。",
+                    t("deploy_windows_tray.swapped", commit=commit[:8], version=served["version"]),
                     **fields)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="构建并换上 Windows 生产托盘二进制")
+    parser = argparse.ArgumentParser(description=t("deploy_windows_tray.description"))
     parser.add_argument("--target", type=Path,
                         default=PROJECT_ROOT / "dist" / "Peach" / "Peach.exe")
     parser.add_argument("--staged", type=Path, default=None,
-                        help="复用这份已经打好的暂存包，跳过构建")
+                        help=t("deploy_windows_tray.stagedHelp"))
     parser.add_argument("--timeout", type=float, default=60.0,
-                        help="等生产 HTTPS 口 /healthz 回话的秒数")
+                        help=t("deploy_windows_tray.timeoutHelp"))
     args = parser.parse_args(argv)
     outcome = deploy(PROJECT_ROOT, target=args.target, staged=args.staged,
                      timeout=max(1.0, args.timeout))

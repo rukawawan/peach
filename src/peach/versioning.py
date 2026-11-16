@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import __version__
+from . import __version__, interface_text
 from .config import PROJECT_ROOT
+
+
+def _say(name: str, **params) -> str:
+    """版本信息只在托盘菜单与托盘通知里出现，跟本机语言（`tray.versions.<名字>`）。"""
+    return interface_text.text(f"server:tray.versions.{name}", params, interface_text.local_language())
 
 
 def discover_repository_root(
@@ -55,25 +60,26 @@ class VersionSnapshot:
 
     @property
     def build_label(self) -> str:
-        dirty = " · 有未提交修改" if self.dirty else ""
-        base = f"{self.branch}@{self.commit}{dirty}"
+        base = f"{self.branch}@{self.commit}"
+        if self.dirty:
+            base = _say("dirty", base=base)
         if not self.build_stale:
             return base
         if self.build_commit is None:
-            return f"{base} · 托盘构建身份未取得"
+            return _say("buildUnknown", base=base)
         if self.build_behind is not None and self.build_behind > 0:
-            return f"{base} · 托盘构建 {self.build_commit[:8]}，落后 {self.build_behind} 个提交"
-        return f"{base} · 托盘构建 {self.build_commit[:8]} 不在本检出历史里"
+            return _say("buildBehind", base=base, build=self.build_commit[:8], count=self.build_behind)
+        return _say("buildForeign", base=base, build=self.build_commit[:8])
 
     @property
     def channel_label(self) -> str:
         if self.commit == "release":
-            return "更新通道 · GitHub 测试版"
+            return _say("channelRelease")
         if not self.remote_configured:
-            return "本地开发版 · 未配置更新源"
+            return _say("channelLocal")
         if not self.upstream:
-            return "已配置更新源 · 未跟踪分支"
-        return f"更新通道 · {self.upstream}"
+            return _say("channelUntracked")
+        return _say("channel", upstream=self.upstream)
 
 
 @dataclass(frozen=True)
@@ -124,7 +130,7 @@ class VersionManager:
         package_version = __version__
         from .distribution import standalone
         if standalone():
-            return VersionSnapshot(package_version, "测试包", "release", False, False, None)
+            return VersionSnapshot(package_version, _say("testPackage"), "release", False, False, None)
         commit = self._text("rev-parse", "--short=8", "HEAD") or "unknown"
         branch = self._text("branch", "--show-current") or "detached"
         dirty = bool(self._text("status", "--porcelain"))
@@ -180,40 +186,37 @@ class VersionManager:
         if standalone():
             from .release_updates import check
             release = check()
-            latest = f"最新测试版：{release['latest_version']}。" if release['latest_version'] else ""
-            return UpdateResult(release["state"], f"当前版本：{before.package_version}。{latest}{release['message']}", before)
+            language = interface_text.local_language()
+            outcome = interface_text.text(f"server:{release['message_code']}", release.get("message_params"), language) \
+                if release.get("message_code") else release["message"]
+            message = _say("releaseLatest" if release['latest_version'] else "release", current=before.package_version,
+                            latest=release['latest_version'], message=outcome)
+            return UpdateResult(release["state"], message, before)
         if not before.remote_configured:
-            return UpdateResult(
-                "unconfigured",
-                f"Peach {before.package_version}（{before.build_label}）\n未配置更新源；当前为本地开发版。",
-                before,
-            )
+            return UpdateResult("unconfigured", _say("unconfigured", version=before.package_version,
+                                                      build=before.build_label), before)
         fetched = self._git("fetch", "--quiet", "--prune", "origin", timeout=30)
         if fetched.returncode != 0:
-            return UpdateResult("error", "无法连接更新源；本地版本未改变。", before)
+            return UpdateResult("error", _say("fetchFailed"), before)
         current = self.inspect()
         if not current.upstream:
-            return UpdateResult(
-                "untracked",
-                "更新源已连接，但当前分支没有对应的跟踪分支。",
-                current,
-            )
+            return UpdateResult("untracked", _say("untracked"), current)
         counts = self._text("rev-list", "--left-right", "--count", f"HEAD...{current.upstream}").split()
         if len(counts) != 2 or not all(value.isdigit() for value in counts):
-            return UpdateResult("error", "更新源已连接，但无法比较版本。", current)
+            return UpdateResult("error", _say("compareFailed"), current)
         ahead, behind = map(int, counts)
         if behind and ahead:
             state = "diverged"
-            message = f"本地领先 {ahead} 个提交，远端领先 {behind} 个提交；需要人工合并。"
+            message = _say("diverged", ahead=ahead, behind=behind)
         elif behind:
             state = "available"
-            message = f"发现 {behind} 个新提交。为保护并行工作树，只检查、不自动安装。"
+            message = _say("available", behind=behind)
         elif ahead:
             state = "ahead"
-            message = f"当前已比更新通道领先 {ahead} 个提交。"
+            message = _say("ahead", ahead=ahead)
         else:
             state = "current"
-            message = f"Peach {current.package_version} 已是当前更新通道的最新版本。"
+            message = _say("current", version=current.package_version)
         return UpdateResult(state, message, current, ahead=ahead, behind=behind)
 
     def update(self) -> UpdateResult:
@@ -235,20 +238,13 @@ class VersionManager:
             return checked
         snapshot = checked.snapshot
         if snapshot.dirty:
-            return UpdateResult(
-                "blocked",
-                f"更新通道有 {checked.behind} 个新提交，但本地检出有未提交修改；"
-                "先处理掉再同步。",
-                snapshot, behind=checked.behind,
-            )
+            return UpdateResult("blocked", _say("dirtyBlocked", behind=checked.behind),
+                                snapshot, behind=checked.behind)
         before = self._text("rev-parse", "HEAD")
         merged = self._git("merge", "--ff-only", str(snapshot.upstream), timeout=60)
         if merged.returncode != 0:
-            return UpdateResult(
-                "blocked",
-                f"无法快进到 {snapshot.upstream}；本地检出未改变，需要人工处理。",
-                snapshot, behind=checked.behind,
-            )
+            return UpdateResult("blocked", _say("fastForwardFailed", upstream=snapshot.upstream),
+                                snapshot, behind=checked.behind)
         current = self.inspect()
         changed = tuple(
             line for line in self._text("diff", "--name-only", f"{before}..HEAD").splitlines()
@@ -256,6 +252,6 @@ class VersionManager:
         )
         return UpdateResult(
             "updated",
-            f"已同步 {checked.behind} 个提交：{before[:8]} → {current.commit}。",
+            _say("updated", count=checked.behind, before=before[:8], after=current.commit),
             current, behind=checked.behind, changed_paths=changed,
         )

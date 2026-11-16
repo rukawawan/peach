@@ -7,6 +7,7 @@ import { EvilBarChart } from '@/registry/charts/recharts-bar-chart';
 
 import { CategoryTick, categoryAxisWidth, CHART_CARD, ChartEmpty, ChartHead, tone } from './chart-card';
 import { ChartTip } from './chart-tip';
+import { interfaceLanguage } from '../../i18n';
 
 /** 一根柱子：显示的名字和它的数。写成类型别名，EvilCharts 的 `data` 要能当 `Record` 收。 */
 export type BarRow = { name: string; value: number };
@@ -17,16 +18,13 @@ export const BAR_DOMAIN: [number, (max: number) => number] = [0, (max) => max * 
 /** 横条右侧给柱端那个数留的位置（像素）：最长那一条的数落在这一截里，不被图框切掉。 */
 export const BAR_LABEL_ROOM = 56;
 
-/** 柱端的数：十万以上读成「万」「亿」，柱端那一小截放得下；全数在悬停浮层里。 */
+/** 页头大数旁的单位：按数量取单复数，中文是量词加名词（「个视频」），英文是名词（videos）。 */
+export type CountUnit = (count: number) => string;
+
+/** 柱端的数：十万以上按界面语言缩写（中文「万」「亿」，英文 K、M、B），柱端那一小截放得下；全数在悬停浮层里。 */
+const COMPACT = new Intl.NumberFormat(interfaceLanguage, { notation: 'compact', maximumSignificantDigits: 3 });
 export function shortCount(value: number): string {
-  const abs = Math.abs(value);
-  const scaled = (unit: number, name: string) => {
-    const figure = value / unit;
-    return `${figure.toLocaleString(undefined, { maximumFractionDigits: Math.abs(figure) < 100 ? 1 : 0 })}${name}`;
-  };
-  if (abs >= 1e8) return scaled(1e8, '亿');
-  if (abs >= 1e5) return scaled(1e4, '万');
-  return value.toLocaleString();
+  return Math.abs(value) >= 1e5 ? COMPACT.format(value) : value.toLocaleString();
 }
 
 /** 柱端的数。`position` 跟着柱子的走向：竖柱标在顶上，横条标在右端。 */
@@ -41,7 +39,7 @@ export const barLabel = (position: 'top' | 'right') => ({
 export function BarCard(
   { title, unit, series, rows, color, empty, layout = 'vertical' }:
   {
-    title: string; unit: string; series: string; rows: BarRow[]; color: string; empty: string;
+    title: string; unit: CountUnit; series: string; rows: BarRow[]; color: string; empty: string;
     layout?: 'vertical' | 'horizontal';
   },
 ) {
@@ -56,7 +54,7 @@ export function BarCard(
      名字放不下就由 `CategoryTick` 截断。 */
   return (
     <section className={CHART_CARD} aria-label={title}>
-      <ChartHead title={title} figure={total.toLocaleString()} note={unit} />
+      <ChartHead title={title} figure={total.toLocaleString()} note={unit(total)} />
       <EvilBarChart data={data} config={{ value: { label: series, colors: tone(color) } }}
         layout={layout} barRadius={4}
         chartProps={horizontal ? { margin: { top: 5, right: BAR_LABEL_ROOM, bottom: 5, left: 5 } } : undefined}

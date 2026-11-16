@@ -1,13 +1,14 @@
 /* 目录排序的词表：有哪几列、每一列的方向怎么说、旧键怎么换成新键。壳的地址解析、筛选条的排序钮与
  * 启动时的设置归一化（`appearance/settings.ts`）读的都是这一份。 */
+import { t } from './i18n';
 
 /** `[键, 显示名]`。随机排第一：它是出厂默认，也没有方向。 */
 export const SORTS: readonly (readonly [key: string, label: string])[] = [
-  ['seed', '随机'], ['rating', '评分'], ['o', '高潮计数'], ['plays', '观看次数'], ['dur', '时长'],
-  ['size', '体积'], ['new', '入库时间'], ['played', '观看时间'],
+  ['seed', t('settings:shared.random')], ['rating', t('settings:shared.rating')], ['o', t('settings:shared.climaxCount')], ['plays', t('settings:shared.plays')], ['dur', t('settings:shared.duration')],
+  ['size', t('settings:shared.fileSize')], ['new', t('settings:shared.dateAdded')], ['played', t('settings:shared.lastWatched')],
 ];
 /** 只在 JAV 语境里出现的那一列。 */
-export const JAV_RELEASE_SORT: readonly [key: string, label: string] = ['release', '发行时间'];
+export const JAV_RELEASE_SORT: readonly [key: string, label: string] = ['release', t('settings:sortOrder.releaseDate')];
 export const SORT_KEYS: readonly string[] = [...SORTS, JAV_RELEASE_SORT].map(([key]) => key);
 
 /** `[desc, asc]` 两种方向的说法。 */
@@ -16,9 +17,9 @@ export type SortDirWords = Readonly<Record<string, readonly [desc: string, asc: 
 /* 方向词按列各自定义：同一个 desc 在时间列上是「从新到旧」，在时长上是「从长到短」，
    写成通用的「降序」等于让界面解释 SQL。数组是 [desc,asc]，在表里就等于这一列可翻转。 */
 export const SORT_DIR_WORDS: SortDirWords = {
-  rating: ['从高到低', '从低到高'], o: ['从多到少', '从少到多'],
-  plays: ['从多到少', '从少到多'], dur: ['从长到短', '从短到长'], size: ['从大到小', '从小到大'],
-  new: ['从新到旧', '从旧到新'], played: ['从近到远', '从远到近'], release: ['从新到旧', '从旧到新'],
+  rating: [t('settings:sortOrder.highestFirst'), t('settings:sortOrder.lowestFirst')], o: [t('settings:sortOrder.mostFirst'), t('settings:sortOrder.fewestFirst')],
+  plays: [t('settings:sortOrder.mostFirst'), t('settings:sortOrder.fewestFirst')], dur: [t('settings:sortOrder.longestFirst'), t('settings:sortOrder.shortestFirst')], size: [t('settings:sortOrder.largestFirst'), t('settings:sortOrder.smallestFirst')],
+  new: [t('settings:sortOrder.newestFirst'), t('settings:sortOrder.oldestFirst')], played: [t('settings:sortOrder.recentFirst'), t('settings:sortOrder.leastRecentFirst')], release: [t('settings:sortOrder.newestFirst'), t('settings:sortOrder.oldestFirst')],
 };
 
 /* 旧键沿用：地址栏、书签和设置里存着把方向写进键名的值。方向现在单独由 `dir` 表达，

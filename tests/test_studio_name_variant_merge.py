@@ -336,7 +336,7 @@ class ApplyTests(unittest.TestCase):
         self.connection.commit()
         self.row = {"keep_id": 1, "keep_name": "MOODYZ", "keep_assets": 1,
                     "drop_id": 2, "drop_name": "ムーディーズ", "drop_assets": 1,
-                    "klass": "日文名／罗马字名", "evidence": "共用番号前缀 MIDV"}
+                    "klass": "japanese-romaji", "evidence": "共用番号前缀 MIDV"}
 
     def tearDown(self):
         self.connection.close()

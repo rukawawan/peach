@@ -146,6 +146,8 @@ class GenreTaxonomyTests(unittest.TestCase):
 
     def test_javdb_source_version_labels_do_not_assert_local_file_attributes(self):
         self.assertEqual(map_genres(["無碼流出", "無碼破解", "HDTV", "共演", "店長推薦"]), ([], []))
+        # 来源的 `4K` 是官方出过 4K 版，手里这份常是 1080p，不落成文件的标签。
+        self.assertEqual(map_genres(["4K", "4k", "4K撮影"]), ([], []))
         self.assertEqual(map_genres(["無修正", "肛交", "女醫生"]), (["无码", "肛交", "女医生"], []))
 
     def test_confirmed_tags_have_filter_groups(self):

@@ -28,10 +28,11 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 
-from . import auth, certs, settings_file
+from . import auth, certs, interface_text, settings_file
 from .migrations import upgrade
 from .platform import is_windows_path
 from .settings_file import PeachConfig
+from .user_messages import UserFacingError, UserValueError
 
 #: 提问函数：(题目, 默认值) -> 用户输入的原文。空串表示接受默认值。
 Ask = Callable[[str, str], str]
@@ -45,8 +46,6 @@ MAX_ATTEMPTS = 3
 POSIX_LOCAL_DECLARED_ROOT = r"R:\media"
 #: 本地来源的 ID。所有本地媒体目录都是 `asset.location = 'local'`。
 LOCAL_LOCATION = "local"
-#: 命令行里追加目录的题面：空答案就是「不加了」。
-MORE_MEDIA_PROMPT = "再加一个媒体目录（不加就直接回车）"
 #: 迁移随代码走，不随数据走。这里不 import `peach.config`：那个模块的常量在进程启动
 #: 那一刻就定型了，而首次设置正是要改变它们指向的 Peach 数据目录。
 MIGRATIONS_DIR = settings_file.PROJECT_ROOT / "migrations"
@@ -55,23 +54,39 @@ MIGRATIONS_DIR = settings_file.PROJECT_ROOT / "migrations"
 SCAN_REQUEST_NAME = "first-scan.request"
 RELOAD_NAME = "configuration-reload.request"
 
-#: 监听范围的两个选项：(提交值, 说明)。题目文本和设置页的下拉都由它生成，
+#: 监听范围的两个选项：(提交值, 显示名的 code)。命令行题面和设置页的单选都由它生成，
 #: 所以两处永远是同一批选项，改一个不会漏掉另一个。
-HOST_OPTIONS = (("1", "只有这台电脑"), ("2", "同一局域网的设备"))
-#: 首扫题的题面。CLI 在后面接 `(Y/n)`，设置页把它当勾选框的标签。
-SCAN_PROMPT = "现在扫描 {target}？"
+HOST_OPTIONS = (("1", "labels.onboarding.hostOption.thisDevice"), ("2", "labels.onboarding.hostOption.lan"))
 
 _DNS_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 _HOST_CHOICES = {
-    "1": LOOPBACK_HOST, "本机": LOOPBACK_HOST, LOOPBACK_HOST: LOOPBACK_HOST,
-    "2": LAN_HOST, "局域网": LAN_HOST, LAN_HOST: LAN_HOST,
+    "1": LOOPBACK_HOST, LOOPBACK_HOST: LOOPBACK_HOST,
+    "2": LAN_HOST, LAN_HOST: LAN_HOST,
 }
-_YES = {"", "y", "yes", "是"}
-_NO = {"n", "no", "否"}
+_YES = {"", "y", "yes"}
+_NO = {"n", "no"}
 
 
-class OnboardingAborted(RuntimeError):
-    """一题没有问出有效答案：连续给错、或者输入结束。消息以句号结尾，前端接着说后果。"""
+def _answers(name: str) -> set[str]:
+    """问答接受的一个简写（`labels.onboarding.answer.<名字>`）：中文与命令行语言里的写法都认。"""
+    code = f"server:labels.onboarding.answer.{name}"
+    return {interface_text.text(code, None, language).strip().lower()
+            for language in (interface_text.SOURCE_LANGUAGE, interface_text.local_language())}
+
+
+def _label(code: str, params: dict | None = None, language: str | None = None) -> str:
+    """问答里的一句话。题面、重试提示与路径说明只在命令行出现，默认按 `local_language` 渲染。"""
+    return interface_text.text(f"server:{code}", params, language or interface_text.local_language())
+
+
+def _reason(error: BaseException) -> str:
+    """校验不通过的原因，按命令行的语言渲染；没带 code 的异常照原文。"""
+    return _label(error.code, error.params) if isinstance(error, UserFacingError) else str(error)
+
+
+class OnboardingAborted(UserFacingError, RuntimeError):
+    """一题没有问出有效答案：连续给错、或者输入结束。消息以句号结尾，前端接着说后果。
+    只有命令行问答抛它，给人看的那句由 `cli.py` 按命令行语言渲染。"""
 
 
 @dataclass(frozen=True)
@@ -99,10 +114,10 @@ class Answers:
 def validate_data_root(raw: str) -> Path:
     text = raw.strip()
     if not text:
-        raise ValueError("Peach 数据目录不能为空")
+        raise UserValueError("errors.onboarding.dataRootEmpty")
     path = Path(text).expanduser()
     if path.is_file():
-        raise ValueError(f"{path} 是一个文件，Peach 数据目录要是目录")
+        raise UserValueError("errors.onboarding.dataRootIsFile", {"path": str(path)})
     return path
 
 
@@ -110,55 +125,56 @@ def media_dir_validator(*, windows: bool) -> Callable[[str], Path]:
     def validate(raw: str) -> Path:
         text = raw.strip()
         if not text:
-            raise ValueError("媒体目录不能为空")
+            raise UserValueError("errors.onboarding.mediaDirEmpty")
         path = Path(text).expanduser()
         if not path.is_dir():
-            raise ValueError(f"目录不存在，或者不是目录：{path}。先建好再填。")
+            raise UserValueError("errors.onboarding.mediaDirMissing", {"path": str(path)})
         # Windows 媒体目录保留盘符；挂载盘的最终路径可能是 UNC。
         resolved = Path(os.path.abspath(path)) if windows else path.resolve()
         if windows and not is_windows_path(str(resolved)):
-            raise ValueError(f"{resolved} 不是盘符路径；网络位置先映射成盘符再来")
+            raise UserValueError("errors.onboarding.mediaDirNotDrive", {"path": str(resolved)})
         return resolved
     return validate
 
 
-def check_media_dirs(dirs: Sequence[Path]) -> dict[int, str]:
+def check_media_dirs(dirs: Sequence[Path]) -> dict[int, UserValueError]:
     """几个媒体目录之间不能重复、不能一个套在另一个里面。
 
-    返回「下标 → 原因」，两个前端各自决定错误写在哪一行。套着的目录会让同一个文件被
+    返回「下标 → 原因」，两个前端各自决定错误写在哪一行、按哪种语言说。套着的目录会让同一个文件被
     登记两次，所以和重复一样拒绝，而不是悄悄合并。
     """
-    problems: dict[int, str] = {}
+    problems: dict[int, UserValueError] = {}
     for index, path in enumerate(dirs):
         for other_index, other in enumerate(dirs):
             if other_index == index or index in problems:
                 continue
             if path == other:
                 if other_index < index:
-                    problems[index] = f"和上面的 {other} 重复了"
+                    problems[index] = UserValueError("errors.onboarding.mediaDirDuplicate", {"other": str(other)})
             elif path.is_relative_to(other):
-                problems[index] = f"已经在 {other} 里面，不用再加"
+                problems[index] = UserValueError("errors.onboarding.mediaDirNested", {"other": str(other)})
     return problems
 
 
 def read_media_dirs(
     raws: Sequence[str], *, validate: Callable[[str], Path], default: str = "",
-) -> tuple[list[Path], list[str]]:
+) -> tuple[list[Path], list[ValueError | str]]:
     """页面表单里的几行媒体目录：逐行校验，再查行与行之间的关系。
 
     第一行留空取默认值，后面的空行当没填。返回 `(合格的路径, 每行的错误)`；错误列表与
-    提交的行一一对应，全对时为空列表，页面据此把原因写回出错的那一行底下。
+    提交的行一一对应，没问题的行是空串，出错的行是那个异常（`web_entry.field_errors` 写成原句与 code），
+    全对时为空列表，页面据此把原因写回出错的那一行底下。
     """
     rows = list(raws) or [""]
     kept = [(index, raw) for index, raw in enumerate(rows) if index == 0 or raw.strip()]
     paths: list[Path] = []
-    problems = [""] * len(rows)
+    problems: list[ValueError | str] = [""] * len(rows)
     failed = False
     for index, raw in kept:
         try:
             paths.append(validate(raw if raw.strip() else default))
         except ValueError as exc:
-            problems[index] = str(exc)
+            problems[index] = exc
             failed = True
     if not failed:
         for offset, why in check_media_dirs(paths).items():
@@ -179,23 +195,26 @@ def more_media_dir_validator(
         path = single(raw)
         problems = check_media_dirs((*taken, path))
         if problems:
-            raise ValueError(problems[len(taken)])
+            raise problems[len(taken)]
         return path
     return validate
 
 
 def validate_host(raw: str) -> str:
     key = raw.strip().lower()
-    try:
+    if key in _HOST_CHOICES:
         return _HOST_CHOICES[key]
-    except KeyError:
-        raise ValueError("填 1（只有这台电脑）或 2（同一局域网的设备）") from None
+    if key in _answers("thisDevice"):
+        return LOOPBACK_HOST
+    if key in _answers("lan"):
+        return LAN_HOST
+    raise UserValueError("errors.onboarding.hostChoice")
 
 
 def validate_port(raw: str) -> int:
     text = raw.strip()
     if not text.isdigit() or not 1 <= int(text) <= 65535:
-        raise ValueError("端口要是 1 到 65535 之间的整数")
+        raise UserValueError("errors.onboarding.portInvalid")
     return int(text)
 
 
@@ -206,23 +225,23 @@ def check_available_port(port: int, current: int) -> None:
         with socket.socket() as candidate:
             candidate.bind(("127.0.0.1", port))
     except OSError as exc:
-        raise ValueError("这个端口已被占用，请换一个端口") from exc
+        raise UserValueError("errors.onboarding.portInUse") from exc
 
 
 def validate_mdns_name(raw: str) -> str:
     text = raw.strip()
     if not _DNS_LABEL.match(text):
-        raise ValueError("名字只能用字母、数字和连字符，不能以连字符开头或结尾")
+        raise UserValueError("errors.onboarding.mdnsNameInvalid")
     return text
 
 
 def validate_yes_no(raw: str) -> bool:
     key = raw.strip().lower()
-    if key in _YES:
+    if key in _YES or key in _answers("yes"):
         return True
-    if key in _NO:
+    if key in _NO or key in _answers("no"):
         return False
-    raise ValueError("填 y 或 n")
+    raise UserValueError("errors.onboarding.yesNo")
 
 
 # --------------------------------------------------------------------------- 题目
@@ -236,20 +255,24 @@ def default_media_dir(home: Path, *, windows: bool) -> Path | None:
 def questions(
     config: PeachConfig, *, windows: bool, home: Path | None = None,
 ) -> tuple[Question, ...]:
-    """按顺序给出全部题目。默认值来自当前解析到的配置，和非交互 `peach init` 同一口径。"""
+    """按顺序给出全部题目。默认值来自当前解析到的配置，和非交互 `peach init` 同一口径。
+
+    题面是命令行用的（按 `local_language` 渲染），设置页的题面与说明另由 `routes_pages` 给 code。
+    """
     home = Path.home() if home is None else home
     media_default = default_media_dir(home, windows=windows)
+    hosts = dict(HOST_OPTIONS)
     return (
-        Question("data_root", "数据目录（Peach 数据库、缓存和设置文件都放在这里）",
+        Question("data_root", _label("labels.onboarding.prompt.dataRoot"),
                  str(config.data_root), validate_data_root),
-        Question("media_dir", "媒体目录（必须已经存在，可以在外置硬盘上）",
+        Question("media_dir", _label("labels.onboarding.prompt.mediaDir"),
                  str(media_default) if media_default else "",
                  media_dir_validator(windows=windows)),
-        Question("host",
-                 "谁可以访问：" + "，".join(f"{value} = {label}" for value, label in HOST_OPTIONS),
+        Question("host", _label("labels.onboarding.prompt.host",
+                                {"thisDevice": _label(hosts["1"]), "lan": _label(hosts["2"])}),
                  "2", validate_host),
-        Question("port", "端口", str(config.server.port), validate_port),
-        Question("mdns_name", "局域网访问地址（<名字>.local，只在允许局域网访问时发布）",
+        Question("port", _label("labels.onboarding.prompt.port"), str(config.server.port), validate_port),
+        Question("mdns_name", _label("labels.onboarding.prompt.mdnsName"),
                  config.server.mdns_name, validate_mdns_name),
     )
 
@@ -258,16 +281,18 @@ def scan_target_text(media_dirs: Sequence[Path | str]) -> str:
     """首扫题里的对象：一个目录就写它的路径，几个就写数目。"""
     if len(media_dirs) == 1:
         return str(media_dirs[0])
-    return f"这 {len(media_dirs)} 个文件夹"
+    return _label("labels.onboarding.scanTargetCount", {"count": len(media_dirs)})
 
 
 def scan_question(media_dirs: Sequence[Path | str]) -> Question:
-    return Question("scan_now", SCAN_PROMPT.format(target=scan_target_text(media_dirs)) + "(Y/n)",
-                    "Y", validate_yes_no)
+    """首扫题：命令行在题面后面接 `(Y/n)`。"""
+    return Question("scan_now", _label("labels.onboarding.prompt.scan", {"target": scan_target_text(media_dirs)})
+                    + "(Y/n)", "Y", validate_yes_no)
 
 
 def more_media_dir_question(*, windows: bool, taken: Sequence[Path]) -> Question:
-    return Question("media_dir", MORE_MEDIA_PROMPT, "",
+    """命令行里追加目录的题：空答案就是「不加了」。"""
+    return Question("media_dir", _label("labels.onboarding.prompt.moreMediaDir"), "",
                     more_media_dir_validator(windows=windows, taken=taken))
 
 
@@ -283,8 +308,11 @@ def ask_until_valid(
             return question.validate(candidate)
         except ValueError as exc:
             remaining = max_attempts - attempt
-            report(f"  {exc}" + (f"（还可以再试 {remaining} 次）" if remaining else ""))
-    raise OnboardingAborted(f"「{question.prompt}」连续 {max_attempts} 次没有拿到有效值。")
+            reason = _reason(exc)
+            report("  " + (_label("labels.onboarding.retryReport", {"reason": reason, "remaining": remaining})
+                           if remaining else reason))
+    raise OnboardingAborted("errors.onboarding.tooManyAttempts",
+                            {"prompt": question.prompt, "attempts": max_attempts})
 
 
 def collect(
@@ -342,7 +370,7 @@ def configure(config: PeachConfig, answers: Answers, *, windows: bool) -> PeachC
         locations, mounts, errors = (media_configuration.validate(sources, windows=windows, config=config)
                                      if sources else ({}, {}, []))
         if errors:
-            raise ValueError("；".join(error for error in errors if error))
+            raise ValueError("；".join(str(error) for error in errors if error))
     prepared = settings_file.capture_existing(
         config, replication_enabled=False,
         overrides={"host": answers.host, "port": answers.port,
@@ -514,19 +542,20 @@ def mounts_explanation(media_dirs: Sequence[Path | str] | Path | str) -> str:
     """说明非 Windows 终端设置保存的两种路径。"""
     if isinstance(media_dirs, (Path, str)):
         media_dirs = (media_dirs,)
-    shown = "、".join(str(path) for path in media_dirs) or "（还没填）"
-    roots = "、".join(posix_declared_roots(max(len(media_dirs), 1)))
-    return (f"Peach 数据库用 Windows 格式保存影片路径，前缀为 {roots}；"
-            f"实际媒体目录为 {shown}，按相同顺序保存在 [media.mounts] local，读取文件前自动转换。")
+    language = interface_text.local_language()
+    separator = interface_text.text("cli:listSeparator", None, language)
+    shown = separator.join(str(path) for path in media_dirs) or _label("labels.onboarding.notFilled", None, language)
+    roots = separator.join(posix_declared_roots(max(len(media_dirs), 1)))
+    return _label("labels.onboarding.mountsExplanation", {"roots": roots, "shown": shown}, language)
 
 
 def console_ask(prompt: str, default: str) -> str:
     """终端前端：把默认值放在方括号里，回车即接受；输入结束视为放弃。"""
-    suffix = f" [{default}]" if default else "（必填）"
+    suffix = f" [{default}]" if default else _label("labels.onboarding.requiredMark")
     try:
         return input(f"{prompt}{suffix}: ")
     except EOFError:
-        raise OnboardingAborted("输入已结束。") from None
+        raise OnboardingAborted("errors.onboarding.inputEnded") from None
 
 
 def is_interactive(stdin) -> bool:

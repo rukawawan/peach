@@ -5,6 +5,7 @@ import {
   type FollowGroup, type FollowItem, type FollowMedia, type FollowPage,
 } from '../follow-feed/follow-feed';
 import type { FollowDetailData } from './follow-detail';
+import { t } from '../../i18n';
 
 export const followRelatedKey = (id: number, media: FollowMedia, limit: number) =>
   ['follow-feed', 'related', id, media, limit] as const;
@@ -52,7 +53,7 @@ export function followRelatedReasons(pages: readonly FollowPage[], current: Foll
     const source = item.source_id === undefined ? undefined : sources.get(item.source_id);
     const tags = all(item).filter(tag => mine.has(tag) && !NOT_A_REASON.has(item.tag_types?.[tag] || ''))
       .sort((a, b) => (seen.get(a) || 0) - (seen.get(b) || 0) || a.localeCompare(b));
-    return { reasons: author && source?.author_key === author ? ['同创作者'] : [], tags };
+    return { reasons: author && source?.author_key === author ? [t('follow:followDetail.sameCreator')] : [], tags };
   };
 }
 

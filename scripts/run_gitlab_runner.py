@@ -6,6 +6,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
 
 
 def run(root: Path) -> int:
@@ -13,10 +21,10 @@ def run(root: Path) -> int:
     for name in ("run-runner.ps1", "gitlab-runner.exe", "config.toml"):
         path = root / name
         if path.is_symlink() or not path.is_file():
-            raise ValueError("runner 目录缺少普通入口文件：" + name)
+            raise ValueError(t("run_gitlab_runner.entryMissing", name=name))
     powershell = shutil.which("pwsh.exe")
     if not powershell:
-        raise ValueError("未找到 PowerShell 7")
+        raise ValueError(t("run_gitlab_runner.pwshMissing"))
     with (root / "runner-launcher.log").open("ab") as log:
         process = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-File", str(root / "run-runner.ps1")],
             cwd=root, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
@@ -25,11 +33,11 @@ def run(root: Path) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("run_gitlab_runner.description"))
     parser.add_argument("--root", required=True, type=Path)
     args = parser.parse_args()
     if os.name != "nt":
-        parser.error("无控制台 runner 启动器仅用于 Windows")
+        parser.error(t("run_gitlab_runner.windowsOnly"))
     return run(args.root)
 
 

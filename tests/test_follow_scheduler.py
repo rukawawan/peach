@@ -62,7 +62,7 @@ class FollowUpdateSchedulerTests(unittest.TestCase):
     def test_installation_reservation_skips_the_tick_without_recording_a_failure(self):
         from peach.update_tasks import UpdateBusy
         def blocked():
-            raise UpdateBusy('正在安装')
+            raise UpdateBusy('errors.updateTasks.installInProgress')
         with tempfile.TemporaryDirectory() as temporary:
             scheduler = FollowUpdateScheduler(Path(temporary), blocked, available=True)
             with self.assertNoLogs('peach', level='ERROR'):
@@ -121,7 +121,7 @@ class FollowUpdateSchedulerTests(unittest.TestCase):
     def test_consecutive_failures_back_off_and_a_good_run_resets_them(self):
         outcomes = [
             {"ok": True, "checked": 1, "results": [{"ok": False, "added": 0}]},
-            RuntimeError("上游断了"),
+            RuntimeError("upstream closed the connection"),
             {"ok": True, "checked": 1, "results": [{"ok": True, "added": 2}]},
         ]
 
@@ -148,10 +148,10 @@ class FollowUpdateSchedulerTests(unittest.TestCase):
             self.assertEqual(first["failing_since"], first["last_started_at"])
             with self.assertLogs("peach.follow_scheduler", level="ERROR") as captured:
                 scheduler._run()
-            self.assertIn("上游断了", "\n".join(captured.output))
+            self.assertIn("upstream closed the connection", "\n".join(captured.output))
             status = scheduler.status()
             self.assertEqual(status["consecutive_failures"], 2)
-            self.assertEqual(status["last_error"], "上游断了")
+            self.assertEqual(status["last_error"], "upstream closed the connection")
             # 连续失败的起点停在第一轮，不跟着每一轮往后挪。
             self.assertEqual(status["failing_since"], first["failing_since"])
             scheduler._run()

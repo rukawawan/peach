@@ -1,0 +1,198 @@
+{
+  "listSeparator": "、",
+  "settingsUnreadable": "{{error}}\n修好这个文件，或者用 `peach init --force` 重新生成。",
+  "notInitialized": "这台机器还没初始化过，先跑 `peach init`。",
+  "serve": {
+    "mdnsLoopback": "mDNS 未发布：--host {{host}} 只允许本机访问，发布 peach.local 会指向一个连不上的地址。需要局域网访问就用 --host 0.0.0.0。",
+    "noAuthNotLoopback": "拒绝启动：--no-auth 仅允许监听本机地址时使用，而 --host {{host}} 不是。\n在局域网地址上关掉登录，等于把整个馆藏和写接口交给同网段的任何设备。",
+    "noToken": "拒绝启动：--host {{host}} 允许其他设备访问，而这台机器还没有访问口令。\n这样起服务，同网段的任何设备都能读整个馆藏并调用写接口。\n先跑 `peach token` 生成并查看口令（存在 {{path}}），再重新启动；只给本机用就改成 --host 127.0.0.1。"
+  },
+  "sync": {
+    "disabled": "数据库角色：disabled · replication.enabled = false，允许本机独立修改数据库",
+    "role": "数据库角色：{{status}} · {{detail}}",
+    "conflict": "  服务转只读。请人工选定一份数据库：本地 {{local}}，共享 {{shared}}。",
+    "result": "数据库同步：{{action}} · {{result}}",
+    "pull": "已从共享副本拉取",
+    "push": "已推送到共享副本",
+    "inSync": "两侧已经一致",
+    "takeOwnership": "本机已成为唯一写入端"
+  },
+  "migrate": {
+    "notWriter": "本机不能迁移账本：{{reason}}；请先在写入端迁移并同步"
+  },
+  "status": {
+    "missingDb": "数据库不存在：{{path}}",
+    "database": "数据库 {{path}}",
+    "locationRow": "  {{location}}{{count}} 条{{size}} TB",
+    "total": "合计",
+    "media": "\n  媒介构成：",
+    "processing": "\n  加工进度（本机视频 {{total}} 条）：",
+    "measure": {
+      "duration": "有时长 (ffprobe)",
+      "snapshot": "有九宫格",
+      "hash": "有哈希",
+      "creator": "有创作者归属",
+      "activity": "有消费记录"
+    },
+    "context": "\n  情境层：",
+    "contextLength": "时长档",
+    "contextOrient": "屏向",
+    "contextQuality": "画质",
+    "contextValue": {
+      "landscape": "横屏",
+      "long": "长",
+      "low": "低画质",
+      "medium": "中",
+      "portrait": "竖屏",
+      "quick": "速食",
+      "short": "短"
+    },
+    "migrations": "\n  迁移：共 {{total}} 个，待应用 {{pending}} 个",
+    "sync": "  同步：{{action}} · {{reason}}；写入端 {{writer}}",
+    "writerLocal": "本机",
+    "writerUnknown": "未确定"
+  },
+  "mount": {
+    "badFormat": "--mount 要写成 来源ID=路径，收到：{{value}}",
+    "unknownSource": "--mount 的来源 ID 未在 [media.locations] 声明：{{key}}（已知：{{known}}）",
+    "noneDeclared": "尚未声明媒体来源"
+  },
+  "init": {
+    "exists": "设置文件已存在：{{path}}",
+    "forceHint": "要重新生成就加 --force；它会覆盖这个文件，不动数据。",
+    "forceHintInteractive": "要重新生成就跑 `peach init --force`；它会覆盖这个文件，不动数据。",
+    "brokenNote": "注意：{{error}}",
+    "brokenRebuilt": "下面这份是按内建默认加环境变量重建的，**没有**继承旧文件里的值。",
+    "brokenRepeat": "旧文件里自定义过的坐标要在这次命令里用对应参数重新给一遍。",
+    "settingsFile": "设置文件：{{path}}",
+    "interviewIntro": "首次运行问答：每一题直接回车就接受方括号里的默认值。",
+    "aborted": "{{reason}}已退出，没有写任何文件。",
+    "dataRoot": "Peach 数据目录：{{path}}",
+    "scanSkipped": "{{reason}}跳过扫描，之后可以跑 `peach scan local`。",
+    "scanResult": "  扫描结果：{{summary}}"
+  },
+  "scan": {
+    "offline": "{{location}}：挂载点离线，未扫描",
+    "unknownSource": "✗ 未声明的来源 {{location}}；[media.locations] 里已知：{{known}}",
+    "noneDeclared": "（设置文件里一个都没有）"
+  },
+  "process": {
+    "progress": "{{stage}}：{{checked}}/{{total}}",
+    "discovered": "{{stage}}：已发现 {{count}} 个文件",
+    "cancelled": "任务已取消，已保存结果保留。",
+    "followups": "后继：声明 {{declared}} 条，入队 {{queued}} 条，已在排队 {{duplicates}} 条"
+  },
+  "tree": {
+    "dbExists": "数据库已存在，跳过建库：{{path}}",
+    "fromExistingHint": "要为现有部署生成设置文件，用 `peach init --from-existing`。",
+    "database": "数据库：{{path}}（已应用 {{count}} 个迁移）",
+    "ca": "本机 CA：{{path}}",
+    "noCa": "未生成本机 CA（{{error}}）。装好 openssl 后重跑 `peach init --force` 补上。"
+  },
+  "token": {
+    "path": "访问口令：{{path}}",
+    "reused": "（沿用已有的那份）",
+    "lanHint": "绑局域网地址的服务必须读得到它，`peach token` 看内容。",
+    "file": "口令文件：{{path}}",
+    "value": "口令：{{token}}",
+    "relogin": "已经登录过的浏览器要再登录一次；正在跑的服务要重启才会读到这份口令。",
+    "shared": "两台机器互取复核结果时发的是自己的口令，reader 要用和 writer 相同的这份文件。"
+  },
+  "tunnel": {
+    "state": "状态：{{state}}",
+    "url": "地址：{{url}}",
+    "reason": "原因：{{reason}}",
+    "public": "公网入口：{{url}}",
+    "stopping": "正在停止临时链接…"
+  },
+  "blanks": {
+    "header": "以下坐标是空的（这不是错误，单机部署本来就该空）：",
+    "row": "  {{field}} 留空 → {{effect}}；要填就重跑并加 {{flag}}",
+    "writerOriginFlag": "--writer-origin https://<writer 的地址>",
+    "writerOriginEffect": "reader 不做复核镜像",
+    "smbHostFlag": "--smb-host <writer 的主机名>",
+    "smbUserFlag": "--smb-user <钥匙串里的账号>",
+    "noSharedMount": "不挂载共享传输点",
+    "mounts": "  [media.mounts] 为空 → 无法读取媒体来源的目录；可用 --mount <媒体来源ID>=<媒体目录> 指定目录（已知来源：{{known}}）"
+  },
+  "next": {
+    "header": "\n下一步：",
+    "existing1": "  1. 打开上面那个文件核对一遍，尤其是 [media.mounts] 和 [replication]。",
+    "existing2": "  2. 重启服务让它生效。这一步之前，运行行为和现在完全一样。",
+    "existing3": "  3. `peach token` 取口令：绑局域网地址的服务读不到它就起不来，已经在用的设备也要重新登录一次。",
+    "open": "  2. 浏览器打开 http://127.0.0.1:{{port}}/ 确认页面可用。",
+    "lanLoopback": "  3. 要在局域网访问就改 --host 0.0.0.0，并把本机 CA 装进各设备的信任列表。访问密码为可选项，在配置页设置。",
+    "lan": "  3. 局域网设备要装本机 CA。访问密码为可选项，在配置页设置。"
+  },
+  "sources": {
+    "intro": "检查来源页面与图片 CDN；连通不代表作品资料或登录会话已验证。"
+  },
+  "help": {
+    "localImage": "读取单张配套图片",
+    "mediaRead": "限时读取媒体目录与配套文件",
+    "init": "首次运行：不带参数在终端里问答；带任何参数或 --no-input 走非交互",
+    "noInput": "不进入问答，按参数与内建默认直接生成",
+    "dataRoot": "Peach 数据目录；默认沿用当前发现结果",
+    "fromExisting": "只为已在运行的部署生成设置文件，不建目录、不建库",
+    "force": "覆盖已存在的设置文件",
+    "host": "服务监听地址",
+    "port": "服务端口",
+    "mdnsName": "本机在局域网发布的名字（<name>.local）",
+    "writerOrigin": "reader 复核镜像要读的 writer 源",
+    "writerProxy": "只对 writer 源生效的 HTTP 代理",
+    "sharedRoot": "ledger 复制的共享传输点",
+    "smbHost": "共享传输点所在主机",
+    "smbShare": "共享名",
+    "smbUser": "挂载共享用的账号",
+    "mountMetavar": "来源ID=路径",
+    "mount": "媒体来源 ID 与本机媒体目录的对应关系，例如 local=/mnt/media；可重复指定",
+    "setup": "只提供首次运行表单：忽略发现到的 Peach 数据目录，也不要口令",
+    "noAuth": "跳过登录页；仅允许本机访问时可用，不读取或修改口令文件",
+    "scan": "扫描一个媒体来源的目录，将文件信息保存到数据库",
+    "scanLocation": "来源 ID（asset.location），要在 [media.locations] 里声明过",
+    "scanRoot": "要扫描的媒体目录；省略时读取该来源的配置（非 Windows 系统使用 [media.mounts]）",
+    "process": "扫描文件并补全馆藏资料",
+    "token": "查看局域网访问口令，没有就生成一份",
+    "rotate": "换一个新口令，已签发的 cookie 立即失效",
+    "tunnel": "运行或查看 Cloudflare Tunnel（默认要求已设置访问密码）",
+    "httpsPort": "源码服务的实际 HTTPS 端口（macOS 默认 8443，其他平台默认 443）",
+    "checkSources": "安装后有界检测外部资料源与图片 CDN，不读取影片",
+    "source": "只检查指定来源 ID；可重复指定，默认检查全部资料源",
+    "sourcesJson": "输出不含凭据的 JSON 结果",
+    "doctor": "逐项诊断本机配置、数据库、工具与挂载，不执行修复",
+    "doctorJson": "输出脱敏 JSON 报告",
+    "doctorHost": "诊断指定的服务监听地址",
+    "doctorPort": "诊断指定的服务端口"
+  },
+  "server": {
+    "description": "运行通过浏览器管理的 Peach 服务",
+    "accessIgnored": "已有访问设置，忽略 {{env}}；要改访问密码请到配置页「网络与访问」。",
+    "accessRejected": "{{env}} 未采用：{{error}}。浏览器打开 Peach 后会进入访问设置。",
+    "accessWriteFailed": "{{env}} 未能写入：{{error}}",
+    "accessSet": "已按 {{env}} 设置访问密码。",
+    "processFailed": "资料处理失败，退出码 {{code}}",
+    "updateTokenFailed": "一键更新令牌未能生成：{{error}}",
+    "listening": "Peach 服务监听：{{host}}:{{port}}。容器外部访问地址以宿主机端口映射为准。",
+    "firstSetup": "首次设置：从部署机器或局域网的浏览器打开 Peach，按页面完成设置。",
+    "firstOpen": "首次打开：从部署机器或局域网的浏览器打开 Peach，设置访问密码或选择免登录。",
+    "firstSignIn": "首次登录：在运行 Peach 的环境中执行 peach token 查看口令，登录后设置访问密码。",
+    "lanAccess": "NAS / 局域网访问：Compose 的 PEACH_BIND 应为宿主机局域网 IP；127.0.0.1 只允许宿主机访问。"
+  },
+  "trayCommand": {
+    "description": "启动 Peach 托盘（macOS 上是菜单栏项）并接管本机服务；通常不带参数直接运行。",
+    "silent": "启动后仅显示托盘",
+    "show": "启动后打开浏览器"
+  },
+  "nasSetup": {
+    "description": "生成可导入 NAS 容器管理器的 Compose；不连接 Docker，不启动或覆盖已有部署。",
+    "help": {
+      "bind": "NAS 的局域网 IP",
+      "media": "宿主机上已有的媒体目录，容器里是只读的 /media",
+      "hostname": "重建容器后保持这个名称，任务仍归同一执行端",
+      "uid": "运行 Peach 的数字 UID，默认 1000，用于沿用 NAS 共享目录的权限",
+      "gid": "运行 Peach 的数字 GID，默认 1000",
+      "prepareRender": "渲染节点权限为 0600 时由容器入口把它交给服务的组；不修改宿主机节点",
+      "output": "保存为新文件，文件已存在时拒绝覆盖；默认写到标准输出"
+    }
+  }
+}

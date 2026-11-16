@@ -13,6 +13,7 @@ import type { LightboxSlide } from '../photo-lightbox/photo-lightbox';
 import type {
   EntityBodyProps, EntityCodeSet, EntityPhotos, EntityRoster, EntitySamplePhoto, EntityWallPhoto,
 } from './entity-body';
+import { t } from '../../i18n';
 
 export function EntityBodyPage(props: EntityBodyProps) {
   if (props.view === 'people' && props.roster) return <Roster roster={props.roster} props={props} />;
@@ -66,8 +67,8 @@ function VideoSection(props: EntityBodyProps) {
 
 /** 一部作品的样张铺成几格。张数、站名和标题已随 `/api/photos` 下来，不再请求一次。 */
 const sampleItems = (set: EntityCodeSet): EntitySamplePhoto[] => Array.from({ length: set.n }, (_, i) => ({
-  sample: true, code: set.code, position: i + 1, total: set.n, name: `${set.code} 样张 ${i + 1}`,
-  source: set.site_label || '官方样张',
+  sample: true, code: set.code, position: i + 1, total: set.n, name: t('catalog:entityPhotos.sampleName', { code: set.code, index: i + 1 }),
+  source: set.site_label || t('catalog:entityPhotos.officialSamples'),
 }));
 
 const isSample = (item: EntityWallPhoto): item is EntitySamplePhoto => (item as EntitySamplePhoto).sample === true;
@@ -124,11 +125,11 @@ function PhotoSection({ photos, props }: { photos: EntityPhotos; props: EntityBo
       {groups.map(({ set, from }) => (
         <Fragment key={set.code}>
           <GroupHead label={set.code} title={set.name}
-            meta={[`${set.site_label || '官方'} 样张`, set.release_date, `${set.n.toLocaleString()} 张`].filter(Boolean).join(' · ')} />
+            meta={[set.site_label ? t('catalog:entityPhotos.siteSamples', { site: set.site_label }) : t('catalog:entityPhotos.officialSamples'), set.release_date, t('catalog:entityPhotos.imageCount', { count: set.n })].filter(Boolean).join(' · ')} />
           <div {...wallAttrs}>{wall.slice(from, from + set.n).map((item, i) => cell(item, from + i))}</div>
         </Fragment>
       ))}
-      {groups.length && photos.total ? <GroupHead label="本地图片" meta={`${photos.total.toLocaleString()} 张`} /> : null}
+      {groups.length && photos.total ? <GroupHead label={t('catalog:entityPhotos.localImages')} meta={t('catalog:entityPhotos.imageCount', { count: photos.total })} /> : null}
       <div {...wallAttrs} data-local-wall="">
         {photos.items.map((item, i) => (lost.has(localStart + i) ? null : cell(item, localStart + i)))}
       </div>

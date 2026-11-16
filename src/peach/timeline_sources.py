@@ -49,7 +49,7 @@ def _text(path: Path) -> str:
     with path.open('rb') as stream:
         data = stream.read(MAX_INDEX_BYTES + 1)
     if len(data) > MAX_INDEX_BYTES:
-        raise ValueError('预览索引过大')
+        raise ValueError("preview index is too large")
     return data.decode('utf-8-sig')
 
 
@@ -57,22 +57,22 @@ def _local(base: Path, name: str, root: Path) -> Path:
     """只接受同一视频目录内的本地引用。越界按 `_real` 判：其他平台解析符号链接，Windows 按词法。"""
     url = urlsplit(name)
     if url.scheme or url.netloc or url.query or '\\' in name:
-        raise ValueError('预览图片引用无效')
+        raise ValueError("invalid preview image reference")
     relative = Path(unquote(url.path))
     if relative.is_absolute() or ':' in str(relative):
-        raise ValueError('预览图片引用无效')
+        raise ValueError("invalid preview image reference")
     path = _real(base / relative)
     if not path.is_relative_to(_real(root)):
-        raise ValueError('预览图片超出视频目录')
+        raise ValueError("preview image is outside the video directory")
     return path
 
 
 def _size(path: Path) -> tuple[int, int]:
     if path.suffix.lower() not in IMAGE_SUFFIXES or path.stat().st_size > MAX_IMAGE_BYTES:
-        raise ValueError('预览图片格式或大小无效')
+        raise ValueError("invalid preview image format or size")
     with Image.open(path) as image:
         if image.format not in ('JPEG', 'PNG', 'WEBP') or image.width * image.height > 40_000_000:
-            raise ValueError('预览图片像素过多')
+            raise ValueError("preview image has too many pixels")
         return image.size
 
 
@@ -100,10 +100,10 @@ def _timeline(source: str, frames: list[Frame], *, estimated: bool = False) -> T
 
 def _seconds(value: str) -> float:
     if not re.fullmatch(r'(?:\d+:)?\d{2}:\d{2}\.\d{3}', value):
-        raise ValueError('预览时刻无效')
+        raise ValueError("invalid preview timestamp")
     parts = value.split(':')
     if float(parts[-1]) >= 60 or int(parts[-2]) >= 60:
-        raise ValueError('预览时刻无效')
+        raise ValueError("invalid preview timestamp")
     return sum(float(part) * 60 ** index for index, part in enumerate(reversed(parts)))
 
 
@@ -144,47 +144,47 @@ def _grid(frames: list[Frame], path: Path, start: float, end: float,
           interval: float, columns: int, rows: int, width: int, height: int) -> None:
     values = (start, end, interval, columns, rows, width, height)
     if not all(math.isfinite(value) for value in values) or interval <= 0 or end <= start:
-        raise ValueError('预览网格无效')
+        raise ValueError("invalid preview grid")
     if min(columns, rows, width, height) <= 0 or columns * rows > MAX_FRAMES:
-        raise ValueError('预览网格无效')
+        raise ValueError("invalid preview grid")
     for slot in range(min(columns * rows, math.ceil((end - start) / interval - 1e-9))):
         point = start + slot * interval
         frames.append(Frame(point, min(end, point + interval), path,
                             ((slot % columns) * width, (slot // columns) * height, width, height)))
         if len(frames) > MAX_FRAMES:
-            raise ValueError('预览帧数过多')
+            raise ValueError("too many preview frames")
 
 
 def _dash_segments(template, ns: str, duration: float) -> list[tuple[int, int]]:
     scale = int(template.get('timescale', '1'))
     offset = int(template.get('presentationTimeOffset', '0'))
     if scale <= 0:
-        raise ValueError('DASH 时间尺度无效')
+        raise ValueError("invalid DASH timescale")
     timeline = template.find(ns + 'SegmentTimeline')
     if timeline is None:
         step = int(template.get('duration', '0'))
         if step <= 0:
-            raise ValueError('DASH 分段时长无效')
+            raise ValueError("invalid DASH segment duration")
         count = math.ceil((duration * scale + offset) / step)
         if not 0 < count <= MAX_FRAMES:
-            raise ValueError('DASH 预览帧数过多')
+            raise ValueError("too many DASH preview frames")
         return [(index * step, step) for index in range(count)]
     entries = list(timeline)
     segments, point = [], 0
     for number, entry in enumerate(entries):
         if entry.tag != ns + 'S':
-            raise ValueError('DASH 时间线无效')
+            raise ValueError("invalid DASH timeline")
         point = int(entry.get('t', str(point)))
         step = int(entry.get('d', '0'))
         repeat = int(entry.get('r', '0'))
         if point < 0 or step <= 0 or repeat < -1:
-            raise ValueError('DASH 时间线无效')
+            raise ValueError("invalid DASH timeline")
         if repeat == -1:
             next_point = (int(entries[number + 1].get('t')) if number + 1 < len(entries)
                           else duration * scale + offset)
             repeat = math.ceil((next_point - point) / step) - 1
         if repeat < 0 or len(segments) + repeat + 1 > MAX_FRAMES:
-            raise ValueError('DASH 预览帧数过多')
+            raise ValueError("too many DASH preview frames")
         for _ in range(repeat + 1):
             segments.append((point, step))
             point += step
@@ -239,7 +239,7 @@ def _dash_name(template: str, representation: str, number: int, time: int, bandw
         return str(value).zfill(int(match[2] or 0))
     name = re.sub(r'\$(RepresentationID|Number|Time|Bandwidth)(?:%0(\d{1,2})d)?\$', replace, template)
     if '$' in name:
-        raise ValueError('DASH 预览模板无效')
+        raise ValueError("invalid DASH preview template")
     return name
 
 

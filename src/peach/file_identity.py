@@ -6,6 +6,7 @@ from filelock import FileLock
 
 from .fsutil import atomic_write_text
 from .update_tasks import state_for
+from .user_messages import UserValueError
 
 
 
@@ -39,7 +40,7 @@ class FileIdentityIndex:
         except FileNotFoundError:
             return {}
         if not isinstance(result, dict):
-            raise ValueError('本地文件身份缓存格式无效')
+            raise UserValueError('errors.fileIdentity.invalidCache')
         return result
 
     def relocate(self, connection, location, path, native, stat, *, previous=None):

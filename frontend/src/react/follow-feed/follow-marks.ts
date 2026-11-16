@@ -13,6 +13,7 @@ import {
 } from '../follow-manage/follow-manage';
 import { localTime } from '../time';
 import type { FollowContext, FollowGroup, FollowIdentity, FollowItem, FollowSource } from './follow-feed';
+import { joinList, t } from '../../i18n';
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 const aliasesOf = (context: FollowContext) => context.aliases as readonly AliasGroup[];
@@ -38,7 +39,7 @@ export function sourceMark(provider: string, label = ''): string {
 }
 
 /** 标题为空时卡片、详情与队列都写这一句。 */
-export const FOLLOW_UNTITLED = '未命名内容';
+export const FOLLOW_UNTITLED = t('follow:feedMarks.untitled');
 export const followTitle = (item: { title?: unknown }): string => text(item.title).trim() || FOLLOW_UNTITLED;
 
 /** 这一版列表里一位创作者的名字（别名合并后的统称优先）。 */
@@ -60,7 +61,7 @@ export function followAuthorEntity(sources: readonly FollowSource[]): string {
 export function authorAvatarHtml(sources: readonly FollowSource[], name: string): string {
   const { src, fallback } = authorAvatar(sources);
   const initial = authorInitial(name);
-  if (!src) return `<span class="favatar none" title="没有可用头像">${esc(initial)}</span>`;
+  if (!src) return `<span class="favatar none" title="${esc(t('follow:feedMarks.noAvatar'))}">${esc(initial)}</span>`;
   const fallbacks = fallback ? ` data-fallbacks="${esc(fallback)}"` : '';
   return `<img class="favatar" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" `
     + `data-drop="initial"${fallbacks} data-initial="${esc(initial)}" data-drop-class="favatar none">`;
@@ -76,7 +77,7 @@ export function followIdentity(item: FollowItem, authorSources: readonly FollowS
   const poster = credit?.poster;
   if (!poster) {
     const name = authorName(authorSources, aliases);
-    return { author: name || text(item.author) || text(item.source_label) || '创作者未取得',
+    return { author: name || text(item.author) || text(item.source_label) || t('follow:feedMarks.creatorNotFound'),
       avatar: authorAvatarHtml(authorSources, name), credited: '', entityName: followAuthorEntity(authorSources) };
   }
   const key = (value: unknown) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -94,11 +95,11 @@ export function followTitleMarks(group: FollowGroup, shown: FollowItem = group.p
   const mark = (edition: string, label: string) =>
     `<small class="javedition" data-follow-edition="${edition}">${label}</small>`;
   if (group.primary.variant_kind === 'wip') marks.push(mark('wip', 'WIP'));
-  else if (group.has_wip) marks.push(mark('has-wip', '含 WIP'));
+  else if (group.has_wip) marks.push(mark('has-wip', t('follow:feedMarks.includesWip')));
   const version = text(group.primary.version);
   if (version) marks.push(mark('version', esc(version)));
   const audio = text(shown.audio);
-  const label = audio === 'voiced' ? '配音版' : audio === 'silent' ? '无声版' : '';
+  const label = audio === 'voiced' ? t('follow:feedMarks.voiced') : audio === 'silent' ? t('follow:feedMarks.silent') : '';
   if (label) marks.push(mark(audio, label));
   return marks.join('');
 }
@@ -111,15 +112,15 @@ export function followBadges(group: FollowGroup, shown: FollowItem = group.prima
     .map((member) => [member.provider, member.provider_label || member.provider] as const));
   if (!sites.size) return '';
   const marks = [...sites].map(([provider, label]) => sourceIcon(provider, label) || `<span>${esc(label)}</span>`).join('');
-  return `<span data-follow-seealso="" title="另见 ${esc([...sites.values()].join('、'))}"><span data-follow-seealso-label="">另见</span> ${marks}</span>`;
+  return `<span data-follow-seealso="" title="${esc(t('follow:feedMarks.seeAlsoSites', { sites: joinList([...sites.values()]) }))}"><span data-follow-seealso-label="">${esc(t('follow:feedMarks.seeAlso'))}</span> ${marks}</span>`;
 }
 
 /** 「媒体未取得」那一句，没有就是空串。 */
 export function followMediaIssue(item: FollowItem, context: FollowContext): string {
   const error = text(item.media_error);
-  if (error) return `媒体未取得：${error}`;
+  if (error) return t('follow:feedMarks.mediaNotFound', { error });
   if (item.media_needs_credential && context.credentialsReady !== false && !context.credentials.has(item.provider)) {
-    return item.playable ? '部分媒体未取得：需要 F95 登录会话解析' : '媒体未取得：需要 F95 登录会话解析';
+    return item.playable ? t('follow:feedMarks.someMediaNeedF95') : t('follow:feedMarks.mediaNeedF95');
   }
   return '';
 }
@@ -131,7 +132,7 @@ const isFuture = (iso: string, now: number): boolean => {
   return Number.isFinite(at) && at - now > FUTURE_SLACK_MS;
 };
 
-/** 发布时间的三段：精度前缀、按看的人所在时区写的时间、晚于现在的标记。来源只给了相对时间
+/** 发布时间的三样：是否约略、按看的人所在时区写的时间、是否晚于现在。来源只给了相对时间
  *  （`published_precision` 为 `approximate`，如「3 years ago」换算来的）时只写到日并加「约」，
  *  时分是换算出来的，写出来就是假精度。 */
 function whenParts(item: FollowItem, now: number) {
@@ -139,26 +140,28 @@ function whenParts(item: FollowItem, now: number) {
   if (!iso) return null;
   const approximate = item.published_precision === 'approximate';
   const full = localTime(iso);
-  return {
-    prefix: approximate ? '约 ' : '',
-    full: approximate ? full.slice(0, 10) : full,
-    suffix: isFuture(iso, now) ? ' · 晚于现在' : '',
-  };
+  return { approximate, full: approximate ? full.slice(0, 10) : full, future: isFuture(iso, now) };
+}
+
+/** 给时间加上「约」与「晚于现在」。 */
+function markedWhen(date: string, { approximate, future }: { approximate: boolean; future: boolean }): string {
+  if (approximate) return t(future ? 'follow:feedMarks.approxFutureDate' : 'follow:feedMarks.approxDate', { date });
+  return future ? t('follow:feedMarks.futureDate', { date }) : date;
 }
 
 /** 发布时间，按看的人所在时区显示；来源没给就明说。 */
 export function followWhen(item: FollowItem, now = Date.now()): string {
   const parts = whenParts(item, now);
-  return parts ? `${parts.prefix}${parts.full}${parts.suffix}` : '时间未取得';
+  return parts ? markedWhen(parts.full, parts) : t('follow:feedMarks.dateNotFound');
 }
 
 /** 列表里时间只写到日：今年的去掉年份，往年的留着。悬停读得到 `followWhen` 的完整写法。 */
 export function followCompactWhen(item: FollowItem, now = Date.now()): string {
   const parts = whenParts(item, now);
-  if (!parts) return '时间未取得';
-  if (!/^\d{4}-/.test(parts.full)) return `${parts.prefix}${parts.full}${parts.suffix}`;
+  if (!parts) return t('follow:feedMarks.dateNotFound');
+  if (!/^\d{4}-/.test(parts.full)) return markedWhen(parts.full, parts);
   const day = parts.full.startsWith(String(new Date(now).getFullYear())) ? parts.full.slice(5, 10) : parts.full.slice(0, 10);
-  return `${parts.prefix}${day}${parts.suffix}`;
+  return markedWhen(day, parts);
 }
 
 /* 这次会话里已经回写过的图，`条目:媒体序号`。回写只补空缺，服务端本来就会忽略已有尺寸的

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import entities, feeds, web_feeds
 from .jav_browser import source_site
 from .performer_profile_followup import bind
+from .user_messages import UserValueError
 from .web_jav_browser_people import entity_avatar
 
 JAVDB_ACTOR = re.compile(r"^/actors/([A-Za-z0-9]{1,16})/?$")
@@ -35,7 +36,7 @@ def _names(values) -> list[str]:
     found: list[str] = []
     for value in values or ():
         if not isinstance(value, str) or len(value) > 4 * NAME_LIMIT:
-            raise ValueError("女优名无效")
+            raise UserValueError("api.javBrowserPerformer.invalidName")
         for part in re.split(r"[,，、]", value):
             base = re.sub(r"[（(][^（）()]*[）)]", "", part).strip()
             for name in (base, *(inner.strip() for inner in re.findall(r"[（(]([^（）()]+)[）)]", part))):
@@ -49,7 +50,7 @@ def performer_page(source_url: str, names=()) -> dict:
     try:
         parts = urlsplit(str(source_url or ""))
     except ValueError as error:
-        raise ValueError("来源网页地址无效") from error
+        raise UserValueError("api.javBrowserPerformer.invalidSourceUrl") from error
     host = (parts.hostname or "").lower()
     site = source_site(host) if parts.scheme == "https" and host else None
     page = {"site": site["id"] if site else "", "javdb": "", "dmm": "", "names": _names(names)}
@@ -62,7 +63,7 @@ def performer_page(source_url: str, names=()) -> dict:
     elif page["site"] == "missav" and (match := MISSAV_ACTRESS.match(parts.path)):
         page["names"] = _names([unquote(match.group(1)), *page["names"]])
     if not (page["javdb"] or page["dmm"] or (page["site"] == "missav" and page["names"])):
-        raise ValueError("这一页不是支持的女优页")
+        raise UserValueError("api.javBrowserPerformer.unsupportedPage")
     return page
 
 
@@ -109,9 +110,9 @@ def _dmm_name(contract, actress_id: str) -> str:
         with site.holding(session):
             return site.actress_works(actress_id, session=session, limit=1).name
     except SourceFailure as error:
-        raise ValueError(f"DMM 没有取到这位女优：{error.message}") from error
+        raise UserValueError("api.javBrowserPerformer.dmmLookupFailed", {"error": error.message}) from error
     except Exception as error:  # noqa: BLE001 - 断网、超时同样只是这一次没问到
-        raise ValueError(f"DMM 没有取到这位女优：{error}") from error
+        raise UserValueError("api.javBrowserPerformer.dmmLookupFailed", {"error": str(error)}) from error
 
 
 def _follow_dmm(contract, page: dict) -> None:
@@ -124,7 +125,7 @@ def _follow_dmm(contract, page: dict) -> None:
             canonical = entities.canonicalize_entity_name("performer", names[0])
             entity_id = web_feeds.create_followed_performer(connection, canonical)
         else:
-            raise ValueError("没有读到这位女优的名字")
+            raise UserValueError("api.javBrowserPerformer.nameMissing")
         bind(connection, entity_id, "dmm", page["dmm"], {"source": web_feeds.FOLLOW_SOURCE})
         sources = web_feeds.subscribe_performer(connection, entity_id, canonical)
     web_feeds.fetch_new_sources(contract, sources)
@@ -139,14 +140,14 @@ def _follow_by_search(contract, page: dict, found) -> None:
             web_feeds.w_feed_source(contract, {"action": "follow-name", "ids": result["suggested"],
                                                "name": str(found["canonical_name"]) if found else name})
             return
-    raise ValueError(f"JavDB 上按「{names[0]}」没能确认是同一位女优，请到她的 JavDB 演员页订阅")
+    raise UserValueError("api.javBrowserPerformer.javdbUnconfirmed", {"name": names[0]})
 
 
 def follow_performer(contract, preview, body: dict) -> dict:
     """订阅或取消订阅这一页的女优，回订阅后的状态。"""
     enabled = body.get("enabled")
     if not isinstance(enabled, bool):
-        raise ValueError("enabled 只能是 true 或 false")
+        raise UserValueError("api.javBrowserPerformer.invalidEnabled")
     names = body.get("names") if isinstance(body.get("names"), list) else []
     page = performer_page(body.get("source_url"), names)
     with contract.database.read_connection() as connection:
@@ -154,13 +155,13 @@ def follow_performer(contract, preview, body: dict) -> dict:
         ready = found is not None and web_feeds.subscribable(connection, found)
     if not enabled:
         if found is None:
-            raise ValueError("Peach 里没有这位女优")
+            raise UserValueError("api.javBrowserPerformer.notInLibrary")
         web_feeds.w_feed_source(contract, {"action": "follow", "entity_id": int(found["id"]), "enabled": False})
     elif ready:
         web_feeds.w_feed_source(contract, {"action": "follow", "entity_id": int(found["id"]), "enabled": True})
     elif page["javdb"]:
         if not (found or page["names"]):
-            raise ValueError("没有读到这位女优的名字")
+            raise UserValueError("api.javBrowserPerformer.nameMissing")
         web_feeds.w_feed_source(contract, {"action": "follow-name", "ids": [page["javdb"]],
                                            "name": str(found["canonical_name"]) if found else page["names"][0]})
     elif page["dmm"]:

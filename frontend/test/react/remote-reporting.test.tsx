@@ -15,7 +15,7 @@ describe('版本统计与错误诊断', () => {
     const host = await mount(<RemoteReportingSettings initial={{ ...initial, delivery: {
       usage: { status: 'queued', last_sent_at: sent }, errors: { status: 'unknown' },
     } }} receipt={vi.fn()} />);
-    expect(host.textContent).toContain(`上次发送：${new Date(sent).toLocaleDateString()}`);
+    expect(host.textContent).toContain(`上次发送：${new Date(sent).toLocaleDateString('zh-CN')}`);
     const rules = host.querySelector('summary');
     await click(rules);
     expect(host.querySelector('details')?.open).toBe(true);
@@ -29,7 +29,7 @@ describe('版本统计与错误诊断', () => {
       errors: { status: 'accepted', last_sent_at: latest },
     } }} receipt={vi.fn()} />);
     const dates = [...host.querySelectorAll('p')].filter(node => node.textContent?.startsWith('上次发送：'));
-    expect(dates.map(node => node.textContent)).toEqual([`上次发送：${new Date(latest).toLocaleDateString()}`]);
+    expect(dates.map(node => node.textContent)).toEqual([`上次发送：${new Date(latest).toLocaleDateString('zh-CN')}`]);
   });
   it('单个推荐开关保留已保存的关闭选择，开启后共同保存版本统计与错误诊断', async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => ({ ...initial, usage: true, errors: true }) }));

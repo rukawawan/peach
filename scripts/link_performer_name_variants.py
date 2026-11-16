@@ -45,6 +45,7 @@ if str(SRC_DIR) not in sys.path:
 from peach.catalog_rules import code_letter_stem, is_amateur_code   # noqa: E402
 from peach.config import GENERATED_DIR   # noqa: E402
 from peach.entities import normalize_entity_name, resolve_entity   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.metadata_auto_apply import _split_multi, _stage_name   # noqa: E402
 from peach.review_csv import read_candidates, write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
@@ -54,9 +55,9 @@ from peach.scripting import (   # noqa: E402
 ALIAS_SOURCE = "link:performer-name-variant"
 FIELDS = ("code", "keep_id", "keep_name", "alias", "alias_source", "keep_source", "evidence")
 EXTRA_COUNTS = {
-    "performer 实体": "SELECT count(*) FROM entity WHERE kind='performer'",
-    "performer 别名": "SELECT count(*) FROM entity_alias ea JOIN entity e ON e.id=ea.entity_id"
-                     " WHERE e.kind='performer'",
+    "entities": "SELECT count(*) FROM entity WHERE kind='performer'",
+    "aliases": "SELECT count(*) FROM entity_alias ea JOIN entity e ON e.id=ea.entity_id"
+               " WHERE e.kind='performer'",
 }
 
 
@@ -122,8 +123,8 @@ def _pair(connection: sqlite3.Connection, code: str, left: tuple[str, str],
     return {"code": code, "keep_id": int(entity["id"]),
             "keep_name": str(entity["canonical_name"]), "alias": alias,
             "alias_source": alias_source, "keep_source": keep_source,
-            "evidence": f"{code} 上 {keep_source} 与 {alias_source} 给的是同一组人，"
-                        f"只有这一个写法不同"}
+            "evidence": t("link_performer_name_variants.evidence", code=code,
+                          keep_source=keep_source, alias_source=alias_source)}
 
 
 def collect(connection: sqlite3.Connection, rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -168,12 +169,12 @@ def apply_rows(connection: sqlite3.Connection, rows: list[dict]) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="把复核候选里同一位出演者的另一个艺名登记成别名")
+    parser = argparse.ArgumentParser(description=t("link_performer_name_variants.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "performer-name-variant-link.csv")
     parser.add_argument("--candidate-root", type=Path,
-                        help="复核候选目录；缺省用本机默认位置")
+                        help=t("link_performer_name_variants.helpCandidateRoot"))
     return parser
 
 
@@ -184,28 +185,30 @@ def run(args: argparse.Namespace) -> int:
         rows, contested = collect(connection, candidates)
         if rows:
             write_rows(args.review_csv, FIELDS, rows)
-        print(f"可登记的别名 {len(rows)} 条，复核 CSV：{args.review_csv}")
+        print(t("link_performer_name_variants.found", count=len(rows), path=args.review_csv))
         for row in rows:
-            print(f"    {row['alias']}（{row['alias_source']}）"
-                  f" -> 实体 {row['keep_id']} {row['keep_name']}（{row['keep_source']}）"
-                  f"  {row['evidence']}")
+            print(t("link_performer_name_variants.row", alias=row['alias'], alias_source=row['alias_source'],
+                    keep_id=row['keep_id'], keep_name=row['keep_name'], keep_source=row['keep_source'],
+                    evidence=row['evidence']))
         for row in contested:
-            print(f"  交人工：{row['alias']} 被多条实体认领，一条都不写")
+            print(t("link_performer_name_variants.contested", alias=row['alias']))
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("link_performer_name_variants.dryRun"))
             return 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("link_performer_name_variants.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             written = apply_rows(connection, rows)
         after = counts_of(connection, EXTRA_COUNTS)
         _integrity, violations = verify_after_write(connection)
-        print(f"  新登记别名 {written} 条")
+        print(t("link_performer_name_variants.written", count=written))
+        labels = {"entities": t("link_performer_name_variants.countEntities"),
+                  "aliases": t("link_performer_name_variants.countAliases")}
         for key in before:
-            mark = "" if before[key] == after[key] else "  <-- 变化"
-            print(f"    {key}: {before[key]} -> {after[key]}{mark}")
-        print(f"  foreign_key_check 违规 {violations} 条")
+            mark = "" if before[key] == after[key] else t("link_performer_name_variants.changed")
+            print(f"    {labels[key]}: {before[key]} -> {after[key]}{mark}")
+        print(t("link_performer_name_variants.foreignKeyViolations", count=violations))
         return 1 if violations else 0
     finally:
         connection.close()

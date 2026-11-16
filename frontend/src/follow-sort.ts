@@ -1,10 +1,11 @@
 /* 关注列表的排序维度与各自的默认方向。React 关注管理页与遗留层画的首屏骨架都读这一份：
    骨架跑在 React 包加载之前，排序框里该写哪一档、方向键该朝哪头，得跟接管后是同一个答案。 */
+import { t } from './i18n';
 
 /** 工具栏那个下拉里的排序维度。前四个按创作者比，后三个按单条来源比。 */
 export const SORT_OPTIONS = [
-  ['checked', '检查时间'], ['added', '添加时间'], ['name', '创作者名称'], ['sources', '来源数量'],
-  ['source', '来源名称'], ['provider', '站点'], ['status', '状态'],
+  ['checked', t('follow:manageSort.lastChecked')], ['added', t('follow:manageSort.dateAdded')], ['name', t('follow:manageSort.creatorName')], ['sources', t('follow:manageSort.sourceCount')],
+  ['source', t('follow:manageSort.sourceName')], ['provider', t('follow:shared.site')], ['status', t('follow:shared.status')],
 ] as const;
 export type SortKey = (typeof SORT_OPTIONS)[number][0];
 export const DEFAULT_SORT: SortKey = 'checked';

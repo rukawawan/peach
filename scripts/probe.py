@@ -22,6 +22,7 @@ if str(SRC_DIR) not in sys.path:
 from peach import junk, record_rehome
 from peach.config import DATABASE_PATH, FFMPEG_DIR, LOG_DIR, STATE_DIR
 from peach.ffmpeg import FFmpegResolver
+from peach.interface_text import dev as t, dev_log
 from peach.jobs import (
     ACTIVE_ASSET_SQL,
     DiskGuard,
@@ -37,7 +38,7 @@ from peach.media_probe import UPDATE, context_fields, probe_file
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="补全视频事实层和情境层")
+    parser = argparse.ArgumentParser(description=t("probe.description"))
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--location")
     parser.add_argument("--interval", type=float, default=0.15)
@@ -47,21 +48,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--disk-check-secs",
         type=float,
         default=20.0,
-        help="运行期复查磁盘余量的间隔；0 表示每条都查",
+        help=t("probe.helpDiskCheckSecs"),
     )
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--redo",
         choices=("none", "zero", "failed", "all"),
         default="none",
-        help="额外重探已记录但无效的时长：zero=0（软失败）、failed=-1（硬失败）、all=两者",
+        help=t("probe.helpRedo"),
     )
     parser.add_argument(
         "--asset",
         type=int,
         action="append",
-        help="按 id 重探指定资产，绕过时长筛选。用于账本时长与真实文件不符的个案："
-             "这类值看着正常，--redo 的 0/-1 判据够不着",
+        help=t("probe.helpAsset"),
     )
     parser.add_argument("--allow-metered", action="store_true")
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
@@ -86,9 +86,9 @@ def duration_selection(redo: str) -> str:
 
 def run(args: argparse.Namespace) -> int:
     if args.workers < 1 or args.interval < 0 or args.limit < 0:
-        raise SystemExit("workers 必须大于 0；interval/limit 不能为负数")
+        raise SystemExit(t("probe.badArguments"))
     if args.timeout <= 0:
-        raise SystemExit("timeout 必须大于 0")
+        raise SystemExit(t("probe.badTimeout"))
     choice = FFmpegResolver(FFMPEG_DIR).ffprobe()
     if choice is None:
         raise RuntimeError("ffprobe unavailable")
@@ -101,16 +101,17 @@ def run(args: argparse.Namespace) -> int:
     log_path = args.log_dir / f"probe-{time.strftime('%Y%m%d-%H%M%S')}.log"
     lock = threading.RLock()
     with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
-        def log(message: str) -> None:
+        def log(key: str, **params) -> None:
+            """控制台一行跟本机语言，日志文件一行固定英文。"""
             with lock:
-                line = f"[{time.strftime('%H:%M:%S')}] {message}"
-                print(line, flush=True)
-                log_file.write(line + "\n")
+                stamp = f"[{time.strftime('%H:%M:%S')}] "
+                print(stamp + t(key, **params), flush=True)
+                log_file.write(stamp + dev_log(key, **params) + "\n")
 
         if args.allow_metered:
-            log("已显式允许计费来源")
+            log("probe.logMeteredAllowed")
         if args.redo != "none":
-            log(f"重探已失败记录：--redo {args.redo}")
+            log("probe.logRedo", redo=args.redo)
         connection = sqlite3.connect(args.db)
         if args.asset:
             # 显式点名就不再套时长筛选，但计费来源和 online 的边界照旧生效。
@@ -137,7 +138,7 @@ def run(args: argparse.Namespace) -> int:
         isolated = junk.isolate(args.db, asset_ids=[row[0] for row in tasks])
         tasks = [row for row in tasks if row[0] not in isolated['ids']]
         total = len(tasks)
-        log(f"待处理 {total:,} 个视频 workers={args.workers} interval={args.interval}s 日志={log_path}")
+        log("probe.logPending", total=f"{total:,}", workers=args.workers, interval=args.interval, path=log_path)
         if not total:
             return 0
 
@@ -179,13 +180,14 @@ def run(args: argparse.Namespace) -> int:
                             elapsed = time.time() - started
                             rate = counters["done"] / elapsed if elapsed else 0
                             eta = (total - counters["done"]) / rate / 60 if rate else 0
-                            log(f"{counters['done']:,}/{total:,} 失败 {counters['failed']} {rate:.1f} 个/秒 剩余 {eta:.0f} 分钟")
+                            log("probe.logProgress", done=f"{counters['done']:,}", total=f"{total:,}",
+                                failed=counters['failed'], rate=f"{rate:.1f}", minutes=f"{eta:.0f}")
                         try:
                             guard.check()
                         except JobPolicyError as exc:
                             if not stop.is_set():
                                 stop_reason.append(str(exc))
-                                log(f"[stop] {exc}")
+                                log("probe.logStop", reason=exc)
                             stop.set()
                     time.sleep(args.interval)
 
@@ -213,15 +215,15 @@ def run(args: argparse.Namespace) -> int:
             connection.commit()
             measured_ids.extend(row[-1] for row in buffer)
         elapsed = time.time() - started
-        log(f"完成 {counters['done']:,} 个，失败 {counters['failed']}，耗时 {elapsed/60:.1f} 分钟")
+        log("probe.logDone", done=f"{counters['done']:,}", failed=counters['failed'], minutes=f"{elapsed/60:.1f}")
         record_rehome.reattach(connection, measured_ids)
         connection.commit()
         connection.close()
         checked = junk.isolate(args.db, asset_ids=measured_ids)
-        log(f"垃圾检查：隔离 {isolated['isolated'] + checked['isolated']} 个，待复核 {checked['review']} 个")
+        log("probe.logJunkCheck", isolated=isolated['isolated'] + checked['isolated'], review=checked['review'])
         if stop_reason:
             # 已探测的部分都已入库；中止必须体现在退出码上，不能报成正常完成。
-            log(f"磁盘闸门中止：{stop_reason[0]}")
+            log("probe.logDiskStopped", reason=stop_reason[0])
             return DiskSpaceDenied.exit_code
     return 0
 

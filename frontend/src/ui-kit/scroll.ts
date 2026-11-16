@@ -4,6 +4,7 @@
 import { esc } from '../core';
 
 import { attachOverlayScrollbar, detachOverlayScrollbar, pruneOverlayScrollbars, refreshOverlayScrollbars, releaseOverlayScrollbars } from './overlay-scrollbar';
+import { t } from '../i18n';
 
 const horizontalControls=new Map<Element,any>();
 let horizontalCleanup:MutationObserver|null|undefined;
@@ -299,7 +300,7 @@ export function cancelGlide(pane:HTMLElement|null|undefined):void{
 }
 
 /** Geist Scroller: one-axis overflow with edge fades as the scroll affordance. */
-export function scrollerHtml(content:string,{className='',label='可滚动内容',overflow='y'}={}){
+export function scrollerHtml(content:string,{className='',label=t('shell:scroller.defaultLabel'),overflow='y'}={}){
   const axis=new Set(['x','y','both']).has(overflow)?overflow:'y';
   return `<div class="ui-geist-scroller${className?` ${esc(className)}`:''}" data-geist-scroller>
     <div class="ui-geist-scroller-overlay" aria-hidden="true"></div>

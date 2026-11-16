@@ -201,7 +201,7 @@ class Fc2SellerTests(unittest.TestCase):
         plan = fc2_sellers.collect(self.connection,self.cache)
         self.connection.execute("UPDATE asset SET code='ABW-001' WHERE id=?",(asset_id,))
         self.connection.commit()
-        with self.assertRaisesRegex(ValueError,'已过期'):
+        with self.assertRaisesRegex(ValueError,'is stale'):
             with self.connection:
                 fc2_sellers.install(self.connection,plan,batch=self.batch)
         self.connection.execute("UPDATE asset SET code='FC2-PPV-1234567' WHERE id=?",(asset_id,))

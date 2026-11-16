@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from peach.interface_text import dev as t  # noqa: E402
 from peach.performer_alias_followup import latin_rejection  # noqa: E402
 from peach.entities import name_rank  # noqa: E402
 from peach.scripting import (  # noqa: E402
@@ -51,7 +52,7 @@ def plan(connection, source: str, primary: dict[int, str]) -> list[dict]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = add_ledger_write_args(argparse.ArgumentParser(description=__doc__,
+    parser = add_ledger_write_args(argparse.ArgumentParser(description=t("repair_western_single_aliases.description"),
                                    formatter_class=argparse.RawDescriptionHelpFormatter))
     parser.add_argument("--source", default="auto:babepedia-profile")
     parser.add_argument("--plan", type=Path, action="append", default=[])

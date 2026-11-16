@@ -278,7 +278,7 @@ class TranscodeService:
                         if (returncode == 0 and temporary.is_file()
                                 and temporary.stat().st_size):
                             temporary.replace(target)
-                            logger.info("整片转码完成：%s", attempt.name)
+                            logger.info("Full transcode finished: %s", attempt.name)
                             completed = True
                             break
                         detail = (stderr or b"").decode("utf-8", "replace")[-1000:]

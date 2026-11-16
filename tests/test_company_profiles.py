@@ -121,7 +121,7 @@ class CompanyProfileTests(unittest.TestCase):
         connection.close()
         (root / 'page.html').write_text('<table><tr><th>設立</th><td>2002年5月</td></tr></table>', encoding='utf-8')
         listed = {'value': 'Brand Group', 'source_url': 'https://brand.example/', 'evidence': 'Brand Group', 'status': 'observed'}
-        plan = {'entities': [{'entity_id': 1, 'name': 'Brand', 'status': '已核查',
+        plan = {'entities': [{'entity_id': 1, 'name': 'Brand', 'status': 'checked',
                               'facts': {'founded': {**listed, 'value': '2002-05'}, 'group': listed},
                               'pages': [{'url': 'https://brand.example/company', 'final_url': 'https://brand.example/company', 'http_status': 200, 'cache': str(root / 'page.html')}],
                               'aliases': [{'value': 'ブランド', 'source_url': 'https://brand.example/', 'status': 'observed'}],
@@ -181,10 +181,13 @@ class CompanyProfileTests(unittest.TestCase):
     def test_resume_retries_rate_limited_entities(self):
         from scripts import harvest_company_profiles as harvest
 
+        self.assertTrue(harvest.settled({'status': 'checked', 'pages': [{'http_status': 200}]}))
+        self.assertTrue(harvest.settled({'status': 'missed', 'reason': '没有可访问的已确认官网', 'pages': []}))
+        self.assertFalse(harvest.settled({'status': 'checked', 'pages': [{'http_status': 200}, {'http_status': 429}]}))
+        self.assertFalse(harvest.settled({'status': 'missed', 'pages': [{'http_status': 403}]}))
+        self.assertFalse(harvest.settled({'status': 'missed', 'pages': [{'reason': 'ConnectTimeout'}]}))
+        # 旧版输出写的中文状态照样认。
         self.assertTrue(harvest.settled({'status': '已核查', 'pages': [{'http_status': 200}]}))
-        self.assertTrue(harvest.settled({'status': '未取得', 'reason': '没有可访问的已确认官网', 'pages': []}))
-        self.assertFalse(harvest.settled({'status': '已核查', 'pages': [{'http_status': 200}, {'http_status': 429}]}))
-        self.assertFalse(harvest.settled({'status': '未取得', 'pages': [{'http_status': 403}]}))
         self.assertFalse(harvest.settled({'status': '未取得', 'pages': [{'reason': 'ConnectTimeout'}]}))
 
     def test_public_profile_requires_public_source_and_known_nonempty_values(self):

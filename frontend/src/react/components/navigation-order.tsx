@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject } from 'react';
+import { useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { Popover, VisuallyHidden } from 'react-aria-components';
 import { MENU_POPOVER_SURFACE } from '@/components/base/dropdown/menu-styles';
 import { Button } from '@/components/base/buttons/button';
@@ -16,7 +16,9 @@ import { MenuDialog } from './menu-dialog';
 import { BoardTabs, type BoardTabsProps } from './board-tabs';
 import { spriteGlyph } from './sprite-glyph';
 import { useLibraryTints } from './library-tint';
+import { LibraryLabel } from './library-label';
 import { orderLibraries } from '../../library-catalog';
+import { t } from '../../i18n';
 import './navigation-order.css';
 
 const More = spriteGlyph('ellipsis');
@@ -44,7 +46,7 @@ export function useNavigationOrder(group: NavigationGroup): NavigationOrder {
       store.save();
       save.mutate({ navigationOrders: { [group]: ordered } }, {
         onError: cause => showToast(`navigation-save-${group}`, {
-          html: esc(`顺序已保存到本机，同步失败。${errorMessage(cause)}`), alert: true, timeout: 6000, action: null,
+          html: esc(t('shell:navigationOrder.syncFailed', { error: errorMessage(cause) })), alert: true, timeout: 6000, action: null,
         }),
       });
     },
@@ -55,8 +57,8 @@ export function restoreNavigationOrder(order: NavigationOrder) {
   const previous = [...order.keys];
   order.commit([...order.defaults]);
   showToast(`navigation-reset-${order.label}`, {
-    html: '已恢复本组默认顺序', alert: false, timeout: 6000,
-    action: { label: '撤销', run: () => order.commit(previous) },
+    html: t('shell:navigationOrder.resetDone'), alert: false, timeout: 6000,
+    action: { label: t('shell:shared.undo'), run: () => order.commit(previous) },
   });
 }
 
@@ -69,20 +71,22 @@ export function NavigationOrderMenu({ order }: { order: NavigationOrder }) {
   };
   if (order.keys.join(',') === order.defaults.join(',')) return null;
   return <>
-    <button ref={trigger} type="button" data-navigation-menu="" aria-label={`${order.label}排序设置`}
+    <button ref={trigger} type="button" data-navigation-menu="" aria-label={t('shell:navigationOrder.menuLabel', { group: order.label })}
       aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}><More aria-hidden="true" /></button>
     <Popover triggerRef={trigger} isOpen={open} onOpenChange={setOpen} placement="bottom end" offset={4}
       className={`peach-react ${MENU_POPOVER_SURFACE}`}>
-      <MenuDialog aria-label={`${order.label}排序设置`} className="flex flex-col gap-1 outline-none">
+      <MenuDialog aria-label={t('shell:navigationOrder.menuLabel', { group: order.label })} className="flex flex-col gap-1 outline-none">
         <button type="button" className="rounded-md px-3 py-2 text-body-2-regular text-text-primary disabled:opacity-50"
-          onClick={reset}>恢复本组默认顺序</button>
+          onClick={reset}>{t('shell:navigationOrder.resetGroup')}</button>
       </MenuDialog>
     </Popover>
   </>;
 }
 
-export function NavigationOrderRows({ order, labels, fixed = [], reset = true }: {
+export function NavigationOrderRows({ order, labels, render, fixed = [], reset = true }: {
   order: NavigationOrder; labels: Readonly<Record<string, string>>; fixed?: readonly string[]; reset?: boolean;
+  /** 行内显示的内容；缺省只写名字。读屏与按钮说明仍用 `labels`。 */
+  render?: (key: string) => ReactNode;
 }) {
   const list = useRef<HTMLDivElement>(null);
   const reorder = useSidebarReorder(list, order.keys, order.commit, () => {}, 'y', 'tab', fixed);
@@ -103,18 +107,18 @@ export function NavigationOrderRows({ order, labels, fixed = [], reset = true }:
           '--navigation-picked-offset': `${reorder.picked?.offset || 0}px`,
           '--sidebar-nudge': `${reorder.nudge(key).distance}px`, '--sidebar-delay': `${reorder.nudge(key).delay}ms` } as CSSProperties}
         {...reorder.bindings(key)}>
-        <Grip aria-hidden="true" /><span>{labels[key]}</span>
-        <button type="button" data-order-step="" aria-label={`上移 ${labels[key]}`}
+        <Grip aria-hidden="true" /><span>{render ? render(key) : labels[key]}</span>
+        <button type="button" data-order-step="" aria-label={t('shell:navigationOrder.moveUp', { name: labels[key] })}
           disabled={index === 0 || fixed.includes(key) || fixed.includes(order.keys[index - 1])}
           onClick={() => move(index, -1)}><Up /></button>
-        <button type="button" data-order-step="" aria-label={`下移 ${labels[key]}`}
+        <button type="button" data-order-step="" aria-label={t('shell:navigationOrder.moveDown', { name: labels[key] })}
           disabled={index === order.keys.length - 1 || fixed.includes(key)}
           onClick={() => move(index, 1)}><Down /></button>
       </div>)}
       <NavigationDropLine reorder={reorder} />
     </div>
     {reset && order.keys.join(',') !== order.defaults.join(',') ? <Button variant="secondary" size="small"
-      onClick={() => restoreNavigationOrder(order)}>恢复本组默认顺序</Button> : null}
+      onClick={() => restoreNavigationOrder(order)}>{t('shell:navigationOrder.resetGroup')}</Button> : null}
     <VisuallyHidden role="status" aria-live="polite">{reorder.announcement}</VisuallyHidden>
   </div>;
 }
@@ -128,16 +132,16 @@ function ManageOrderPreferences() {
   const store = appSettingsStore();
   useSyncExternalStore(store.subscribe, store.version);
   const commit = useCommitNavigationOrder(store, 'manageOrder');
-  return <NavigationOrderRows order={{ label: '管理顶部菜单', keys: store.value.manageOrder, defaults: MANAGE_MENU_SECTIONS, commit }}
+  return <NavigationOrderRows order={{ label: t('shell:navigationOrder.manageMenu'), keys: store.value.manageOrder, defaults: MANAGE_MENU_SECTIONS, commit }}
     labels={Object.fromEntries(MANAGE_SECTIONS.map(([key, label]) => [key, label]))} />;
 }
 
 export function NavigationOrderPreferences() {
   const [group, setGroup] = useState<NavigationGroup | 'manage' | 'libraries'>('manage');
   return <div className="peach-react"><div className="flex flex-col gap-3">
-    <Select aria-label="导航分组" selectedKey={group} onSelectionChange={key => setGroup(key as typeof group)}>
-      <SelectItem id="manage">管理顶部菜单</SelectItem>
-      <SelectItem id="libraries">媒体库</SelectItem>
+    <Select aria-label={t('shell:navigationOrder.group')} selectedKey={group} onSelectionChange={key => setGroup(key as typeof group)}>
+      <SelectItem id="manage">{t('shell:navigationOrder.manageMenu')}</SelectItem>
+      <SelectItem id="libraries">{t('shell:shared.library')}</SelectItem>
       {(Object.keys(NAVIGATION_GROUPS) as NavigationGroup[]).map(key => <SelectItem key={key} id={key}>{NAVIGATION_GROUPS[key].label}</SelectItem>)}
     </Select>
     {group === 'manage' ? <ManageOrderPreferences /> : group === 'libraries' ? <LibraryOrderPreferences /> : <GroupOrderPreferences key={group} group={group} />}
@@ -155,9 +159,10 @@ function LibraryOrderPreferences() {
     save.mutate({ libraryOrder: keys });
   };
   return <>
-    <NavigationOrderRows order={{ label: '媒体库', keys: orderLibraries(libraries, store.value.libraryOrder, row => row.id).map(row => row.id),
-      defaults: libraries.map(row => row.id), commit }} labels={Object.fromEntries(libraries.map(row => [row.id, row.name]))} />
-    {save.isError ? <p role="alert">媒体库顺序同步失败。{errorMessage(save.error)}</p> : null}
+    <NavigationOrderRows order={{ label: t('shell:shared.library'), keys: orderLibraries(libraries, store.value.libraryOrder, row => row.id).map(row => row.id),
+      defaults: libraries.map(row => row.id), commit }} labels={Object.fromEntries(libraries.map(row => [row.id, row.name]))}
+      render={key => { const library = libraries.find(row => row.id === key); return library ? <LibraryLabel library={library} /> : key }} />
+    {save.isError ? <p role="alert">{t('shell:navigationOrder.librarySyncFailed', { error: errorMessage(save.error) })}</p> : null}
   </>;
 }
 

@@ -149,7 +149,7 @@ def install_cover(target: Path, code: str, payload: bytes, size: tuple[int, int]
                   evidence: dict | None = None, detector=None) -> None:
     """准备完成后安装整组文件；失败时还原旧组，避免图片与取景跨版本。"""
     if evidence and is_javdb_image(evidence.get('source_url'), evidence.get('source')):
-        raise Unavailable('未取得无 JavDB 水印的封面')
+        raise Unavailable('errors.communityCatalog.noUnwatermarked')
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     prepared = _sidecars(code, payload, size, detector, evidence)

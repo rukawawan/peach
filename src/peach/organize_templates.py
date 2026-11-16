@@ -22,23 +22,31 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-#: 模板认识的占位符，以及它在界面上的说明。顺序就是界面上列出来的顺序。
-PLACEHOLDERS: dict[str, str] = {
-    "code": "番号",
-    "title": "标题",
-    "studio": "厂牌",
-    "series": "系列",
-    "year": "发行年",
-    "actors": "出演者",
-    "cd": "分片号",
-    "mosaic": "有码无码",
-    "definition": "画质",
-}
+from . import interface_text
+from .content_words import UNCENSORED_FILENAME_WORD
+from .user_messages import UserFacingError, error_fields
 
-EXAMPLE_VALUES = {
-    "code": "ABC-123", "title": "标题", "studio": "厂牌", "series": "系列",
-    "year": "2024", "actors": "甲、乙", "cd": "2", "mosaic": "无码", "definition": "1080p",
-}
+#: 模板认识的占位符，顺序就是界面上列出来的顺序。键是用户写进模板的语法（`{code}`），是协议值，不翻译；
+#: 界面上的说明在 `server:labels.organizeTemplates.placeholder.<键>`，这里放 zh-CN 原文给命令行与老前端兜底。
+PLACEHOLDER_KEYS = ("code", "title", "studio", "series", "year", "actors", "cd", "mosaic", "definition")
+PLACEHOLDERS: dict[str, str] = {
+    key: interface_text.text(f"server:labels.organizeTemplates.placeholder.{key}") for key in PLACEHOLDER_KEYS}
+
+#: 示例字段里与语言无关的那几项；标题、厂牌、系列与出演者是示例文字，按界面语言取
+#: `server:labels.organizeTemplates.example.<键>`。`mosaic` 只会取到写进文件名的无码字样。
+_FIXED_EXAMPLES = {"code": "ABC-123", "year": "2024", "cd": "2", "mosaic": UNCENSORED_FILENAME_WORD,
+                   "definition": "1080p"}
+_WORDED_EXAMPLES = ("title", "studio", "series", "actors")
+
+
+def example_values(language: str = interface_text.SOURCE_LANGUAGE) -> dict[str, str]:
+    """预览模板用的固定示例字段。"""
+    return {**_FIXED_EXAMPLES, **{key: interface_text.text(f"server:labels.organizeTemplates.example.{key}",
+                                                           language=language)
+                                  for key in _WORDED_EXAMPLES}}
+
+
+EXAMPLE_VALUES = example_values()
 
 #: 单个路径组件的长度上限。Windows 的组件上限是 255 个字符，但长名字在资源管理器、
 #: 压缩包和网盘客户端里到处挨截断，所以留一大截余量；超出的从中间截断而不是末尾——
@@ -57,8 +65,8 @@ _RESERVED = frozenset({"CON", "PRN", "AUX", "NUL",
                        *(f"LPT{n}" for n in range(1, 10))})
 
 
-class TemplateError(ValueError):
-    """模板本身不合法。消息直接给用户看，所以写成一句中文。"""
+class TemplateError(UserFacingError, ValueError):
+    """模板本身不合法。消息直接给用户看，带 code，文字在语言资源里。"""
 
 
 @dataclass(frozen=True)
@@ -147,15 +155,15 @@ def _parse(template: str) -> tuple[_Token, ...]:
         if char == "{":
             end = template.find("}", index)
             if end < 0:
-                raise TemplateError("占位符的 `{` 没有配对的 `}`")
+                raise TemplateError("errors.organizeTemplates.unclosedPlaceholder")
             name = template[index + 1:end].strip()
             # 已保存的模板可以使用番号别名。
             if name == "number":
                 name = "code"
             if name not in PLACEHOLDERS:
-                raise TemplateError(
-                    f"不认识的占位符 `{{{name}}}`；可用的是 "
-                    + "、".join(f"{{{key}}}" for key in PLACEHOLDERS))
+                raise TemplateError("errors.organizeTemplates.unknownPlaceholder", {
+                    "placeholder": f"{{{name}}}",
+                    "available": "、".join(f"{{{key}}}" for key in PLACEHOLDERS)})
             flush()
             target.append(_Token("field", name))
             index = end + 1
@@ -168,7 +176,7 @@ def _parse(template: str) -> tuple[_Token, ...]:
             continue
         if char == "]":
             if not stack:
-                raise TemplateError("可选分组的 `]` 没有配对的 `[`")
+                raise TemplateError("errors.organizeTemplates.unopenedGroup")
             flush()
             group = _Token("group", parts=tuple(target))
             target = stack.pop()
@@ -178,7 +186,7 @@ def _parse(template: str) -> tuple[_Token, ...]:
         buffer.append(char)
         index += 1
     if stack:
-        raise TemplateError("可选分组的 `[` 没有配对的 `]`")
+        raise TemplateError("errors.organizeTemplates.unclosedGroup")
     flush()
     return tuple(tokens)
 
@@ -240,21 +248,21 @@ def validate_template(template: str, *, directory: bool = False) -> str:
     if not text:
         return ""
     if len(text) > 300:
-        raise TemplateError("模板太长")
+        raise TemplateError("errors.organizeTemplates.tooLong")
     _parse(text)  # 记号配对与占位符名字先过一遍
     if ntpath.splitdrive(text)[0]:
-        raise TemplateError("模板不能带盘符；它只描述来源根下面的相对位置")
+        raise TemplateError("errors.organizeTemplates.driveLetter")
     normalised = text.replace("\\", "/")
     if normalised.startswith("/"):
-        raise TemplateError("模板不能以分隔符开头；它只描述来源根下面的相对位置")
+        raise TemplateError("errors.organizeTemplates.leadingSeparator")
     if not directory and "/" in normalised:
-        raise TemplateError("文件名模板不能带目录分隔符；分层写在目录模板里")
+        raise TemplateError("errors.organizeTemplates.separatorInFilename")
     for component in normalised.split("/"):
         stripped = component.strip()
         if stripped in {".", ".."}:
-            raise TemplateError("模板不能包含 `.` 或 `..`")
+            raise TemplateError("errors.organizeTemplates.dotSegment")
         if directory and not stripped and normalised.strip("/") != "":
-            raise TemplateError("目录模板里有空的一层")
+            raise TemplateError("errors.organizeTemplates.emptyLevel")
     return normalised.strip("/") if directory else normalised
 
 
@@ -277,13 +285,14 @@ def render(template: str, values: dict[str, str], *,
     return "/".join(components), frozenset(missing)
 
 
-def example_path(file_template: str, dir_template: str) -> dict:
-    """以固定示例字段渲染当前输入的路径。"""
+def example_path(file_template: str, dir_template: str, language: str = interface_text.SOURCE_LANGUAGE) -> dict:
+    """以固定示例字段渲染当前输入的路径；示例文字按 `language` 取。"""
+    values = EXAMPLE_VALUES if language == interface_text.SOURCE_LANGUAGE else example_values(language)
     parts = {}
     for field, text, directory in (("file", file_template, False), ("dir", dir_template, True)):
         try:
-            parts[field], _missing = render(text, EXAMPLE_VALUES, directory=directory)
+            parts[field], _missing = render(text, values, directory=directory)
         except TemplateError as error:
-            return {"ok": False, "error": str(error), "field": field}
-    filename = (parts["file"] if file_template.strip() else "ABC-123 标题") + ".mp4"
+            return {"ok": False, **error_fields(error), "field": field}
+    filename = (parts["file"] if file_template.strip() else f"{values['code']} {values['title']}") + ".mp4"
     return {"ok": True, "example": "/".join(filter(None, (parts["dir"], filename)))}

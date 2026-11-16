@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from peach.config import REVIEW_DIR
 from peach.http import HttpxTransport
+from peach.interface_text import dev as t
 from peach.scripting import (HostLimiter, add_ledger_write_args, open_for_write, open_readonly, counts_of,
                              verify_after_write)
 from peach.western_profiles import profile, land
@@ -19,7 +20,7 @@ from peach.western_profiles import profile, land
 def run(args):
     if args.apply:
         if not args.plan:
-            raise ValueError('执行需要已生成的 --plan')
+            raise ValueError(t("harvest_western_profiles.needPlan"))
         records = json.loads(args.plan.read_text(encoding='utf8'))
         connection = open_for_write(args)
         before = counts_of(connection)
@@ -34,7 +35,7 @@ def run(args):
                     result['entities'].append(land(connection, record['entity_id'], record['name'], record, batch=result['batch']))
                 integrity, violations = verify_after_write(connection)
                 if integrity != 'ok' or {tuple(row) for row in connection.execute('PRAGMA foreign_key_check')} != baseline:
-                    raise ValueError('资料写入产生完整性或外键变化')
+                    raise ValueError(t("harvest_western_profiles.integrityChanged"))
                 result.update(after=counts_of(connection),integrity=integrity,foreign_keys=violations)
         finally:
             connection.close()
@@ -42,7 +43,7 @@ def run(args):
         args.out.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         return result
     if not args.entity or len(set(args.entity)) > 16 or args.delay < 1:
-        raise ValueError('每轮 1–16 位艺人，请求间隔至少 1 秒')
+        raise ValueError(t("harvest_western_profiles.badRound"))
     return collect(args, HttpxTransport(), HostLimiter({}, default_interval=args.delay))
 
 
@@ -56,7 +57,7 @@ def collect(args, http, limiter) -> dict:
         for entity_id in sorted(set(args.entity)):
             row = connection.execute("SELECT canonical_name FROM entity WHERE id=? AND kind IN ('performer','creator')",(entity_id,)).fetchone()
             if not row:
-                records.append({'entity_id':entity_id, 'issue':'艺人不存在或不是出演者、账号'})
+                records.append({'entity_id':entity_id, 'issue':t('harvest_western_profiles.notPerformer')})
             else:
                 aliases = [r[0] for r in connection.execute('SELECT alias FROM entity_alias WHERE entity_id=?',(entity_id,))]
                 url = dict(args.profile_url or []).get(str(entity_id), '')
@@ -74,7 +75,7 @@ def collect(args, http, limiter) -> dict:
 
 
 if __name__ == '__main__':
-    parser = add_ledger_write_args(argparse.ArgumentParser(description=__doc__))
+    parser = add_ledger_write_args(argparse.ArgumentParser(description=t("harvest_western_profiles.description")))
     parser.add_argument('--entity',type=int,action='append')
     parser.add_argument('--profile-url',nargs=2,action='append',metavar=('ENTITY_ID','URL'))
     parser.add_argument('--plan',type=Path)

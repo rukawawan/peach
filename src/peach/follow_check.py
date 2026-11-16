@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
 from . import error_reporting, follow_providers
+from .coded_text import Said, from_error
 from .follow import FollowHistoryEnd, FollowSourceError, FollowSourceRateLimited
 from .follow_secrets import CredentialError
 from .follow_sources import SourceFetch, enrichment_mark, history_window, published_stamp
@@ -169,7 +170,8 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
     if remaining:
         # 没问就不算这条来源失败：上次的结论与检查时间都不动，冷却一过下一跳照常到期。
         return CheckResult(**base, status="skipped",
-                           message=f"{provider} 限流冷却中，{int(remaining) + 1} 秒后再试，本次跳过")
+                           message=Said("labels.followCheck.coolingDown", provider=provider,
+                                        seconds=int(remaining) + 1))
     force = bool(row.get("force_media_reparse")) or replay_first
     cutoff, floor = _history_limits(row, metadata, writer, moment,
                                     older=older, initial_days=initial_days)
@@ -215,7 +217,7 @@ def run_check(row: Mapping, *, credentials, writer, connector_factory,
     except FollowHistoryEnd:
         with writer() as store:
             store.record_history_end(source_id, moment)
-        return CheckResult(**base, exhausted=True, message="没有更多历史内容")
+        return CheckResult(**base, exhausted=True, message=Said("errors.follow.historyEnd"))
     except CredentialError as error:
         return _record_failure(writer, base, error, moment, "unauthorized", phase=phase)
     except FollowSourceError as error:
@@ -291,7 +293,7 @@ def _fill_floor(row, connector, writer, fetch, outcome, cutoff, floor, moment, *
 def _record_failure(writer, base: dict, error: Exception, moment: datetime,
                     status: str, *, phase: str) -> CheckResult:
     with writer() as store:
-        store.record_error(base["source_id"], str(error), moment, status=status)
+        store.record_error(base["source_id"], from_error(error), moment, status=status)
     error_reporting.event("follow-check", error, provider=base["provider"],
                           source_id=base["source_id"], phase=phase,
                           page=base["page"], older=base["older"], status=status)

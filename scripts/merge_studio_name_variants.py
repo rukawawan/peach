@@ -49,12 +49,15 @@ if str(SRC_DIR) not in sys.path:
 from peach.config import GENERATED_DIR   # noqa: E402
 from peach.entities import merge_entity, studio_name_key   # noqa: E402
 from peach.field_owners import write_owned_fields   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import read_rows, write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args, counts_of, open_for_write, verify_after_write,
 )
 
 MERGE_ALIAS_SOURCE = "merge:studio-name-variant"
+#: 复核件 `klass` 列：同一名字的写法变体、日文名与罗马字名各存一条、日英并写的一串另存了一条。
+SPELLING_VARIANT, SCRIPT_VARIANT, BRACKETED_VARIANT = "spelling-variant", "japanese-romaji", "bracketed"
 
 #: 假名、汉字与全角片假名。判「这个名字是日文写法」只看有没有这些字符。
 JAPANESE = re.compile(r"[぀-ヿ㐀-䶿一-鿿]")
@@ -121,12 +124,12 @@ def spelling_variants(names: dict[int, str], counts: dict[int, int]) -> list[dic
         ascii_ids = [i for i in ids if names[i].isascii()]
         if len(ascii_ids) == 1:
             keep = ascii_ids[0]
-            why = "同名不同写法，保留纯 ASCII 的一侧"
+            why = t("merge_studio_name_variants.keepAscii")
         else:
             keep = max(ids, key=lambda i: (counts.get(i, 0), -i))
-            why = "同名不同写法，两侧同为 ASCII 或同为非 ASCII，保留作品多的一侧"
+            why = t("merge_studio_name_variants.keepMoreVideos")
         drop = next(i for i in ids if i != keep)
-        rows.append(_pair(keep, drop, names, counts, "写法变体", why))
+        rows.append(_pair(keep, drop, names, counts, SPELLING_VARIANT, why))
     return rows
 
 
@@ -148,13 +151,13 @@ def script_variants(names: dict[int, str], counts: dict[int, int],
             # 两种都交人工——这条捷径唯一的身份保证就是前缀，它不成立就没有别的。
             continue
         other, common = hits[0]
-        evidence = f"共用番号前缀 {'、'.join(common)}"
+        prefixes_text = list(common)
         if NATIVE_JAPANESE.search(name):
-            rows.append(_pair(entity_id, other, names, counts, "日文名／罗马字名",
-                              evidence + "；日文名含汉字或平假名，罗马字名是转写"))
+            rows.append(_pair(entity_id, other, names, counts, SCRIPT_VARIANT,
+                              t("merge_studio_name_variants.sharedPrefixRomanized", prefixes=prefixes_text)))
         else:
-            rows.append(_pair(other, entity_id, names, counts, "日文名／罗马字名",
-                              evidence + "；日文名是纯片假名，保留英文品牌名"))
+            rows.append(_pair(other, entity_id, names, counts, SCRIPT_VARIANT,
+                              t("merge_studio_name_variants.sharedPrefixKatakana", prefixes=prefixes_text)))
     return rows
 
 
@@ -189,8 +192,8 @@ def bracketed_variants(connection: sqlite3.Connection, names: dict[int, str],
         keep = next(iter(sides[0]))
         if keep in taken:
             continue
-        rows.append(_pair(keep, entity_id, names, counts, "并写名",
-                          f"括号两边都是 {names[keep]} 的登记写法"))
+        rows.append(_pair(keep, entity_id, names, counts, BRACKETED_VARIANT,
+                          t("merge_studio_name_variants.bracketedRegistered", name=names[keep])))
         taken.update({keep, entity_id})
     return rows
 
@@ -254,12 +257,12 @@ EXTRA_COUNTS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="合并写法变体与日文名／罗马字名重复的厂牌实体")
+    parser = argparse.ArgumentParser(description=t("merge_studio_name_variants.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "studio-name-variant-merge.csv")
     parser.add_argument("--logo-root", type=Path,
-                        help="移动标识文件：把被丢弃名下的挪到保留名下，保留方缺哪个补哪个")
+                        help=t("merge_studio_name_variants.logoRootHelp"))
     return parser
 
 
@@ -279,32 +282,32 @@ def run(args: argparse.Namespace) -> int:
         recorded = _recorded_pairs(args.review_csv) if args.logo_root else []
         if rows:
             write_rows(args.review_csv, FIELDS, rows)
-        print(f"重复厂牌 {len(rows)} 组，复核 CSV：{args.review_csv}")
-        print("  判据分布：", dict(Counter(str(row["klass"]) for row in rows)))
+        print(t("merge_studio_name_variants.found", count=len(rows), path=args.review_csv))
+        print(t("merge_studio_name_variants.classes", counts=dict(Counter(str(row["klass"]) for row in rows))))
         for row in rows:
-            print(f"    {row['drop_name']}（{row['drop_assets']} 部）"
-                  f" -> {row['keep_name']}（{row['keep_assets']} 部）  {row['evidence']}")
+            print(t("merge_studio_name_variants.pairRow", drop=row['drop_name'], dropAssets=row['drop_assets'],
+                    keep=row['keep_name'], keepAssets=row['keep_assets'], evidence=row['evidence']))
         if args.logo_root:
             relinked = relink_logos(rows or recorded, args.logo_root)
-            print(f"  标识改挂 {len(relinked['moved'])} 个文件"
-                  f"（保留方已有、留在原地的 {len(relinked['left'])} 个）")
+            print(t("merge_studio_name_variants.logosMoved", moved=len(relinked['moved']),
+                    left=len(relinked['left'])))
             for line in relinked["moved"]:
                 print(f"    {line}")
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("merge_studio_name_variants.dryRun"))
             return 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("merge_studio_name_variants.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             moved = apply_rows(connection, rows)
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print("  合并结果：", moved)
+        print(t("merge_studio_name_variants.merged", counts=moved))
         for key in before:
-            mark = "" if before[key] == after[key] else "  <-- 变化"
+            mark = "" if before[key] == after[key] else t("merge_studio_name_variants.changedMark")
             print(f"    {key}: {before[key]} -> {after[key]}{mark}")
-        print(f"  foreign_key_check 违规 {violations} 条")
+        print(t("merge_studio_name_variants.foreignKeys", count=violations))
         print(f"  integrity_check: {integrity}")
         return 1 if violations or integrity != 'ok' else 0
     finally:

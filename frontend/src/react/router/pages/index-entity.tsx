@@ -27,6 +27,7 @@ import { apiGet } from '../../../api';
 import { queryClient } from '../../query';
 import type { EntityPageData } from '../../entity-page/entity-page';
 import { pageOpens, selectMode, subscribeShell, writeShell } from '@peach/shell';
+import { t } from '../../../i18n';
 
 import { indexParams, paintIndexSkeleton, peopleLayoutOf, type IndexPageKind } from '../../../index-skeleton';
 import type { EntityPageProps } from '../../entity-page/entity-page';
@@ -195,7 +196,7 @@ async function openEntity(
   const reserveFeed = !!host.querySelector('.feednew');
   frame.innerHTML = `<div data-entity-hero><div class="peach-react"></div></div>
     <div data-entity-filter><div class="peach-react"></div></div>
-    <section class="feednew" data-feed-new aria-label="未入库的新作" ${reserveFeed ? 'aria-busy="true"' : 'hidden'}></section>
+    <section class="feednew" data-feed-new aria-label="${t('shell:feedNew.sectionLabel')}"${reserveFeed ? 'aria-busy="true"' : 'hidden'}></section>
     <div data-entity-body><div class="peach-react"></div></div>`;
   const parts = [...frame.content.childNodes];
   const hero = frame.content.querySelector('[data-entity-hero]')!;

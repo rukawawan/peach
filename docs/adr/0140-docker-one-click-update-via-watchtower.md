@@ -16,7 +16,7 @@
 
 | 路线 | 做法 | 结论 |
 | --- | --- | --- |
-| 可选 Watchtower 旁挂 | `compose.yaml` 的 `watchtower` profile 起 [`nickfedor/watchtower:1.23.2`](https://github.com/nicholas-fedor/watchtower)（Apache-2.0，原 `containrrr/watchtower` 已于 2025-12 归档）；Peach 调它的 HTTP API | 采纳 |
+| 可选 Watchtower 旁挂 | `compose.yaml` 的 `watchtower` profile 起 [`nickfedor/watchtower:1.24.0`](https://github.com/nicholas-fedor/watchtower)（Apache-2.0，原 `containrrr/watchtower` 已于 2025-12 归档）；Peach 调它的 HTTP API | 采纳 |
 | Peach 容器挂 `/var/run/docker.sock` | Peach 自己调 Docker API 拉镜像、重建自己 | 拒绝 |
 | 自写更新旁挂 | 写一个小容器专做拉取与重建 | 拒绝，与 Watchtower 重复，还要自己维护容器重建的全部细节 |
 

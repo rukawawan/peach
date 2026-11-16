@@ -27,6 +27,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.entities import name_chain   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 # 形状判据与「在站点上把地址找回来」那套动作定义在 peach.link_repair；
 # `repair_entity_links` 用的是同一套，判据只有这一份。
 from peach.link_repair import (   # noqa: E402,F401
@@ -52,6 +53,10 @@ def fetch(url: str, timeout: float = 12.0) -> tuple[int, str, str]:
     return response.status_code, response.text, str(response.url)
 
 
+#: 复核 CSV `verdict` 列：找到了新地址、没找到。
+OK, MISSED = "ok", "missed"
+
+
 def rediscover(record: dict, interval: float, timeout: float) -> dict:
     """给一条死链找回它现在的地址。就地返回一行复核结果。"""
     limiter = RateLimiter(interval)
@@ -59,9 +64,9 @@ def rediscover(record: dict, interval: float, timeout: float) -> dict:
     row = {field: "" for field in FIELDS}
     row.update(entity_id=record["entity_id"], kind=record["kind"], name=record["name"],
                link_kind=record["link_kind"], label=record["label"],
-               old_url=record["url"], verdict="未取得")
+               old_url=record["url"], verdict=MISSED)
     if not names:
-        row["evidence"] = "没有可用于日文站的名字"
+        row["evidence"] = t("rediscover_entity_links.noJapaneseName")
         return row
 
     seen: set[str] = set()
@@ -87,13 +92,13 @@ def rediscover(record: dict, interval: float, timeout: float) -> dict:
             title = confirms(hit_html, names)
             if title:
                 row.update(url=hit_final, matched_name=matched, found_via=index,
-                           verdict="ok",
+                           verdict=OK,
                            evidence=f"站点索引 {index} 指向该页，标题自述「{title}」；"
                                     f"旧址 {record['url']} 回 404")
                 return row
         if len(seen) > 30:
             break
-    row["evidence"] = f"在 {len(seen)} 个候选里没有标题自述该人的页面"
+    row["evidence"] = t("rediscover_entity_links.noTitleMatch", count=len(seen))
     return row
 
 
@@ -113,11 +118,11 @@ def load_dead(connection: sqlite3.Connection) -> list[dict]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, required=True, help="账本路径")
+    parser = argparse.ArgumentParser(description=t("rediscover_entity_links.description"))
+    parser.add_argument("--db", type=Path, required=True, help=t("rediscover_entity_links.helpDb"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dead-list", type=Path, required=True,
-                        help="entity-link-check CSV，只处理其中 status 为 404/410 的行")
+                        help=t("rediscover_entity_links.helpDeadList"))
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--interval", type=float, default=0.4)
     parser.add_argument("--timeout", type=float, default=12.0)
@@ -138,20 +143,20 @@ def main(argv: list[str] | None = None) -> int:
         connection.close()
     if args.limit:
         targets = targets[:args.limit]
-    print(f"待复查 {len(targets)} 条 404")
+    print(t("rediscover_entity_links.pending", count=len(targets)))
 
     results = []
     for index, record in enumerate(targets, 1):
         row = rediscover(record, args.interval, args.timeout)
         results.append(row)
-        mark = "搬走了" if row["verdict"] == "ok" else "没找到"
+        mark = t("rediscover_entity_links.moved") if row["verdict"] == "ok" else t("rediscover_entity_links.notFound")
         print(f"{index:>3}/{len(targets)} {record['name'][:10]:<10} {mark}  "
               f"{str(row['url'])[:56]}")
 
     write_rows(args.output, FIELDS, results)
     moved = [row for row in results if row["verdict"] == "ok"]
-    print({"复查": len(results), "实际还在（换了地址）": len(moved),
-           "确实没了": len(results) - len(moved), "output": str(args.output)})
+    print({t("rediscover_entity_links.checked"): len(results), t("rediscover_entity_links.stillThere"): len(moved),
+           t("rediscover_entity_links.gone"): len(results) - len(moved), "output": str(args.output)})
     return 0
 
 

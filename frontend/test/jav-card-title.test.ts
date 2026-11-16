@@ -6,14 +6,14 @@ import { textLang } from '../src/core/text-lang';
 it('新作订阅还没入库，卡片只给番号与片名，不出版次与画质徽章', () => {
   const host = document.createElement('div');
   host.innerHTML = feedNewCardHtml({ id: 1, code: 'ABC-123', title: '示例新作', width: 3840, height: 2160,
-    edition_badges: ['中字', '无码破解'] });
+    edition_badges: ['chinese-subtitles', 'uncensored-crack'] });
   expect(host.querySelector('.ui-javcode')?.textContent).toBe('ABC-123');
   expect(host.querySelectorAll('.javedition')).toHaveLength(0);
 });
 
 it('已确认的版本标签与 4K 位于标题，分辨率未取得时不添加画质标记', () => {
   const host = document.createElement('div');
-  const item = { is_jav: true, code: 'EXM-001', catalog_title: '示例作品', edition_badges: ['中字', '无码'] };
+  const item = { is_jav: true, code: 'EXM-001', catalog_title: '示例作品', edition_badges: ['chinese-subtitles', 'uncensored'] };
   host.innerHTML = javTitleHtml({ ...item, width: 3840, height: 2160 });
   expect([...host.querySelectorAll('.javedition')].map(node => node.textContent)).toEqual(['中字', '无码', '4K']);
   expect(host.querySelector('.ui-javtitle')?.textContent).toBe('示例作品');
@@ -25,10 +25,11 @@ it('已确认的版本标签与 4K 位于标题，分辨率未取得时不添加
 
 it('无码三档各用自己的颜色：无码、流出、破解', () => {
   const host = document.createElement('div');
-  host.innerHTML = ['无码', '无码流出', '无码破解'].map((label) =>
+  host.innerHTML = ['uncensored', 'uncensored-leak', 'uncensored-crack'].map((label) =>
     javTitleHtml({ is_jav: true, code: 'EXM-001', catalog_title: '示例作品', edition_badges: [label] })).join('');
   expect([...host.querySelectorAll('.javedition')].map((node) => node.className))
     .toEqual(['javedition uncensored', 'javedition leaked', 'javedition cracked']);
+  expect([...host.querySelectorAll('.javedition')].map((node) => node.textContent)).toEqual(['无码', '无码流出', '无码破解']);
 });
 
 it('含假名的标题标日文、纯拉丁字母标英文，纯汉字分不出中日时沿用页面语言', () => {

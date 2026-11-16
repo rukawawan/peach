@@ -13,6 +13,7 @@ import { Note } from './note';
 import { useOverlayScrollbar } from './overlay-scrollbar';
 import { useAction, busyProps } from '../settings/use-action';
 import { queryClient } from '../query';
+import { t } from '../../i18n';
 
 const Glyph = ({ name }: { name: string }) => <span className="contents" dangerouslySetInnerHTML={{ __html: icon(name) }} />;
 /* 标签多时先露前面一截：在线来源一帖常挂上百个标签，全摊开会把侧栏推成一整屏胶囊。来源分类排在
@@ -37,7 +38,7 @@ export function DetailTags({ tags, candidates, scope = 'local', id, adding, labe
     const result = await queryClient.fetchQuery({ queryKey: ['tag-management', scope],
       queryFn: () => apiGet<{ items: ManagedTag[] }>(`/api/tag-management${scope === 'online' ? '?scope=online' : ''}`, signal) });
     const row = result.items.find(value => value.k === tag.k || value.aliases.includes(tag.k));
-    if (!row) throw new Error('标签已变化，请重新打开详情');
+    if (!row) throw new Error(t('shell:detailTags.tagChanged'));
     return row;
   }, row => setEditing(row)) };
   const [open, setOpen] = useState(false);
@@ -51,19 +52,19 @@ export function DetailTags({ tags, candidates, scope = 'local', id, adding, labe
       {shown.map(tag => <span key={tag.k} data-detail-tag="" data-tag-cat={tag.cat}>
         <button type="button" data-tag={tag.k} data-follow-tag={scope === 'online' ? tag.k : undefined}
           title={label(tag.k)} onClick={() => onOpen(tag.k)}>{label(tag.k)}</button>
-        <button type="button" data-edit-tag={tag.k} title="修改标签名称" aria-label={`修改标签 ${label(tag.k)}`}
+        <button type="button" data-edit-tag={tag.k} title={t('shell:detailTags.renameTag')} aria-label={t('shell:detailTags.renameTagNamed', { tag: label(tag.k) })}
           {...busyProps(!!action.busy)} onClick={() => rename(tag)}><Glyph name="pencil" /></button>
-        <button type="button" data-remove-tag={tag.k} title="从此内容隐藏该标签" aria-label={`删除标签 ${label(tag.k)}`}
+        <button type="button" data-remove-tag={tag.k} title={t('shell:detailTags.hideTag')} aria-label={t('shell:detailTags.removeTagNamed', { tag: label(tag.k) })}
           {...busyAttrs(tag.k)} onClick={() => onRemove(tag)}><Glyph name="x" /></button>
       </span>)}
       {long ? <Button variant="secondary" size="small" data-tags-more="" aria-expanded={open}
         trailingIcon={open ? RiArrowUpSLine : RiArrowDownSLine} onClick={() => setOpen(!open)}>
-        {open ? '收起' : `还有 ${tags.length - shown.length} 个`}</Button> : null}
+        {open ? t('shell:shared.collapse') : t('shell:detailTags.moreCount', { count: tags.length - shown.length })}</Button> : null}
       <TagPicker tags={tags} candidates={options} label={label} onAdd={add} adding={adding} scope={scope}
         onOpen={() => setAsked(true)} loading={inventory.isFetching} />
     </div>
     {action.error ? <Note tone="error">{action.error}</Note> : null}
-    {inventory.isError ? <Note tone="error" action={<Button variant="secondary" onClick={() => void inventory.refetch()}>立即重试</Button>}>无法读取标签候选</Note> : null}
+    {inventory.isError ? <Note tone="error" action={<Button variant="secondary" onClick={() => void inventory.refetch()}>{t('shell:shared.retryNow')}</Button>}>{t('shell:detailTags.optionsLoadFailed')}</Note> : null}
     {editing ? <TagEditor operation="rename" selected={[editing]} scope={scope}
       close={() => setEditing(null)} done={() => setEditing(null)} /> : null}
   </>;
@@ -159,23 +160,23 @@ function TagPicker({ tags, candidates, label, onAdd, adding, scope, onOpen, load
   };
   return (
     <>
-      <button ref={plus} type="button" id="tagPlus" data-tag-plus="" title="添加标签" aria-label="添加标签" aria-expanded={open}
+      <button ref={plus} type="button" id="tagPlus" data-tag-plus="" title={t('shell:tagPicker.addTag')} aria-label={t('shell:tagPicker.addTag')} aria-expanded={open}
         {...busyProps(!!adding)}><Glyph name="plus" /></button>
-      <div ref={picker} id="tagPicker" data-tag-picker="" role="dialog" aria-label="添加标签" hidden>
+      <div ref={picker} id="tagPicker" data-tag-picker="" role="dialog" aria-label={t('shell:tagPicker.addTag')} hidden>
         <label data-tag-search="">
-          {loading ? <span className="contents" dangerouslySetInnerHTML={{ __html:spinnerHtml('正在读取标签') }} /> : <Glyph name="search" />}
-          <input ref={search} id="tagPickSearch" maxLength={80} placeholder="搜索或输入新标签" autoComplete="off" value={query}
+          {loading ? <span className="contents" dangerouslySetInnerHTML={{ __html:spinnerHtml(t('shell:tagPicker.loading')) }} /> : <Glyph name="search" />}
+          <input ref={search} id="tagPickSearch" maxLength={80} placeholder={t('shell:tagPicker.searchPlaceholder')} autoComplete="off" value={query}
             onChange={(event) => { setQuery(event.target.value); setActive(-1); if (!composing.current) setTerm(event.target.value) }}
             onCompositionStart={() => { composing.current = true }}
             onCompositionEnd={(event) => { composing.current = false; setTerm(event.currentTarget.value) }} onKeyDown={keydown} />
         </label>
         <div data-tag-scroll-frame=""><div ref={body} id="tagPickBody" data-tag-body="">
           {open && sections.recent.length ? (
-            <section data-tag-section=""><h4>最近使用</h4><div data-tag-grid="">{sections.recent.map(button)}</div></section>
+            <section data-tag-section=""><h4>{t('shell:tagPicker.recent')}</h4><div data-tag-grid="">{sections.recent.map(button)}</div></section>
           ) : null}
           {open ? (
             <section data-tag-section="">
-              <h4>{term.trim() ? '搜索结果' : '全部标签'}</h4>
+              <h4>{term.trim() ? t('shell:tagPicker.results') : t('shell:tagPicker.allTags')}</h4>
               <div data-tag-grid="">
                 {sections.results.map(button)}
                 {sections.create ? (() => {
@@ -184,7 +185,7 @@ function TagPicker({ tags, candidates, label, onAdd, adding, scope, onOpen, load
                   return (
                     <button key="create" type="button" data-pick={sections.create} data-active={at === active ? '' : undefined}
                       onClick={() => { close(); onAdd(sections.create) }}>
-                      <Glyph name="plus" /><span data-pick-name="">新建“{sections.create}”</span>
+                      <Glyph name="plus" /><span data-pick-name="">{t('shell:tagPicker.createNamed', { tag: sections.create })}</span>
                     </button>
                   );
                 })() : null}

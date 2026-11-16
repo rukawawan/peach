@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.entities import normalize_entity_name, resolve_entity   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import read_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     BACKUP_REQUIRED,
@@ -77,28 +78,28 @@ def plan(connection: sqlite3.Connection, rows: list[dict], *,
                 "evidence": str(row.get("evidence") or "").strip()}
         planned.append(item)
         if not label_name or not maker_name:
-            item["reason"] = "label 或 maker 为空"
+            item["reason"] = t("install_label_makers.emptyNames")
             continue
         if not item["evidence"]:
-            item["reason"] = "没有证据"
+            item["reason"] = t("install_label_makers.noEvidence")
             continue
         label = resolve_entity(connection, "studio", label_name)
         if label is None and not (create_makers
                                   and normalize_entity_name(label_name) in makers_in_plan):
-            item["reason"] = f"厂牌「{label_name}」在账本里找不到或别名撞名"
+            item["reason"] = t("install_label_makers.labelNotFound", label=label_name)
             continue
         item["label_id"] = int(label["id"]) if label is not None else None
         maker = resolve_entity(connection, "studio", maker_name)
         if maker is None and not create_makers:
-            item["reason"] = f"片商「{maker_name}」在账本里没有实体；确认后加 --create-makers"
+            item["reason"] = t("install_label_makers.studioMissing", studio=maker_name)
             continue
         item["maker_id"] = int(maker["id"]) if maker is not None else None
         label_key, maker_key = name_key(connection, label_name), name_key(connection, maker_name)
         if label_key == maker_key:
-            item["reason"] = "label 与片商是同一条实体"
+            item["reason"] = t("install_label_makers.sameEntity")
             continue
         if closes_a_loop(edges, label_key, maker_key):
-            item["reason"] = "沿上级往上会绕回这条 label 自己，成环"
+            item["reason"] = t("install_label_makers.loop")
             continue
         item.update(**change(connection, item))
     return planned
@@ -110,12 +111,12 @@ def change(connection: sqlite3.Connection, item: dict) -> dict:
         "SELECT maker_id FROM label_maker WHERE label_id=?",
         (item["label_id"],)).fetchone() if item["label_id"] is not None else None
     if current and item["maker_id"] is not None and int(current[0]) == item["maker_id"]:
-        return {"reason": "已是这家，跳过"}
+        return {"reason": t("install_label_makers.alreadySet")}
     if current:
-        return {"action": "update", "reason": f"转手：片商实体 {current[0]} → {item['maker']}"}
+        return {"action": "update", "reason": t("install_label_makers.reassigned", current=current[0], studio=item['maker'])}
     created = [name for name, found in ((item["label"], item["label_id"]),
                                         (item["maker"], item["maker_id"])) if found is None]
-    return {"action": "insert", "reason": f"新建实体：{'、'.join(created)}" if created else ""}
+    return {"action": "insert", "reason": t("install_label_makers.created", names='、'.join(created)) if created else ""}
 
 
 def ensure_maker(connection: sqlite3.Connection, name: str, stamp: str) -> int:
@@ -149,10 +150,10 @@ def install(connection: sqlite3.Connection, planned: list[dict], *, source: str)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--input", type=Path, required=True, help="复核 CSV：label,maker,evidence")
+    parser = argparse.ArgumentParser(description=t("install_label_makers.description"))
+    parser.add_argument("--input", type=Path, required=True, help=t("install_label_makers.inputHelp"))
     parser.add_argument("--create-makers", action="store_true",
-                        help="片商在账本里没有实体时新建")
+                        help=t("install_label_makers.createMakersHelp"))
     return add_ledger_write_args(parser)
 
 
@@ -163,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     connection = open_for_write(args)
     if args.apply:
-        print(f"已备份：{args.backup}")
+        print(t("install_label_makers.backedUp", backup=args.backup))
     connection.execute("PRAGMA foreign_keys=ON")
     rows = read_rows(args.input)
     try:
@@ -173,20 +174,20 @@ def main(argv: list[str] | None = None) -> int:
             mark = {"insert": "+", "update": "~"}.get(item["action"], " ")
             print(f" {mark} {item['label'][:24]:<24} → {item['maker'][:14]:<14} {item['reason']}")
         changes = [item for item in planned if item["action"] != "skip"]
-        print({"输入": len(rows), "将写入": len(changes), "跳过": len(planned) - len(changes),
-               "写入前 label_maker": before})
+        print({t("install_label_makers.inputRows"): len(rows), t("install_label_makers.toWrite"): len(changes), t("install_label_makers.skipped"): len(planned) - len(changes),
+               t("install_label_makers.before"): before})
         if not args.apply:
-            print("dry-run；确认无误后加 --apply --backup <路径>")
+            print(t("install_label_makers.dryRun"))
             return 0
         with connection:
             written = install(connection, planned, source=args.input.name)
         after = connection.execute("SELECT count(*) FROM label_maker").fetchone()[0]
         integrity, orphans = verify_after_write(connection)
         inserted = sum(item["action"] == "insert" for item in planned)
-        print({"实际写入": written, "写入后 label_maker": after, "差值": after - before,
+        print({t("install_label_makers.written"): written, t("install_label_makers.after"): after, t("install_label_makers.delta"): after - before,
                "integrity_check": integrity, "foreign_key_check": orphans})
         if after - before != inserted or integrity != "ok" or orphans:
-            print("[warn] 前后差值、完整性或外键与预期不符，请人工核对")
+            print(t("install_label_makers.checkMismatch"))
             return 1
     finally:
         connection.close()

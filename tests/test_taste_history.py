@@ -23,6 +23,37 @@ from peach.taste_history import (
 )
 
 
+class TasteTextTests(unittest.TestCase):
+    """口味分析与统计页按 id 拼出来的 code（维度、证据来源、存储卷、置信度、报告各节）都有中英文。"""
+
+    def test_every_taste_code_built_from_an_id_has_both_languages(self):
+        from peach import interface_text, taste_preferences, web_stats
+        codes = {f"taste.category.{name}" for name in taste_history.CATEGORY_TERMS}
+        codes |= {f"taste.evidence.{name}" for name in taste_history.EVIDENCE_SOURCES}
+        codes |= {f"taste.dimension.{kind}" for kind in taste_preferences.WEIGHTS}
+        codes |= {f"taste.confidence.{level}" for level in ("high", "medium", "early")}
+        codes |= {f"taste.volume.{kind}.{form}" for kind in web_stats.STORAGE_KINDS for form in ("name", "numbered")}
+        codes |= set(web_stats.QUALITY_LABEL_CODES.values())
+        codes |= {f"taste.report.{key}" for key in (
+            "title", "generatedAt", "range", "none", "visits", "bookmarks", "sources", "privacy",
+            "candidate", "signals", "nothingExtracted", "section.categories", "section.tags",
+            "section.creators", "section.domains")}
+        for language in ("zh-CN", "en"):
+            with self.subTest(language):
+                self.assertEqual(sorted(code for code in codes if not interface_text.has(f"server:{code}", language)), [])
+        self.assertEqual(interface_text.text("server:taste.category.feet", None, "en"), "Feet")
+
+    def test_reasons_carry_their_codes_and_render_in_english(self):
+        from peach.taste_preferences import preference_score
+        row = {"entities": {"tag": {1}}}
+        score, reasons = preference_score(row, {"tag": {1: .5}}, {"tag": {1: "恋足"}},
+                                          {"tag": {1: ["watched", "browsing"]}})
+        self.assertEqual(reasons, ["标签偏好：恋足（浏览记录、观看与反馈）"])
+        self.assertEqual(row["reason_codes"], ["taste.reason.line"])
+        self.assertEqual(taste_history.taste_text(row["reason_codes"][0], row["reason_params"][0], "en"),
+                         "Tag preference: 恋足 (Browsing history, Watching and feedback)")
+
+
 class TasteHistoryTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -68,6 +99,12 @@ class TasteHistoryTests(unittest.TestCase):
             failed = refresh_bookmarks([source], store)
         self.assertEqual(failed[0]["status"], "failed")
         self.assertNotIn("私有标题", str(failed))
+        # 资料名不带写死的「书签」后缀，由 `kind` 交给界面按语言写。
+        self.assertEqual((failed[0]["profile"], failed[0]["kind"]), ("default", "bookmarks"))
+        from peach.web_stats import BOOKMARK_PROFILE_CODE, _refresh_warnings
+        warning = _refresh_warnings(failed)
+        self.assertEqual(warning["warning_params"][0]["profile"]["code"], BOOKMARK_PROFILE_CODE)
+        self.assertTrue(warning["warnings"][0].startswith("firefox · default · 书签："), warning["warnings"][0])
         with closing(sqlite3.connect(store)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM history_bookmark").fetchone()[0], 1)
 
@@ -508,6 +545,13 @@ class TasteHistoryTests(unittest.TestCase):
         self.assertTrue({"游戏同人", "恋足"}.issubset(explore_tags))
         self.assertTrue(all(row["items"] > 0 for row in analysis["explore"]))
         self.assertIn("不合口味", analysis["next_steps"][-1]["detail"])
+        # 英文界面按 code 重排：维度名换成英文，标签名、创作者名是内容照原样。
+        english = [taste_history.taste_text(row["text_code"], row["text_params"], "en") for row in analysis["points"]]
+        self.assertTrue(any("Feet" in text for text in english))
+        self.assertEqual(taste_history.taste_text(analysis["confidence"]["label_code"], None, "en"), "Still learning")
+        self.assertIn("disliked", taste_history.taste_text(
+            analysis["next_steps"][-1]["detail_code"], analysis["next_steps"][-1]["detail_params"], "en"))
+        self.assertEqual(alice["evidence_codes"], ["taste.evidence.browsing", "taste.evidence.peach"])
 
     def test_identity_signals_are_judged_once_per_url_and_survive_unrelated_ledger_writes(self):
         """同一网址重复访问只判一次身份、计数照样按次；账本里与身份无关的写入不触发重判。"""

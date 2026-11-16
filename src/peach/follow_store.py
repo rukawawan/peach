@@ -19,19 +19,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import follow_evidence, follow_providers
-from .follow import FollowSourceError, write_immutable
+from .coded_text import Said, columns
+from .follow import FollowSourceError, internal_error, write_immutable
 from .follow_image_dims import positive_dims
 from .follow_sources import (
     Rule34VideoConnector, SourceFetch, canonical_source_ref,
     official_profile_handle, origin_group_key, profile_link_identity,
 )
 from .follow_variants import classify, group_duplicates, video_spec_markers
+from .user_messages import UserValueError
 
 
 def _now_text(moment: datetime | None = None) -> str:
     moment = moment or datetime.now(timezone.utc)
     if moment.tzinfo is None:
-        raise FollowSourceError("追更时间戳必须带时区")
+        raise internal_error("follow timestamps must be timezone-aware")
     return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -50,7 +52,7 @@ def _same_snapshot(raw: Path, fetch: SourceFetch, digest: str) -> bool:
 #: 标签里跟在中点后面的服务名。`LazyProcrastinator · fanbox` 和 rule34video 上的
 #: `lazyprocrastinator` 是同一个人，中点后面那截只说明他在哪个平台连载。
 _LABEL_SERVICE_RE = re.compile(r"\s*[·|]\s*[A-Za-z0-9_\-]+\s*$")
-_AUTHOR_NOISE_RE = re.compile(r"[^0-9a-z一-鿿]+")
+_AUTHOR_NOISE_RE = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
 _F95_TITLE_SUFFIX_RE = re.compile(r"\s+collections?\s*$", re.IGNORECASE)
 
 #: F95 线程标题里的每一个方括号段。站点的标题约定是
@@ -340,7 +342,7 @@ class FollowStore:
                  semantics: str = "work", entity_id: int | None = None,
                  metadata: dict | None = None, moment: datetime | None = None) -> int:
         if semantics not in ("work", "release"):
-            raise FollowSourceError("semantics 只能是 work 或 release")
+            raise internal_error("semantics must be work or release")
         ref = canonical_source_ref(provider, ref)
         stamp = _now_text(moment)
         payload = json.dumps(metadata or {}, ensure_ascii=False)
@@ -441,7 +443,8 @@ class FollowStore:
         if fetch.not_modified:
             connection.execute(
                 "UPDATE follow_source SET last_checked_at=?, last_status='not_modified',"
-                " last_error=NULL, updated_at=? WHERE id=?", (stamp, stamp, source_id))
+                " last_error=NULL, last_error_code=NULL, last_error_params=NULL, updated_at=?"
+                " WHERE id=?", (stamp, stamp, source_id))
             return RecordOutcome(source_id, not_modified=True)
 
         evidence, evidence_error, fresh = (self._persist_evidence(fetch, moment) if complete
@@ -521,12 +524,13 @@ class FollowStore:
             # 站点回 304，新的更新从此再也进不来。只推进游标。
             connection.execute(
                 "UPDATE follow_source SET backfill_page=max(backfill_page,?),"
-                " last_checked_at=?, last_status='ok', last_error=NULL, updated_at=?"
-                " WHERE id=?", (page, stamp, stamp, source_id))
+                " last_checked_at=?, last_status='ok', last_error=NULL, last_error_code=NULL,"
+                " last_error_params=NULL, updated_at=? WHERE id=?", (page, stamp, stamp, source_id))
         else:
             connection.execute(
                 "UPDATE follow_source SET etag=?, last_modified=?, last_checked_at=?,"
-                " last_status='ok', last_error=NULL, updated_at=? WHERE id=?",
+                " last_status='ok', last_error=NULL, last_error_code=NULL, last_error_params=NULL,"
+                " updated_at=? WHERE id=?",
                 (fetch.etag, fetch.last_modified, stamp, stamp, source_id))
         return RecordOutcome(source_id, len(fetch.candidates), added, updated,
                              evidence_path=evidence, evidence_error=evidence_error)
@@ -656,7 +660,7 @@ class FollowStore:
         """
         predicate = _ENRICHED_PREDICATES.get(str(mark or ""))
         if predicate is None:
-            raise ValueError(f"未登记的补齐判据：{mark!r}")
+            raise ValueError(f"unregistered enrichment predicate: {mark!r}")
         rows = self._connect().execute(
             "SELECT external_id FROM follow_item WHERE source_id=?"
             f" AND {predicate}", (source_id,))
@@ -681,10 +685,12 @@ class FollowStore:
 
     def record_error(self, source_id: int, message: str,
                      moment: datetime | None = None, *, status: str = "error") -> None:
+        """记下这次失败；`message` 是 `Said` 时旁边一并存下 code 与参数，界面按当前语言显示。"""
         stamp = _now_text(moment)
         self._connect().execute(
             "UPDATE follow_source SET last_checked_at=?, last_status=?, last_error=?,"
-            " updated_at=? WHERE id=?", (stamp, status, message[:500], stamp, source_id))
+            " last_error_code=?, last_error_params=?, updated_at=? WHERE id=?",
+            (stamp, status, message[:500], *columns(message), stamp, source_id))
 
     def record_history_end(self, source_id: int,
                            moment: datetime | None = None) -> None:
@@ -692,7 +698,8 @@ class FollowStore:
         stamp = _now_text(moment)
         self._connect().execute(
             "UPDATE follow_source SET last_checked_at=?, last_status='not_modified',"
-            " last_error=NULL, updated_at=? WHERE id=?", (stamp, stamp, source_id))
+            " last_error=NULL, last_error_code=NULL, last_error_params=NULL, updated_at=?"
+            " WHERE id=?", (stamp, stamp, source_id))
 
     def _persist_evidence(self, fetch: SourceFetch,
                           moment: datetime | None) -> tuple[str | None, str | None, bool]:
@@ -732,7 +739,9 @@ class FollowStore:
             write_immutable(path, fetch.raw_body)
             write_immutable(path.with_suffix(".json"), sidecar)
         except OSError as error:
-            return None, f"证据未取得（{self.sources_root} 不可写：{error.strerror or error}）", False
+            # 参数要能写进任务状态与检查点（JSON）：路径与异常都转成文字。
+            return None, Said("labels.followStore.evidenceUnwritable", path=str(self.sources_root),
+                              error=error.strerror or str(error)), False
         return str(path.relative_to(self.sources_root.parent)), None, True
 
     def _evidence_directory(self, fetch: SourceFetch) -> Path:
@@ -863,9 +872,9 @@ class FollowStore:
 
     def set_status(self, item_id: int, status: str) -> None:
         if status not in ("new", "seen", "saved", "ignored"):
-            raise FollowSourceError(f"未知的追更状态：{status}")
+            raise internal_error(f"unknown follow status: {status}")
         if status == "saved":
-            raise FollowSourceError("`saved` 只能由 save_asset() 设置")
+            raise internal_error("`saved` can only be set by save_asset()")
         self._connect().execute(
             "UPDATE follow_item SET status=? WHERE id=?", (status, item_id))
 
@@ -880,7 +889,7 @@ class FollowStore:
             "SELECT hidden_media_json FROM follow_item WHERE id=?", (int(item_id),)
         ).fetchone()
         if row is None:
-            raise FollowSourceError(f"追更条目不存在：{item_id}")
+            raise FollowSourceError("errors.followStore.itemMissing", {"id": item_id})
         try:
             current = [key for key in json.loads(row[0] or "[]")
                        if isinstance(key, str) and key]
@@ -906,7 +915,7 @@ class FollowStore:
         """
         dims = positive_dims(width, height)
         if dims is None:
-            raise FollowSourceError(f"图片宽高必须是正整数：{width}×{height}")
+            raise internal_error(f"image dimensions must be positive integers: {width}x{height}")
         if media_index is None:
             prefix = "$"
             guard = ""
@@ -959,9 +968,9 @@ class FollowStore:
         canonical_key = normalized_author_name(canonical_name)
         alias_key = normalized_author_name(alias_name)
         if not canonical_key or not alias_key:
-            raise ValueError("规范创作者名和平台别名都不能为空")
+            raise UserValueError("errors.followStore.aliasNamesRequired")
         if canonical_key == alias_key:
-            raise ValueError("这两个名字归一化后相同，不需要维护别名")
+            raise UserValueError("errors.followStore.aliasSameAsName")
 
         connection = self._connect()
         stamp = _now_text(moment)
@@ -1016,20 +1025,20 @@ class FollowStore:
         name = str(name).strip()
         next_key = normalized_author_name(name)
         if not next_key:
-            raise ValueError("统一名称不能为空")
+            raise UserValueError("errors.followStore.nameRequired")
         connection = self._connect()
         current = connection.execute(
             "SELECT canonical_name FROM follow_author_alias WHERE canonical_key=? LIMIT 1",
             (canonical_key,),
         ).fetchone()
         if current is None:
-            raise ValueError("这个创作者别名组不存在，请刷新列表")
+            raise UserValueError("errors.followStore.aliasGroupMissing")
         occupied = connection.execute(
             "SELECT canonical_key FROM follow_author_alias WHERE alias_key=? OR canonical_key=?",
             (next_key, next_key),
         ).fetchall()
         if any(str(row["canonical_key"]) != canonical_key for row in occupied):
-            raise ValueError("这个名称已属于另一位创作者，请先确认是否需要合并")
+            raise UserValueError("errors.followStore.nameTaken")
         stamp = _now_text()
         connection.execute(
             "UPDATE follow_author_alias SET canonical_key=?,canonical_name=?,updated_at=? "
@@ -1047,16 +1056,16 @@ class FollowStore:
         """删掉一条别名。规范名本身不能当别名删掉，那会拆散整个组。"""
         alias_key = normalized_author_name(alias_name)
         if not alias_key:
-            raise ValueError("别名不能为空")
+            raise UserValueError("errors.followStore.aliasRequired")
         connection = self._connect()
         row = connection.execute(
             "SELECT canonical_key FROM follow_author_alias WHERE alias_key=?",
             (alias_key,),
         ).fetchone()
         if row is None:
-            raise ValueError("这个创作者别名不存在")
+            raise UserValueError("errors.followStore.aliasMissing")
         if str(row["canonical_key"]) == alias_key:
-            raise ValueError("规范名不能作为别名移除")
+            raise UserValueError("errors.followStore.canonicalNotRemovable")
         connection.execute(
             "DELETE FROM follow_author_alias WHERE alias_key=?", (alias_key,))
 
@@ -1150,17 +1159,17 @@ class FollowStore:
         不改写任何既有 asset 的真相字段，也不下载媒体。
         """
         if not confirm:
-            raise FollowSourceError("写 ledger 需要显式 confirm=True")
+            raise internal_error("writing the ledger requires explicit confirm=True")
         connection = self._connect()
         row = connection.execute(
             self._SELECT + " WHERE i.id=?", (item_id,)).fetchone()
         if row is None:
-            raise FollowSourceError(f"追更条目 {item_id} 不存在")
+            raise FollowSourceError("errors.followStore.itemNotFound", {"id": item_id})
         item = self._row(row)
         if item.asset_id:
             return item.asset_id
         if not item.url:
-            raise FollowSourceError("候选没有作品页 URL，无法作为在线作品保存")
+            raise FollowSourceError("errors.followStore.noWorkUrl")
         stamp = _now_text(moment)
         existing = connection.execute(
             "SELECT id FROM asset WHERE location='online' AND path=?", (item.url,)
@@ -1226,7 +1235,7 @@ class FollowStore:
         `ON DELETE CASCADE` 会留下认不出主人的孤儿行。
         """
         if not confirm:
-            raise FollowSourceError("删 ledger 行需要显式 confirm=True")
+            raise internal_error("deleting ledger rows requires explicit confirm=True")
         connection = self._connect()
         removed = 0
         for row in rows:

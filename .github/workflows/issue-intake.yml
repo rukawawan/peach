@@ -61,5 +61,14 @@ jobs:
             reopen)
               gh issue reopen "$NUMBER"
               gh issue edit "$NUMBER" --remove-label status:needs-template --type "$kind"
+              # 关闭时的提示已失效，折叠成「已过时」，留作记录。
+              gh api "repos/$GH_REPO/issues/$NUMBER/comments" --paginate --slurp | jq 'add // []' > "$RUNNER_TEMP/comments.json"
+              python scripts/issue_intake.py --notice-ids "$RUNNER_TEMP/comments.json" | while read -r id; do
+                # `$subject` 是 GraphQL 的变量，要原样交给 GitHub，不能让 shell 展开。
+                # shellcheck disable=SC2016
+                gh api graphql -f subject="$id" -f query='mutation($subject: ID!) {
+                  minimizeComment(input: {subjectId: $subject, classifier: OUTDATED}) { clientMutationId }
+                }'
+              done
               ;;
           esac

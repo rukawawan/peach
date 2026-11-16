@@ -7,6 +7,7 @@ from .personal_records import VANISHED
 from .web_activity import DEFAULT_PROFILE_ID
 from .web_catalog import con_entities, entity_ref
 from .media_sources import cost_for
+from .user_messages import UserValueError
 
 
 MAX_PLAYLIST_ITEMS = 200
@@ -29,9 +30,9 @@ def _name(value: object) -> str:
         raise TypeError("name must be a string")
     name = value.strip()
     if not name:
-        raise ValueError("播放列表名称不能为空")
+        raise UserValueError("api.playlists.nameRequired")
     if len(name) > 80:
-        raise ValueError("播放列表名称最多 80 个字符")
+        raise UserValueError("api.playlists.nameTooLong")
     return name
 
 
@@ -40,9 +41,9 @@ def _ids(value: object, *, allow_empty: bool = True) -> list[int]:
         raise TypeError("asset_ids must be a list")
     ids = list(dict.fromkeys(int(item) for item in value))
     if not allow_empty and not ids:
-        raise ValueError("播放列表至少需要一个视频")
+        raise UserValueError("api.playlists.itemsRequired")
     if len(ids) > MAX_PLAYLIST_ITEMS:
-        raise ValueError(f"播放列表最多 {MAX_PLAYLIST_ITEMS} 个视频")
+        raise UserValueError("api.playlists.tooManyItems", {"limit": MAX_PLAYLIST_ITEMS})
     return ids
 
 
@@ -70,7 +71,7 @@ def _existing_video_ids(connection, ids: list[int]) -> list[int]:
     }
     missing = [asset_id for asset_id in ids if asset_id not in found]
     if missing:
-        raise ValueError(f"播放列表含不可用视频：{missing[0]}")
+        raise UserValueError("api.playlists.unavailableVideo", {"assetId": missing[0]})
     return ids
 
 
@@ -201,7 +202,7 @@ def w_playlist(contract: PlaylistContract, body):
             source_kind = "mix" if body.get("source_kind") == "mix" else "manual"
             seed_id = int(body["source_seed_asset_id"]) if body.get("source_seed_asset_id") else None
             if seed_id is not None and seed_id not in ids:
-                raise ValueError("Mix 种子必须在播放列表中")
+                raise UserValueError("api.playlists.mixSeedMissing")
             cursor = connection.execute(
                 f"INSERT INTO playlist(profile_id,name,source_kind,source_seed_asset_id,"
                 f"current_asset_id,created_at,updated_at) VALUES(?,?,?,?,?,{now},{now})",
@@ -263,13 +264,13 @@ def w_playlist(contract: PlaylistContract, body):
                 ids = _ids(body.get("asset_ids"))
                 current = _ordered_ids(connection, playlist_id)
                 if len(ids) != len(current) or set(ids) != set(current):
-                    raise ValueError("排序必须完整包含当前播放列表的所有视频")
+                    raise UserValueError("api.playlists.reorderIncomplete")
                 _replace_order(connection, playlist_id, ids)
                 connection.execute(f"UPDATE playlist SET updated_at={now} WHERE id=?", (playlist_id,))
             elif action == "progress":
                 asset_id = int(body["asset_id"])
                 if asset_id not in _ordered_ids(connection, playlist_id):
-                    raise ValueError("续播位置不在这个播放列表中")
+                    raise UserValueError("api.playlists.progressOutsidePlaylist")
                 connection.execute(
                     f"UPDATE playlist SET current_asset_id=?,updated_at={now} WHERE id=?",
                     (asset_id, playlist_id),

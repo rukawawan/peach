@@ -145,11 +145,11 @@ class GuangyaSourceTests(unittest.TestCase):
                     media.write_bytes(b"media")
                     connection.execute("INSERT OR REPLACE INTO asset(id,location,path,name,medium) "
                         "VALUES(1,?,?,'film.mp4','video')", (location, str(media)))
-                    with patch.object(web_batch.os, "rename", side_effect=PermissionError("写入权限不足")):
+                    with patch.object(web_batch.os, "rename", side_effect=PermissionError("Permission denied")):
                         result = web_batch.purge_assets(connection,
                             connection.execute("SELECT id,location,path,snapshot_path FROM asset").fetchall())
                     self.assertEqual(result["purged"], 0)
-                    self.assertIn("写入权限不足", result["blocked"][0]["reason"])
+                    self.assertIn("Permission denied", result["blocked"][0]["reason"])
                     self.assertEqual(media.read_bytes(), b"media")
                     self.assertEqual(connection.execute("SELECT count(*) FROM asset").fetchone()[0], 1)
 

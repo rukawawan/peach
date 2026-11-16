@@ -9,6 +9,7 @@ from .media_sources import CLOUD_LOCATIONS, cost_for
 from .platform import translate_ledger_path
 from .media_identity import path_key
 from .strm import skip_background_read
+from .user_messages import UserValueError
 
 RECEIPT_KEY = 'display_dimensions_v2'
 IDENTITY_COLUMNS = 'id,location,path,size,mtime'
@@ -80,7 +81,7 @@ def reprobe(contract, config, asset_id: int, *, checkpoint, expected_generation=
 
     with contract.database.read_connection() as connection:
         if connection.execute('SELECT 1 FROM ledger_upgrade_repair WHERE id=?', (REVISION,)).fetchone() is None:
-            raise ValueError('显示尺寸补测记录尚未准备')
+            raise UserValueError('errors.displayDimensionsRepair.notPrepared')
         completed = _completed(connection, asset_id)
         row = connection.execute("SELECT * FROM asset WHERE id=? AND medium='video' AND disposal IS NULL",
                                  (asset_id,)).fetchone()
@@ -92,20 +93,20 @@ def reprobe(contract, config, asset_id: int, *, checkpoint, expected_generation=
     if completed is not None and completed.get('generation') == current_generation:
         return completed
     if cost_for(row['location'], row['path'], config) != 'free':
-        raise RepairDeferred('计费来源的流量还没确认，稍后再补测', MOUNT_RETRY_SECONDS)
+        raise RepairDeferred('deferBilling', MOUNT_RETRY_SECONDS)
     ffprobe = _ffprobe_path(config)
     if not ffprobe:
-        raise ValueError('显示尺寸补测未取得 ffprobe')
+        raise UserValueError('errors.displayDimensionsRepair.ffprobeMissing')
     if mount_unreachable(row['path']):
-        raise RepairDeferred('影片所在目录读不到，挂载恢复后再补测', MOUNT_RETRY_SECONDS)
+        raise RepairDeferred('deferMountDimensions', MOUNT_RETRY_SECONDS)
     checkpoint()
     measured = media_probe.measure(ffprobe, asset_id, row['path'])
     checkpoint()
     if measured[0] <= 0 or measured[1] <= 0 or measured[2] <= 0:
         # 测量途中掉线也是挂载的事，不按这部片失败结算。
         if mount_unreachable(row['path']):
-            raise RepairDeferred('影片所在目录读不到，挂载恢复后再补测', MOUNT_RETRY_SECONDS)
-        raise ValueError('显示尺寸未取得，保留原有测量')
+            raise RepairDeferred('deferMountDimensions', MOUNT_RETRY_SECONDS)
+        raise UserValueError('errors.displayDimensionsRepair.notMeasured')
     changed = (row['width'], row['height']) != tuple(measured[1:3])
     result = {'changed': changed, 'dimensions': list(measured[1:3]), 'generation': current_generation}
     # 测量和这部片的完成行同一事务提交；服务在任务结算前重启也不再读取成功的媒体。
@@ -114,7 +115,7 @@ def reprobe(contract, config, asset_id: int, *, checkpoint, expected_generation=
         current = connection.execute('SELECT * FROM asset WHERE id=? AND disposal IS NULL', (asset_id,)).fetchone()
         if current is None or generation(current) != current_generation or any(
                 current[key] != row[key] for key in media_probe.PROBED_COLUMNS):
-            raise ValueError('补测期间影片或测量已变化，请重试')
+            raise UserValueError('errors.displayDimensionsRepair.changedDuringRepair')
         if changed:
             _invalidate(contract, config, current)
         connection.execute('UPDATE asset SET width=?,height=?,ctx_orient=?,ctx_quality=? WHERE id=?',

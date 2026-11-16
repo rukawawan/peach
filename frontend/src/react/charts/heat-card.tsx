@@ -10,9 +10,11 @@
 import { useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
+import { type CountUnit } from './bar-card';
 import { CHART_CARD, ChartEmpty, ChartHead } from './chart-card';
 import { TIP_SURFACE, TIP_SWATCH, TipRow } from './chart-tip';
 import { dayCalendar, hourGrid, WEEKDAYS, type ActivityCounts, type HeatCell } from './heat';
+import { t } from '../../i18n';
 
 const SIZE = 14;
 const STEP = 17;
@@ -46,8 +48,8 @@ function HeatTooltip(
   );
 }
 
-/** 读数的三处文字：页头大数旁的单位、浮层那一行的名字、读屏时每一格计数后面的量词。 */
-export interface HeatWords { unit: string; series: string; cellUnit: string }
+/** 读数的三处文字：页头大数旁的单位、浮层那一行的名字、读屏时每一格的计数（带数字的整句，如「3 次访问」）。 */
+export interface HeatWords { unit: CountUnit; series: string; cell: CountUnit }
 
 /** 一张热力图：一格一个计数，指到哪一格读数就换成哪一格。 */
 export function HeatCard(
@@ -89,7 +91,7 @@ export function HeatCard(
   return (
     <section className={CHART_CARD}>
       <ChartHead title={title} figure={(cell ? cell.count : total).toLocaleString()}
-        note={cell ? cell.label : words.unit} />
+        note={cell ? cell.label : words.unit(total)} />
       {/* 带坐标轴的星期 × 小时有 24 列，压到 320 以下格子和字都读不清，宁可在卡里横滚；
           每日那张只有 13 列，跟着卡片缩，最近几天不会藏到右边看不见的地方。 */}
       <div className="relative">
@@ -101,7 +103,7 @@ export function HeatCard(
               const { x, y } = at(index);
               return (
                 <rect key={item.key} data-cell={index} tabIndex={index === focusable ? 0 : -1} role="img"
-                  aria-label={`${item.label}，${item.count} ${words.cellUnit}`}
+                  aria-label={`${item.label}${t('shell:format.clauseSeparator')}${words.cell(item.count)}`}
                   x={x} y={y} width={SIZE} height={SIZE} rx={3} fillOpacity={item.share || 1}
                   opacity={shown >= 0 && shown !== index ? 0.4 : 1}
                   className={item.share
@@ -159,7 +161,7 @@ export function ActivityHeat(
     <div className="inline-grid w-full items-start gap-5 lg:grid-cols-2">
       <HeatCard title={title} words={words} tone={tone}
         cells={hours.cells} total={hours.total} columns={24} rows={7} axis={HOUR_AXIS}
-        footer={<><span>星期 × 小时</span><span>{activity?.timezone || 'UTC+08:00'}</span></>} />
+        footer={<><span>{t('manage:charts.dayByHour')}</span><span>{activity?.timezone || 'UTC+08:00'}</span></>} />
       <HeatCard title={dailyTitle} words={words} tone={tone}
         cells={days.cells} total={days.total} columns={13} rows={7}
         footer={<><span>{days.start}</span><span>{days.end}</span></>} />

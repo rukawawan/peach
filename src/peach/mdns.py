@@ -186,7 +186,7 @@ class MdnsPublisher:
             try:
                 self.refresh()
             except Exception:
-                LOGGER.exception("mDNS 地址复查失败")
+                LOGGER.exception("mDNS address recheck failed")
 
     def refresh(self) -> str:
         """本机地址变了就重新广播。
@@ -324,7 +324,7 @@ class DnsSdPublisher:
             try:
                 self.refresh()
             except Exception:
-                LOGGER.exception("mDNS 地址复查失败")
+                LOGGER.exception("mDNS address recheck failed")
 
 
 def create_mdns_publisher(

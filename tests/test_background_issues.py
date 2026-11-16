@@ -123,6 +123,11 @@ class BackgroundIssueTests(unittest.TestCase):
         [row] = self.collect()
         self.assertEqual((row["key"], row["title"], row["href"]),
                          ("downloads", "2 个云下载任务对账暂时失败", "/tasks#cloudDownloads"))
+        # 界面按 code 取当前语言：英文界面拿到的是英文。
+        from peach import interface_text
+        self.assertEqual(interface_text.text(f"server:{row['title_code']}", row["title_params"], "en"),
+                         "Couldn't reconcile 2 cloud download tasks for now")
+        self.assertEqual(interface_text.text(f"server:{row['link_label_code']}", None, "en"), "View cloud downloads")
         self.contract.downloads.available = False
         self.assertEqual(self.collect(), [])
 
@@ -179,7 +184,7 @@ class BackgroundIssueTests(unittest.TestCase):
 
     def test_one_broken_service_does_not_hide_the_others(self):
         def broken():
-            raise RuntimeError("状态文件读坏了")
+            raise RuntimeError("state file is unreadable")
         self.state.automatic_updates = SimpleNamespace(snapshot=broken)
         self.state.network_reachability = SimpleNamespace(summary=lambda: {"state": "offline"})
         with self.assertLogs("peach.background_issues", level="ERROR"):

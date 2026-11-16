@@ -12,6 +12,14 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
 
 WIDTH, HEIGHT = 900, 508
 LEFT, RIGHT, TOP, BOTTOM = 56, 872, 90, 456
@@ -31,7 +39,7 @@ def fetch_history(repository: str) -> list[dict]:
         ["gh", "api", "--paginate", "--slurp", f"repos/{repository}/stargazers/history?per_page=100"],
         capture_output=True, text=True, encoding="utf-8", timeout=120)
     if result.returncode:
-        raise RuntimeError(f"读取 Star 历史失败：{result.stderr.strip()}")
+        raise RuntimeError(t("render_star_history.fetchFailed", error=result.stderr.strip()))
     return [week for page in json.loads(result.stdout) for week in page]
 
 
@@ -41,12 +49,12 @@ def daily_points(weeks: list[dict], as_of: datetime) -> list[tuple[datetime, int
     for week in sorted(weeks, key=lambda item: item["week"]):
         start = datetime.fromtimestamp(week["week"], UTC)
         if len(week["days"]) != 7:
-            raise ValueError(f"{start:%Y-%m-%d} 这一周的逐日记录不是 7 天")
+            raise ValueError(t("render_star_history.weekNotSevenDays", week=f"{start:%Y-%m-%d}"))
         days += [(start + index * DAY, count) for index, count in enumerate(week["days"])
                  if start + index * DAY <= as_of]
     first = next((index for index, (_, count) in enumerate(days) if count), None)
     if first is None:
-        raise ValueError("Star 历史里没有任何记录，拒绝生成空图")
+        raise ValueError(t("render_star_history.empty"))
     points, total = [(days[first][0], 0)], 0
     for day, count in days[first:]:
         total += count
@@ -166,13 +174,13 @@ def render(points: list[tuple[datetime, int]], repository: str, theme: str) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("render_star_history.description"))
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"))
-    parser.add_argument("--history-file", type=Path, help="改读已保存的接口 JSON，不访问网络")
+    parser.add_argument("--history-file", type=Path, help=t("render_star_history.historyFileHelp"))
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if not args.repo:
-        parser.error("需要 --repo 或 GITHUB_REPOSITORY")
+        parser.error(t("render_star_history.repoMissing"))
     weeks = (json.loads(args.history_file.read_text(encoding="utf-8")) if args.history_file
              else fetch_history(args.repo))
     points = daily_points(weeks, datetime.now(UTC))

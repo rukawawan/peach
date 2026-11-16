@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import interface_text
 from .avatar_face import face_px_width
 from .avatar_provider import AvatarCandidateCache, inspect_avatar
 
@@ -65,7 +66,8 @@ def cover_fallback(connection, record: dict, cache: AvatarCandidateCache,
                 continue
             source = path.resolve().as_uri()
             stored = cache.store(source, data, inspected)
-            label = "完整封面" if provider == "cover-fallback" else f"高清帧 {path.stem}"
+            label = (interface_text.text("server:labels.portraitArtwork.fullCover") if provider == "cover-fallback"
+                     else interface_text.text("server:labels.portraitArtwork.frame", {"name": path.stem}))
             candidates.append({
                 "provider": provider,
                 "source_kind": source_kind,
@@ -79,7 +81,8 @@ def cover_fallback(connection, record: dict, cache: AvatarCandidateCache,
                 "matched": record["canonical"],
                 "name_source": "ledger-performer",
                 "identity_verified": False,
-                "evidence": f"单人作品 {code_text or asset_id} {label}",
+                "evidence": interface_text.text("server:labels.portraitArtwork.evidence",
+                                                {"work": code_text or asset_id, "label": label}),
             })
     if not candidates:
         return None

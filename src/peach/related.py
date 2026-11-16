@@ -7,6 +7,8 @@ from collections.abc import Iterable, Mapping
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from . import interface_text
+
 
 KINDS = ("creator", "performer", "series", "studio", "tag")
 
@@ -65,14 +67,26 @@ def _closeness_features(left, right, weights: Mapping[int, float]) -> float:
     return score
 
 
-TAG_REASON = "标签接近"
+#: 推荐理由的 code，按列出的先后取前两条；文字在 `server:labels.related.<名字>`（ADR-0159）。
+REASON_CODES = (
+    ("creator", "labels.related.sameCreator"), ("series", "labels.related.sameSeries"),
+    ("performer", "labels.related.samePerformer"), ("tag", "labels.related.similarTags"),
+    ("studio", "labels.related.sameStudio"),
+)
+TAG_REASON_CODE = "labels.related.similarTags"
+
+
+def reason_text(code: str) -> str:
+    """一条推荐理由的 zh-CN 原文，放在 `why` 里给没更新的前端兜底。"""
+    return interface_text.text(f"server:{code}")
+
+
+def _reason_codes(a: Mapping[str, set[int]], b: Mapping[str, set[int]]) -> list[str]:
+    return [code for kind, code in REASON_CODES if a[kind] & b[kind]]
 
 
 def _reasons_features(a: Mapping[str, set[int]], b: Mapping[str, set[int]]) -> list[str]:
-    return [label for kind, label in (
-        ("creator", "同创作者"), ("series", "同系列"),
-        ("performer", "同出演者"), ("tag", TAG_REASON), ("studio", "同厂牌"),
-    ) if a[kind] & b[kind]]
+    return [reason_text(code) for code in _reason_codes(a, b)]
 
 
 @dataclass(slots=True)
@@ -110,10 +124,11 @@ def rank_related(source: Mapping, candidates: Iterable[Mapping], limit: int,
         relevance = relevance_for(candidate) if relevance_for else _closeness_features(source_feature, feature, weights)
         if relevance <= 0:
             continue
-        reasons = _reasons_features(source_feature[0], feature[0])
+        reasons = _reason_codes(source_feature[0], feature[0])
         if not reasons and not relevance_for:
             continue
-        candidate["why"] = " · ".join(reasons[:2])
+        candidate["why"] = " · ".join(map(reason_text, reasons[:2]))
+        candidate["why_codes"] = reasons[:2]
         # 「标签接近」本身说不出接近在哪：共同标签按 IDF 从稀有到常见交出去，由调用方换成名字。
         candidate["shared_tags"] = sorted(source_feature[0]["tag"] & feature[0]["tag"],
                                           key=lambda tag: (-weights.get(tag, 1.0), tag))

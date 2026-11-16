@@ -86,16 +86,16 @@ class NetworkChangeWatcher:
         try:
             library = _libsystem()
         except OSError:
-            LOGGER.exception("无法加载 libSystem，网络变化订阅不可用")
+            LOGGER.exception("Could not load libSystem; network change subscription unavailable")
             return
         descriptor = ctypes.c_int(0)
         token = ctypes.c_int(0)
         status = library.notify_register_file_descriptor(
             NETWORK_CHANGE, ctypes.byref(descriptor), 0, ctypes.byref(token))
         if status != _NOTIFY_STATUS_OK:
-            LOGGER.error("订阅网络变化失败，notify 状态 %s", status)
+            LOGGER.error("Failed to subscribe to network changes, notify status %s", status)
             return
-        LOGGER.info("已订阅网络变化事件（%s）", NETWORK_CHANGE.decode())
+        LOGGER.info("Subscribed to network change events (%s)", NETWORK_CHANGE.decode())
         try:
             while not self._stop.is_set():
                 readable, _, _ = select.select([descriptor.value, self._wake_read], [], [])
@@ -111,6 +111,6 @@ class NetworkChangeWatcher:
                 try:
                     self.on_change()
                 except Exception:
-                    LOGGER.exception("网络变化回调失败")
+                    LOGGER.exception("Network change callback failed")
         finally:
             library.notify_cancel(ctypes.c_int(token.value))

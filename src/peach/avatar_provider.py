@@ -16,7 +16,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .avatar_face import FaceProbe, drop_sidecar, write_sidecar
 from .fsutil import atomic_write_bytes
+from . import interface_text
 from .images import CROP_JPEG_QUALITY
+from .user_messages import UserFacingError
 
 
 POLICY_VERSION = "performer-avatar-provider-v1"
@@ -27,7 +29,7 @@ SUPPORTED_FORMATS = {
 INPUT_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "AVIF", "GIF", "BMP", "DIB", "TIFF", "ICO", "JPEG2000"})
 
 
-class AvatarImageError(ValueError):
+class AvatarImageError(UserFacingError, ValueError):
     """头像输入无法识别、解码或转换。"""
 
 
@@ -37,7 +39,9 @@ def prepare_avatar(data: bytes) -> bytes:
         with Image.open(io.BytesIO(data)) as image:
             image_format = (image.format or "").upper()
             if image_format not in INPUT_FORMATS:
-                raise AvatarImageError(f"暂不支持 {image_format or '这种'} 图片格式，请换用 JPEG、PNG、WebP 或 AVIF 图片")
+                if not image_format:
+                    raise AvatarImageError("errors.avatarProvider.unsupportedFormatUnknown")
+                raise AvatarImageError("errors.avatarProvider.unsupportedFormat", {"format": image_format})
             image.verify()
         with Image.open(io.BytesIO(data)) as image:
             image.seek(0)
@@ -54,11 +58,11 @@ def prepare_avatar(data: bytes) -> bytes:
     except AvatarImageError:
         raise
     except Image.DecompressionBombError as error:
-        raise AvatarImageError("图片像素尺寸过大，请缩小后重新选择") from error
+        raise AvatarImageError("errors.avatarProvider.imageTooLarge") from error
     except UnidentifiedImageError as error:
-        raise AvatarImageError("无法识别图片内容，文件可能损坏或格式未支持，请重新导出图片") from error
+        raise AvatarImageError("errors.avatarProvider.unrecognizedImage") from error
     except (OSError, SyntaxError, ValueError, EOFError, struct.error) as error:
-        raise AvatarImageError("图片数据不完整或无法解码，请重新下载或导出图片") from error
+        raise AvatarImageError("errors.avatarProvider.incompleteImage") from error
 
 
 @dataclass(frozen=True)
@@ -270,12 +274,12 @@ def mark_duplicate_candidates(rows: list[dict], installed: dict[str, int]) -> No
         digest = str(row.get("sha256") or "")
         if not digest:
             row["verdict"] = "rejected"
-            row["note"] = "缺少内容哈希，不能进入复核候选"
+            row["note"] = interface_text.text("server:labels.avatarProvider.missingHash")
             continue
         owner = owners.get(digest)
         if owner is not None and owner != int(row["entity_id"]):
             row["verdict"] = "duplicate"
             row["duplicate_of_entity_id"] = owner
-            row["note"] = f"与 performer-{owner} 的头像内容完全相同"
+            row["note"] = interface_text.text("server:labels.avatarProvider.duplicateOf", {"entity": f"performer-{owner}"})
             continue
         owners[digest] = int(row["entity_id"])

@@ -33,9 +33,10 @@ import {
   canApprove, currentReviewRow, DEFAULT_CATEGORY, decisionPayload, decisionReceipt, defaultChoice,
   fetchReview, filterReviewRows, groupReviewRows, isReviewCategory, mirrorText,
   REVIEW_CATEGORIES, REVIEW_KEY, REVIEW_LABELS, reviewGroupingOptions,
-  REVIEW_QUEUES, REVIEW_QUEUE_LABELS, reviewQueueData, reviewQueueOf,
+  REVIEW_QUEUES, reviewQueueData, reviewQueueOf,
   reviewWindow, selectReviewRange, settleReviewRows, submitDecision,
 } from './review';
+import { t } from '../../i18n';
 
 // 与配置页共用 BoardUI gray PillTab 样式；保留 tabpanel 与复核队列计数。
 const TAB_CLASS = 'flex cursor-pointer items-center justify-between gap-2';
@@ -161,7 +162,7 @@ export function ReviewPage(props: ReviewProps) {
     mutationFn: ({ row, status, category: target }: { row: ReviewRow; status: DecisionStatus; category: ReviewCategory }) =>
       submitDecision(decisionPayload(target, currentReviewRow(target, row), status, choiceOf(row))),
     onSuccess: (result, { row, status, category: target }) => {
-      if (!result.ok) { fail(row.item_key, result.error || '服务端拒绝了这次判定'); return }
+      if (!result.ok) { fail(row.item_key, result.error || t('manage:reviewPage.decisionRejected')); return }
       settleReviewRows(target, [row.item_key], status);
       forget([row.item_key]);
       toast(decisionReceipt(status));
@@ -179,10 +180,10 @@ export function ReviewPage(props: ReviewProps) {
       const failures: [string, string][] = [];
       for (const [at, row] of rows.entries()) {
         if (!alive.current) break;
-        setFeedback(`正在处理 ${at} / ${rows.length}`);
+        setFeedback(t('manage:reviewPage.processingProgress', { current: at, total: rows.length }));
         try {
           const result = await submitDecision(decisionPayload(target, currentReviewRow(target, row), status, choiceOf(row)));
-          if (!result.ok) throw new Error(result.error || '服务端未采用该项');
+          if (!result.ok) throw new Error(result.error || t('manage:reviewPage.itemNotAccepted'));
           done.push(row.item_key);
         } catch (cause) {
           failures.push([row.item_key, errorMessage(cause)]);
@@ -195,9 +196,9 @@ export function ReviewPage(props: ReviewProps) {
       forget(done);
       failures.forEach(([key, message]) => fail(key, message));
       setFeedback('');
-      const action = { approved: '通过', rejected: '忽略', skipped: '移至稍后处理', restore: '恢复待处理' }[status];
-      toast(`已${action} ${done.length} 项`
-        + (failures.length ? `，${failures.length} 项未完成` : ''));
+      const doneKey = { approved: 'manage:reviewPage.approvedCount', rejected: 'manage:reviewPage.ignoredCount', skipped: 'manage:reviewPage.laterCount', restore: 'manage:reviewPage.pendingCount' }[status];
+      toast(t(doneKey, { count: done.length })
+        + (failures.length ? t('manage:reviewPage.notCompletedSuffix', { count: failures.length }) : ''));
     },
     onError: (cause) => { setFeedback(errorMessage(cause)) },
   });
@@ -206,7 +207,7 @@ export function ReviewPage(props: ReviewProps) {
     if (bulk.isPending || !selectedRows.length) return;
     if (status === 'approved' && metadata
       && selectedRows.some((row) => !choiceOf(row).candidateKey)) {
-      setFeedback('请先为所选资料选择要采用的来源。');
+      setFeedback(t('manage:reviewPage.chooseSourceFirst'));
       return;
     }
     setFeedback('');
@@ -245,7 +246,7 @@ export function ReviewPage(props: ReviewProps) {
       }
       return next;
     });
-    setFeedback(`已选择 ${source}，点击通过所选采用。`);
+    setFeedback(t('manage:reviewPage.sourceChosen', { source }));
   };
 
   const reveal = async (id: number) => {
@@ -268,10 +269,10 @@ export function ReviewPage(props: ReviewProps) {
     <Page>
       <div className="flex flex-col gap-5 pb-10">
       {locked ? (
-        <Note tone="warning" title="本机只能浏览"
+        <Note tone="warning" title={t('manage:reviewPage.readOnly')}
           extra={writerUrl
             ? <p className="text-body-2-regular">
-                <ExternalLink href={writerUrl}>前往写入端复核</ExternalLink>
+                <ExternalLink href={writerUrl}>{t('manage:reviewPage.goToPrimary')}</ExternalLink>
               </p>
             : undefined}>
           {mirror}
@@ -282,8 +283,8 @@ export function ReviewPage(props: ReviewProps) {
       {/* 分类目录位于正文左侧；窄屏使用正文上方的导航。 */}
       <div className="flex flex-col gap-5 review-split:flex-row review-split:items-start review-split:gap-6">
         <div data-section-nav className="w-full min-w-0 review-split:sticky review-split:top-topbar review-split:w-review-tabs review-split:shrink-0">
-          <h2 id="reviewcategories">复核分类</h2>
-          <SortableBoardTabs group="review" label="复核分类" value={category} onChange={goCategory}
+          <h2 id="reviewcategories">{t('manage:reviewPage.categories')}</h2>
+          <SortableBoardTabs group="review" label={t('manage:reviewPage.categories')} value={category} onChange={goCategory}
             orientation={narrow ? 'horizontal' : 'vertical'} panelPrefix="review" sectionItems
             className="" itemClassName={TAB_CLASS} disabled={decide.isPending || bulk.isPending}
             tabs={REVIEW_CATEGORIES.map((key) => {
@@ -327,7 +328,7 @@ export function ReviewPage(props: ReviewProps) {
                       for (const key of keys) { if (all) next.delete(key); else next.add(key) }
                       setSelected(next);
                     }}>
-                      {group.rows.every((row) => selected.has(row.item_key)) ? '清空本组' : '全选本组'}
+                      {group.rows.every((row) => selected.has(row.item_key)) ? t('manage:reviewPage.clearGroup') : t('manage:reviewPage.selectGroup')}
                     </Button>
                   )}
                 </div>
@@ -359,23 +360,23 @@ export function ReviewPage(props: ReviewProps) {
             </section>
           )) : review.isError && !review.data ? (
             /* 读不到队列和队列是空的不是一回事：说清楚是读取失败，给一颗重试键。 */
-            <Note tone="error" title="复核队列读取失败" action={
-              <Button variant="secondary" size="small" disabled={review.isFetching} onClick={() => void review.refetch()}>立即重试</Button>
+            <Note tone="error" title={t('manage:reviewPage.queueLoadFailed')} action={
+              <Button variant="secondary" size="small" disabled={review.isFetching} onClick={() => void review.refetch()}>{t('manage:shared.retryNow')}</Button>
             }>
               {errorMessage(review.error)}
             </Note>
           ) : (
-            <EmptyState icon={RiCheckboxCircleLine} title={`此分类没有${REVIEW_QUEUE_LABELS[queueView]}项目`}
+            <EmptyState icon={RiCheckboxCircleLine} title={t({ pending: 'manage:reviewPage.emptyPending', later: 'manage:reviewPage.emptyLater', ignored: 'manage:reviewPage.emptyIgnored' }[queueView])}
               actions={REVIEW_CATEGORIES.some(key => key !== category && Number(snapshot.counts[key] || 0) > 0)
                 ? <Button size="small" onClick={() => {
                     const next = categoryOrder.find(key => key !== category && Number(snapshot.counts[key] || 0) > 0);
                     if (next) goCategory(next);
-                  }}>查看其他分类</Button> : undefined}>
-              {queueView === 'pending' ? '可切换分类查看其他待确认资料。' : `${REVIEW_QUEUE_LABELS[queueView]}的资料会保留在这里，可恢复到待处理。`}
+                  }}>{t('manage:reviewPage.viewOtherCategories')}</Button> : undefined}>
+              {queueView === 'pending' ? t('manage:reviewPage.switchCategoryHint') : t(queueView === 'later' ? 'manage:reviewPage.laterKeptHint' : 'manage:reviewPage.ignoredKeptHint')}
             </EmptyState>
           )}
 
-          {filteredRows.length ? <DataTableFooter label="复核" total={filteredRows.length}
+          {filteredRows.length ? <DataTableFooter label={t('manage:reviewPage.footerLabel')} total={filteredRows.length}
             pagination={{ pageIndex: win.page - 1, pageSize }}
             onChange={(next) => { setPage(next.pageIndex + 1); setPageSize(next.pageSize) }} /> : null}
           {metadata && queueView === 'pending'

@@ -1,6 +1,8 @@
 /** Board 的 Pagination（boardui.com `r/pagination.json`）：上一页／下一页是 32px 的次级小键，页码是 32×32、圆角 8 的格，
  * 当前页借次级键的面（primary 底、border-button 描边、xs 阴影），其它页码只有文字，悬停才有底；页数多时两侧折成「…」，
  * 当前页左右各留 `sibling` 个邻页。页码格不做过渡：动了背景和阴影，换页时上一枚当前页会肉眼可见地淡出。 */
+import { t } from './i18n';
+
 export const DOTS = '…';
 
 export function paginationRange(current: number, total: number, sibling = 1): (number | typeof DOTS)[] {
@@ -27,10 +29,10 @@ export function paginationHtml(page: number, pages: number, label: string): stri
   if (pages <= 1) return '';
   const cells = paginationRange(page, pages).map(item => item === DOTS
     ? '<li class="ui-board-page-dots" aria-hidden="true">…</li>'
-    : `<li><button type="button" class="ui-board-page" data-page="${item}" aria-label="第 ${item} 页"${item === page ? ' aria-current="page"' : ''}>${item}</button></li>`).join('');
+    : `<li><button type="button" class="ui-board-page" data-page="${item}" aria-label="${t('shell:tablePagination.page', { page: item })}"${item === page ? ' aria-current="page"' : ''}>${item}</button></li>`).join('');
   return `<nav class="board-pagination" aria-label="${label}">
-    <button type="button" class="geist-button" data-page="${page - 1}"${page <= 1 ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left"></use></svg>上一页</button>
+    <button type="button" class="geist-button" data-page="${page - 1}"${page <= 1 ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left"></use></svg>${t('shell:tablePagination.previous')}</button>
     <ul>${cells}</ul>
-    <button type="button" class="geist-button" data-page="${page + 1}"${page >= pages ? ' disabled' : ''}>下一页<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+    <button type="button" class="geist-button" data-page="${page + 1}"${page >= pages ? ' disabled' : ''}>${t('shell:tablePagination.next')}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
   </nav>`;
 }

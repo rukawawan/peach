@@ -24,6 +24,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.media_sources import SCANNABLE_LOCATIONS
 from peach.resource_identification import (
     CANDIDATE_FILENAME,
@@ -41,20 +42,20 @@ WORKLIST_FIELDS = [
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="无番号视频的检索清单与候选合并")
+    parser = argparse.ArgumentParser(description=t("identify_resources.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    worklist = sub.add_parser("worklist", help="生成联网识别清单")
+    worklist = sub.add_parser("worklist", help=t("identify_resources.helpWorklist"))
     worklist.add_argument("--location", action="append", choices=SCANNABLE_LOCATIONS)
-    worklist.add_argument("--root", help="账本口径的目录前缀，例如 B:\\xxr\\0208 (23)")
-    worklist.add_argument("--paired-only", action="store_true", help="只列有同目录配套图片的")
+    worklist.add_argument("--root", help=t("identify_resources.helpRoot"))
+    worklist.add_argument("--paired-only", action="store_true", help=t("identify_resources.helpPairedOnly"))
     worklist.add_argument("--sparse-only", action="store_true",
-                          help="只列元信息最少的（无创作者／标题／厂牌／系列／演员）")
+                          help=t("identify_resources.helpSparseOnly"))
     worklist.add_argument("--limit", type=int, default=0)
     worklist.add_argument("--out", type=Path)
 
-    ingest = sub.add_parser("ingest", help="把核对结果合并成字段候选")
+    ingest = sub.add_parser("ingest", help=t("identify_resources.helpIngest"))
     ingest.add_argument("--results", type=Path, required=True)
     ingest.add_argument("--candidates", type=Path,
                         default=GENERATED_DIR / CANDIDATE_FILENAME)
@@ -75,14 +76,14 @@ def cmd_worklist(args: argparse.Namespace) -> int:
     output = args.out or GENERATED_DIR / time.strftime(
         "resource-identification-%Y%m%d-%H%M%S.csv")
     write_rows(output, WORKLIST_FIELDS, rows, atomic=True)
-    print(f"待识别 {len(rows)} 条 → {output}")
+    print(t("identify_resources.worklistWritten", count=len(rows), path=output))
     for row in rows[:15]:
-        cover = "有图" if row["cover_path"] else "无图"
-        guess = f" 演出者线索={row['performer_guess']}" if row["performer_guess"] else ""
-        print(f"  {row['asset_id']:>7} 元信息{row['metadata_hits']} {cover} "
-              f"{row['size_gb']:>8.2f}GB {str(row['name'])[:56]!r}{guess}")
+        cover = t("identify_resources.hasImage") if row["cover_path"] else t("identify_resources.noImage")
+        guess = t("identify_resources.performerHint", guess=row['performer_guess']) if row["performer_guess"] else ""
+        print(t("identify_resources.worklistRow", id=f"{row['asset_id']:>7}", hits=row['metadata_hits'],
+                cover=cover, size=f"{row['size_gb']:>8.2f}", name=repr(str(row['name'])[:56]), guess=guess))
     if len(rows) > 15:
-        print(f"  …… 其余 {len(rows) - 15} 条见 CSV")
+        print(t("identify_resources.moreInCsv", count=len(rows) - 15))
     return 0
 
 
@@ -93,9 +94,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         stats = ingest_results(connection, args.candidates, results)
     finally:
         connection.close()
-    print(f"合并候选 {stats['applied']} 条，跳过 {stats['skipped']} 条，"
-          f"候选组 {stats['groups']} 个 → {args.candidates}")
-    print("在 /review 的「资料字段」里逐条核对；批准才写真相字段。")
+    print(t("identify_resources.ingested", applied=stats['applied'], skipped=stats['skipped'],
+            groups=stats['groups'], path=args.candidates))
+    print(t("identify_resources.reviewHint"))
     return 0
 
 

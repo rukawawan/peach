@@ -44,13 +44,15 @@ from peach.config import GENERATED_DIR
 from peach.entities import normalize_entity_name
 from peach.genre_decisions import load_genre_decisions
 from peach.genre_taxonomy import map_genres
+from peach.interface_text import dev as t
 from peach.metadata_auto_apply import UNION_TAGS_SOURCE, _extend_approved_tags
 from peach.review_csv import write_rows
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write
 
 FIELDS = ("asset_id", "code", "source", "status", "removed", "added", "snapshot")
 #: 每组的去向；只有 `REWRITE` 会写库。
-REWRITE, SAME, NO_SNAPSHOT, NO_GENRES, EMPTY = "重写", "不受影响", "快照缺失", "无 genre", "套完为空"
+#: 依次是：重写、不受影响、快照缺失、快照里没有 genre、套完映射标签为空。
+REWRITE, SAME, NO_SNAPSHOT, NO_GENRES, EMPTY = "rewrite", "unchanged", "no-snapshot", "no-genres", "empty"
 TAXONOMY = "src/peach/genre_taxonomy.py"
 
 
@@ -149,7 +151,7 @@ def rewrite(connection: sqlite3.Connection, row: dict, batch: str, now: str) -> 
         candidate.update(source=site, confidence=row["confidence"], value=added,
                          candidate_key=metadata.get("candidate_key") or f"reproject:{row['asset_id']}:{site}")
         if _extend_approved_tags(connection, group, candidate, batch, now) is None:
-            raise ValueError("落库的闸没过（资产已不在或来源身份对不上）")
+            raise ValueError(t("reproject_snapshot_tags.gateRejected"))
     for tag in filter(None, row["removed"].split("、")):
         connection.execute("DELETE FROM asset_tag WHERE asset_id=? AND tag=? AND source=?",
                            (row["asset_id"], tag, row["source"]))
@@ -160,11 +162,9 @@ def rewrite(connection: sqlite3.Connection, row: dict, batch: str, now: str) -> 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="按来源快照把已落库的 javinizer 标签跟上现在的映射")
+    parser = argparse.ArgumentParser(description=t("reproject_snapshot_tags.description"))
     add_ledger_write_args(parser)
-    parser.add_argument("--since",
-                        help="映射改动之前的那一版（git 提交或分支），只套它与现在之间的差；"
-                             "不给就是补齐：快照现在映射得出、账本还没有的补上，一个不删")
+    parser.add_argument("--since", help=t("reproject_snapshot_tags.sinceHelp"))
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "snapshot-tag-reprojection.csv")
     return parser
@@ -178,21 +178,22 @@ def run(args: argparse.Namespace) -> int:
         decisions = load_genre_decisions(connection)
         rows = [judge(group, before, decisions) for group in ledger_groups(connection)]
         tally = Counter(row["status"] for row in rows)
-        print("资产×来源 {} 组：".format(len(rows))
-              + "，".join(f"{status} {count}" for status, count in tally.most_common()))
+        print(t("reproject_snapshot_tags.groups", count=len(rows), statuses=t("common.commaSeparator").join(
+            f"{status} {count}" for status, count in tally.most_common())))
         changes = Counter((kind, tag) for row in rows for kind in ("removed", "added")
                           for tag in row[kind].split("、") if tag)
         for (kind, tag), count in changes.most_common():
-            print(f"  {'去掉' if kind == 'removed' else '加上'} {tag}：{count} 组")
+            key = "reproject_snapshot_tags.tagRemoved" if kind == "removed" else "reproject_snapshot_tags.tagAdded"
+            print(t(key, tag=tag, count=count))
         if args.apply:
             apply_rows(connection, [row for row in rows if row["status"] == REWRITE])
     finally:
         connection.close()
     write_rows(args.review_csv, FIELDS, [{field: row[field] for field in FIELDS}
                                          for row in rows if row["status"] != SAME])
-    print(f"复核 CSV → {args.review_csv}")
+    print(t("reproject_snapshot_tags.reviewCsv", path=args.review_csv))
     if not args.apply:
-        print("这是预览：未写 ledger。确认后再加 --apply --backup。")
+        print(t("reproject_snapshot_tags.previewOnly"))
     return 0
 
 
@@ -207,14 +208,15 @@ def apply_rows(connection: sqlite3.Connection, rows: list[dict]) -> None:
             try:
                 rewrite(connection, row, batch, now)
             except ValueError as error:
-                failures.append(f"{row['code'] or row['asset_id']} {row['source']}：{error}")
+                failures.append(t("reproject_snapshot_tags.failure", item=row['code'] or row['asset_id'],
+                                  source=row['source'], error=error))
     after = counts_of(connection, extra)
     integrity, violations = verify_after_write(connection)
-    print(f"已改 {len(rows) - len(failures)} 组；标签行 {before['tag']} → {after['tag']}；"
-          f"补上的归属 {batch}")
-    print(f"  自检：integrity_check={integrity}，外键违规 {violations} 条")
+    print(t("reproject_snapshot_tags.applied", count=len(rows) - len(failures), tagsBefore=before['tag'],
+            tagsAfter=after['tag'], batch=batch))
+    print(t("reproject_snapshot_tags.selfCheck", integrity=integrity, violations=violations))
     for line in failures:
-        print(f"  跳过 {line}")
+        print(t("reproject_snapshot_tags.skipped", line=line))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -7,6 +7,14 @@ const initial: LibrarySharingState = { enabled: false, available: true, schema: 
   fields: ['作品编号、标签、评分与全部偏好维度'], notice: '匿名处理后上传馆藏与各类偏好明细。' };
 
 describe('馆藏与口味分享的明确同意', () => {
+  it('展示快照编号及压缩大小，并说明接收回执的含义', async () => {
+    const host = await mount(<LibrarySharingSettings initial={{ ...initial, enabled: true, last_attempt: {
+      snapshot_id: 'a'.repeat(32), status: 'accepted', attempted: true, raw_bytes: 4096, compressed_bytes: 1024,
+    } }} receipt={vi.fn()} />);
+    expect(host.textContent).toContain('a'.repeat(32));
+    expect(host.textContent).toContain('原始 4.0 KiB，gzip 压缩后 1.0 KiB。');
+    expect(host.textContent).toContain('接收端已接受请求，附件留存需由接收端归档核验。');
+  });
   it.each([
     [{ status: 'waiting-data', attempted: false }, '等待可分析的馆藏或偏好数据。'],
     [{ status: 'failed', attempted: false }, '馆藏与口味上传未完成，将自动重新准备。'],
@@ -19,7 +27,7 @@ describe('馆藏与口味分享的明确同意', () => {
 
   it('开关始终可见，上传预览和明确同意完整后才能开启', async () => {
     const fetcher = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/preview')
-      ? { data: { library: [{ code: 'EXM-001' }], preferences: {}, coverage: { uncoded_items: 0 } }, bytes: 80, token: 'preview-token', schema: 4 }
+      ? { data: { library: [{ code: 'EXM-001' }], preferences: {}, coverage: { uncoded_items: 0 } }, bytes: 80, compressed_bytes: 60, token: 'preview-token', schema: 4 }
       : { ...initial, enabled: true } }));
     vi.stubGlobal('fetch', fetcher);
     const receipt = vi.fn();

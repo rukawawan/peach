@@ -161,3 +161,18 @@ describe('每部视频的字幕选择', () => {
     view.dispose();
   });
 });
+
+describe('原生全屏的字幕显示', () => {
+  it('iOS 原生全屏时交还原生字幕轨道，回到页面内再由网页层绘制', () => {
+    const view = mounted(), cleanup = new AbortController(), root = view.player.el();
+    let mode = 'inline';
+    Object.defineProperty(view.video, 'webkitPresentationMode', { get: () => mode });
+    mountCaptionStyle(root, view.video, cleanup.signal);
+    expect(root.dataset.peachCaptions).toBe('');
+    mode = 'fullscreen'; view.video.dispatchEvent(new Event('webkitpresentationmodechanged'));
+    expect(root.dataset.peachCaptions).toBeUndefined();
+    mode = 'inline'; view.video.dispatchEvent(new Event('webkitpresentationmodechanged'));
+    expect(root.dataset.peachCaptions).toBe('');
+    cleanup.abort();
+  });
+});

@@ -135,8 +135,8 @@ it('首屏用 prefetch 缓存画出来源与任务，挂载时不重复请求', 
 it('走本机浏览器的来源只说明验证怎么过，不画 Cookie 输入', async () => {
   const { host } = await open(quiet({ source: 'fc2ppvdb', label: 'FC2PPV-DB', browser: true }));
   const card = section(host, 'FC2PPV-DB');
-  expect(card?.textContent).toContain('人机验证由本机浏览器自动完成');
-  expect(card?.textContent).toContain('这台机器上不需要 Cookie');
+  expect(card?.textContent).toContain('运行 Peach 的电脑上的浏览器会自动完成人机验证');
+  expect(card?.textContent).toContain('不需要 Cookie');
   expect(password(host), '浏览器自己带 Cookie，这一格不该出现').toBeNull();
   expect(card?.textContent).not.toContain('任选一种方式提供 Cookie');
   expect(host.querySelector('[aria-haspopup=listbox]'), '连接方式仍由用户选，浏览器按它换出口').not.toBeNull();
@@ -195,8 +195,8 @@ it('保存失败时原因留在卡内，列表和刚填的内容都不动', asyn
 
 it('连接结果按来源名称与这一跳查的是什么说成一句话', async () => {
   const results: Check[] = [
-    { label: '来源页面', ok: true, width: 800, height: 538 },
-    { label: '高清图片 CDN', ok: false, status: 403, message: '需要登录' },
+    { target: 'page', label: '来源页面', ok: true, width: 800, height: 538 },
+    { target: 'cdn', label: '高清图片 CDN', ok: false, status: 403, message: '需要登录' },
   ];
   const { host } = await open({
     ...quiet(),

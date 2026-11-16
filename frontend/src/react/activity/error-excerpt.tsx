@@ -9,6 +9,7 @@ import { Button } from '@/components/base/buttons/button';
 import { readableErrorHeadline } from './tasks';
 import { cardClass } from '../components/card';
 import { useOverlayScrollbar } from '../components/overlay-scrollbar';
+import { t } from '../../i18n';
 
 /** 完整报错共用限高容器与覆盖式滚动条。 */
 export function ErrorDetails({ children, label, id }: { children: ReactNode; label: string; id?: string }) {
@@ -32,12 +33,12 @@ export function ErrorExcerpt({ text, className = '' }: { text: string; className
   return (
     <div data-error-excerpt="" className={`flex min-w-0 max-w-full flex-col items-start gap-1 ${className}`}>
       {open
-        ? <ErrorDetails id={id} label="完整错误详情">{full}</ErrorDetails>
+        ? <ErrorDetails id={id} label={t('manage:errorExcerpt.fullDetails')}>{full}</ErrorDetails>
         : <p className="w-full wrap-anywhere">{head}</p>}
       {more
         ? <Button variant="ghost" size="small" data-error-details-toggle="" className="-ml-2" aria-expanded={open} aria-controls={open ? id : undefined}
             onClick={() => setOpen(!open)}>
-            {open ? '收起详情' : '查看详情'}
+            {open ? t('manage:errorExcerpt.hideDetails') : t('manage:errorExcerpt.showDetails')}
           </Button>
         : null}
     </div>

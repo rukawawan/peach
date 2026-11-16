@@ -28,6 +28,7 @@ import { stopTelemetry, wireFollowTelemetry, wireTelemetry } from './telemetry';
 import type { MediaFacts, PlayerItem, PlayerSource, SourceQuality, VjsPlayer } from './types';
 import { ensureVideojs } from './videojs';
 import { isPlayerGuidePreview } from './guide-preview';
+import { interfaceLanguage, t } from '../i18n';
 
 /** 从小窗展开回来或带 `?t=` 深链进来时接着放的那一刻。 */
 export interface PlayerResume { time: number; autoplay: boolean }
@@ -100,7 +101,7 @@ export async function mountDetailPlayer(
     return null;
   }
   const player = videojs(video, {
-    controls: true, preload: 'metadata', language: 'zh-CN', responsive: true,
+    controls: true, preload: 'metadata', language: interfaceLanguage, responsive: true,
     /* 海报与作品当前封面偏好一致，交给原生视频显示。 */
     poster: options.poster || detailPosterUrl(item, host.settings().javImage),
     controlBar: {
@@ -165,23 +166,23 @@ export async function mountDetailPlayer(
     const speedText = speed ? `${(speed / 1e6).toFixed(1)} Mbps` : '—';
     const byteScale = segmented || meter.bitrate > 0;
     const loadedRow: [string, string, string] = segmented
-      ? ['网络活动', `${bytes ? fmtSize(bytes) : '—'} · ${resources.length} 请求`,
-        `最近一秒网络活动 ${activity ? fmtSize(activity) : '0 B'}`]
-      : ['已下载', byteScale ? `${fmtSize(loaded)}${mediaSize > 0 ? ` / ${fmtSize(mediaSize)}` : ''}` : `${loaded.toFixed(0)} 秒`,
-        byteScale ? `最近一秒下载 ${activity ? fmtSize(activity) : '0 B'}` : `最近一秒下载 ${activity.toFixed(1)} 秒`];
+      ? [t('catalog:playerStats.networkActivity'), t('catalog:playerStats.networkValue', { size: bytes ? fmtSize(bytes) : '—', count: resources.length }),
+        t('catalog:playerStats.networkLastSecond', { size: activity ? fmtSize(activity) : '0 B' })]
+      : [t('catalog:playerStats.downloaded'), byteScale ? `${fmtSize(loaded)}${mediaSize > 0 ? ` / ${fmtSize(mediaSize)}` : ''}` : t('catalog:playerStats.seconds', { seconds: loaded.toFixed(0) }),
+        byteScale ? t('catalog:playerStats.downloadedLastSecond', { size: activity ? fmtSize(activity) : '0 B' }) : t('catalog:playerStats.downloadedSecondsLastSecond', { seconds: activity.toFixed(1) })];
     const rows: [string, string, string?][] = [
-      ['视频 ID / 会话', stream && !options.source ? `${item.id} / ${stream.slice(0, 8)}` : `${item.id}`],
-      ['视口 / 帧', `${Math.round(rect.width)}×${Math.round(rect.height)} / ${quality ? `${quality.totalVideoFrames - quality.droppedVideoFrames} of ${quality.totalVideoFrames}` : '—'}`],
-      ['当前 / 最佳分辨率', `${current} / ${item.width || video.videoWidth || '?'}×${item.height || video.videoHeight || '?'}`],
-      ['编码 / 传输', `${container} / ${segmented ? 'HLS' : 'HTTP Range'}`],
-      ['连接速度', speedText,
-        playerStatsPlot(statsHistory.speed, 'speed', Math.max(10e6, ...statsHistory.speed), `连接速度 ${speedText === '—' ? '暂无数据' : speedText}`)],
+      [t('catalog:playerStats.videoSession'), stream && !options.source ? `${item.id} / ${stream.slice(0, 8)}` : `${item.id}`],
+      [t('catalog:playerStats.viewportFrames'), `${Math.round(rect.width)}×${Math.round(rect.height)} / ${quality ? `${quality.totalVideoFrames - quality.droppedVideoFrames} of ${quality.totalVideoFrames}` : '—'}`],
+      [t('catalog:playerStats.resolution'), `${current} / ${item.width || video.videoWidth || '?'}×${item.height || video.videoHeight || '?'}`],
+      [t('catalog:playerStats.formatTransport'), `${container} / ${segmented ? 'HLS' : 'HTTP Range'}`],
+      [t('catalog:playerStats.connectionSpeed'), speedText,
+        playerStatsPlot(statsHistory.speed, 'speed', Math.max(10e6, ...statsHistory.speed), t('catalog:playerStats.connectionSpeedPlot', { speed: speedText === '—' ? t('catalog:playerStats.noData') : speedText }))],
       [loadedRow[0], loadedRow[1],
         playerStatsPlot(statsHistory.activity, 'activity', Math.max(1, ...statsHistory.activity), loadedRow[2])],
-      ['缓冲健康', `${buffer.toFixed(1)} 秒`,
-        playerStatsPlot(statsHistory.buffer, 'buffer', 30, `当前可连续播放 ${buffer.toFixed(1)} 秒`)],
-      ['播放时间', `${fmtClock(video.currentTime)} / ${fmtClock(expected || player.duration())}`],
-      ['日期', new Date().toLocaleString()],
+      [t('catalog:playerStats.bufferHealth'), t('catalog:playerStats.seconds', { seconds: buffer.toFixed(1) }),
+        playerStatsPlot(statsHistory.buffer, 'buffer', 30, t('catalog:playerStats.bufferAhead', { seconds: buffer.toFixed(1) }))],
+      [t('catalog:playerStats.playbackTime'), `${fmtClock(video.currentTime)} / ${fmtClock(expected || player.duration())}`],
+      [t('catalog:playerStats.date'), new Date().toLocaleString(interfaceLanguage)],
     ];
     statsPanel.innerHTML = `<dl>${rows.map(([key, value, plot]) =>
       `<dt>${esc(key)}</dt><dd${plot ? ' data-player-stats-metric=""' : ''}>${plot || ''}<span>${esc(value)}</span></dd>`).join('')}</dl>`;
@@ -195,7 +196,7 @@ export async function mountDetailPlayer(
     if (!segmented) meter.sample(video);
     const bits = playerSpeedBits(player, item.id, detailStreamSession(), segmented ? null : meter);
     const rate = segmented ? fmtSpeed(bits) : fmtLoadRate(bits, bufferedAhead(video));
-    netBadge.innerHTML = `${icon('gauge')}<span class="sr-only">加载速度</span><span>${esc(rate)}</span>`;
+    netBadge.innerHTML = `${icon('gauge')}<span class="sr-only">${t('catalog:playerStats.loadSpeed')}</span><span>${esc(rate)}</span>`;
   };
   const showNet = () => {
     const netBadge = session.chrome?.netBadge;
@@ -223,12 +224,12 @@ export async function mountDetailPlayer(
     if (options.checkSourceStatus === false) return;
     void host.loadSourceStatus().then((status) => {
       if (status[String(item.root_id || item.location)] !== false || player.isDisposed()) return;
-      player.error({ code: 2, message: `媒体目录无法访问 · ${host.offlineReason(String(item.root_id || item.location))}` });
+      player.error({ code: 2, message: t('catalog:playerControls.directoryOffline', { reason: host.offlineReason(String(item.root_id || item.location)) }) });
     });
   });
   player.ready(() => {
     enforceDuration();
-    const updateQualities = mountPlayerQualityControl(player, video, item.height, options.qualities ?? null);
+    const updateQualities = mountPlayerQualityControl(player, video, item, options.qualities ?? null);
     options.mediaPromise?.then((next) => {
       if (!live()) return;
       updateQualities?.(next?.qualities?.length ? next.qualities : null);

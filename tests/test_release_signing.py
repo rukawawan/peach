@@ -36,26 +36,26 @@ class VerifyTests(unittest.TestCase):
     def test_one_changed_byte_is_rejected(self):
         signature = release_signing.sign(SUMS, self.private).encode()
         tampered = SUMS.replace(b"a" * 64, b"c" + b"a" * 63, 1)
-        with self.assertRaisesRegex(ValueError, "签名校验未通过"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             release_signing.verify(tampered, signature, (self.public,))
         broken = bytearray(signature)
         broken[50] ^= 1
-        with self.assertRaisesRegex(ValueError, "签名校验未通过"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             release_signing.verify(SUMS, bytes(broken), (self.public,))
 
     def test_a_key_the_client_does_not_trust_is_rejected(self):
         other, other_public = keypair()
         signature = release_signing.sign(SUMS, other).encode()
-        with self.assertRaisesRegex(ValueError, "签名校验未通过"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             release_signing.verify(SUMS, signature, (self.public,))
         # 把信任的公钥写进签名行、签名却出自另一把私钥，同样过不了。
         forged = signature.replace(other_public.encode(), self.public.encode())
-        with self.assertRaisesRegex(ValueError, "签名校验未通过"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             release_signing.verify(SUMS, forged, (self.public,))
 
     def test_missing_or_empty_signature_is_rejected(self):
         for signature in (b"", b"\n", b"not a signature\n"):
-            with self.subTest(signature=signature), self.assertRaisesRegex(ValueError, "签名校验未通过"):
+            with self.subTest(signature=signature), self.assertRaisesRegex(ValueError, "signature verification failed"):
                 release_signing.verify(SUMS, signature, (self.public,))
 
     def test_rotation_accepts_either_trusted_key(self):
@@ -67,7 +67,7 @@ class VerifyTests(unittest.TestCase):
         # 换签名私钥之后，新旧公钥并存的客户端照样认。
         only_new = release_signing.sign(SUMS, new).encode()
         self.assertTrue(release_signing.verify(SUMS, only_new, (self.public, new_public)))
-        with self.assertRaisesRegex(ValueError, "签名校验未通过"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             release_signing.verify(SUMS, only_new, (self.public,))
 
     def test_sums_must_be_well_formed_once_the_signature_holds(self):
@@ -82,7 +82,7 @@ class VerifyTests(unittest.TestCase):
                 self.assertEqual(len(release_signing._key_bytes(key)), 32)
 
     def test_an_empty_trust_set_never_verifies(self):
-        with self.assertRaisesRegex(ValueError, "签名校验未通过"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             release_signing.verify(SUMS, release_signing.sign(SUMS, self.private).encode(), ())
 
 

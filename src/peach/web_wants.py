@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from . import feed_followup, wants, web_follow
 from .jobs import TaskRunConflict
+from .user_messages import UserInterruptedError, UserValueError
 
 #: 取不到资料或封面的想要，隔多久再试一次；与 Feed 壳同一个间隔。
 RETRY_AFTER = feed_followup.RETRY_AFTER
@@ -112,7 +113,7 @@ def scrape(contract, job_id: str | None = None) -> dict:
             if job_id:
                 if not contract.want_job.update(job_id, checked=len(done), total=len(done) + len(batch),
                                                 current=want_id):
-                    raise InterruptedError('想要资料任务已停止')
+                    raise UserInterruptedError("errors.webWants.scrapeStopped")
             got, covered = _scrape_one(contract, provider, want_id)
             fetched += got
             covers += covered
@@ -128,7 +129,7 @@ def scrape(contract, job_id: str | None = None) -> dict:
                 incomplete.discard(want_id)
             if job_id and not contract.want_job.checkpoint(job_id, completed_wants=sorted(completed),
                     incomplete_wants=sorted(incomplete), checked=len(done), fetched=fetched, covers=covers):
-                raise InterruptedError('想要资料任务已停止')
+                raise UserInterruptedError("errors.webWants.scrapeStopped")
     contract.cache_bust()
     return {"ok": True, "total": len(done), "fetched": fetched, "covers": covers,
             "incomplete": len(incomplete)}
@@ -219,11 +220,11 @@ def q_want_magnets(contract, args) -> dict:
 
     raw = str(args.get("id") or "")
     if not raw.isdigit():
-        raise ValueError("缺少想要条目编号")
+        raise UserValueError("api.wants.missingId")
     with contract.database.read_connection() as connection:
         row = wants.get(connection, int(raw))
     if row is None:
-        raise KeyError("想要条目不存在")
+        raise KeyError("want not found")
     if not row["code"] or wants.phase(row, date.today()) in {"unreleased", "acquired"}:
         return {"ok": True, "state": "unavailable", "items": [], "error": "", "checked_at": None}
     # JavDB 匿名资料与详情页共用快照目录。

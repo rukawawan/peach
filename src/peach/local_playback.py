@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import playback_tracking as tracking
 from .media import normalized_path
+from .user_messages import UserValueError
 
 
 def available() -> bool:
@@ -77,16 +78,16 @@ def open_media(path: Path, player: str = 'default', *, track: Track | None = Non
     `extra_args` 只给人工验收用（静音、暂停起播），接口不暴露。
     """
     if not available():
-        raise ValueError('此部署请使用网络播放地址或 M3U 播放列表')
+        raise UserValueError("errors.localPlayback.deploymentUnsupported")
     path = normalized_path(path)
     if not path.is_file() or path.suffix.lower() not in {
         '.mp4', '.m4v', '.mkv', '.webm', '.avi', '.mov', '.wmv', '.flv', '.ts', '.mts', '.m2ts',
         '.mpg', '.mpeg', '.vob', '.iso', '.mp3', '.m4a', '.flac', '.wav', '.ogg', '.opus',
     }:
-        raise ValueError('此文件请使用网络播放地址或 M3U 播放列表')
+        raise UserValueError("errors.localPlayback.fileUnsupported")
     chosen = installed().get(player) if player != 'default' else None
     if player != 'default' and chosen is None:
-        raise ValueError('播放器未安装，请重新选择')
+        raise UserValueError("errors.localPlayback.playerMissing")
     tracked = _tracked_command(player, chosen[1], path) if chosen and track else None
     if tracked:
         command, connect = tracked

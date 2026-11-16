@@ -1,6 +1,7 @@
 import contextlib
 import io
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -233,6 +234,54 @@ class NotesTests(unittest.TestCase):
         self.assertIn("--to release/RELEASE_NOTES.md", workflow)
         self.assertIn("--notes-file RELEASE_NOTES.md", workflow)
         self.assertNotIn("--notes 'Windows", workflow)
+
+
+class RecordedMergeTests(unittest.TestCase):
+    """`merge -s ours` 只为署名记入社区提交，那些改动不在主线上，不进日志也不抬版本级别。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.git("init", "-q", "-b", "master")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("config", "user.name", "Test")
+        self.commit("chore: 起点")
+        self.git("tag", "v0.1.0")
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True,
+                              text=True, encoding="utf-8").stdout
+
+    def commit(self, subject):
+        name = f"{len(list(self.root.glob('*.txt')))}.txt"
+        (self.root / name).write_text(subject, encoding="utf-8")
+        self.git("add", "--", name)
+        self.git("commit", "-q", "-m", subject)
+
+    def test_only_commits_whose_changes_reached_master_are_drafted(self):
+        self.git("checkout", "-q", "-b", "community")
+        self.commit("feat(web): 对方的整套译文")
+        self.git("checkout", "-q", "master")
+        self.git("merge", "-q", "-s", "ours", "--no-ff", "-m", "chore(i18n): 记入社区译法", "community")
+        self.git("checkout", "-q", "-b", "worker")
+        self.commit("fix(web): 正常合入的修复")
+        self.git("checkout", "-q", "master")
+        self.git("merge", "-q", "--no-ff", "-m", "Merge branch 'worker'", "worker")
+        self.commit("fix(web): 主线上的修复")
+        expected = ["fix(web): 主线上的修复", "fix(web): 正常合入的修复"]
+        self.assertEqual([c.subject for c in changelog.read_commits(self.root, "v0.1.0..HEAD")], expected)
+        self.assertEqual(changelog.version_bump.subjects_in(self.root, "v0.1.0..HEAD"), expected)
+
+    def test_master_commits_the_recorded_branch_merged_in_still_count(self):
+        self.commit("fix(web): 标签之后的主线修复")
+        self.git("checkout", "-q", "-b", "community")
+        self.git("merge", "-q", "--no-ff", "-m", "Merge master into community", "master")
+        self.commit("feat(web): 对方的整套译文")
+        self.git("checkout", "-q", "master")
+        self.git("merge", "-q", "-s", "ours", "--no-ff", "-m", "chore(i18n): 记入社区译法", "community")
+        self.assertEqual([c.subject for c in changelog.read_commits(self.root, "v0.1.0..HEAD")],
+                         ["fix(web): 标签之后的主线修复"])
 
 
 class DueTests(unittest.TestCase):

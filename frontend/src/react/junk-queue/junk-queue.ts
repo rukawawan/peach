@@ -18,6 +18,8 @@ export interface JunkItem {
   name?: string;
   junk_kind?: string;
   why?: string;
+  /** `why` 按段的写法（code 与参数，词库原文是 `text` 段），前端按当前语言拼。 */
+  why_parts?: unknown;
   size?: number | null;
   location?: string;
   cost?: string;

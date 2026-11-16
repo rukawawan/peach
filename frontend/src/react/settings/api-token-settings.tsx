@@ -16,6 +16,7 @@ import type { AccessState } from '../bundle';
 import { Note } from '../components/note';
 import { Footer, Help, Section, Stack } from './section';
 import { useAction } from './use-action';
+import { t } from '../../i18n';
 
 export interface ApiTokenState {
   /** 这次启动的口令取自口令文件才能在这里换；被启动参数覆盖或没有口令时为 false。 */
@@ -39,13 +40,13 @@ const URL = '/api/configuration/access/token/rotate';
 
 /** 确认框里那句后果：按这台的访问方式说清哪些设备要重新登录。 */
 export function rotationEffect(mode: AccessState['mode'], paired: boolean): string {
-  const scripts = '用旧口令的脚本和 API 调用会立即失效。';
+  const scripts = t('settings:accessToken.scriptsInvalidated');
   const sentence = mode === 'legacy'
-    ? `其他浏览器现在用这串口令登录，会全部退出，需要输入新口令重新登录；本机保持登录。${scripts}`
+    ? t('settings:accessToken.rotateEffectLegacy', { scripts })
     : mode === 'open'
-      ? `浏览器不需要登录，不受影响。${scripts}`
-      : `用访问密码登录的浏览器不受影响。${scripts}`;
-  return paired ? `${sentence}另一台电脑要换成同一份口令文件，两台之间才能继续互取复核结果。` : sentence;
+      ? t('settings:accessToken.rotateEffectOpen', { scripts })
+      : t('settings:accessToken.rotateEffectPassword', { scripts });
+  return paired ? t('settings:accessToken.rotateEffectPaired', { sentence }) : sentence;
 }
 
 export function ApiTokenSettings({ initial, mode, receipt }: {
@@ -57,43 +58,43 @@ export function ApiTokenSettings({ initial, mode, receipt }: {
   const queries = useQueryClient();
 
   const rotate = () => void confirmModal({
-    title: '更换访问口令',
+    title: t('settings:accessToken.rotateTitle'),
     body: rotationEffect(mode, state.paired),
-    confirmLabel: '更换口令',
+    confirmLabel: t('settings:accessToken.rotate'),
     onConfirm: async () => {
       const next = await apiSend<Rotated>(URL, {});
       setState(next); setRotated(next);
       // 口令即登录凭据时设备记录整份清空，列表要重取。
       if (next.mode === 'legacy') void queries.invalidateQueries({ queryKey: ['access-sessions'] });
-      receipt(next.signed_out ? `已更换访问口令，${next.signed_out} 台设备需要重新登录` : '已更换访问口令');
+      receipt(next.signed_out ? t('settings:accessToken.rotatedSignedOut', { count: next.signed_out }) : t('settings:accessToken.rotated'));
     },
   });
 
   return (
-    <Section title="访问口令">
+    <Section title={t('settings:accessToken.title')}>
       <Stack>
-        <Help>脚本和 API 调用在 X-Token 请求头里携带访问口令。口令只存在这台电脑上，页面不显示。</Help>
+        <Help>{t('settings:accessToken.help')}</Help>
         {rotated ? (
           <div className="flex min-w-0 flex-col gap-2">
             <div className="flex min-w-0 flex-wrap items-end gap-2">
-              <Input className="min-w-0 flex-1" label="新访问口令" value={rotated.token} isReadOnly autoComplete="off" />
-              <Button variant="secondary" aria-label="复制新访问口令"
-                onClick={() => void copy.run('copy', () => navigator.clipboard.writeText(rotated.token), () => receipt('已复制口令'))}>
-                复制口令
+              <Input className="min-w-0 flex-1" label={t('settings:accessToken.newToken')} value={rotated.token} isReadOnly autoComplete="off" />
+              <Button variant="secondary" aria-label={t('settings:accessToken.copyNew')}
+                onClick={() => void copy.run('copy', () => navigator.clipboard.writeText(rotated.token), () => receipt(t('settings:accessToken.copied')))}>
+                {t('settings:accessToken.copy')}
               </Button>
             </div>
-            {copy.error ? <Help role="status">复制失败，请选中口令复制。</Help> : null}
-            <Note tone="info" title="新口令只显示这一次">
-              已经生效，不用重启。离开本页后不再显示，之后在终端运行 peach token 查看。
+            {copy.error ? <Help role="status">{t('settings:accessToken.copyFailed')}</Help> : null}
+            <Note tone="info" title={t('settings:accessToken.shownOnce')}>
+              {t('settings:accessToken.shownOnceHelp')}
             </Note>
           </div>
         ) : null}
-        {rotated?.relogin ? <Note tone="warning" title="本机需要重新登录">刷新页面后用新口令登录。</Note> : null}
+        {rotated?.relogin ? <Note tone="warning" title={t('settings:accessToken.reloginTitle')}>{t('settings:accessToken.reloginHelp')}</Note> : null}
         {state.rotatable ? null : <Help>{state.reason}</Help>}
       </Stack>
       {state.rotatable
-        ? <Footer status="更换后立即生效。">
-            <Button variant="secondary" onClick={rotate}>更换口令</Button>
+        ? <Footer status={t('settings:accessToken.immediate')}>
+            <Button variant="secondary" onClick={rotate}>{t('settings:accessToken.rotate')}</Button>
           </Footer>
         : null}
     </Section>

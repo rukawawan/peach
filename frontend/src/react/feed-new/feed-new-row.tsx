@@ -14,6 +14,7 @@ import { CoverQueue } from '../components/cover-queue';
 import { fetchCoverNow, type CoverNow } from '../jav/jav';
 
 import type { FeedNew } from './feed-new';
+import { t } from '../../i18n';
 
 /** 封面格的「优先处理」「立即重试」：不进后台那条队，当场取这一部的封面，等的时候是不定进度圆环。
  *  取完只换这一格，不重画整行；没取到就落成「无封面」，原因换成这一次的。回这一部取没取到。 */
@@ -27,7 +28,7 @@ async function prioritise(code: string, slot: Element, card: Element): Promise<b
   placeholder.outerHTML = result.has_cover
     ? coverImage({ code, has_cover: true, cover_version: result.cover_version, cover_frame: result.cover_frame,
       poster_box: result.poster_box, title: card.querySelector('.t')?.textContent || '' }, 'big')
-    : coverStateHtml({ code, cover_state: 'missing', cover_reason: result.message || '没有找到可用的官方封面' });
+    : coverStateHtml({ code, cover_state: 'missing', cover_reason: result.message || t('follow:newReleasesRow.noOfficialCover') });
   return result.has_cover;
 }
 
@@ -96,7 +97,7 @@ export function FeedNewRow({ feedNew, host, wire, act, settled, error, retry }: 
       const wanted = action === 'want';
       button.dataset.feedAction = wanted ? 'unwant' : 'want';
       button.setAttribute('aria-pressed', String(wanted));
-      button.title = wanted ? '取消想要' : '想要';
+      button.title = wanted ? t('follow:wantToggle.remove') : t('follow:wantToggle.want');
       return;
     }
     if (action === 'ignore') card.remove();
@@ -110,7 +111,7 @@ export function FeedNewRow({ feedNew, host, wire, act, settled, error, retry }: 
   // 提示条与进度条套一层 `peach-react` 进去（与骨架同一个写法）。
   if (error) return <RetryNote message={error} onRetry={() => retry?.()} />;
   if (!feedNew && reserve) return <div dangerouslySetInnerHTML={{ __html: feedNewSkeletonHtml() }} />;
-  return html ? <><div className="peach-react" data-feed-cover-queue><CoverQueue scope="这一行" codes={queued} fetchOne={cover} /></div>
+  return html ? <><div className="peach-react" data-feed-cover-queue><CoverQueue scope={t('follow:newReleasesRow.coverQueueScope')} codes={queued} fetchOne={cover} /></div>
     <div ref={box} className="contents" onClick={(event) => { void click(event) }}
     dangerouslySetInnerHTML={{ __html: html }} />{sourceFaces.map((face, index) => createPortal(
       <SourceAvatar code={face.dataset.code!} person={{ name: face.dataset.name!, source_actor_id: face.dataset.actor! }} />,

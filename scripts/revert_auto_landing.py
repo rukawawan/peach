@@ -18,6 +18,8 @@
     revert_auto_landing.py --source auto:western-artwork --batch auto:western-artwork@20261008T000000Z
     revert_auto_landing.py --source upgrade:garbled-performers
     revert_auto_landing.py --source upgrade:javdb-actor-records
+    revert_auto_landing.py --source upgrade:source-resolution-tags
+    revert_auto_landing.py --source upgrade:quality-resolution
 
 默认只列计划；`--apply` 必须同时给 `--backup`，删文件在账本行之后、同一次运行里完成。
 """
@@ -31,15 +33,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import auto_landing_revert  # noqa: E402
 from peach.config import COVER_DIR, GENERATED_DIR  # noqa: E402
+from peach.interface_text import dev as t, list_separator, local_language  # noqa: E402
 from peach.scripting import add_ledger_write_args, open_for_write, verify_after_write  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("revert_auto_landing.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--source", default="auto:studio-mark",
-                        help="要撤回的归属串，与写入时记的逐字相同")
-    parser.add_argument("--batch", default="", help="只撤这一批；不给就撤这个来源的全部")
+                        help=t("revert_auto_landing.sourceHelp"))
+    parser.add_argument("--batch", default="", help=t("revert_auto_landing.batchHelp"))
     parser.add_argument("--logo-root", type=Path, default=GENERATED_DIR / "logos")
     parser.add_argument("--cover-root", type=Path, default=COVER_DIR)
     return parser
@@ -49,75 +52,94 @@ def print_acquired(planned: list[dict]) -> None:
     """想要清单里对账标了已入库的那几条，一条一行。"""
     for item in planned:
         label = item["code"] or item["title"] or f"#{item['id']}"
-        print(f" - 想要 {label[:40]:<40} 资产 {item['acquired_asset_id']} {item['acquired_batch']}")
+        print(t("revert_auto_landing.wantRow", label=f"{label[:40]:<40}", asset=item['acquired_asset_id'],
+                batch=item['acquired_batch']))
 
 
 def print_verified(planned: list[dict]) -> None:
     """核查结算的撤回清单：覆盖写还原几条资产、几条已被改过不动，并集删几个标签。"""
     for entry in planned:
         if "tags" in entry:
-            names = "、".join(tag["tag"] for tag in entry["tags"])
-            print(f" - 核查并集 {entry['item_key']:<28} {names[:40]}")
+            names = list_separator(local_language()).join(tag["tag"] for tag in entry["tags"])
+            print(t("revert_auto_landing.verifiedUnionRow", key=f"{entry['item_key']:<28}", tags=names[:40]))
         else:
-            print(f" - 核查覆盖 {entry['item_key']:<28} 还原 {len(entry['restores'])} 条"
-                  f"，已被改过 {len(entry['changed'])} 条")
+            print(t("revert_auto_landing.verifiedReplaceRow", key=f"{entry['item_key']:<28}",
+                    restores=len(entry['restores']), changed=len(entry['changed'])))
 
 
 def print_profiles(profiles: list[dict], companies: list[dict]) -> None:
     """显示逐行人物资料与逐字段公司资料的撤回清单。"""
     for profile in profiles:
-        print(f" - 资料 {profile['entity'][:20]:<20} {profile['source']}")
+        print(t("revert_auto_landing.profileRow", entity=f"{profile['entity'][:20]:<20}", source=profile['source']))
     for company in companies:
-        print(f" - 公司资料 {company['entity']}: {','.join(company['fields'])}")
+        print(t("revert_auto_landing.companyRow", entity=company['entity'], fields=','.join(company['fields'])))
 
 
 def print_files(files: list[Path], covers: list[Path]) -> None:
     """显示要删的标识文件与无番号作品封面。"""
     for path in files:
-        print(f" - 标识 {path.name}")
+        print(t("revert_auto_landing.logoRow", name=path.name))
     for path in covers:
-        print(f" - 封面 {path.name}")
+        print(t("revert_auto_landing.coverRow", name=path.name))
 
 
 def print_plan(planned: dict) -> None:
     print_acquired(planned["acquired"])
     print_verified(planned["verified"])
     for link in planned["links"]:
-        print(f" - 链接 {link['entity'][:20]:<20} {link['url'][:56]} {link['batch']}")
+        print(t("revert_auto_landing.linkRow", entity=f"{link['entity'][:20]:<20}", url=link['url'][:56],
+                batch=link['batch']))
     for alias in planned["aliases"]:
-        print(f" - 别名 {alias['entity'][:20]:<20} {alias['alias'][:40]} {alias['source']}")
+        print(t("revert_auto_landing.aliasRow", entity=f"{alias['entity'][:20]:<20}", alias=alias['alias'][:40],
+                source=alias['source']))
     for name in planned["names"]:
-        print(f" - 中文名 {name['entity']} → {name['previous_name']} {name['source']}")
+        print(t("revert_auto_landing.chineseNameRow", entity=name['entity'], previous=name['previous_name'],
+                source=name['source']))
     print_profiles(planned["profiles"], planned["companies"])
     for creator in planned["creators"]:
-        print(f" - 建档 {creator['name'][:20]:<20} {creator['sources']} 个来源 {creator['batch']}")
+        print(t("revert_auto_landing.creatorRow", name=f"{creator['name'][:20]:<20}", sources=creator['sources'],
+                batch=creator['batch']))
     for claim in planned["claims"]:
-        print(f" - 断言 {claim['entity'][:20]:<20} {claim['facet']}={claim['value']} {claim['source']}")
+        print(t("revert_auto_landing.claimRow", entity=f"{claim['entity'][:20]:<20}", facet=claim['facet'],
+                value=claim['value'], source=claim['source']))
     for ref in planned["refs"]:
-        print(f" - 编号 {ref['entity'][:20]:<20} {ref['provider']} {ref['id']} {ref['batch']}")
+        print(t("revert_auto_landing.refRow", entity=f"{ref['entity'][:20]:<20}", provider=ref['provider'],
+                id=ref['id'], batch=ref['batch']))
     for membership in planned["memberships"]:
-        print(f" - 归属 {membership['entity'][:20]:<20} {membership['agency'][:30]} {membership['source']}")
+        print(t("revert_auto_landing.membershipRow", entity=f"{membership['entity'][:20]:<20}",
+                agency=membership['agency'][:30], source=membership['source']))
     for maker in planned["makers"]:
-        print(f" - 片商 {maker['entity'][:20]:<20} {maker['maker'][:30]} {maker['source']}")
+        print(t("revert_auto_landing.makerRow", entity=f"{maker['entity'][:20]:<20}", studio=maker['maker'][:30],
+                source=maker['source']))
     print_files(planned["files"], planned["covers"])
     for sample in planned["samples"]:
-        print(f" - 样张 {sample['code']:<20} {sample['count']} 张 {sample['source']}")
+        print(t("revert_auto_landing.sampleRow", code=f"{sample['code']:<20}", count=sample['count'],
+                source=sample['source']))
     for rejection in planned["rejections"]:
-        print(f" - 否决 {rejection['category']} {rejection['item_key']}")
+        print(t("revert_auto_landing.rejectionRow", category=rejection['category'], key=rejection['item_key']))
     for tag in planned["tags"]:
-        print(f" - 标签 {tag['asset_id']:<8} {tag['tag'][:30]:<30} {tag['source']}")
+        print(t("revert_auto_landing.tagRow", asset=f"{tag['asset_id']:<8}", tag=f"{tag['tag'][:30]:<30}",
+                source=tag['source']))
     for rehome in planned["rehomes"]:
-        print(f" - 接回 {rehome['old_asset_id']:<8} → {rehome['new_asset_id']:<8} "
-              f"{rehome['name'][:40]} {rehome['batch']}")
+        print(t("revert_auto_landing.rehomeRow", old=f"{rehome['old_asset_id']:<8}", new=f"{rehome['new_asset_id']:<8}",
+                name=rehome['name'][:40], batch=rehome['batch']))
     for item in planned["garbled"]:
         row = item["row"]
         label = row.get("canonical_name") or row.get("tag") or row.get("external_id") or row.get("alias") or ""
-        print(f" - 乱码人物 {item['table']:<20} {str(row.get('asset_id') or row.get('entity_id') or row.get('id')):<8} "
-              f"{str(label)[:30]} {item['batch']}")
+        row_id = str(row.get('asset_id') or row.get('entity_id') or row.get('id'))
+        print(t("revert_auto_landing.garbledRow", table=f"{item['table']:<20}", id=f"{row_id:<8}",
+                label=str(label)[:30], batch=item['batch']))
     for item in planned.get("javdb_records", []):
-        what = (f"订阅源 {item['source_id']}" if item["kind"] == "feed"
-                else ("无码" if item["uncensored"] else "有码"))
+        what = (t("revert_auto_landing.feed", id=item['source_id']) if item["kind"] == "feed"
+                else t("revert_auto_landing.uncensored") if item["uncensored"] else t("revert_auto_landing.censored"))
         print(f" - JavDB {item['entity_id']:<8} {item['external_id']:<10} {what} {item['batch']}")
+    for item in planned.get("resolution_tags", []):
+        row = item["row"]
+        print(t("revert_auto_landing.resolutionTagRow", asset=f"{row['asset_id']:<8}", kind=f"{item['kind']:<4}",
+                source=row['source'], batch=item['batch']))
+    for item in planned.get("quality", []):
+        print(t("revert_auto_landing.qualityRow", asset=f"{item['asset_id']:<8}", quality=item["quality"],
+                previous=item["previous"], batch=item["batch"]))
     print(auto_landing_revert.counts(planned))
 
 
@@ -129,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                                            logo_root=args.logo_root, cover_root=args.cover_root)
         print_plan(planned)
         if not args.apply:
-            print("dry-run；确认无误后加 --apply --backup <路径>")
+            print(t("revert_auto_landing.dryRun"))
             return 0
         with connection:
             result = auto_landing_revert.apply(connection, planned)
@@ -141,8 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = {}
     for key, value in result.items():
         summary[key] = value
-        if key == "删除建档实体":
-            summary["删除文件"] = removed
+        if key == "deleted_creator_entities":
+            summary[t("revert_auto_landing.deletedFiles")] = removed
     print({**summary, "integrity_check": integrity, "foreign_key_check": orphans})
     return 0
 

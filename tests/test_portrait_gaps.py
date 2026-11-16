@@ -128,29 +128,29 @@ class PortraitGapTests(unittest.TestCase):
 
     def test_a_name_the_gallery_knows_once_is_installed(self):
         rows = self.run_script("--apply")
-        self.assertEqual(rows["吉良いろは"]["action"], "装上")
+        self.assertEqual(rows["吉良いろは"]["action"], "install")
         self.assertTrue(self.installed(8713).exists())
 
     def test_a_name_several_people_share_installs_nothing(self):
         """`ななみ` 在图库里命中三张，那是三个人。自动挑等于随机安一张别人的脸。"""
         rows = self.run_script("--apply")
-        self.assertEqual(rows["ななみ"]["action"], "多张（认不准）")
+        self.assertEqual(rows["ななみ"]["action"], "several")
         self.assertFalse(self.installed(8896).exists())
 
     def test_a_name_the_gallery_does_not_have_is_recorded_as_such(self):
         rows = self.run_script("--apply")
-        self.assertEqual(rows["深田えいみ"]["action"], "无候选")
+        self.assertEqual(rows["深田えいみ"]["action"], "no-candidate")
 
     def test_without_apply_the_avatar_root_stays_empty(self):
         rows = self.run_script()
-        self.assertEqual(rows["吉良いろは"]["action"], "装上")
+        self.assertEqual(rows["吉良いろは"]["action"], "install")
         self.assertIn("未装", rows["吉良いろは"]["detail"])
         self.assertFalse(self.installed(8713).exists())
 
     def test_a_picture_below_the_size_bar_is_left_alone(self):
         """图库最后几档里有 200 px 的缩略图。装上去比留着首字母还糟。"""
         rows = self.run_script("--apply", size=(120, 180))
-        self.assertEqual(rows["吉良いろは"]["action"], "图太小")
+        self.assertEqual(rows["吉良いろは"]["action"], "too-small")
         self.assertFalse(self.installed(8713).exists())
 
     def test_the_contrast_sheet_shows_every_candidate_and_links_to_her_works(self):

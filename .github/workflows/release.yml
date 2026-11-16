@@ -204,6 +204,7 @@ jobs:
           path: source
           sparse-checkout: |
             scripts
+            src/peach
             tools/amane-bridge
       - uses: actions/download-artifact@v8
         with:
@@ -372,6 +373,7 @@ jobs:
           path: source
           sparse-checkout: |
             scripts
+            src/peach
             tools/amane-bridge
       - uses: actions/download-artifact@v8
         with:
@@ -558,14 +560,23 @@ jobs:
           CI_COMMIT_TIMESTAMP="$(git show -s --format=%cI "$GITHUB_SHA")" \
             .venv/bin/python scripts/release_r2.py --root build/mirror --version "${GITHUB_REF_NAME#v}" --apply
 
-  # 镜像在演练中构建和验收，标签核对相同 image ID 后发布；发布排在 GitHub Release 成功之后：
-  # 桌面包任何一步没发出去，Docker Hub 的版本号与 edge 都不动（ADR-0121）。
+  # 镜像在演练中按架构各自构建和验收，标签核对相同 image ID 后发布；发布排在 GitHub Release 成功之后：
+  # 桌面包任何一步没发出去，Docker Hub 的版本号、edge 与 latest 都不动（ADR-0121）。
   docker:
-    name: Linux amd64 镜像构建与验收
+    name: Linux ${{ matrix.arch }} 镜像构建与验收
     needs: validate
     if: github.ref_type != 'tag' && github.repository_owner != 'rukawawan'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 两个架构都在原生 runner 上构建与冒烟，不经 QEMU 模拟。
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -580,30 +591,30 @@ jobs:
         with:
           context: .
           load: true
-          tags: longmeidao/peach:candidate
+          tags: longmeidao/peach:candidate-${{ matrix.arch }}
           # ghcr 包页显示 description；带上这一版的发行说明链接，镜像页能直接点到更新内容。
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.description=Local-first video metadata scraper and media manager for VPS and NAS. Release notes: https://github.com/peach-mitao/peach/releases/tag/v${{ steps.version.outputs.version }}
             org.opencontainers.image.url=https://github.com/peach-mitao/peach/releases/tag/v${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
       - name: 验收临时容器
-        run: python3 scripts/smoke_docker.py longmeidao/peach:candidate
+        run: python3 scripts/smoke_docker.py longmeidao/peach:candidate-${{ matrix.arch }}
       - name: 保存已验收镜像与摘要
         run: |
-          python scripts/github_release_candidate.py image-record --version '${{ steps.version.outputs.version }}' --destination docker-image.json
-          docker image save longmeidao/peach:candidate | gzip > docker-image.tar.gz
+          python scripts/github_release_candidate.py image-record --version '${{ steps.version.outputs.version }}' --arch ${{ matrix.arch }} --destination docker-image-${{ matrix.arch }}.json
+          docker image save longmeidao/peach:candidate-${{ matrix.arch }} | gzip > docker-image-${{ matrix.arch }}.tar.gz
       - uses: actions/upload-artifact@v7
         with:
-          name: docker-candidate
+          name: docker-candidate-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
           path: |
-            docker-image.json
-            docker-image.tar.gz
+            docker-image-${{ matrix.arch }}.json
+            docker-image-${{ matrix.arch }}.tar.gz
 
   docker-publish:
     name: 发布已验收镜像
@@ -624,8 +635,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python scripts/github_release_candidate.py docker --destination docker-candidate
-          docker image load --input docker-candidate/docker-image.tar.gz
-          python scripts/github_release_candidate.py image-verify --version "${GITHUB_REF_NAME#v}" --destination docker-candidate/docker-image.json
+          for arch in amd64 arm64; do
+            docker image load --input "docker-candidate/docker-image-$arch.tar.gz"
+            python scripts/github_release_candidate.py image-verify --version "${GITHUB_REF_NAME#v}" --arch "$arch" --destination "docker-candidate/docker-image-$arch.json"
+          done
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
@@ -636,13 +650,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       # Docker Hub 是应用内更新与 Watchtower 认的来源，先推；ghcr 推同一镜像，挂到仓库侧栏的 Packages（ADR-0147）。
-      - name: 推送版本号与 edge
+      # 每个架构先推 `<版本>-<架构>`，再合成一个多架构 index，版本号、edge 与 latest 指向同一个 index；
+      # NAS 容器面板与不写标签的 `docker pull` 只认 latest（ADR-0121）。
+      - name: 推送版本号、edge 与 latest
         run: |
+          version="${GITHUB_REF_NAME#v}"
           for image in longmeidao/peach ghcr.io/peach-mitao/peach; do
-            for tag in "${GITHUB_REF_NAME#v}" edge; do
-              docker tag longmeidao/peach:candidate "$image:$tag"
-              docker push "$image:$tag"
+            for arch in amd64 arm64; do
+              docker tag "longmeidao/peach:candidate-$arch" "$image:$version-$arch"
+              docker push "$image:$version-$arch"
             done
+            docker buildx imagetools create --tag "$image:$version" --tag "$image:edge" --tag "$image:latest"               "$image:$version-amd64" "$image:$version-arm64"
+            docker buildx imagetools inspect "$image:$version"
           done
 
   project-board:

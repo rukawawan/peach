@@ -21,27 +21,14 @@ from bs4 import BeautifulSoup
 from .http import public_https_url
 from .kanji import fold_glyphs
 from .social_links import name_key
+from .studio_words import (COMPANY_DATE, COMPANY_LINK, COMPANY_PROFILE_LABELS, CORPORATE_FORM, ERA_DATE,
+                           ERA_FIRST_YEAR, ERA_OFFSETS, LOCATION_TAIL, YEAR_MARK)
 
 KEY = 'company_profile'
 FIELDS = ('legal_name', 'founded', 'launched', 'country', 'location', 'operator', 'parent', 'group', 'distributor')
-LABELS = {
-    '会社名': 'legal_name', '社名': 'legal_name', '商号': 'legal_name',
-    '法人名': 'legal_name', 'companyname': 'legal_name',
-    '設立': 'founded', '設立年月日': 'founded', '設立年月': 'founded',
-    '創立': 'founded', '創業': 'founded', 'founded': 'founded',
-    'ブランド設立': 'launched', 'レーベル設立': 'launched', 'ブランド開始': 'launched',
-    '所在地': 'location', '本社所在地': 'location', '本店所在地': 'location',
-    '住所': 'location', '本社': 'location', 'address': 'location', 'headquarters': 'location',
-    '運営会社': 'operator', '運営法人': 'operator', 'operatedby': 'operator',
-    '親会社': 'parent', 'parentcompany': 'parent',
-    '国': 'country', 'country': 'country',
-}
-#: 法人名里的公司形态词：比名字时剥掉，`SODクリエイト株式会社` 与别名 `SODクリエイト` 同键。
-CORPORATE_FORM = re.compile(r'株式会社|有限会社|合同会社|合資会社|合名会社|[（(]\s*[株有]\s*[)）]'
-                            r'|\b(?:inc|llc|ltd|corp|co|kft|gmbh)\b\.?', re.I)
+LABELS = COMPANY_PROFILE_LABELS
 #: 英文服务条款开头订立方那一句：运营主体是括号或句号前的那一段。
 TERMS_OPERATOR = re.compile(r'These terms of (?:service|use) are entered into between you and ([^.()]+?)\s*(?:\(|\.)', re.I)
-COMPANY_LINK = re.compile(r'会社概要|企業情報|会社案内|特定商取引|about\s*(?:us)?|company\s*(?:profile)?|terms\s*(?:of|and|&)?\s*(?:service|use|conditions)|privacy\s*policy', re.I)
 SOCIAL_HOSTS = {'x.com', 'twitter.com', 'instagram.com', 'youtube.com', 'tiktok.com', 'facebook.com', 'threads.net', 'threads.com'}
 
 
@@ -52,11 +39,11 @@ def _clean(value: str) -> str:
 def date_text(value: str) -> str | None:
     """只接受明确日期或年份；不从版权、周年数字或公司简介里猜成立年。"""
     value = value.strip()
-    era = re.fullmatch(r'(昭和|平成|令和)(元|\d{1,2})年(.*)', value)
+    era = re.fullmatch(ERA_DATE, value)
     if era:
-        offset = {'昭和': 1925, '平成': 1988, '令和': 2018}[era[1]]
-        value = f"{offset + (1 if era[2] == '元' else int(era[2]))}年{era[3]}"
-    match = re.fullmatch(r'(18\d{2}|19\d{2}|20\d{2})(?:[年/.-](\d{1,2})(?:[月/.-](\d{1,2})日?)?月?)?(?:年)?', value)
+        year = 1 if era[2] == ERA_FIRST_YEAR else int(era[2])
+        value = f"{ERA_OFFSETS[era[1]] + year}{YEAR_MARK}{era[3]}"
+    match = re.fullmatch(COMPANY_DATE, value)
     if not match:
         return None
     year, month, day = match.groups()
@@ -114,7 +101,7 @@ def extract(html: str, source_url: str) -> dict:
             continue
         value = date_text(raw) if key in {'founded', 'launched'} else raw
         if key == 'location':
-            value = re.split(r'\s*(?:TEL\s*[:：]|FAX\s*[:：]|■|丸ノ内線)', raw, maxsplit=1, flags=re.I)[0].strip()
+            value = re.split(LOCATION_TAIL, raw, maxsplit=1, flags=re.I)[0].strip()
         if not value:
             continue
         fact = {'value': value, 'source_url': source_url, 'evidence': f'{_clean(label)}：{raw}', 'status': 'observed'}

@@ -97,8 +97,8 @@ it('订阅源拉取失败时写出原因；正在跑的一轮与关闭的调度�
 });
 
 it.each([
-  ['follow', '/api/follow/schedule/run', '正在检查来源更新…'],
-  ['feed', '/api/feeds/schedule/run', '正在拉取订阅源…'],
+  ['follow', '/api/follow/schedule/run', '正在检查来源更新'],
+  ['feed', '/api/feeds/schedule/run', '正在拉取订阅源'],
 ] as const)('%s 调度失败后立即重试走调度自己的重跑接口，跑起来后原因收起', async (kind, url, running) => {
   const { posts, schedule, feedSchedule } = server();
   Object.assign(kind === 'follow' ? schedule : feedSchedule, { last_error: '上游断了', consecutive_failures: 1 });

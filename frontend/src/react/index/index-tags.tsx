@@ -20,6 +20,7 @@ import { useHorizontalScroller } from '../components/use-horizontal-scroller';
 import { EntityActionButton, FavoriteButton } from '../library-shortcuts/shortcut-controls';
 import type { Favorite } from '../library-shortcuts/library-shortcuts';
 import { tagColorKey, type IndexTag, type TagView } from './index-data';
+import { t } from '../../i18n';
 
 export interface TagEntry extends IndexTag {
   label: string;
@@ -53,7 +54,7 @@ function AlphaTag({ tag, actions }: { tag: TagEntry; actions: TagActions }) {
       <span className="flex-none text-caption-1-regular text-text-secondary">{tag.n.toLocaleString()}</span>
     </button>
     {actions.favorites !== false ? <FavoriteButton item={tagFavorite(tag, actions.online)} /> : null}
-    {actions.edit ? <EntityActionButton label={`编辑标签 ${tag.label}`} onClick={() => actions.edit?.(tag.k)}><Pencil /></EntityActionButton> : null}
+    {actions.edit ? <EntityActionButton label={t('catalog:tagFilters.editTag', { name: tag.label })} onClick={() => actions.edit?.(tag.k)}><Pencil /></EntityActionButton> : null}
     </div>
   );
 }
@@ -98,7 +99,7 @@ export function TagCloud({ tags, actions }: { tags: TagEntry[]; actions: TagActi
         </button>
         {actions.favorites !== false || actions.edit ? <span data-tag-actions="" className="inline-flex flex-none items-center gap-1">
           {actions.favorites !== false ? <FavoriteButton item={tagFavorite(tag, actions.online)} /> : null}
-          {actions.edit ? <EntityActionButton label={`编辑标签 ${tag.label}`} onClick={() => actions.edit?.(tag.k)}><Pencil /></EntityActionButton> : null}
+          {actions.edit ? <EntityActionButton label={t('catalog:tagFilters.editTag', { name: tag.label })} onClick={() => actions.edit?.(tag.k)}><Pencil /></EntityActionButton> : null}
         </span> : null}
         </span>
       ))}
@@ -107,7 +108,7 @@ export function TagCloud({ tags, actions }: { tags: TagEntry[]; actions: TagActi
 }
 
 const VIEWS: readonly (readonly [TagView, string, string])[] = [
-  ['cloud', '标签云', 'tags'], ['alphabet', '字母表', 'text-aa'],
+  ['cloud', t('catalog:peopleIndex.tagCloud'), 'tags'], ['alphabet', t('catalog:peopleIndex.alphabetical'), 'text-aa'],
 ];
 
 /** 筛选浮层：上排类型药丸，下排读数、按首字跳转与视图切换。只摆数得到的那几类。 */
@@ -128,13 +129,13 @@ export function TagFilters(
 ) {
   const alphaScroll = useHorizontalScroller<HTMLElement>();
   return (
-    <FilterGlassRows label="标签筛选" topLabel="标签类型"
+    <FilterGlassRows label={t('catalog:tagFilters.label')} topLabel={t('catalog:tagFilters.tagType')}
       top={<>
-        {status ? <div role="group" aria-label="标签状态" className="flex flex-none items-center gap-1.75 border-r border-(--glass-low) pr-3">
-          {[[false, '使用中'], [true, '已隐藏']].map(([hidden, label]) => <FilterPill key={String(hidden)}
+        {status ? <div role="group" aria-label={t('catalog:tagFilters.tagStatus')} className="flex flex-none items-center gap-1.75 border-r border-(--glass-low) pr-3">
+          {[[false, t('catalog:tagFilters.inUse')], [true, t('catalog:tagFilters.hidden')]].map(([hidden, label]) => <FilterPill key={String(hidden)}
             data-tag-pill="" data-tag-cat="all" pressed={!status.blocked && status.hidden === hidden} onPress={() => status.onChange(Boolean(hidden))}>{label}</FilterPill>)}
           {status.onBlocked ? <FilterPill data-tag-pill="" data-tag-cat="all" pressed={!!status.blocked}
-            onPress={status.onBlocked}>已屏蔽内容</FilterPill> : null}
+            onPress={status.onBlocked}>{t('catalog:tagFilters.blockedContent')}</FilterPill> : null}
         </div> : null}
         {categories.map(([key, label]) => (
         <FilterPill key={key} data-tag-pill="" data-tag-cat={key === 'all' ? 'all' : tagColorKey(online, key)}
@@ -148,7 +149,7 @@ export function TagFilters(
         </span>
         {actions}
         {letters.length > 1 ? (
-          <nav ref={alphaScroll} aria-label="按首字跳转" data-alpha-jump=""
+          <nav ref={alphaScroll} aria-label={t('catalog:tagFilters.jumpToLetter')} data-alpha-jump=""
             className="flex min-w-0 gap-0.5 overflow-x-auto overscroll-x-contain">
             {letters.map((letter, at) => (
               <button key={letter} type="button" onClick={() => onJump(at)}
@@ -158,7 +159,7 @@ export function TagFilters(
             ))}
           </nav>
         ) : null}
-        <RadioGroup aria-label="标签视图" orientation="horizontal" value={view}
+        <RadioGroup aria-label={t('catalog:tagFilters.tagView')} orientation="horizontal" value={view}
           onChange={(next) => onView(next as TagView)} className={`ml-auto ${SEGMENTED_GLASS_TRACK}`}>
           {VIEWS.map(([value, label, symbol]) => {
             const Glyph = spriteGlyph(symbol);
@@ -181,15 +182,15 @@ export function TagDock(
   { count: number; match: 'any' | 'all'; onMatch(match: 'any' | 'all'): void; onClear(): void; onApply(): void },
 ) {
   return (
-    <SelectionDock visible={count > 0} label="所选标签操作" count={`已选 ${count.toLocaleString()} 个标签`}>
+    <SelectionDock visible={count > 0} label={t('catalog:tagFilters.selectionActions')} count={t('catalog:tagFilters.selectedCount', { count: count })}>
       <Checkbox isSelected={match === 'any'} onChange={(on) => onMatch(on ? 'any' : 'all')}>
         <span className="flex flex-col">
-          <span className="text-body-medium">广泛匹配</span>
-          <span className="text-caption-1-regular text-text-secondary">开启后匹配任一所选标签；关闭后必须同时包含全部标签。</span>
+          <span className="text-body-medium">{t('catalog:tagFilters.matchAny')}</span>
+          <span className="text-caption-1-regular text-text-secondary">{t('catalog:tagFilters.matchAnyHint')}</span>
         </span>
       </Checkbox>
-      <Button variant="secondary" size="small" onClick={onClear}>清空</Button>
-      <Button variant="primary" size="small" disabled={!count} onClick={onApply}>显示结果</Button>
+      <Button variant="secondary" size="small" onClick={onClear}>{t('catalog:tagFilters.clearSelection')}</Button>
+      <Button variant="primary" size="small" disabled={!count} onClick={onApply}>{t('catalog:tagFilters.showResults')}</Button>
     </SelectionDock>
   );
 }

@@ -22,7 +22,7 @@ describe('浏览器添加 JAV 设置', () => {
         const posted: Record<string, unknown>[] = [];
         await page.route('**/api/configuration/jav-browser', async route => {
           const request = route.request();
-          const state = { enabled, provider: '115', available: true, userscript: USERSCRIPT, sites: SITES, providers: [
+          const state = { enabled, provider: '115', available: true, userscript: USERSCRIPT, sites: SITES, want_on_no_match: true, providers: [
             { key: '115', label: '115', configured: true, target: '/115/Movies' },
             { key: 'pikpak', label: 'PikPak', configured: true, target: '/Movies' },
           ] };
@@ -124,6 +124,40 @@ describe('浏览器添加 JAV 设置', () => {
       } finally { await opened.close(); }
     });
   }
+
+  it('「没找到资源时加入想要」默认开启，切换即写入账本设置，写入失败退回原值', async () => {
+    const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('下载渠道'), VIEWPORTS[0]!);
+    const { page } = opened;
+    try {
+      await page.route('**/api/configuration/jav-browser', route => route.fulfill({ json: {
+        enabled: true, provider: '115', available: true, userscript: USERSCRIPT, want_on_no_match: true,
+        providers: [{ key: '115', label: '115', configured: true, target: '/Movies' }],
+      } }));
+      const posted: unknown[] = [];
+      let failing = false;
+      await page.route('**/api/settings', async route => {
+        if (route.request().method() !== 'POST') return route.fallback();
+        posted.push(route.request().postDataJSON());
+        await (failing ? route.fulfill({ status: 500, json: { error: '写入失败' } }) : route.fulfill({ json: { ok: true } }));
+      });
+      await page.reload();
+      const region = page.getByRole('region', { name: '浏览器添加 JAV', exact: true });
+      const toggle = region.getByRole('switch', { name: '没找到资源时加入想要', exact: true });
+      const face = toggle.locator('xpath=ancestor::label[1]');
+      const settled = (checked: boolean) => toggle.and(page.locator(checked ? ':enabled:checked' : ':enabled:not(:checked)'))
+        .waitFor({ state: 'attached', timeout: 10_000 });
+      await settled(true);
+      await face.click();
+      await settled(false);
+      assert.deepEqual(posted, [{ javBrowserWantOnNoMatch: false }]);
+      failing = true;
+      await face.click();
+      await region.getByText('写入失败').waitFor();
+      await settled(false);
+      assert.deepEqual(posted, [{ javBrowserWantOnNoMatch: false }, { javBrowserWantOnNoMatch: true }]);
+      assert.deepEqual(opened.problems.filter(problem => !String(problem).includes('500')), []);
+    } finally { await opened.close(); }
+  });
 
   it('桥接页延迟加载仍能检测脚本，未知来源消息不改变检测结果', async () => {
     const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('下载渠道'), VIEWPORTS[0]!);

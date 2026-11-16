@@ -121,7 +121,7 @@ class DiscoveryMetadataTests(unittest.TestCase):
     def test_source_cooldown_stops_batch_and_preserves_failure(self):
         def unavailable(code):
             self.api.paused_until = self.api.clock() + 900
-            raise PublicSourceUnavailable("资料未取得")
+            raise PublicSourceUnavailable("errors.javdbPublic.unavailable")
         with patch.object(self.api, "movie", side_effect=unavailable) as movie:
             self.cache.ensure(["EXM-001", "EXM-002"])
             self.cache.job.thread.join(5)

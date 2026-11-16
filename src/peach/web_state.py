@@ -461,7 +461,7 @@ class WebContract:
                     for table in set(tables):
                         self.cache_landed[table] = self.cache_landed.get(table, 0) + 1
             except Exception:  # noqa: BLE001 - 后台重算失败时下一次读照旧当场重算，原因记日志
-                LOGGER.exception("后台重算缓存 %s 失败", key)
+                LOGGER.exception("Background cache recompute %s failed", key)
                 with self.cache_lock:
                     self.cache.pop(key, None)
             finally:

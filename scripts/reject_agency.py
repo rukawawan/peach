@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach.entities import (   # noqa: E402
     AGENCY_REJECTED, agency_key, normalize_entity_name, rejected_agencies, split_name,
 )
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import read_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args, counts_of, open_for_write, verify_after_write,
@@ -64,7 +65,7 @@ def plan(connection, rows: list[dict[str, str]]) -> list[dict[str, object]]:
         item = {**row, "entity_id": person["id"] if person else None,
                 "agency_id": agency["id"] if agency else None, "note": ""}
         if not person or not wanted:
-            item["note"] = "未取得：账本里没有这位 performer" if not person else "未取得：事务所名为空"
+            item["note"] = t("reject_agency.performerNotFound") if not person else t("reject_agency.agencyEmpty")
             found.append(item)
             continue
         held = connection.execute(
@@ -74,10 +75,14 @@ def plan(connection, rows: list[dict[str, str]]) -> list[dict[str, object]]:
             "SELECT count(*) FROM entity_membership WHERE agency_id=? AND member_id<>?",
             (item["agency_id"], person["id"])).fetchone()[0] if agency else 0
         item["drop_entity"] = bool(agency) and others == 0
-        item["note"] = (f"撤归属{'，删实体' if item['drop_entity'] else f'，这家还有 {others} 人'}"
-                        if item["holds"] else "她不在这家名下，只记驳回")
+        if not item["holds"]:
+            item["note"] = t("reject_agency.notMember")
+        elif item["drop_entity"]:
+            item["note"] = t("reject_agency.dropMembershipAndEntity")
+        else:
+            item["note"] = t("reject_agency.dropMembership", others=others)
         if row.get("replacement"):
-            item["note"] += f"，改挂 {row['replacement']}"
+            item["note"] += t("reject_agency.relink", replacement=row['replacement'])
         found.append(item)
     return found
 
@@ -128,7 +133,7 @@ def relabel_links(connection, entity_id: int, rejected: str, replacement: str, s
 
 
 def apply_rows(connection, rows: list[dict[str, object]], stamp: str) -> dict[str, int]:
-    done = {"驳回": 0, "归属": 0, "事务所": 0, "改挂": 0, "新建事务所": 0, "链接标签": 0}
+    done = {"rejected": 0, "memberships": 0, "agencies": 0, "relinked": 0, "created": 0, "labels": 0}
     # 外键默认关着，删实体时要它把别名、链接、外部编号一并级联删掉；PRAGMA 只能在事务外设。
     connection.commit()
     connection.execute("PRAGMA foreign_keys=ON")
@@ -144,7 +149,7 @@ def apply_rows(connection, rows: list[dict[str, object]], stamp: str) -> dict[st
             metadata.setdefault(AGENCY_REJECTED, []).append(
                 {"name": row["agency"], "reason": row.get("reason", ""),
                  "source": SOURCE, "decided_at": stamp})
-            done["驳回"] += 1
+            done["rejected"] += 1
         if agency_key(str((metadata.get("agency") or {}).get("name") or "")) == key:
             metadata.pop("agency")
         replacement = str(row.get("replacement") or "")
@@ -153,44 +158,44 @@ def apply_rows(connection, rows: list[dict[str, object]], stamp: str) -> dict[st
                                   "checked_at": stamp}
         connection.execute("UPDATE entity SET metadata_json=?,updated_at=? WHERE id=?",
                            (json.dumps(metadata, ensure_ascii=False), stamp, entity_id))
-        done["链接标签"] += relabel_links(connection, entity_id, str(row["agency"]), replacement, stamp)
+        done["labels"] += relabel_links(connection, entity_id, str(row["agency"]), replacement, stamp)
         if row.get("holds"):
             connection.execute("DELETE FROM entity_membership WHERE member_id=? AND agency_id=?",
                                (entity_id, int(row["agency_id"])))
-            done["归属"] += connection.execute("SELECT changes()").fetchone()[0]
+            done["memberships"] += connection.execute("SELECT changes()").fetchone()[0]
         if row.get("drop_entity"):
             connection.execute(
                 "DELETE FROM entity WHERE id=? AND kind='agency' AND NOT EXISTS"
                 " (SELECT 1 FROM entity_membership WHERE agency_id=?)",
                 (int(row["agency_id"]), int(row["agency_id"])))
-            done["事务所"] += connection.execute("SELECT changes()").fetchone()[0]
+            done["agencies"] += connection.execute("SELECT changes()").fetchone()[0]
         if replacement:
-            done["新建事务所"] += attach(connection, entity_id, replacement, stamp)
-            done["改挂"] += 1
+            done["created"] += attach(connection, entity_id, replacement, stamp)
+            done["relinked"] += 1
     return done
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("reject_agency.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--input", type=Path, required=True,
-                        help="复核 CSV：performer,agency,reason[,replacement]")
+                        help=t("reject_agency.inputHelp"))
     args = parser.parse_args()
 
     connection = open_for_write(args)
     try:
         rows = plan(connection, read_rows(args.input))
         for row in rows:
-            print(f"{row['performer']} × {row['agency']}：{row['note']}")
+            print(t("reject_agency.planRow", performer=row['performer'], agency=row['agency'], note=row['note']))
         if not args.apply:
-            print("dry-run：没有写入。加 --apply --backup <路径> 才真的写。")
+            print(t("reject_agency.dryRun"))
             return 0
         before = counts_of(connection, EXTRA_COUNTS)
         done = apply_rows(connection, rows, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         connection.commit()
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print("写入：" + "，".join(f"{key} {value}" for key, value in done.items()))
+        print(t("reject_agency.written", done))
         for key in sorted(before):
             print(f"  {key}: {before[key]} -> {after[key]}")
         print(f"integrity_check={integrity} foreign_key_check={violations}")

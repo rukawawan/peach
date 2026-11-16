@@ -9,7 +9,7 @@ on:
         description: 已发布的版本号，例如 0.55.1
         required: true
       edge:
-        description: 同时把 ghcr 的 edge 指向这一版
+        description: 同时把 ghcr 的 edge 与 latest 指向这一版
         type: boolean
         default: true
 
@@ -39,7 +39,7 @@ jobs:
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号格式不对：$VERSION"; exit 1; }
           source="docker://docker.io/longmeidao/peach:$VERSION"
           targets=("ghcr.io/peach-mitao/peach:$VERSION")
-          if [ "$EDGE" = "true" ]; then targets+=(ghcr.io/peach-mitao/peach:edge); fi
+          if [ "$EDGE" = "true" ]; then targets+=(ghcr.io/peach-mitao/peach:edge ghcr.io/peach-mitao/peach:latest); fi
           # skopeo 读 login-action 写下的 ~/.docker/config.json；--preserve-digests 保证复制后摘要不变。
           expected="$(skopeo inspect --raw "$source" | sha256sum | cut -d' ' -f1)"
           for target in "${targets[@]}"; do

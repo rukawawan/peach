@@ -1,11 +1,12 @@
-/* 只出 HTML 字符串的那几样 Geist 控件：集合页头、Note、项目横幅、Gauge、Progress、Spinner、
- * Search Input、Loading Dots、Board Tabs、Empty State、徽标与勾选框。
+/* 只出 HTML 字符串的那几样 Geist 控件：集合页头、Note、Spinner、Search Input、Board Tabs、Empty State、
+ * 徽标与勾选框。后台推进的语义动画在同目录 `activity-motion.ts`。
  *
  * 由共享源码直接引用，随 `peach-app.js` 发出；island 里用 `dangerouslySetInnerHTML` 插入。
  * 它们内部已经对文本做转义，且是 Peach 唯一那份 Geist 控件实现——在 island 里另画一遍空态或 Note
  * 就是同一语义的第二份实现，`peach-web-ui` 的门槛不允许。 */
 import { esc, icon, requestErrorMessage } from '../core';
 import { islandShortcutsEntry } from '../island-skeleton';
+import { t } from '../i18n';
 
 const NOTE_VARIANTS=new Set(['secondary','warning','error','success']);
 
@@ -54,38 +55,6 @@ export function noteHtml(message:any,{variant='secondary',label='',className='',
     ${icon(symbol)}<p>${label?`<b>${esc(label)}</b>`:''}<span>${esc(kind==='error'?requestErrorMessage(message):message)}</span></p>${action}${details?noteDetailsHtml(details):''}</div>`;
 }
 
-const PROJECT_BANNER_CLASSES:Record<string,string>={gray:'project-banner-gray',success:'ui-project-banner-success',warning:'ui-project-banner-warning',error:'ui-project-banner-error'};
-export function projectBannerHtml(message:unknown,{variant='gray',href,label,value,max}:{
-  variant?: string; href?: string; label?: string; value?: unknown; max?: unknown;
-}={}):string{
-  const kind=['gray','success','warning','error'].includes(variant)?variant:'gray';
-  return `<aside class="ui-project-banner ${PROJECT_BANNER_CLASSES[kind]}" role="${kind==='error'?'alert':'status'}"><div>${Number(max)>0?gaugeHtml('任务完成率',value,max):icon(kind==='error'||kind==='warning'?'alert':'info')}<p>${esc(message)}</p></div><a href="${esc(href)}">${esc(label)}</a></aside>`;
-}
-
-/** Geist Gauge。`indeterminate` 是 Geist 的不定档：一次请求这种说不出完成了几成的等待，画一段转动的弧，
- *  不报 `aria-valuenow`；旁边要有一句说明在等什么（Geist：别让人把它读成 0）。 */
-export function gaugeHtml(label:string,value:unknown,max:unknown=100,{usage=false,compact=false,indeterminate=false}={}):string{
-  if(indeterminate)return `<span class="ui-geist-gauge" data-indeterminate role="progressbar" aria-label="${esc(label)}" aria-valuemin="0" aria-valuemax="100"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/><circle cx="16" cy="16" r="13" pathLength="100" stroke-dasharray="25 100"/></svg></span>`;
-  const ceiling=Number(max), current=Number(value);
-  if(!Number.isFinite(ceiling)||ceiling<=0||!Number.isFinite(current))return `<span>${esc(label)}：未取得</span>`;
-  const percent=Math.max(0,Math.min(100,current/ceiling*100));
-  const level=usage?(percent>=95?'error':percent>=80?'warning':'normal'):'normal';
-  const status=usage?(level==='error'?'空间即将用满':level==='warning'?'空间使用偏高':'空间充足'):'';
-  return `<span class="ui-geist-gauge" data-level="${level}" role="progressbar" aria-label="${esc(label+(status?'：'+status:''))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/><circle cx="16" cy="16" r="13" pathLength="100" stroke-dasharray="${percent} 100"/></svg></span>${status&&!compact?`<span class="ui-gauge-status">${status}</span>`:''}`;
-}
-
-/** Determinate progress only. Callers supply real units instead of a decorative width. */
-export function progressHtml(label:string,value:unknown,max:unknown=100,{variant='active',stops=[]}:{
-  variant?: 'active' | 'warning' | 'error' | (string & {}); stops?: { value: unknown; label: string }[];
-}={}):string{
-  const ceiling=Math.max(0,Number(max)||0);
-  const current=Math.max(0,Math.min(Number(value)||0,ceiling));
-  const percent=ceiling?current/ceiling*100:0;
-  return `<div class="ui-geist-progress" role="progressbar" aria-label="${esc(label)}"
-    aria-valuemin="0" aria-valuemax="${ceiling}" aria-valuenow="${current}"
-    style="--progress-value:${percent}%;--progress-color:var(${variant==='error'?'--drop':variant==='warning'?'--meter':'--feedback-success'})"><i></i>${stops.filter(stop=>Number(stop.value)>0&&Number(stop.value)<ceiling&&stop.label).map(stop=>`<span class="ui-geist-progress-stop" style="left:${Number(stop.value)/ceiling*100}%" role="img" aria-label="${esc(stop.label)}"></span>`).join('')}</div>`;
-}
-
 /**
  * Geist Spinner: immediate feedback for a user-triggered action. Geist names
  * "inline icon refresh" as one of its three cases, so an icon-only key that
@@ -96,7 +65,7 @@ export function progressHtml(label:string,value:unknown,max:unknown=100,{variant
  * that has its own accessible name: repeating that name announces the same
  * words twice and tells the reader nothing changed.
  */
-export function spinnerHtml(label='加载中'):string{
+export function spinnerHtml(label=t('shell:spinner.loading')):string{
   const bars=Array.from({length:10},(_,index)=>
     `<i aria-hidden="true" style="--spinner-angle:${index*36}deg;--spinner-delay:${index*100-900}ms"></i>`).join('');
   return `<span class="ui-geist-spinner" role="status" aria-label="${esc(label)}">${bars}</span>`;
@@ -127,18 +96,10 @@ export function searchInputHtml({label,id='',name='',value='',placeholder='',att
 }
 
 /**
- * 列表续页时 Loading Dots 旁那一句：目录哨兵、垃圾文件队列等无限滚动列表共用。三颗点已经在动，
- * 字不带省略号。
+ * 列表续页时那一句：目录哨兵、垃圾文件队列等无限滚动列表共用，配传输动画（`activityStatusHtml('linear-dots', …)`）。
+ * 动画已经在动，字不带省略号。
  */
-export const LOAD_MORE_STATUS = '载入中';
-
-/** Geist Loading Dots: indeterminate work continuing in the background. The dots already say
- *  "still going", so the label never ends in an ellipsis. */
-export function loadingDotsHtml(label='正在处理', {className=''}={}):string{
-  return `<span class="ui-geist-loading${className?` ${esc(className)}`:''}" role="status">
-    <span class="ui-geist-loading-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-    <span>${esc(label)}</span></span>`;
-}
+export const LOAD_MORE_STATUS = t('shell:spinner.loadingMore');
 
 /**
  * 页面分区 Tabs：一排互斥的「这一页现在摆的是哪一组东西」。
@@ -151,7 +112,7 @@ export function loadingDotsHtml(label='正在处理', {className=''}={}):string{
  * 时出现。
  */
 export function boardTabsHtml(items:{value:unknown;label:unknown;count?:unknown;symbol?:string}[],
-  {active='',attr='data-tab',label='页面视图',className='',panel=''}:{
+  {active='',attr='data-tab',label=t('shell:boardTabs.defaultLabel'),className='',panel=''}:{
     active?: unknown; attr?: string; label?: string; className?: string; panel?: string;
   }={}):string{
   const tabs=items.map(({value,label:text,count,symbol})=>{

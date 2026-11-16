@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from . import __version__, distribution
 from .profiles import DEFAULT_PROFILE_ID, read_settings
+from . import interface_text
 from .release_notices import NOTICES
 
 KEY = 'release_notice'
@@ -47,11 +48,18 @@ def applies(item: dict, tokens: set[str], facts: dict) -> bool:
     return not item.get('when') or bool(facts.get(item['when']))
 
 
-def _items(rows, tokens, facts):
+def _text(version: str, key: str) -> str:
+    """这一版公告的文字：`server:releaseNotes.v<版本，点换成连字符>.<key>`（ADR-0159）。"""
+    return interface_text.text(f"server:releaseNotes.v{version.replace('.', '-')}.{key}")
+
+
+def _items(version, rows, tokens, facts):
     shown = []
     for row in rows or []:
         if applies(row, tokens, facts):
-            item = {key: row[key] for key in ('id', 'icon', 'title', 'body', 'route') if row.get(key)}
+            item = {key: row[key] for key in ('id', 'icon', 'route') if row.get(key)}
+            item['title'] = _text(version, f"items.{row['id']}.title")
+            item['body'] = _text(version, f"items.{row['id']}.body")
             if isinstance(facts.get(row.get('when')), dict):
                 item['progress'] = facts[row['when']]
             shown.append(item)
@@ -100,9 +108,9 @@ def snapshot(connection, *, facts: dict | None = None, tokens: set[str] | None =
         older = sorted((version for version in NOTICES if lower < version_key(version) < version_key(current)),
                        key=version_key, reverse=True)
         for version in older:
-            rows = _items(NOTICES[version].get('features'), tokens, facts)
+            rows = _items(version, NOTICES[version].get('features'), tokens, facts)
             if NOTICES[version].get('level') == 'notice' and rows:
-                missed.append({'version': version, 'headline': NOTICES[version]['headline'], 'features': rows})
+                missed.append({'version': version, 'headline': _text(version, 'headline'), 'features': rows})
         missed = missed[:MISSED_LIMIT]
         if missed and not estimated:
             kind = 'skipped'
@@ -111,10 +119,10 @@ def snapshot(connection, *, facts: dict | None = None, tokens: set[str] | None =
                'release_url': RELEASES_URL + current, 'missed': missed}
     if notice is not None:
         payload['notice'] = {
-            'level': notice.get('level', 'notice'), 'headline': notice['headline'],
-            'features': _items(notice.get('features'), tokens, facts),
-            'automatic': _items(notice.get('automatic'), tokens, facts),
-            'attention': _items(notice.get('attention'), tokens, facts),
+            'level': notice.get('level', 'notice'), 'headline': _text(current, 'headline'),
+            'features': _items(current, notice.get('features'), tokens, facts),
+            'automatic': _items(current, notice.get('automatic'), tokens, facts),
+            'attention': _items(current, notice.get('attention'), tokens, facts),
         }
     return payload
 
@@ -131,4 +139,4 @@ def acknowledge(connection, version: str = __version__) -> None:
         'UPDATE profile SET settings_json=?,updated_at=? WHERE id=?',
         (json.dumps(settings, ensure_ascii=False), record['acknowledged_at'], DEFAULT_PROFILE_ID)).rowcount
     if not updated:
-        raise ValueError('当前用户设置不存在')
+        raise ValueError('current profile settings do not exist')

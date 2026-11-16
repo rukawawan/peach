@@ -274,7 +274,8 @@ button,[role="button"],summary{user-select:none;-webkit-user-select:none;-webkit
   user-select:auto;-webkit-user-select:auto;-webkit-touch-callout:default}
 /* React 子树的焦点环由 BoardUI 组件自己画（输入框画在外框上）；`:where` 让特指度保持 0,1,0。 */
 :where(:not(.peach-react *)):focus-visible{outline:2px solid var(--tungsten);outline-offset:2px}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* 伪元素一并选上：遗留骨架的微光写在 `::after` 上，只写 `*` 时减少动效也照样扫。 */
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 /* 静态搜索框：React 接管前的骨架里用（索引页标题行），接管后换成 BoardUI 的 InputBase。
    两者是同一只框的前后两帧，几何与面照 InputBase 取：无边框的填充底、20px 图标距左 8px、
    文字从 34px 起（8 + 20 + 2 + 4），框高跟同一行按钮共用 --control-h。 */

@@ -350,7 +350,8 @@ class PurgeMissingTests(unittest.TestCase):
             scan = finish_scan(self.contract)
             result = rm_sync.w_resource_sync_apply(
                 self.contract, {"confirm": True, "clean_cache": False, "scan_id": scan["scan_id"]})
-        self.assertEqual(result["blocked"], [{"id": 5, "name": "CESD-499.strm", "reason": "媒体来源未挂载或不可读取"}])
+        self.assertEqual(result["blocked"], [{"id": 5, "name": "CESD-499.strm", "reason": "媒体来源未挂载或不可读取",
+                                              "reason_code": "errors.webBatch.storageOffline", "reason_params": {}}])
         self.assertEqual(self.ids(), [1, 2, 4, 5])
 
     def test_deleting_media_outside_every_media_folder_is_still_refused(self):
@@ -369,7 +370,7 @@ class PurgeMissingTests(unittest.TestCase):
         def remember(**fields):
             saved.update(fields)
             if 'apply_checkpoint' in fields:
-                raise InterruptedError('停止于检查点')
+                raise InterruptedError('stopped at checkpoint')
             return True
         with self._synced():
             scan = finish_scan(self.contract)
@@ -739,7 +740,8 @@ class ResourceSyncCleanupTests(unittest.TestCase):
             result = self.apply(scan)
 
         self.assertEqual(result["purged"], 1)
-        self.assertEqual(result["blocked"], [{"id": 2, "name": "b.mp4", "reason": "文件仍在盘上"}])
+        self.assertEqual(result["blocked"], [{"id": 2, "name": "b.mp4", "reason": "文件仍在盘上",
+                                              "reason_code": "labels.webBatch.stillOnDisk", "reason_params": {}}])
         self.assertEqual((self.mount / "gone" / "b.mp4").read_bytes(), b"back")
         self.assertIn(2, self.ids())
 

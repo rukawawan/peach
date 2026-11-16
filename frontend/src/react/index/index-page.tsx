@@ -18,6 +18,7 @@ import { Button, ButtonLink } from '@/components/base/buttons/button';
 import { IndexSearch } from './index-search';
 import { DataTableFooter } from '../components/table-controls';
 import { tagSkeletonHtml, TAG_PAGE_SIZE, TAG_PAGE_SIZES } from '../../tag-skeleton';
+import { INDEX_NOUNS } from '../../index-skeleton';
 import { useTagPagination, useTagPageBounds } from './tag-pagination';
 
 import { IDENTITY_ROW_CLASS } from '../../identity-filter';
@@ -40,38 +41,39 @@ import {
 import { OnlineAuthors, PeopleGrid } from './index-people';
 import { TagAlphabet, TagCloud, TagDock, TagFilters, type TagEntry } from './index-tags';
 import { TagManager } from './tag-manager';
+import { t } from '../../i18n';
 
 /* 厂牌与事务所是两种实体，不是同一份数据的两种筛选：厂牌出片，事务所出人。所以这个开关切的
    是地址。场记板归厂牌，公文包归事务所，字形各说各的那一件事。 */
 const MAKER_TABS: BoardTab<'studios' | 'agencies' | 'series'>[] = [
-  { value: 'studios', label: '厂牌', symbol: 'clapperboard' },
-  { value: 'series', label: '系列', symbol: 'list' },
-  { value: 'agencies', label: '事务所', symbol: 'briefcase' },
+  { value: 'studios', label: t('catalog:shared.studios'), symbol: 'clapperboard' },
+  { value: 'series', label: t('catalog:shared.series'), symbol: 'list' },
+  { value: 'agencies', label: t('catalog:shared.agencies'), symbol: 'briefcase' },
 ];
 /* 本地与在线是两套词表：计数口径、类别划分和点开去哪儿都不同，所以也是页面级的 Tabs。 */
 const SCOPE_TABS: BoardTab<IndexScope>[] = [
-  { value: 'local', label: '本地', symbol: 'hard-drive' },
-  { value: 'online', label: '在线', symbol: 'rss' },
+  { value: 'local', label: t('catalog:shared.localLabel'), symbol: 'hard-drive' },
+  { value: 'online', label: t('catalog:shared.online'), symbol: 'rss' },
 ];
 const PEOPLE_TABS: BoardTab<'performers' | 'creators' | 'online'>[] = [
-  { value: 'performers', label: '艺人', symbol: 'user-round' },
-  { value: 'creators', label: '卖家', symbol: 'user-round' },
-  { value: 'online', label: '在线', symbol: 'rss' },
+  { value: 'performers', label: t('catalog:shared.performers'), symbol: 'user-round' },
+  { value: 'creators', label: t('catalog:shared.sellers'), symbol: 'user-round' },
+  { value: 'online', label: t('catalog:shared.online'), symbol: 'rss' },
 ];
 
 /* 公司那一格摆的是标识而不是脸，沿用艺人那套词就是提示说着「竖幅头像」、屏幕上摆着方标识。
    档位仍是同一个设置值，分开的只有说法。 */
 const LAYOUTS: Record<'people' | 'company' | 'series', readonly (readonly [PeopleLayout, string, string])[]> = {
-  people: [['big', '大图 · 竖幅头像', 'maximize'], ['compact', '紧凑 · 圆形头像', 'layout-grid']],
-  company: [['big', '大图 · 完整标识', 'maximize'], ['compact', '紧凑 · 圆形标识', 'layout-grid']],
-  series: [['big', '大图 · 系列图片', 'maximize'], ['compact', '紧凑 · 系列图片', 'layout-grid']],
+  people: [['big', t('catalog:peopleIndex.layoutLargePortrait'), 'maximize'], ['compact', t('catalog:peopleIndex.layoutCompactRound'), 'layout-grid']],
+  company: [['big', t('catalog:peopleIndex.layoutLargeLogo'), 'maximize'], ['compact', t('catalog:peopleIndex.layoutCompactLogo'), 'layout-grid']],
+  series: [['big', t('catalog:peopleIndex.layoutLargeSeries'), 'maximize'], ['compact', t('catalog:peopleIndex.layoutCompactSeries'), 'layout-grid']],
 };
 
 function LayoutSwitch(
   { kind, layout, onChange }: { kind: IndexKind; layout: PeopleLayout; onChange(layout: PeopleLayout): void },
 ) {
   return (
-    <RadioGroup aria-label={`${INDEX_TITLES[kind]}索引版式`} orientation="horizontal" value={layout}
+    <RadioGroup aria-label={t('catalog:peopleIndex.layout', { title: INDEX_NOUNS[kind] })} orientation="horizontal" value={layout}
       onChange={(next) => onChange(next as PeopleLayout)} data-index-layout=""
       className={`flex-none ${SEGMENTED_TRACK}`}>
       {LAYOUTS[kind === 'series' ? 'series' : isCompany(kind) ? 'company' : 'people'].map(([value, label, symbol]) => {
@@ -104,7 +106,7 @@ export function IndexPage(props: IndexProps) {
   const [match, setMatch] = useState<'any' | 'all'>('any');
   const root = useRef<HTMLDivElement>(null);
   const { kind, q, scope, view, category } = route;
-  const title = INDEX_TITLES[kind];
+  const title = INDEX_TITLES[kind], noun = INDEX_NOUNS[kind];
   const onlineTags = kind === 'tags' && scope === 'online';
   const onlineAuthors = kind === 'performers' && scope === 'online';
 
@@ -152,7 +154,7 @@ export function IndexPage(props: IndexProps) {
   }, [result.data, result.isPending, result.isPlaceholderData, route]);
   useTagPageBounds(kind === 'tags' && !result.isPlaceholderData ? total : undefined, pagination, changePage);
   const readout = kind === 'tags'
-    ? (result.isPending || result.isError ? '' : `${(total ?? items.length).toLocaleString()} 个标签`)
+    ? (result.isPending || result.isError ? '' : t('catalog:peopleIndex.tagCount', { count: total ?? items.length }))
     : countText(items.length, !!result.hasNextPage);
   /* 分类计数只随名册、词表和过滤词变，与选中哪一类无关。换分类时新一页还没到，沿用同一份
      名册上一次拿到的计数：分类按钮行不先塌成「全部」加当前项、等数据回来再弹开。头一回
@@ -177,13 +179,13 @@ export function IndexPage(props: IndexProps) {
   const changeLayout = (next: PeopleLayout) => { setLayout(next); props.savePreference({ layout: next }) };
 
   const tabs = kind === 'tags'
-    ? <SortableBoardTabs group="tags" tabs={SCOPE_TABS} value={scope} label="词表" onChange={(next) => {
+    ? <SortableBoardTabs group="tags" tabs={SCOPE_TABS} value={scope} label={t('catalog:peopleIndex.tagScope')} onChange={(next) => {
       setPicked(new Set());
       // 在线标签全是英文，字母表才是它的形态；切过去时顺手换上，不必再点一次。
       go({ scope: next, category: 'all', view: next === 'online' ? 'alphabet' : view });
     }} />
     : isCompany(kind) || kind === 'series'
-        ? <BoardTabs tabs={MAKER_TABS} value={kind as 'studios' | 'agencies' | 'series'} label="资料类型"
+        ? <BoardTabs tabs={MAKER_TABS} value={kind as 'studios' | 'agencies' | 'series'} label={t('catalog:peopleIndex.companyType')}
           onChange={(next) => go({ kind: next })} />
         : null;
 
@@ -210,8 +212,8 @@ export function IndexPage(props: IndexProps) {
     }
     if (result.isError) {
       return (
-        <EmptyState icon={spriteGlyph('alert')} title={`没能读取${title}`}
-          actions={<Button variant="secondary" onClick={() => void result.refetch()}>立即重试</Button>}>
+        <EmptyState icon={spriteGlyph('alert')} title={t('catalog:peopleIndex.loadFailed', { title: noun })}
+          actions={<Button variant="secondary" onClick={() => void result.refetch()}>{t('catalog:shared.retryNow')}</Button>}>
           {requestErrorMessage(result.error)}
         </EmptyState>
       );
@@ -240,12 +242,12 @@ export function IndexPage(props: IndexProps) {
         {isPeople(kind) ? <LayoutSwitch kind={kind} layout={layout} onChange={changeLayout} /> : null}
         <LibraryShortcuts kind={kind === 'tags' ? 'tag' : kind === 'series' ? 'series' : kind === 'studios' ? 'studio' : kind === 'agencies' ? 'agency' : kind === 'creators' ? 'creator' : 'performer'} />
         {kind === 'tags' ? <Button variant={managing ? 'primary' : 'ghost'} iconOnly className="flex-none" data-tag-mode=""
-          leadingIcon={spriteGlyph('pencil')} aria-label={managing ? '返回标签浏览' : '管理标签'} title={managing ? '返回标签浏览' : '管理标签'} aria-pressed={managing}
+          leadingIcon={spriteGlyph('pencil')} aria-label={managing ? t('catalog:peopleIndex.backToTags') : t('catalog:peopleIndex.manageTags')} title={managing ? t('catalog:peopleIndex.backToTags') : t('catalog:peopleIndex.manageTags')} aria-pressed={managing}
           onClick={() => { props.exitSelectMode(); setPicked(new Set()); setManaging(!managing) }} /> : null}
-        <IndexSearch label={`过滤${title}`} value={q} onQuery={(next) => { if (next !== q) go({ q: next }, !!next) }} />
+        <IndexSearch label={t('catalog:peopleIndex.filterTitle', { title: noun })} value={q} onQuery={(next) => { if (next !== q) go({ q: next }, !!next) }} />
       </div>
       {kind === 'performers' || kind === 'creators' ? (
-        <BoardTabs tabs={PEOPLE_TABS} value={onlineAuthors ? 'online' : kind} label="人物名册"
+        <BoardTabs tabs={PEOPLE_TABS} value={onlineAuthors ? 'online' : kind} label={t('catalog:peopleIndex.roster')}
           onChange={(next) => {
             if (next === 'online') props.exitSelectMode();
             go({ kind: next === 'online' ? 'performers' : next,
@@ -257,7 +259,7 @@ export function IndexPage(props: IndexProps) {
         onCategory={next => go({ category: next })} onView={next => go({ view: next })}
         onJump={at => root.current?.querySelector(`[data-alpha-group="${at}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })} /> : <>
       {kind === 'performers' && scope === 'local' ? (
-        <div aria-label="身份分类" className={IDENTITY_ROW_CLASS}>
+        <div aria-label={t('catalog:peopleIndex.identityCategory')} className={IDENTITY_ROW_CLASS}>
           {IDENTITY_CATEGORIES.filter((entry) => entry[0] === category || hasEntries(entry)).map(([key, label]) => (
             <Button key={key} variant={category === key ? 'primary' : 'secondary'} size="small"
               aria-pressed={category === key} onClick={() => go({ category: key })}>{label}</Button>
@@ -277,7 +279,7 @@ export function IndexPage(props: IndexProps) {
         {body()}
       </SkeletonContent></div>
       {kind === 'tags' && !pending && !result.isError ? <div className="mt-5">
-        <DataTableFooter label="标签" total={total ?? items.length} pagination={pagination} onChange={changePage} unit="个标签" pageUnit="个" pageSizes={TAG_PAGE_SIZES} />
+        <DataTableFooter label={t('catalog:shared.tags')} total={total ?? items.length} pagination={pagination} onChange={changePage} unit={t('catalog:peopleIndex.footerUnit')} pageUnit={t('catalog:peopleIndex.footerPageUnit')} pageSizes={TAG_PAGE_SIZES} />
       </div> : null}
       {more ? (
         <div className="mt-5 flex justify-center">
@@ -287,8 +289,8 @@ export function IndexPage(props: IndexProps) {
           <Button variant="secondary" data-index-more="" className="min-w-31"
             disabled={result.isFetchingNextPage} aria-busy={result.isFetchingNextPage || undefined}
             onClick={() => void result.fetchNextPage()}>
-            {result.isFetchingNextPage ? <span className="contents" dangerouslySetInnerHTML={{ __html: spinnerHtml('正在载入下一批') }} /> : null}
-            载入更多
+            {result.isFetchingNextPage ? <span className="contents" dangerouslySetInnerHTML={{ __html: spinnerHtml(t('catalog:peopleIndex.loadingNext')) }} /> : null}
+            {t('catalog:shared.loadMore')}
           </Button>
         </div>
       ) : null}
@@ -302,10 +304,6 @@ export function IndexPage(props: IndexProps) {
   );
 }
 
-const LABELS: Record<IndexKind, string> = {
-  tags: '标签', performers: '艺人', creators: '卖家', studios: '厂牌', agencies: '事务所', series: '系列',
-};
-
 /** 空馆藏、筛选无结果与在线来源还没有内容分别给出可执行的去处。文案同目录页的空态
  *  （`frontend/src/catalog-onboarding.ts` 的 `catalogEmptyHtml`）。 */
 function IndexEmpty(
@@ -313,24 +311,24 @@ function IndexEmpty(
 ) {
   if (filtered) {
     return (
-      <EmptyState icon={spriteGlyph('search')} title="没有符合条件的内容"
-        actions={<Button size="small" onClick={onClear}>清除筛选</Button>}>
-        清除筛选或搜索条件后查看全部内容。
+      <EmptyState icon={spriteGlyph('search')} title={t('catalog:peopleIndex.noMatches')}
+        actions={<Button size="small" onClick={onClear}>{t('catalog:shared.clearFilters')}</Button>}>
+        {t('catalog:peopleIndex.noMatchesHint')}
       </EmptyState>
     );
   }
   // 在线那一档数的是来源上的东西，名字也跟着来源的说法：艺人页在线摆的是关注来源里的创作者。
-  const label = online && kind === 'performers' ? '创作者' : LABELS[kind];
+  const label = online && kind === 'performers' ? t('catalog:peopleIndex.nounOnlineCreators') : INDEX_NOUNS[kind];
   const follow = (
-    <ButtonLink size="small" variant={online ? 'primary' : 'secondary'} href="/subscriptions?tab=add">添加关注</ButtonLink>
+    <ButtonLink size="small" variant={online ? 'primary' : 'secondary'} href="/subscriptions?tab=add">{t('catalog:entityOnlineEmpty.addFollow')}</ButtonLink>
   );
   return (
-    <EmptyState icon={spriteGlyph(kind === 'tags' ? 'tags' : 'user-round')} title={`还没有${label}`}
+    <EmptyState icon={spriteGlyph(kind === 'tags' ? 'tags' : 'user-round')} title={t('catalog:peopleIndex.emptyTitle', { label })}
       actions={online ? follow : <>
-        <ButtonLink size="small" href="/settings/library">添加媒体</ButtonLink>
+        <ButtonLink size="small" href="/settings/library">{t('catalog:shared.addMedia')}</ButtonLink>
         {follow}
       </>}>
-      {online ? `添加关注来源并获取内容后，这里会显示来源上的${label}。` : '添加内容并补充资料后，这里会显示对应信息。'}
+      {online ? t('catalog:peopleIndex.emptyOnlineHint', { label }) : t('catalog:peopleIndex.emptyLocalHint')}
     </EmptyState>
   );
 }

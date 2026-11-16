@@ -28,12 +28,18 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import interface_text
 from .fsutil import atomic_write_text
 from .platform import root_online
+
+
+def _local(code: str, params: dict | None = None) -> str:
+    """判定原因主要在托盘与命令行里给人看，跟本机语言（`labels.sync.<名字>`）。"""
+    return interface_text.text(f"server:{code}", params, interface_text.local_language())
 
 
 LOGGER = logging.getLogger(__name__)
@@ -91,16 +97,30 @@ class Marker:
 
 @dataclass(frozen=True)
 class SyncPlan:
-    """启动时的判定结果。`action` 决定接下来做什么，`reason` 是给人看的。"""
+    """启动时的判定结果。`action` 决定接下来做什么，`reason` 是给人看的（本机语言），
+    `reason_code`／`reason_params` 是同一句的 code 与参数。"""
 
     action: str          # disabled / offline / missing / pull / push / local-ahead / in-sync / conflict
     reason: str
     local_generation: int = 0
     shared_generation: int = 0
+    reason_code: str = ""
+    reason_params: dict = field(default_factory=dict)
 
     @property
     def conflict(self) -> bool:
         return self.action == "conflict"
+
+    @property
+    def phrase(self) -> dict | str:
+        """这一句作为另一句的参数：有 code 时是 `{code, params}`，否则是原文。"""
+        return {"code": self.reason_code, "params": self.reason_params} if self.reason_code else self.reason
+
+
+def _plan(action: str, name: str, params: dict | None = None, local_generation: int = 0,
+          shared_generation: int = 0) -> SyncPlan:
+    code = f"labels.sync.{name}"
+    return SyncPlan(action, _local(code, params), local_generation, shared_generation, code, dict(params or {}))
 
 
 def marker_path(db_path: Path) -> Path:
@@ -165,7 +185,7 @@ def device_id(state_dir: Path) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(generated, encoding="utf-8")
     except OSError:
-        LOGGER.warning("无法保存 device-id，本次运行使用临时标识")
+        LOGGER.warning("Could not save device-id; using a temporary id for this run")
     return generated
 
 
@@ -284,17 +304,17 @@ COPY_ACTIONS = ("pull", "push", "local-ahead")
 def plan(local: Path, shared: Path) -> SyncPlan:
     """只读判定，不碰任何文件。"""
     if local == shared or local.resolve() == shared.resolve():
-        return SyncPlan("disabled", "本机直接使用共享副本，不需要复制")
+        return _plan("disabled", "sameFile")
     if not root_online(shared.parent):
-        return SyncPlan("offline", "共享副本所在的盘不可达，本地照常读写")
+        return _plan("offline", "sharedOffline")
 
     local_exists, shared_exists = local.is_file(), shared.is_file()
     if not shared_exists and not local_exists:
-        return SyncPlan("missing", "两侧都没有数据库")
+        return _plan("missing", "bothMissing")
     if not shared_exists:
-        return SyncPlan("push", "共享副本不存在，用本地副本播种")
+        return _plan("push", "sharedMissing")
     if not local_exists:
-        return SyncPlan("pull", "本地副本不存在，从共享副本拉取")
+        return _plan("pull", "localMissing")
 
     local_marker, shared_marker = read_marker(local), read_marker(shared)
     dirty = local_dirty(local, local_marker)
@@ -303,30 +323,20 @@ def plan(local: Path, shared: Path) -> SyncPlan:
 
     if local_marker is None or shared_marker is None:
         # 没有血缘可比，两份都有数据。这种情况只能人来选，自动挑一边就是丢数据。
-        return SyncPlan(
-            "conflict", "缺少同步标记，无法判断两份数据库的先后",
-            local_generation, shared_generation,
-        )
+        return _plan("conflict", "markerMissing", None, local_generation, shared_generation)
     if (local_generation == shared_generation
             and local_marker.device != shared_marker.device):
-        return SyncPlan(
-            "conflict", "同一世代的写入端标记不一致",
-            local_generation, shared_generation,
-        )
+        return _plan("conflict", "writerMismatch", None, local_generation, shared_generation)
     if shared_generation > local_generation:
         if dirty:
-            return SyncPlan(
-                "conflict",
-                f"共享副本已到第 {shared_generation} 代，本地仍是第 {local_generation} 代"
-                f"且有未回写的改动",
-                local_generation, shared_generation,
-            )
-        return SyncPlan("pull", "共享副本更新", local_generation, shared_generation)
+            return _plan("conflict", "diverged", {"shared": shared_generation, "local": local_generation},
+                         local_generation, shared_generation)
+        return _plan("pull", "sharedNewer", None, local_generation, shared_generation)
     if shared_generation < local_generation:
-        return SyncPlan("push", "本地副本更新", local_generation, shared_generation)
+        return _plan("push", "localNewer", None, local_generation, shared_generation)
     if dirty:
-        return SyncPlan("local-ahead", "本地有待回写的改动", local_generation, shared_generation)
-    return SyncPlan("in-sync", "两侧一致", local_generation, shared_generation)
+        return _plan("local-ahead", "localDirty", None, local_generation, shared_generation)
+    return _plan("in-sync", "inSync", None, local_generation, shared_generation)
 
 
 def resolve(local: Path, shared: Path, device: str) -> SyncPlan:
@@ -341,10 +351,8 @@ def resolve(local: Path, shared: Path, device: str) -> SyncPlan:
     owner = writer_device(local, shared)
     if (decision.action in ("push", "local-ahead")
             and owner is not None and owner != device):
-        return SyncPlan(
-            "conflict", f"当前写入端是 {owner}，本机不能推送",
-            decision.local_generation, decision.shared_generation,
-        )
+        return _plan("conflict", "otherWriter", {"owner": owner},
+                     decision.local_generation, decision.shared_generation)
     return decision
 
 
@@ -363,7 +371,22 @@ class LedgerSync:
         self.device = device
         self.interval = interval
         self.status = "unstarted"
+        #: 诊断用的一句：`detail` 按本机语言（托盘、命令行），`detail_phrase` 是它的 `{code, params}`。
         self.detail = ""
+        self.detail_phrase: dict | str = ""
+
+    def _set(self, status: str, name: str, params: dict | None = None, *, reason: SyncPlan | None = None) -> None:
+        """记下状态与说明；`reason` 是要接在说明后面的判定。"""
+        values = dict(params or {})
+        if reason is not None:
+            values["reason"] = reason.phrase
+        self.status = status
+        self.detail_phrase = {"code": f"labels.sync.{name}", "params": values}
+        self.detail = _local(f"labels.sync.{name}", values)
+
+    def _follow(self, status: str, decision: SyncPlan) -> None:
+        """状态与说明就是这次判定本身。"""
+        self.status, self.detail, self.detail_phrase = status, decision.reason, decision.phrase
 
     @property
     def read_only(self) -> bool:
@@ -371,19 +394,20 @@ class LedgerSync:
         return self.status == "conflict" or writer_device(self.local, self.shared) != self.device
 
     @property
-    def read_only_message(self) -> str:
-        """409 时给界面的解释：发生了什么、影响、怎么恢复。"""
+    def read_only_phrase(self) -> dict:
+        """409 时给界面的解释（发生了什么、影响、怎么恢复）：`{code, params}`，按界面语言渲染。"""
         if self.status == "conflict":
-            return (
-                f"数据库处于冲突状态（{self.detail}），本机暂时只读。"
-                "请在托盘执行「同步数据库」；若提示仍冲突，需按日志人工处理。"
-            )
-        owner = writer_device(self.local, self.shared) or "另一台机器"
-        return (
-            f"数据库由 {owner} 负责写入，本机当前只能浏览。"
-            "请改在该机器上操作，或在托盘执行「由本机接管数据库写入」"
-            "（要求两侧数据一致）后再试。"
-        )
+            return {"code": "labels.sync.readOnlyConflict", "params": {"detail": self.detail_phrase or self.detail}}
+        owner = writer_device(self.local, self.shared)
+        if owner is None:
+            return {"code": "labels.sync.readOnlyOtherMachine"}
+        return {"code": "labels.sync.readOnlyWriter", "params": {"owner": owner}}
+
+    @property
+    def read_only_message(self) -> str:
+        """`read_only_phrase` 按 zh-CN 渲染的原文，给还不认 code 的调用方。"""
+        phrase = self.read_only_phrase
+        return interface_text.text(f"server:{phrase['code']}", phrase.get("params"))
 
     # ── 单次动作 ────────────────────────────────────────────────────────────
     def pull(self) -> None:
@@ -414,19 +438,19 @@ class LedgerSync:
         decision = plan(self.local, self.shared)
         owner = writer_device(self.local, self.shared)
         if decision.conflict:
-            self.status, self.detail = "conflict", decision.reason
+            self._follow("conflict", decision)
         elif owner == self.device:
-            self.status, self.detail = "writer", f"本机是写入端；{decision.reason}"
+            self._set("writer", "thisWriter", reason=decision)
         elif owner:
-            self.status, self.detail = "reader", f"写入端是 {owner}；{decision.reason}"
+            self._set("reader", "writerIs", {"owner": owner}, reason=decision)
         else:
-            self.status, self.detail = "conflict", "没有可验证的写入端"
+            self._set("conflict", "noWriter")
         return decision
 
     def synchronize_now(self) -> SyncPlan:
         """重新判定并完成一次安全同步，供服务停机后的手动同步使用。"""
         decision = resolve(self.local, self.shared, self.device)
-        self.status, self.detail = decision.action, decision.reason
+        self._follow(decision.action, decision)
         if decision.action == "pull":
             self.pull()
         elif decision.action in ("push", "local-ahead"):
@@ -438,13 +462,9 @@ class LedgerSync:
         """在两份完全一致时显式切换唯一写入端，不复制数据库内容。"""
         decision = plan(self.local, self.shared)
         if decision.action != "in-sync":
-            self.status, self.detail = "conflict", (
-                f"接管前必须两侧一致；当前是 {decision.action}：{decision.reason}"
-            )
-            return SyncPlan(
-                "conflict", self.detail,
-                decision.local_generation, decision.shared_generation,
-            )
+            self._set("conflict", "takeOverNeedsSync", {"action": decision.action}, reason=decision)
+            return _plan("conflict", "takeOverNeedsSync", self.detail_phrase["params"],
+                         decision.local_generation, decision.shared_generation)
         local_marker, shared_marker = read_marker(self.local), read_marker(self.shared)
         generation = max(
             local_marker.generation if local_marker else 0,
@@ -455,7 +475,7 @@ class LedgerSync:
                      with_digest=False)
         write_marker(self.local, Marker(generation, self.device, stamp, 0, 0))
         self.observe()
-        return SyncPlan("take-ownership", "本机已成为唯一写入端", generation, generation)
+        return _plan("take-ownership", "tookOver", None, generation, generation)
 
     def push_if_needed(self) -> str:
         """周期回写。别人抢先推过就转冲突，绝不覆盖。"""
@@ -467,8 +487,8 @@ class LedgerSync:
             self.status = "in-sync"
             return "pushed"
         if decision.action == "conflict":
-            self.status, self.detail = "conflict", decision.reason
-            LOGGER.error("数据库同步冲突：%s", decision.reason)
+            self._follow("conflict", decision)
+            LOGGER.error("Database sync conflict: %s", decision.reason_code or decision.reason)
             return "conflict"
         self.status = decision.action
         return decision.action

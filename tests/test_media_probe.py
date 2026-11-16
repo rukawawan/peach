@@ -20,6 +20,16 @@ ROOT = r"R:\media"
 
 
 class ProbeUnmeasuredTests(unittest.TestCase):
+    def test_common_video_dimensions_map_to_the_expected_quality(self):
+        dimensions = (
+            (3840, 2160, '4K'), (2560, 1440, '2K'), (2048, 1080, '2K'),
+            (1920, 1080, '1080P'), (1080, 1920, '1080P'),
+            (1280, 720, '720P'), (720, 1280, '720P'), (720, 404, 'low'),
+        )
+        for width, height, expected in dimensions:
+            with self.subTest(width=width, height=height):
+                self.assertEqual(media_probe.context_fields(width, height, 60)[2], expected)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -75,7 +85,7 @@ class ProbeUnmeasuredTests(unittest.TestCase):
 
         self.assertEqual(self.probe(), 1)
         self.assertEqual(self.probed, ["a.mp4"], "同前缀的兄弟目录 R:\\mediax 不在这个根下")
-        self.assertEqual(self.row(fresh), (1800.0, 1920, 1080, "2K"))
+        self.assertEqual(self.row(fresh), (1800.0, 1920, 1080, "1080P"))
         self.assertEqual(self.row(measured)[0], 10.0)
 
     def test_selected_probe_query_fits_the_connection_parameter_limit(self):
@@ -217,7 +227,7 @@ class ProbeProcessTests(unittest.TestCase):
                     mock.patch.object(media_probe, 'resolve_case_insensitive', return_value='sample.mp4'):
                 result = media_probe.measure('ffprobe', 1, 'sample.mp4')
             self.assertEqual(result[1:3], (width, 1280))
-            self.assertEqual(result[7], '横屏' if width > 1280 else '竖屏')
+            self.assertEqual(result[7], 'landscape' if width > 1280 else 'portrait')
             self.assertEqual(result[8], '2K' if width > 1280 else '720P')
 
     def test_probe_reads_metadata_with_a_hidden_windows_process(self):

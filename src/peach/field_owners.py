@@ -28,6 +28,9 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from . import interface_text
+from .user_messages import UserFacingError
+
 #: 受归属保护的 `asset` 列，也就是 AGENTS.md 术语表说的真相字段。
 #: 逻辑名就是列名，别处不得另立一套映射——两套名字迟早对不上，而对不上的表现是
 #: 归属写在一个谁也不会去读的键上。
@@ -73,7 +76,7 @@ def script_owner(name: str) -> str:
 def _identifier(value: str) -> str:
     text = str(value or "").strip()
     if not _IDENTIFIER.fullmatch(text):
-        raise ValueError(f"归属标识只能是小写字母、数字、下划线和连字符：{value!r}")
+        raise ValueError(f"owner identifier may only contain lowercase letters, digits, underscores, and hyphens: {value!r}")
     return text
 
 
@@ -108,27 +111,28 @@ def owner_of(value: object, field: str | None) -> str:
     return parse_owners(value).get(field, "")
 
 
-def owner_label(owner: str | None) -> str:
-    """归属串给人看的写法；无主返回空串。
+#: 写入者类别 → 给人看的写法的 code（`server:labels.fieldOwners.<类别>`），参数 `identifier` 是归属串的标识部分。
+OWNER_LABEL_CODES = {kind: f"labels.fieldOwners.{kind}" for kind in ("user", "review", "auto", "scan", "script")}
+
+
+def owner_phrase(owner: str | None) -> dict | None:
+    """归属串给人看的那一句，写成嵌套参数 `{"code", "params"}`（ADR-0159）；无主返回 None。
 
     页面上要回答的是「这个值我还要不要管」，所以标签按写入者的身份说话，
     不重复一遍归属串的机器写法。
     """
     kind, _, identifier = str(owner or "").partition(":")
-    if kind == "user":
-        return "手动填写"
-    if kind == "review":
-        return f"复核批准 {identifier}"
-    if kind == "auto":
-        return f"{identifier} 免复核落库"
-    if kind == "scan":
-        return "文件名推导"
-    if kind == "script":
-        return f"维护脚本 {identifier}"
-    return ""
+    code = OWNER_LABEL_CODES.get(kind)
+    return {"code": code, "params": {"identifier": identifier}} if code else None
 
 
-class RevisionConflict(ValueError):
+def owner_label(owner: str | None) -> str:
+    """归属串给人看的写法，按 zh-CN 资源渲染；无主返回空串。"""
+    phrase = owner_phrase(owner)
+    return interface_text.text(f"server:{phrase['code']}", phrase["params"]) if phrase else ""
+
+
+class RevisionConflict(UserFacingError, ValueError):
     """期望的 `mutation_revision` 与账本现值不符，写入一个字段都没有发生。
 
     继承 `ValueError` 是为了兜底：没有专门处理它的派发路径会把它当成请求错误
@@ -138,8 +142,8 @@ class RevisionConflict(ValueError):
     def __init__(self, expected: int, revisions: Mapping[int, int]):
         self.expected = int(expected)
         self.revisions = {int(key): int(value) for key, value in revisions.items()}
-        current = "、".join(f"{key}={value}" for key, value in sorted(self.revisions.items()))
-        super().__init__(f"资产已被改过：期望 revision {expected}，数据库现值 {current}")
+        current = [f"{key}={value}" for key, value in sorted(self.revisions.items())]
+        super().__init__("errors.fieldOwners.revisionConflict", {"expected": expected, "current": current})
 
 
 @dataclass(frozen=True)
@@ -211,12 +215,12 @@ def write_owned_fields(
     fields = list(values)
     unknown = [name for name in fields if name not in OWNED_FIELDS]
     if unknown:
-        raise ValueError(f"不是受归属保护的真相字段：{sorted(unknown)}")
+        raise ValueError(f"not an ownership-protected truth field: {sorted(unknown)}")
     if not fields:
-        raise ValueError("要写的字段是空的")
+        raise ValueError("no fields to write")
     kind, _, identifier = str(owner or "").partition(":")
     if kind not in {"user", "review", "auto", "scan", "script"}:
-        raise ValueError(f"归属串的类别不在清单里：{owner!r}")
+        raise ValueError(f"owner kind is not in the allowed list: {owner!r}")
     _identifier(identifier)
 
     marks = ",".join("?" * len(ids))

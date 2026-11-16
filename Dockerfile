@@ -13,6 +13,8 @@ COPY web ./web
 COPY resources ./resources
 COPY tools/amane-bridge ./tools/amane-bridge
 COPY scripts/write_reporting_config.py ./scripts/
+# write_reporting_config.py 的说明与报错由 scripts/locales 渲染（ADR-0159 第三条），构建阶段要带上。
+COPY scripts/locales ./scripts/locales
 COPY scripts/build_amane_runtime.py scripts/amane_bridge.spec ./scripts/
 # vision 带上 OpenCV：镜像里随附的人脸模型要靠它才能检出与比对。
 RUN uv sync --locked --no-dev --no-editable --extra vision
@@ -29,7 +31,8 @@ LABEL org.opencontainers.image.title="Peach" \
       org.opencontainers.image.documentation="https://github.com/peach-mitao/peach/blob/master/docs/DOCKER.md" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 # amane 独立环境在构建阶段准备，空数据卷可直接调用。
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg openssl ca-certificates mesa-va-drivers vainfo \
+# Intel iHD 驱动 Debian 只出 amd64 包；arm64 镜像只带 Mesa VAAPI。
+RUN intel=""; if [ "$(dpkg --print-architecture)" = amd64 ]; then intel="intel-media-va-driver=25.2.3+dfsg1-1"; fi     && apt-get update && apt-get install -y --no-install-recommends ffmpeg openssl ca-certificates mesa-va-drivers vainfo $intel \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 peach && useradd --uid 1000 --gid 1000 --create-home peach \
     && mkdir /data && chown peach:peach /data
@@ -56,9 +59,11 @@ ENV PATH="/app/.venv/bin:$PATH" PEACH_DATA_ROOT=/data PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 PYTHONUTF8=1 PEACH_FACE_MODELS=/app/tools/face-models PEACH_DISTRIBUTION=docker \
     PEACH_AMANE_RUNTIME=/app/amane-runtime PEACH_UPDATE_DIR=/update
 WORKDIR /data
-USER peach
+# 入口先以 root 修正已有 /data 卷的所有者，再降权到 PEACH_UID/PEACH_GID。
+USER root
 EXPOSE 8900
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8900/healthz?ready=1', timeout=3).read()"]
-ENTRYPOINT ["python", "-m", "peach.server"]
+ENTRYPOINT ["python", "-m", "peach.docker_entrypoint"]
+CMD ["python", "-m", "peach.server"]

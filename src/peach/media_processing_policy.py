@@ -6,6 +6,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from .fsutil import atomic_write_text
+from .user_messages import UserValueError
 
 FILENAME = 'media-processing.json'
 
@@ -25,13 +26,13 @@ def metadata_only(state_root: Path | None = None) -> bool:
 
 def save(state_root: Path, value: bool) -> None:
     if not isinstance(value, bool):
-        raise ValueError('请选择视频预览生成状态')
+        raise UserValueError('errors.mediaProcessingPolicy.previewStateRequired')
     save_preferences(state_root, {'metadata_only': value})
 
 
 def acceleration(state_root: Path | None = None, *, purpose: str = 'playback') -> str:
     if purpose not in ('preview', 'playback'):
-        raise ValueError('媒体加速用途无效')
+        raise ValueError('invalid media acceleration purpose')
     if state_root is None:
         from .settings_file import active
         state_root = active().directory('state')
@@ -46,15 +47,15 @@ def save_preferences(state_root: Path, body: dict) -> None:
     patch = {}
     if 'metadata_only' in body:
         if not isinstance(body['metadata_only'], bool):
-            raise ValueError('请选择视频预览生成状态')
+            raise UserValueError('errors.mediaProcessingPolicy.previewStateRequired')
         patch['metadata_only'] = body['metadata_only']
     for key in ('preview_acceleration', 'playback_acceleration'):
         if key in body:
             if body[key] not in ('auto', 'software'):
-                raise ValueError('请选择自动或仅软件模式')
+                raise UserValueError('errors.mediaProcessingPolicy.accelerationModeRequired')
             patch[key] = body[key]
     if not patch:
-        raise ValueError('请选择媒体处理方式')
+        raise UserValueError('errors.mediaProcessingPolicy.choiceRequired')
     path = Path(state_root) / FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(path) + '.lock', timeout=5):

@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from peach import metadata_amane
 from peach.jav_cover_fetch import NotFound, Unavailable
 from peach.library_processing import LibraryMetadataProvider, PROVIDER_NAMES, SOURCE_LABELS
-from peach.metadata import MetadataProviderError, extract_peach_fields
+from peach.metadata import MetadataProviderError, extract_peach_fields, relayed
 from peach.metadata_policy import SOURCE_SPECS
 from peach.metadata_routes import AMANE_OFFICIAL_STAGE, AMANE_STAGE
 from peach.scraping_access import SourcePaused, cooldown_state, paused_until, pause_source
@@ -329,7 +329,9 @@ class PreparationTests(unittest.TestCase):
             calls = []
             with patch.object(metadata_amane, "find_uv", return_value=Path("uv.exe")):
                 rebuilt = metadata_amane.rebuild(tools, runner=lambda *a, **k: calls.append(a) or completed(""), root=empty)
-            self.assertEqual(rebuilt, {"ok": False, "error": facts["problem"]})
+            self.assertEqual(rebuilt, {"ok": False, "error": facts["problem"],
+                                       "message_code": "errors.metadataAmane.bundleFileMissing",
+                                       "message_params": {"path": str(empty / "pyproject.toml")}})
             self.assertEqual(calls, [])
 
     def test_an_unreadable_or_unpinned_manifest_is_a_problem_too(self):
@@ -751,7 +753,8 @@ class FailureMappingTests(unittest.TestCase):
         for reason in ("not_found", "timeout", "server_error", "parse_error", "age_verification", "login_required"):
             self.assertEqual(metadata_amane.cooldown_action(
                 metadata_amane.failure_error("avsox", {"reason": reason})), "")
-        self.assertEqual(metadata_amane.cooldown_action(MetadataProviderError("plain")), "")
+        # 桥报告里只有一句原文、没有细档的失败（`_bridge_report`）。
+        self.assertEqual(metadata_amane.cooldown_action(MetadataProviderError(*relayed("bridge error"))), "")
 
     def test_a_region_lock_or_a_bare_403_pauses_the_site_but_is_not_a_miss(self):
         """被挡与没有要分开：地区限制和裸 403 让整站冷却，不冻进「没有」的记忆。"""
@@ -879,13 +882,13 @@ class ProviderStageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as empty:
             provider = LibraryMetadataProvider(self.secrets, tools_root=Path(empty))
             self.addCleanup(provider.transport.close)
-            failure = metadata_amane.PreparationError("amane 运行环境下载失败")
+            failure = metadata_amane.PreparationError("errors.metadataAmane.runtimeUnavailable")
             with patch.object(metadata_amane, "ensure", side_effect=failure) as prepare:
                 for code in ("HEYZO-1380", "HEYZO-1381"):
                     with self.assertRaises(Unavailable) as caught:
                         provider.amane(code, route=("avsox",))
                 self.assertEqual(prepare.call_count, 1)
-        self.assertIn("amane 运行环境下载失败", str(caught.exception))
+        self.assertIn("amane 运行环境未取得", str(caught.exception))
 
     def test_a_route_without_bridge_sites_is_not_found_without_a_subprocess(self):
         provider = self.provider(report())

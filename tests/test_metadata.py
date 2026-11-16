@@ -299,3 +299,42 @@ class SourceIdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetadataInterfaceTextTests(unittest.TestCase):
+    """登录墙的理由与候选旁证的说法带 code，英文界面按 code 拿到英文（ADR-0159）。"""
+
+    def test_an_authentication_wall_reason_renders_in_the_interface_language(self):
+        from peach import interface_text
+        from peach.metadata import auth_wall, reason_blames_credentials
+        reason = auth_wall(status_code=401)
+        self.assertEqual(interface_text.text(f"server:{reason['code']}", reason["params"], language="en"),
+                         "The source returned 401; rerun with different credentials")
+        self.assertTrue(reason_blames_credentials(reason))
+        self.assertFalse(reason_blames_credentials(auth_wall(status_code=403)))
+        # 当作鉴权报错的参数时，整句跟着同一语言渲染。
+        error = auth_error("javdb", reason, status_code=401)
+        self.assertEqual(interface_text.text(f"server:{error.code}", error.params, language="en").split(": ", 1)[1],
+                         "The source returned 401; rerun with different credentials")
+
+    def test_catalog_evidence_carries_codes_beside_the_original_wording(self):
+        from peach import interface_text
+        evidence = extract_catalog_evidence({
+            "runtime": 120,
+            "screenshot_urls": [f"https://img{index}.example/{index}.jpg" for index in range(30)],
+        })
+        screenshots = evidence["screenshot_urls"]
+        self.assertTrue(screenshots["display_value"].endswith("张截图（img0.example、img1.example 等）"))
+        self.assertEqual(
+            interface_text.text(f"server:{screenshots['display_value_code']}",
+                                {**screenshots["display_value_params"], "hosts": "img0.example, img1.example"},
+                                language="en"),
+            f"{len(screenshots['value'])} screenshots (img0.example, img1.example and more)")
+        self.assertEqual(len(screenshots["warning_codes"]), len(screenshots["warnings"]))
+        self.assertEqual(
+            interface_text.text(f"server:{screenshots['warning_codes'][0]}", screenshots["warning_params"][0],
+                                language="en").split(".")[0],
+            "The source returned 30 links")
+        self.assertEqual(evidence["runtime"]["display_value"], "120 分钟")
+        self.assertEqual(interface_text.text(f"server:{evidence['runtime']['display_value_code']}",
+                                             evidence["runtime"]["display_value_params"], language="en"), "120 min")

@@ -16,6 +16,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from peach import face_detect, face_match
+from peach.interface_text import dev as t
 from peach.peach_proxy import read_url
 from peach.user_agent import USER_AGENT
 
@@ -69,7 +70,7 @@ def install(destination: Path, *, cache: Path = CACHE, fetch=download) -> list[P
             payload = fetch(url)
             actual = hashlib.sha256(payload).hexdigest()
             if actual != sha256:
-                raise ValueError(f"{name} 的 SHA-256 不符：期望 {sha256}，实际 {actual}")
+                raise ValueError(t("fetch_face_models.shaMismatch", name=name, sha256=sha256, actual=actual))
             temporary = cached.with_name(cached.name + ".part")
             temporary.write_bytes(payload)
             temporary.replace(cached)
@@ -81,7 +82,7 @@ def install(destination: Path, *, cache: Path = CACHE, fetch=download) -> list[P
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("fetch_face_models.description"))
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=CACHE)
     args = parser.parse_args()

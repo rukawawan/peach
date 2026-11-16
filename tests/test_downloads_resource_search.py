@@ -147,6 +147,16 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["rejected"], {"code": 2, "seeders": 1, "size": 1})
         self.assertEqual(result["warnings"],
                          ["索引器返回了 4 条结果，都没通过筛选：番号不符 2 条、体积不在区间 1 条、没有人做种 1 条"])
+        # 那句带 code，列表参数里每段也是带 code 的一句，英文界面按 code 拼出英文（ADR-0159）。
+        from peach import interface_text
+        params = result["warning_params"][0]
+        counts = ", ".join(interface_text.text(f"server:{part['code']}", {
+            **part["params"], "reason": interface_text.text(f"server:{part['params']['reason']['code']}", language="en")},
+            language="en") for part in params["counts"])
+        self.assertEqual(interface_text.text(f"server:{result['warning_codes'][0]}", {**params, "counts": counts},
+                                             language="en"),
+                         "Indexers returned 4 results, but none passed the filters: "
+                         "code mismatch: 2, size out of range: 1, no seeders: 1")
 
     def test_quality_goal_precedes_size_and_only_five_candidates_are_returned(self):
         rows = [item(title=f"ABC-123 1080p {'中字' if at == 6 else ''}",

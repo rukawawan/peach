@@ -46,10 +46,11 @@ from itertools import chain
 from pathlib import Path, PureWindowsPath
 from filelock import FileLock
 
-from . import filename_performers, folder_rules, junk, record_rehome, subtitles, wants
+from . import filename_performers, folder_rules, interface_text, junk, record_rehome, subtitles, wants
 from .platform import is_windows_path, is_unmapped, resolve_location, resolve_root
 from .processing_control import checkpoint
 from .fsutil import atomic_write_text
+from .user_messages import UserFacingError
 from .discovery_rules import system_directory, system_path
 from .catalog_rules import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, is_local_extra
 
@@ -85,7 +86,7 @@ _UPSERT = """INSERT INTO asset(location,path,name,medium,size,mtime,first_seen,l
                disposal=CASE WHEN asset.disposal='vanished' THEN NULL ELSE asset.disposal END"""
 
 
-class ScanTargetError(ValueError):
+class ScanTargetError(UserFacingError, ValueError):
     """来源与扫描根对不上，或者来源在本机没有落点。消息可以直接给人看。"""
 
 
@@ -95,9 +96,8 @@ class ScanPathConflict(ScanTargetError):
     def __init__(self, entries):
         self.asset_ids = tuple(entry[0] for entry in entries)
         self.paths = tuple(entry[1] for entry in entries)
-        ids = '、'.join(str(value) for value in self.asset_ids)
-        super().__init__(f'同一规范路径有多条文件记录（记录 {ids}）：{self.paths[0]}；'
-                         '已保留全部记录，请复核；其他文件继续处理')
+        super().__init__('errors.scan.pathConflict',
+                         {'ids': [str(value) for value in self.asset_ids], 'path': self.paths[0]})
 
 
 def _registered_paths(connection, location, root):
@@ -194,15 +194,16 @@ def check_scan_target(
     """扫描根必须落在这个来源的某个数据库路径前缀内，否则拒绝（ADR-0023 第 2 阶段的写入侧门槛）。"""
     declared = declared_roots.get(location)
     if declared is None:
-        known = "、".join(sorted(declared_roots)) or "（设置文件里一个都没有）"
-        raise ScanTargetError(f"✗ 未声明的来源 {location!r}；[media.locations] 里已知：{known}")
+        if not declared_roots:
+            raise ScanTargetError("errors.scan.unknownSourceNoneDeclared", {"location": repr(location)})
+        raise ScanTargetError("errors.scan.unknownSource",
+                              {"location": repr(location), "known": "、".join(sorted(declared_roots))})
     actual = resolve_location(root, declared_roots)[0]
     if actual != location:
-        raise ScanTargetError(
-            f"✗ 扫描目录与媒体来源不一致：{location} 的数据库路径前缀是 {'、'.join(declared)}，"
-            f"但要扫的是 {root}"
-            + (f"（该目录属于 {actual}）" if actual else "（不在任何已配置的媒体目录下）")
-        )
+        params = {"location": location, "prefixes": "、".join(declared), "root": root}
+        if actual:
+            raise ScanTargetError("errors.scan.rootBelongsElsewhere", {**params, "actual": actual})
+        raise ScanTargetError("errors.scan.rootOutsideMedia", params)
 
 
 def ledger_root_for(
@@ -244,33 +245,35 @@ def ledger_root_for(
     if is_windows_path(text):
         return text
     if not location_mounts:
-        raise ScanTargetError(
-            f"✗ 媒体来源 {location!r} 未配置本机目录，无法转换 {text} 的路径；"
-            f"请先在 [media.mounts] 中配置媒体目录")
-    shown = "、".join(os.fspath(mount) for mount in location_mounts)
-    raise ScanTargetError(f"✗ {text} 不在来源 {location!r} 的挂载点 {shown} 之下")
+        raise ScanTargetError("errors.scan.noMounts", {"location": repr(location), "path": text})
+    raise ScanTargetError("errors.scan.outsideMounts", {
+        "path": text, "location": repr(location),
+        "mounts": "、".join(os.fspath(mount) for mount in location_mounts)})
 
 
 def walk_root_for(
     location: str, root: str, *, declared_roots: Mapping[str, Sequence[str]],
     mounts: Mapping[str, Sequence[str | Path]], windows: bool | None = None,
 ) -> Path:
-    """取得数据库路径在本机对应的扫描目录。调用前先过 `check_scan_target`。"""
+    """取得数据库路径在本机对应的扫描目录。
+
+    先过 `check_scan_target`：不在这个来源任何数据库路径前缀下的目录，`resolve_root` 给的
+    序号是 -1，拿它取挂载表会越界或落到最后一个挂载点，所以在这里就报可读的错误。
+    """
     windows = os.name == "nt" if windows is None else windows
+    check_scan_target(location, root, declared_roots=declared_roots)
     _location, index, tail = resolve_root(root, declared_roots)
     location_mounts = tuple(mounts.get(location, ()))
     from .smb_media import is_address, resolve
     if index < len(location_mounts) and is_address(str(location_mounts[index])):
         resource = resolve(root)
         if resource is None:
-            raise ScanTargetError('SMB 目录尚未保存到媒体库配置')
+            raise ScanTargetError('errors.scan.smbNotSaved')
         return resource
     if index >= len(location_mounts) or str(location_mounts[index]) in ("", ".") or is_unmapped(Path(location_mounts[index])):
         if windows:
             return Path(root)
-        raise ScanTargetError(
-            f"✗ 媒体来源 {location!r} 的第 {index + 1} 个数据库路径前缀没有对应的本机目录；"
-            f"请先在 [media.mounts] 中按相同顺序配置媒体目录")
+        raise ScanTargetError("errors.scan.prefixWithoutMount", {"location": repr(location), "index": index + 1})
     return Path(location_mounts[index]).joinpath(*tail)
 
 
@@ -469,12 +472,13 @@ class ScanResult:
     relocated_ids: tuple[int, ...] = ()
 
     def summary(self) -> str:
-        return (f"✓ {self.location}: {self.files:,} 文件 / "
-                f"{self.total_bytes / 1024 ** 4:.2f} TB / 耗时 {self.seconds:.0f}s；"
-                f"附属文件未登记 {self.sidecars:,} 个；清单中已消失 {self.gone:,} 个；"
-                f"字幕 {self.subtitles:,} 条（孤立 {self.orphan_subtitles:,} 条）；"
-                f"垃圾移入回收站 {self.junk_isolated:,} 个，待复核 {self.junk_review:,} 个；"
-                f"路径重复待复核 {self.path_conflicts:,} 组")
+        """命令行打印的一行摘要，跟本机语言（`labels.scan.summary`）。"""
+        return interface_text.text("server:labels.scan.summary", {
+            "location": self.location, "files": f"{self.files:,}", "size": f"{self.total_bytes / 1024 ** 4:.2f}",
+            "seconds": f"{self.seconds:.0f}", "sidecars": f"{self.sidecars:,}", "gone": f"{self.gone:,}",
+            "subtitles": f"{self.subtitles:,}", "orphans": f"{self.orphan_subtitles:,}",
+            "junk": f"{self.junk_isolated:,}", "junkReview": f"{self.junk_review:,}",
+            "conflicts": f"{self.path_conflicts:,}"}, interface_text.local_language())
 
 
 def _walk(top: Path, pending: list[str] | None = None, *, onerror=lambda error: None, read_directory=None):
@@ -637,7 +641,7 @@ def _pending_directories(previous, walk_root):
             _relative_directory(value, walk_root)
         return pending
     if any(not Path(value).is_relative_to(walk_root) for value in pending):
-        raise ScanTargetError('扫描目录与保存的断点不一致，请核对挂载设置')
+        raise ScanTargetError('errors.scan.checkpointMismatch')
     return pending
 
 
@@ -839,8 +843,9 @@ def _scan_location(
                                                        identities, observations)
                     discovered.update(inserted_ids)
                     save_directory(directory, name, here)
-                    report(f"  {time.time() - started:5.0f}s  {files:,} 文件  "
-                           f"{total / 1024 ** 4:.2f} TB")
+                    report(interface_text.text("server:labels.scan.progress", {
+                        "seconds": f"{time.time() - started:5.0f}", "files": f"{files:,}",
+                        "size": f"{total / 1024 ** 4:.2f}"}, interface_text.local_language()))
             inserted_ids = _commit_scan_records(connection, db_path, batch, registered, conflicts,
                                                identities, observations)
             directory_tracks, directory_orphans = _record_directory_subtitles(

@@ -1,4 +1,5 @@
 import { apiGet, apiSend } from '../../api';
+import { withBackoff } from '../../polling';
 import { queryClient } from '../query';
 import { fetchWants, WANTS_KEY } from '../wants/wants';
 import type { CoverState, FaceRef, CoverItem } from '@peach/card-art';
@@ -6,6 +7,7 @@ import { coverImage, javArtwork, remoteCoverUrl } from '@peach/card-art';
 import { esc } from '@peach/legacy/core';
 import { peachHistory, shellNavigate } from '@peach/history';
 import { RELEASE_SORTS, type DiscoveryDirection, type DiscoverySort, type ReleaseSort } from './discovery-sorts';
+import { t } from '../../i18n';
 
 export { JAV_TABS, javTab, javPath, javLibraryPath } from './jav-navigation';
 
@@ -20,11 +22,14 @@ export interface Discovery extends CoverItem {
   id: number; code: string; title: string; performers: string; release_date: string;
   studio: string; link: string; cover_url: string; has_cover: boolean; wanted: boolean;
   performer_refs?: (FaceRef & { name: string; source_actor_id?: string; source_avatar?: boolean })[];
-  asset_id?: number | null; tags?: string[]; reasons?: string[]; score?: number;
+  asset_id?: number | null; tags?: string[]; score?: number;
+  /** 口味理由，服务端按中文渲染好的原句；`reason_codes`、`reason_params` 与它一一对应。 */
+  reasons?: string[]; reason_codes?: string[]; reason_params?: Record<string, unknown>[];
   taste_score?: number | null; ranking_score?: number | null; rank?: number;
   source_score?: number | null; duration?: number | null;
   metadata_state?: 'pending' | 'ready' | 'partial' | 'unavailable' | 'stale'; metadata_message?: string;
-  cover_state?: CoverState | null; cover_reason?: string;
+  cover_state?: CoverState | null; cover_reason?: string; cover_reason_code?: string;
+  cover_reason_params?: Record<string, unknown>;
 }
 export type DiscoveryScope = 'external' | 'library';
 
@@ -99,9 +104,12 @@ export function fetchDiscoveries(scope: DiscoveryScope, signal: AbortSignal, opt
 }
 
 export const DISCOVERY_METADATA_KEY = ['jav-discovery-metadata'] as const;
-/** 资料读取进行中，推荐与新作列表隔这么久重取一次，把读到的标签与评分带上来；进度条另按任务轮询走。 */
-export const DISCOVERY_REFRESH_MS = 15000;
 export type DiscoveryMetadataStatus = Pick<DiscoveryResult, 'metadata_job' | 'poll_after_ms'>;
+/** 资料读取进度的 `refetchInterval`：有一轮在跑时按服务端给的 `poll_after_ms`（至少一秒），读失败退避。
+ *  列表本身读的期间不另起轮询：读到的标签与评分由全站那一处的 `discoveries` 版本作废列表带上来，
+ *  读完页面再取一次。`listed` 是列表带回来的那一轮是不是在跑。 */
+export const metadataInterval = (listed: () => boolean) => withBackoff<DiscoveryMetadataStatus>((data) =>
+  (data?.metadata_job?.status === 'running' || listed() ? Math.max(1000, data?.poll_after_ms || 3000) : false));
 /** 资料读取进度：只读任务快照，不重算推荐。 */
 export const fetchDiscoveryMetadata = (signal: AbortSignal) =>
   apiGet<DiscoveryMetadataStatus>('/api/jav/discoveries/metadata', signal);
@@ -164,7 +172,7 @@ export function discoveryArtwork(item: Discovery, layout: 'big' | 'small', javIm
   const remote = esc(remoteCoverUrl(item));
   return coverImage(item, layout).replace(/ src="[^"]*"/,
     ` src="${remote}" data-jav-image="${item.id}" data-jav-cover="${remote}" data-jav-thumb="" data-jav-image-layout="${layout}"${layout === 'big' ? ' data-panel-prior="1"' : ''}`)
-    .replace('data-drop="self"', 'data-drop="initial" data-initial="封面未取得" data-drop-class="media-nopic"');
+    .replace('data-drop="self"', `data-drop="initial" data-initial="${esc(t('shell:artworkGap.coverNotFound'))}" data-drop-class="media-nopic"`);
 }
 
 export async function prefetchJav(tab: string, signal: AbortSignal) {

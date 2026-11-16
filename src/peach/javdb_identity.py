@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+from .source_page_words import FANZA_LIMITED_PREFIX, FANZA_PHOTO_BONUS_TITLE
+
 RULE = 2
 
 
@@ -15,8 +17,8 @@ def fanza_regular_id(rows: list[dict]) -> str | None:
         ordinary = regular.get('origin_title')
         if not isinstance(title, str) or not isinstance(ordinary, str) or not ordinary:
             continue
-        match = re.fullmatch(r'【FANZA限定】(.+) 生写真[1-9]\d?枚付き', title)
-        if match and match[1] == ordinary and not ordinary.startswith('【FANZA限定】'):
+        match = re.fullmatch(FANZA_PHOTO_BONUS_TITLE, title)
+        if match and match[1] == ordinary and not ordinary.startswith(FANZA_LIMITED_PREFIX):
             return regular['id']
     return None
 

@@ -27,6 +27,7 @@ import {
   followBadges, followCompactWhen, followIdentity, followMediaIssue, followTitle, followTitleMarks, followWhen,
   learnFollowDims, sourceMark,
 } from './follow-marks';
+import { t } from '../../i18n';
 
 /** 时长只在是真时长时写：来源没给、给了 0 或给了一个明显是占位的数，都不出这一格。 */
 const realDuration = (value: unknown) => Number(value) > 0;
@@ -164,7 +165,7 @@ function FollowCardView(props: FollowCardProps) {
       data-selected={selected ? '' : undefined} onClick={click} onMouseDown={suppressShiftTextSelection}
       onMouseEnter={flip.onPointerEnter} onMouseLeave={flip.onPointerLeave}>
       <div data-follow-visual="" data-mix-stack={stack.isMix ? '' : undefined}>
-        <button type="button" data-follow-open="" aria-label={`打开 ${title} 详情`} />
+        <button type="button" data-follow-open="" aria-label={t('follow:followCard.openDetails', { title })} />
         <div data-media-pic="">
           {thumbUrl
             ? <Thumb key={thumbUrl} src={thumbUrl} fallback={imageFallback} width={sized?.width} height={sized?.height}
@@ -181,7 +182,7 @@ function FollowCardView(props: FollowCardProps) {
           ) : null}
           <div data-follow-sources="">
             <span data-media-badge="" title={item.provider_label || item.provider}
-              aria-label={`来源：${item.provider_label || item.provider}`}
+              aria-label={t('follow:followFeed.sourceLabel', { source: item.provider_label || item.provider })}
               dangerouslySetInnerHTML={{ __html: sourceMark(item.provider, item.provider_label) }} />
             {badges ? <span data-follow-badges="" dangerouslySetInnerHTML={{ __html: badges }} /> : null}
           </div>
@@ -199,23 +200,23 @@ function FollowCardView(props: FollowCardProps) {
               </button>
             ) : null}
             {props.variant !== 'next' ? <div data-follow-actions="">
-              <button type="button" data-follow-save={item.id} title={saved ? '已保存' : '保存到数据库'}
-                aria-label={saved ? '已保存' : '保存到数据库'} disabled={saved}
+              <button type="button" data-follow-save={item.id} title={saved ? t('follow:shared.saved') : t('follow:followDetail.saveToDatabase')}
+                aria-label={saved ? t('follow:shared.saved') : t('follow:followDetail.saveToDatabase')} disabled={saved}
                 aria-busy={busy === 'save' || undefined} aria-disabled={busy === 'save' || undefined}
                 onClick={(event) => act(event, () => props.onSave?.(item.id))}
                 dangerouslySetInnerHTML={{ __html: icon(saved ? 'check' : 'bookmark-plus') }} />
-              <button type="button" data-follow-status={item.id} data-to="seen" title="标记已看" aria-label="标记已看"
+              <button type="button" data-follow-status={item.id} data-to="seen" title={t('follow:followDetail.markSeen')} aria-label={t('follow:followDetail.markSeen')}
                 disabled={item.status === 'seen'} aria-busy={busy === 'seen' || undefined}
                 aria-disabled={busy === 'seen' || undefined}
                 onClick={(event) => act(event, () => props.onStatus?.(item.id, 'seen'))}
                 dangerouslySetInnerHTML={{ __html: icon('eye') }} />
-              <button type="button" data-follow-status={item.id} data-to="ignored" title="忽略" aria-label="忽略"
+              <button type="button" data-follow-status={item.id} data-to="ignored" title={t('follow:shared.ignore')} aria-label={t('follow:shared.ignore')}
                 disabled={item.status === 'ignored'} aria-busy={busy === 'ignored' || undefined}
                 aria-disabled={busy === 'ignored' || undefined}
                 onClick={(event) => act(event, () => props.onStatus?.(item.id, 'ignored'))}
                 dangerouslySetInnerHTML={{ __html: icon('eye-off') }} />
               {item.status === 'seen' || item.status === 'ignored' ? (
-                <button type="button" data-follow-status={item.id} data-to="new" title="恢复未看" aria-label="恢复未看"
+                <button type="button" data-follow-status={item.id} data-to="new" title={t('follow:followDetail.markUnseen')} aria-label={t('follow:followDetail.markUnseen')}
                   aria-busy={busy === 'new' || undefined} aria-disabled={busy === 'new' || undefined}
                   onClick={(event) => act(event, () => props.onStatus?.(item.id, 'new'))}
                   dangerouslySetInnerHTML={{ __html: icon('rotate-ccw') }} />
@@ -227,8 +228,8 @@ function FollowCardView(props: FollowCardProps) {
       <div data-media-meta="">
         {identity.entityName ? (
           <FollowAuthorLink name={identity.entityName} actions={actions} data-media-avatar="" data-follow-avatar=""
-            aria-label={`查看 ${identity.author} 的作者页`} dangerouslySetInnerHTML={{ __html: identity.avatar }} />
-        ) : <span data-media-avatar="" data-follow-avatar="" title="创作者头像"
+            aria-label={t('follow:followFeed.viewCreatorPage', { name: identity.author })} dangerouslySetInnerHTML={{ __html: identity.avatar }} />
+        ) : <span data-media-avatar="" data-follow-avatar="" title={t('follow:followCard.creatorAvatar')}
           dangerouslySetInnerHTML={{ __html: identity.avatar }} />}
         <div data-media-text="">
           <button type="button" data-media-title=""
@@ -244,7 +245,7 @@ function FollowCardView(props: FollowCardProps) {
             <span data-media-facts="">
               <CardDate value={item.published_at || ''} label={followCompactWhen(item)} title={followWhen(item)} />
             </span>
-            {identity.credited ? <span data-follow-credit="" title={`署名含 ${identity.credited}`}>{`署名含 ${identity.credited}`}</span> : null}
+            {identity.credited ? <span data-follow-credit="" title={t('follow:followCard.credited', { names: identity.credited })}>{t('follow:followCard.credited', { names: identity.credited })}</span> : null}
           </div>
           {props.variant === 'next'
             ? props.reason ? <RecommendationReason reasons={props.reason.reasons} tags={props.reason.tags.map(tag => tagLabel(tag))} /> : null

@@ -26,6 +26,8 @@ import json
 import re
 from datetime import date
 
+from .source_page_words import AVWIKIDB_SIZES_CELL
+
 SITE = "https://avwikidb.com/"
 ACTOR_PAGE = SITE + "actor/{id}/"
 WORK_PAGE = SITE + "work/{code}/"
@@ -34,7 +36,7 @@ _ACTOR = re.compile(r"/actor/(\d+)/?$")
 _NEXT_DATA = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
 _LD_JSON = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
-_SIZES_CELL = re.compile(r"身長・スリーサイズ\s*</p>\s*<p[^>]*>([^<]*)<", re.S)
+_SIZES_CELL = re.compile(AVWIKIDB_SIZES_CELL, re.S)
 _SIZE = re.compile(r"([TBWH])\s*(\d{2,3})(?:\s*[(（]\s*([A-Z]{1,2})\s*[)）])?")
 _KANA = re.compile(r"^[぀-ゟ゠-ヿ\s・]+$")
 _LATIN = re.compile(r"^[A-Za-z][A-Za-z\s'.-]*$")

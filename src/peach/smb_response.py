@@ -66,7 +66,7 @@ class SmbResponse(Response):
                 while remaining > 0:
                     block = await asyncio.to_thread(handle.read, min(1 << 20, remaining))
                     if not block:
-                        raise OSError('SMB 文件在读取期间发生变化')
+                        raise OSError('SMB file changed while streaming')
                     remaining -= len(block)
                     yield block
             await StreamingResponse(body(), status_code=status, headers=headers,

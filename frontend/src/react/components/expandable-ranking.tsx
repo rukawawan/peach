@@ -3,6 +3,7 @@ import {
   Children, cloneElement, isValidElement, useId, useLayoutEffect, useRef, useState,
   type ReactElement, type ReactNode,
 } from 'react';
+import { t } from '../../i18n';
 
 interface ExpandableRankingProps {
   children: ReactNode;
@@ -53,7 +54,7 @@ export function ExpandableRanking(
       </ol>
       {expandable ? (
         <button type="button" data-ranking-toggle aria-controls={listId} aria-expanded={expanded}
-          aria-label={expanded ? '收起排名' : '展开更多排名'}
+          aria-label={expanded ? t('shell:expandableRanking.collapse') : t('shell:expandableRanking.expand')}
           onClick={() => { setAnimating(true); setExpanded((current) => !current) }}>
           <RiArrowDownSLine aria-hidden />
         </button>

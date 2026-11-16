@@ -1,15 +1,16 @@
 /* 字幕外观持久化与 TextTrack 时间轴显示。 */
 import type { playerMemory } from './memory';
+import { t } from '../i18n';
 export const CAPTION_OPTIONS = {
-  font: { label: '字体', values: [['sans', '无衬线'], ['mono', '等宽无衬线'], ['serif', '衬线'], ['mono-serif', '等宽衬线'], ['casual', '休闲'], ['cursive', '手写'], ['small-caps', '小型大写字母']] },
-  size: { label: '字号', values: ['50', '75', '100', '150', '200', '300', '400'].map(value => [value, `${value}%`]) },
-  color: { label: '文字颜色', values: [['white', '白色'], ['yellow', '黄色'], ['green', '绿色'], ['cyan', '青色'], ['blue', '蓝色'], ['magenta', '品红'], ['red', '红色'], ['black', '黑色']] },
-  opacity: { label: '文字不透明度', values: ['25', '50', '75', '100'].map(value => [value, `${value}%`]) },
-  background: { label: '背景颜色', values: [['black', '黑色'], ['white', '白色'], ['red', '红色'], ['green', '绿色'], ['blue', '蓝色'], ['yellow', '黄色'], ['magenta', '品红'], ['cyan', '青色']] },
-  backgroundOpacity: { label: '背景不透明度', values: ['0', '25', '50', '75', '100'].map(value => [value, `${value}%`]) },
-  window: { label: '窗口颜色', values: [['black', '黑色'], ['white', '白色'], ['red', '红色'], ['green', '绿色'], ['blue', '蓝色'], ['yellow', '黄色'], ['magenta', '品红'], ['cyan', '青色']] },
-  windowOpacity: { label: '窗口不透明度', values: ['0', '25', '50', '75', '100'].map(value => [value, `${value}%`]) },
-  edge: { label: '字符边缘样式', values: [['none', '无'], ['raised', '凸起'], ['depressed', '凹陷'], ['outline', '描边'], ['shadow', '阴影']] },
+  font: { label: t('catalog:subtitleStyle.font'), values: [['sans', t('catalog:subtitleStyle.sansSerif')], ['mono', t('catalog:subtitleStyle.monoSansSerif')], ['serif', t('catalog:subtitleStyle.serif')], ['mono-serif', t('catalog:subtitleStyle.monoSerif')], ['casual', t('catalog:subtitleStyle.casual')], ['cursive', t('catalog:subtitleStyle.cursive')], ['small-caps', t('catalog:subtitleStyle.smallCaps')]] },
+  size: { label: t('catalog:subtitleStyle.fontSize'), values: ['50', '75', '100', '150', '200', '300', '400'].map(value => [value, `${value}%`]) },
+  color: { label: t('catalog:subtitleStyle.fontColor'), values: [['white', t('catalog:subtitleStyle.white')], ['yellow', t('catalog:subtitleStyle.yellow')], ['green', t('catalog:subtitleStyle.green')], ['cyan', t('catalog:subtitleStyle.cyan')], ['blue', t('catalog:subtitleStyle.blue')], ['magenta', t('catalog:subtitleStyle.magenta')], ['red', t('catalog:subtitleStyle.red')], ['black', t('catalog:subtitleStyle.black')]] },
+  opacity: { label: t('catalog:subtitleStyle.fontOpacity'), values: ['25', '50', '75', '100'].map(value => [value, `${value}%`]) },
+  background: { label: t('catalog:subtitleStyle.backgroundColor'), values: [['black', t('catalog:subtitleStyle.black')], ['white', t('catalog:subtitleStyle.white')], ['red', t('catalog:subtitleStyle.red')], ['green', t('catalog:subtitleStyle.green')], ['blue', t('catalog:subtitleStyle.blue')], ['yellow', t('catalog:subtitleStyle.yellow')], ['magenta', t('catalog:subtitleStyle.magenta')], ['cyan', t('catalog:subtitleStyle.cyan')]] },
+  backgroundOpacity: { label: t('catalog:subtitleStyle.backgroundOpacity'), values: ['0', '25', '50', '75', '100'].map(value => [value, `${value}%`]) },
+  window: { label: t('catalog:subtitleStyle.windowColor'), values: [['black', t('catalog:subtitleStyle.black')], ['white', t('catalog:subtitleStyle.white')], ['red', t('catalog:subtitleStyle.red')], ['green', t('catalog:subtitleStyle.green')], ['blue', t('catalog:subtitleStyle.blue')], ['yellow', t('catalog:subtitleStyle.yellow')], ['magenta', t('catalog:subtitleStyle.magenta')], ['cyan', t('catalog:subtitleStyle.cyan')]] },
+  windowOpacity: { label: t('catalog:subtitleStyle.windowOpacity'), values: ['0', '25', '50', '75', '100'].map(value => [value, `${value}%`]) },
+  edge: { label: t('catalog:subtitleStyle.edgeStyle'), values: [['none', t('catalog:subtitleStyle.none')], ['raised', t('catalog:subtitleStyle.raised')], ['depressed', t('catalog:subtitleStyle.depressed')], ['outline', t('catalog:subtitleStyle.outline')], ['shadow', t('catalog:subtitleStyle.dropShadow')]] },
 } as const;
 export type CaptionKey = keyof typeof CAPTION_OPTIONS;
 export type CaptionStyle = Record<CaptionKey, string>;
@@ -32,7 +33,17 @@ export function mountCaptionStyle(root: HTMLElement, video: HTMLVideoElement, si
   const touched = new Set<CaptionKey>();
   const overlay = document.createElement('div'); overlay.className = 'vjs-peach-captions'; overlay.setAttribute('aria-hidden', 'true');
   const window = document.createElement('div'); window.className = 'vjs-peach-caption-window'; overlay.append(window);
-  root.querySelector('media-container')!.append(overlay); root.dataset.peachCaptions = '';
+  root.querySelector('media-container')!.append(overlay);
+  // 网页层字幕只在页面内播放时可见；iOS 原生全屏与画中画由系统绘制画面，那时交还原生字幕轨道。
+  const presentation = () => {
+    const native = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean; webkitPresentationMode?: string };
+    const outside = !!native.webkitDisplayingFullscreen || (native.webkitPresentationMode ?? 'inline') !== 'inline'
+      || document.pictureInPictureElement === video;
+    if (outside) delete root.dataset.peachCaptions; else root.dataset.peachCaptions = '';
+  };
+  for (const event of ['webkitbeginfullscreen', 'webkitendfullscreen', 'webkitpresentationmodechanged', 'enterpictureinpicture', 'leavepictureinpicture'])
+    video.addEventListener(event, presentation, { signal });
+  presentation();
   const paintStyle = () => {
     const rgba = (color: string, opacity: string) => `rgba(${COLORS[color]},${Number(opacity) / 100})`;
     root.style.setProperty('--peach-caption-font', FONTS[style.font]!);

@@ -13,6 +13,7 @@ import { SetupDoneView } from './setup-done';
 import { SetupForm } from './setup-form';
 import { SetupRestore } from './setup-restore';
 import { SetupShell } from './setup-scene';
+import { t } from '../../../i18n';
 
 type View =
   | { kind: 'loading' }
@@ -52,17 +53,17 @@ export function SetupPage() {
   return (
     <SetupShell step={0}>
     <section data-setup-form-panel="" aria-labelledby="auth-card-title" aria-busy={view.kind === 'loading' || undefined}>
-      <div data-setup-top=""><span className="text-body-2-regular text-text-secondary">首次设置</span></div>
+      <div data-setup-top=""><span className="text-body-2-regular text-text-secondary">{t('shell:setupForm.eyebrow')}</span></div>
       <div data-setup-step-scroll=""><div data-setup-step-content="">
       <header data-setup-step-heading="">
-        <h1 id="auth-card-title" className="text-title-1-semibold text-text-primary">欢迎使用 Peach</h1>
-        <p className="text-body-regular text-text-secondary">花一点时间，让 Peach 更适合你。</p>
+        <h1 id="auth-card-title" className="text-title-1-semibold text-text-primary">{t('shell:setupForm.welcomeTitle')}</h1>
+        <p className="text-body-regular text-text-secondary">{t('shell:setupForm.welcomeLede')}</p>
       </header>
-      {view.kind === 'loading' ? <div data-setup-loading="" data-skeleton="" role="status" aria-label="正在读取设置"><span /><span /><span /></div> : null}
+      {view.kind === 'loading' ? <div data-setup-loading="" data-skeleton="" role="status" aria-label={t('shell:setupPage.loading')}><span /><span /><span /></div> : null}
       {view.kind === 'denied'
-        ? <Note tone="error">{view.docker ? FIRST_ACCESS_DENIED : '请在运行 Peach 的这台电脑上打开设置。'}</Note> : null}
+        ? <Note tone="error">{view.docker ? FIRST_ACCESS_DENIED : t('shell:setupPage.openOnServer')}</Note> : null}
       {view.kind === 'failed'
-        ? <Note tone="error" action={<Button variant="secondary" onClick={retry}>立即重试</Button>}>{view.message}</Note>
+        ? <Note tone="error" action={<Button variant="secondary" onClick={retry}>{t('shell:shared.retryNow')}</Button>}>{view.message}</Note>
         : null}
       </div></div>
     </section>

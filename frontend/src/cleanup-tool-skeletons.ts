@@ -88,11 +88,11 @@ function dataTable({ title: name, description, search = '', columns, rows }:
   const searchBox = search ? `<div data-index-search class="ml-auto min-w-0 max-w-80 flex-1">${islandSearchInput('', '', search)}</div>` : '';
   return `<div data-data-table-panel class="${cardClass({ padding: 'none', className: 'flex flex-col gap-4 px-6 py-5 max-sm:px-4' })}">
     <div data-responsive-toolbar><div data-toolbar-heading>${title(name, '')}<span class="text-body-2-regular tabular-nums text-text-secondary">${text('4em')}</span></div>
-      <div data-toolbar-actions>${searchBox}<div class="flex flex-none gap-2">${islandButton({ variant: 'secondary', label: '显示列' })}${islandButton({ variant: 'secondary', label: '重置列宽' })}</div>
-        <span class="flex flex-none items-center gap-2">${islandSelect('默认顺序', { prefix: '排序' })}${islandButton({ variant: 'secondary', glyph: 'arrow-up', attrs: WAITING })}</span></div></div>
+      <div data-toolbar-actions>${searchBox}<div class="flex flex-none gap-2">${islandButton({ variant: 'secondary', label: t('shell:tableColumns.columns') })}${islandButton({ variant: 'secondary', label: t('shell:tableColumns.resetWidths') })}</div>
+        <span class="flex flex-none items-center gap-2">${islandSelect(t('shell:tableSort.defaultOrder'), { prefix: t('shell:shared.sort') })}${islandButton({ variant: 'secondary', glyph: 'arrow-up', attrs: WAITING })}</span></div></div>
     <p class="text-body-2-regular text-text-secondary">${description}</p>
     <div data-board-data-table data-resizable-table data-follow-table><div class="relative min-w-0"><div class="w-full overflow-x-auto"><table class="bui-table bui-table-sm" style="min-width:${least}px"><thead><tr>${head}</tr></thead><tbody>${row.repeat(rows)}</tbody></table></div></div></div>
-    <div data-table-pagination class="flex flex-wrap items-center justify-between gap-3"><span class="mr-auto text-body-2-regular tabular-nums text-text-secondary">${text('8em')}</span><div data-toolbar-actions>${islandSelect('每页 20 条', { size: 'sm' })}</div></div>
+    <div data-table-pagination class="flex flex-wrap items-center justify-between gap-3"><span class="mr-auto text-body-2-regular tabular-nums text-text-secondary">${text('8em')}</span><div data-toolbar-actions>${islandSelect(t('shell:tablePagination.perPage', { count: 20, unit: t('shell:tablePagination.pageUnit') }), { size: 'sm' })}</div></div>
   </div>`;
 }
 

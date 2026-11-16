@@ -46,6 +46,8 @@
  * `styles.css` 的 `@theme`：独立页面包也用 `SourceMark` 与带字按键，而 `@theme` 变量按用量裁剪。 */
 :root {
   --icon-inline: 1.2em;
+  /* 标题加一行说明的两行图标位（扫描与采集通知卡）：两行行高之和，随根字号缩放。 */
+  --icon-lead: calc(var(--text-body-medium--line-height, 1.25rem) + var(--text-caption-1-regular--line-height, 1rem));
 }
 
 /* 控件高度四档，用法见 `docs/DESIGN_GUIDELINES.md` 第 11 节；遗留壳 `web/css/01-base.css` 的 `:root` 同名同值。 */

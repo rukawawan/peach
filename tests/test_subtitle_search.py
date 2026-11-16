@@ -1,4 +1,4 @@
-"""中文字幕筛选、转换与下载边界；媒体均为临时夹具。"""
+"""按界面语言筛字幕（中文界面找简繁中文、英文界面找英文）、转换与下载边界；媒体均为临时夹具。"""
 from __future__ import annotations
 
 import tempfile
@@ -29,15 +29,37 @@ class SubtitleSearchTests(unittest.TestCase):
             payload = source.search('ABP-758')
         self.assertEqual(payload['source'], 'SubtitleCat')
         self.assertFalse(payload['more'])
-        self.assertEqual([(row['title'], row['language']) for row in payload['results']], [('ABP-758', '简体中文 / 繁体中文')])
+        self.assertEqual([(row['title'], row['languages']) for row in payload['results']], [('ABP-758', ['zh-Hans', 'zh-Hant'])])
         self.assertEqual(source._detail(payload['results'][0]['id']), source.SITE + '/subs/42/ABP-758.html')
 
     def test_files_expose_language_choices_without_download_urls(self):
         with self.client(lambda request: httpx.Response(200, text=DETAIL)):
             rows = source.files(source._id('/subs/42/ABP-758.html'))['files']
-        self.assertEqual([row['language'] for row in rows], ['简体中文', '繁体中文'])
+        self.assertEqual([row['language'] for row in rows], ['zh-Hans', 'zh-Hant'])
         self.assertEqual([row['index'] for row in rows], [0, 1])
         self.assertTrue(all(row['playable'] and 'url' not in row for row in rows))
+
+    def test_english_interface_searches_english_subtitles_only(self):
+        def respond(request):
+            if request.url.path == '/index.php':
+                return httpx.Response(200, text=SEARCH)
+            return httpx.Response(200, text=DETAIL if '/42/' in request.url.path else '<a href="/subs/43/x-zh-CN.srt">中文</a>')
+        with self.client(respond):
+            payload = source.search('ABP-758', language='en')
+        with self.client(respond):
+            rows = source.files(payload['results'][0]['id'], 'en')['files']
+        self.assertEqual([(row['title'], row['languages']) for row in payload['results']], [('ABP-758', ['en'])])
+        self.assertEqual([(row['index'], row['language']) for row in rows], [(0, 'en')])
+        requested = []
+        def download(request):
+            requested.append(request.url.path)
+            return httpx.Response(200, text=DETAIL) if request.url.path.endswith('.html') else httpx.Response(200, text=SRT)
+        with self.client(download):
+            source.load(source._id('/subs/42/ABP-758.html'), 0, 'en')
+        self.assertEqual(requested[-1], '/subs/42/ABP-758-en.srt')
+        with self.assertRaisesRegex(source.SubtitleSearchError, '只支持') as raised:
+            source.search('ABP-758', language='ja')
+        self.assertEqual(raised.exception.code, 'subtitles.unsupportedLanguage')
 
     def test_release_search_filters_other_identities_before_pagination(self):
         titles = ['ABP-7580', 'XABP-758', 'ABP-757', 'ABP-00758', 'abp758 中文',

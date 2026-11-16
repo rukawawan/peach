@@ -21,6 +21,7 @@ from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 
 from . import settings_file
+from .user_messages import UserOSError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ def system_volume() -> Path:
     buffer = ctypes.create_unicode_buffer(32768)
     length = ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer))
     if not 0 < length < len(buffer):
-        raise OSError("未取得 Windows 系统目录")
+        raise UserOSError("errors.platform.windowsDirectoryUnavailable")
     return Path(PureWindowsPath(buffer.value).anchor)
 
 

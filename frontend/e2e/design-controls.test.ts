@@ -473,7 +473,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
         };
         // `divide-y` 把线画在每条的下缘（末条除外），所以量的是第一条的下边。
         const first = element.querySelectorAll('li')[0]!;
-        const log = element.querySelector('[aria-label="在资源管理器中显示"]')!.closest('.text-text-secondary')!.querySelector('p')!;
+        const log = element.querySelector('[aria-label="查看文件位置"]')!.closest('.text-text-secondary')!.querySelector('p')!;
         return {
           divider: parseFloat(getComputedStyle(first).borderBottomWidth),
           dividerInk: paint(getComputedStyle(first).borderBottomColor),
@@ -493,7 +493,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
 
   it('一趟的问题收在同一块提示里，「7 天内不再问」、完整记录与导出都跟着它', { timeout: 60_000 }, async () => {
     const notes = { fetching_cover: 84, querying_metadata: 18 };
-    const button = '[aria-label="在资源管理器中显示"]';
+    const button = '[aria-label="查看文件位置"]';
     const reveal = `#libraryProcessing ${button}`;
     const failed = await openProcessing(browser, '/data-cleanup', { ...FAILED_JOB, notes });
     try {

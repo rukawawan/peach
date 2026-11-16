@@ -46,20 +46,25 @@ import httpx
 from bs4 import BeautifulSoup
 
 from ..catalog_rules import normalise_code_key, same_release_code
+from ..coded_text import Said
 from ..http import HttpRequest, HttpxTransport, body_text
-from ..metadata import MetadataProviderError, auth_error, auth_wall_reason, validate_provider_code
+from ..metadata import MetadataProviderError, auth_error, auth_wall, validate_provider_code
 from ..scripting import HostLimiter
+from ..source_page_words import (AV_NAME_LABEL, AV_NEME_LABEL, SEESAA_CAST_HEADER, SEESAA_CAST_LABEL,
+                                 SEESAA_CODE_HEADER, SEESAA_LABEL, SEESAA_LABEL_INDEX,
+                                 SEESAA_PERSON_MAIN_LABEL, SEESAA_PERSON_NAME_LABELS, SEESAA_RENAMED,
+                                 SEESAA_SEPARATORS, SEESAA_UNCERTAIN_NAME)
 from .base import Page, Session, SiteConfig, SiteRecord, SiteSource
 
 #: 社区 Wiki，按社区来源登记。主机间隔用默认的 2 秒，单页上限用默认的 4 MiB（真实 Flower 页
 #: 253975 字节）。不带 Cookie，也不在 `scraping_access.SOURCES` 里：采集设置页没有这一站的卡片。
-SEESAA = SiteConfig(name="sougouwiki", label="素人系総合 Wiki", provider="sougouwiki",
+SEESAA = SiteConfig(name="sougouwiki", label=SEESAA_LABEL, provider="sougouwiki",
                     base_url="https://seesaawiki.jp", domains=("seesaawiki.jp",), stage="community")
 ROOT = SEESAA.base_url + "/w/sougouwiki/"
 #: 两个认人 Wiki。与素人系総合 Wiki 同主机，`scrape_codes` 让几站共用一个主机间隔。
-AV_NEME = SiteConfig(name="av_neme", label="このAV女優の名前教えてwiki", provider="av_neme",
+AV_NEME = SiteConfig(name="av_neme", label=AV_NEME_LABEL, provider="av_neme",
                      base_url="https://seesaawiki.jp", domains=("seesaawiki.jp",), stage="community")
-AV_NAME = SiteConfig(name="av_name", label="AV女優の名前特定wiki", provider="av_name",
+AV_NAME = SiteConfig(name="av_name", label=AV_NAME_LABEL, provider="av_name",
                      base_url="https://seesaawiki.jp", domains=("seesaawiki.jp",), stage="community")
 #: 本批 HTTP 请求上限的默认值（`scrape_codes --wiki-max-requests`）。
 MAX_REQUESTS = 80
@@ -69,17 +74,17 @@ TIMEOUT = 20
 SEARCH_PAGES = 8
 LABEL_PAGES = 4
 
-REVIEW_WARNING = '社区 Wiki 的出演断言需要人工复核；人物页链接不自动合并艺名'
-INCOMPLETE_WARNING = '出演栏含未识别或不确定内容，完整出演名单未取得'
-NOT_IN_SEARCH = 'Wiki 搜索范围内未取得精确作品表格行'
-NOT_IN_ENTRIES = 'Wiki 搜索范围内未取得精确番号的作品条目'
+REVIEW_WARNING = Said('labels.seesaa.reviewCast')
+INCOMPLETE_WARNING = Said('labels.seesaa.incompleteCast')
+NOT_IN_SEARCH = 'errors.seesaa.notInSearch'
+NOT_IN_ENTRIES = 'errors.seesaa.notInEntries'
 #: 出演栏里这些写法说明名单不确定，整份名单只留原文证据。`▲` 是 av_neme 站方说明里的不确定标记。
-_UNCERTAIN_NAME = re.compile(r'[?？�▲]|不明|未確認')
+_UNCERTAIN_NAME = re.compile(SEESAA_UNCERTAIN_NAME)
 #: 链接名摘掉之后剩下的分隔符与「出演順」不算未识别内容。
-_SEPARATORS = re.compile(r'[\s／/、,・]+|出演順')
+_SEPARATORS = re.compile(SEESAA_SEPARATORS)
 _PHOTO = re.compile(r'\.(?:jpg|png|webp)(?:\?|$)', re.I)
 #: 认人 Wiki 的出演行开头：av_name 写「出演女優:」，av_neme 写「名前(女優名)：」。
-_CAST_LABEL = re.compile(r'^\s*(?:出演女優|名前\s*[(（]女優名[)）])\s*[:：]?')
+_CAST_LABEL = re.compile(SEESAA_CAST_LABEL)
 #: av_name 在名字后面标假名读音（`玉木くるみ（たまき くるみ）`），不算未识别内容。
 _READING = re.compile(r'[（(][ぁ-ゟー\s]+[）)]')
 #: av_name 的人物页名带另一种写法（`羽生アリサ（羽生ありさ）`），艺名取括号前那段。
@@ -92,7 +97,7 @@ def page_url(url: str, root: str = ROOT) -> str:
     parsed = urlsplit(absolute)
     if (parsed.scheme != 'https' or parsed.netloc != 'seesaawiki.jp'
             or not parsed.path.startswith(urlsplit(root).path + 'd/') or parsed.query):
-        raise ValueError('需要这个 Wiki 的公开详情页')
+        raise ValueError('expected a public detail page of this wiki')
     return absolute
 
 
@@ -113,7 +118,7 @@ def _one(code: str, rows) -> SiteRecord | None:
     if not matches:
         return None
     if len({_signature(row) for row in matches}) != 1:
-        raise MetadataProviderError('Wiki 精确番号存在冲突行，需复核原页', kind='ambiguous')
+        raise MetadataProviderError('errors.seesaa.conflictingRows', kind='ambiguous')
     return matches[0]
 
 
@@ -148,31 +153,31 @@ class WikiPages:
             except (ValueError, KeyError, TypeError):
                 pass
         if self.blocked or self.requests >= self.max_requests:
-            raise MetadataProviderError('Wiki 本批请求已停止或达到限额', kind='budget', retryable=True)
+            raise MetadataProviderError('errors.seesaa.budgetStopped', kind='budget', retryable=True)
         self.limiter.wait(url)
         self.requests += 1
         try:
             response = self.transport(HttpRequest('GET', url, {}), TIMEOUT, limit)
         except (OSError, RuntimeError, httpx.HTTPError) as error:
-            raise MetadataProviderError('Wiki 网络请求未取得', kind='unavailable', retryable=True) from error
+            raise MetadataProviderError('errors.seesaa.networkFailed', kind='unavailable', retryable=True) from error
         if response.status in {403, 429}:
             self.blocked = True
         # 鉴权失败先判：401/403 与「跳到登录页」都是同一把锁，本批再问多少次都是它。
         # 判成 unavailable 的话它会被当成网络抖动，几百个番号各自再撞一次。
-        reason = auth_wall_reason(status_code=response.status, final_url=response.url)
+        reason = auth_wall(status_code=response.status, final_url=response.url)
         if reason:
             self.blocked = True
             raise auth_error(self.config.name, reason, status_code=response.status)
         if response.status != 200:
-            raise MetadataProviderError('Wiki HTTP 请求未取得', kind='unavailable',
+            raise MetadataProviderError('errors.seesaa.httpFailed', kind='unavailable',
                                         status_code=response.status, retryable=True)
         if len(response.body) > limit:
-            raise MetadataProviderError('Wiki 页面超过读取上限', kind='size_limit')
+            raise MetadataProviderError('errors.seesaa.pageTooLarge', kind='size_limit')
         if response.url and response.url != url:
-            raise MetadataProviderError('Wiki 重定向页面未取得身份验证', kind='redirect')
+            raise MetadataProviderError('errors.seesaa.redirectUnverified', kind='redirect')
         if b'cf-chl-' in response.body or b'Just a moment' in response.body:
             self.blocked = True
-            raise MetadataProviderError('Wiki 机器人验证未取得', kind='blocked', status_code=403)
+            raise MetadataProviderError('errors.seesaa.botCheckFailed', kind='blocked', status_code=403)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix('.tmp')
         temp.write_text(json.dumps({'url': url, 'body_hex': response.body.hex()}), encoding='utf8')
@@ -342,7 +347,7 @@ class SeesaaSource(SiteSource):
             if found:
                 return found
             for anchor in _soup(page.body).select('#page-body .user-area a[href]'):
-                if 'レーベル一覧' not in anchor.get_text():
+                if SEESAA_LABEL_INDEX not in anchor.get_text():
                     continue
                 try:
                     target = self.page_url(anchor['href'])
@@ -430,9 +435,11 @@ class NameWikiSource(SeesaaSource):
                 head, cell = row.find('th'), row.find('td')
                 if head is not None and cell is not None:
                     fields.setdefault(head.get_text(strip=True), cell)
-            if '品番' in fields and '出演女優' in fields:
-                details = {key: cell.get_text(' ', strip=True) for key, cell in fields.items() if key != '出演女優'}
-                record = self._entry(url, fields['品番'].get_text(' ', strip=True), fields['出演女優'],
+            if SEESAA_CODE_HEADER in fields and SEESAA_CAST_HEADER in fields:
+                details = {key: cell.get_text(' ', strip=True) for key, cell in fields.items()
+                           if key != SEESAA_CAST_HEADER}
+                record = self._entry(url, fields[SEESAA_CODE_HEADER].get_text(' ', strip=True),
+                                     fields[SEESAA_CAST_HEADER],
                                      {'table': str(table.get('id') or ''), 'details': details})
                 if record is not None:
                     records.append(record)
@@ -481,8 +488,8 @@ class AvNameSource(NameWikiSource):
 #: av_neme 人物页「プロフィール」一节里的名字栏。两种排法并存：`<pre>` 里逐行写
 #: 「名前(女優名)：主名」「旧名義&別名：甲・乙」，或一张表的「名前(別名)」一格写「主名／甲／乙」。
 #: 作品小节里的「別名：そら 18歳 本屋の店員」是那部片给她起的素人名义，标签不同，不在这里。
-PERSON_MAIN_LABEL = '名前(女優名)'
-PERSON_NAME_LABELS = ('旧名義&別名', '名前(別名)')
+PERSON_MAIN_LABEL = SEESAA_PERSON_MAIN_LABEL
+PERSON_NAME_LABELS = SEESAA_PERSON_NAME_LABELS
 _LABEL_FOLD = str.maketrans({'（': '(', '）': ')', '＆': '&', '：': ':'})
 _PROFILE_LINE = re.compile(r'^([^:]{2,12}):(.+)$')
 #: `&` 连的是两个名字：`橋本真紀&桧山彩音（舞ワイフ名義）` 是她在同一渠道用过的两个艺名。
@@ -534,7 +541,7 @@ def search_results(body: bytes) -> list[tuple[str, str, str]]:
     return found
 
 
-_RENAMED = re.compile(r'から【([^【】]+)】へ変更')
+_RENAMED = re.compile(SEESAA_RENAMED)
 
 
 def renamed_to(page: Page) -> str:

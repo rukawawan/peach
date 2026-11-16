@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import company_profiles  # noqa: E402
 from peach.config import REVIEW_DIR  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.scripting import (  # noqa: E402
     add_ledger_write_args, counts_of, open_for_write, verify_after_write)
 
@@ -97,7 +98,7 @@ def apply(connection, planned: dict) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = add_ledger_write_args(argparse.ArgumentParser(description=__doc__,
+    parser = add_ledger_write_args(argparse.ArgumentParser(description=t("repair_company_profile_landing.description"),
                                    formatter_class=argparse.RawDescriptionHelpFormatter))
     parser.add_argument("--batch", required=True)
     parser.add_argument("--plan", type=Path, default=REVIEW_DIR / "company-profile-observed-plan.json")
@@ -108,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.batch.startswith(SOURCE + "@"):
-        raise SystemExit(f"--batch 必须以 {SOURCE}@ 开头")
+        raise SystemExit(t("repair_company_profile_landing.batchPrefix", source=SOURCE))
     rows = json.loads(args.plan.read_text(encoding="utf-8"))["entities"]
     pages = {int(row["entity_id"]): row.get("pages", []) for row in rows}
     connection = open_for_write(args)
@@ -131,9 +132,9 @@ def main(argv: list[str] | None = None) -> int:
             if item["action"] != "keep":
                 print(f" - {item['action']:<9} {item['entity']} {item['field']} = {item['value']}")
         for alias in planned["aliases"]:
-            print(f" - 删别名   {alias['entity']} {alias['alias']}")
+            print(t("repair_company_profile_landing.dropAlias", entity=alias['entity'], alias=alias['alias']))
         for link in planned["links"]:
-            print(f" - 删链接   {link['entity']} {link['url']}")
+            print(t("repair_company_profile_landing.dropLink", entity=link['entity'], url=link['url']))
         print(json.dumps(summary, ensure_ascii=False))
         if args.apply:
             return 0 if receipt["integrity"] == "ok" else 1

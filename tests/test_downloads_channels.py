@@ -19,7 +19,8 @@ class LibraryChannelTests(unittest.TestCase):
         for operation in ('token_permissions', 'folder_capabilities', 'mount_points'):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
                 self.setUp()
-                error = DownloadError('config', 'Authorization: Bearer test-only-token')
+                error = DownloadError('config', 'errors.downloadsClouddrive.tokenRejected',
+                                      {'action': '读取令牌权限', 'details': 'Authorization: Bearer test-only-token'})
                 if operation == 'token_permissions':
                     self.client.token_info.side_effect = error
                 elif operation == 'folder_capabilities':
@@ -44,7 +45,8 @@ class LibraryChannelTests(unittest.TestCase):
                     self.assertTrue(result['problems'])
 
     def test_a_broken_clouddrive_credential_keeps_a_healthy_pikpak_channel(self):
-        self.credentials.load.side_effect = CredentialError("test-only-secret-detail")
+        self.credentials.load.side_effect = CredentialError(
+            "errors.followSecrets.missingFields", {"provider": "clouddrive2", "fields": "test-only-secret-detail"})
         self.credentials.describe.return_value = {"fields": ["refresh_token"]}
         self.service.config = DownloadConfig("http://localhost:bad-port", targets={"pikpak": "/Movies"},
                                              pikpak_root="P:\\")
@@ -119,7 +121,8 @@ class LibraryChannelTests(unittest.TestCase):
         self.assertEqual(self.catalog()["providers"], [])
         self.client.folder.assert_not_called()
         self.clock = 31
-        self.client.token_info.side_effect = DownloadError("network", "test-only-failure")
+        self.client.token_info.side_effect = DownloadError(
+            "network", "errors.downloadsClouddrive.unreachable", {"action": "读取令牌权限", "details": "test-only-failure"})
         result = self.catalog()
         self.assertEqual(result["providers"], [])
         self.assertTrue(result["problems"])

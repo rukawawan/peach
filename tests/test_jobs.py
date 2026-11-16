@@ -154,7 +154,7 @@ class JobMainTests(unittest.TestCase):
             lock = Path(tmp) / "job.lock"
 
             def run(_args):
-                raise DiskSpaceDenied("盘满了")
+                raise DiskSpaceDenied("errors.jobs.freeSpaceLow", {"path": "C:\\", "free": 1, "minimum": 5})
 
             with patch("builtins.print") as printed:
                 code = job_main(lambda: self._parser(lock), run, [])
@@ -280,7 +280,7 @@ class BackgroundJobTests(unittest.TestCase):
         job = self._job()
 
         def work(_job_id: str) -> None:
-            raise RuntimeError("上游没了")
+            raise RuntimeError("upstream went away")
 
         job.start(work)
         for _ in range(500):
@@ -289,7 +289,7 @@ class BackgroundJobTests(unittest.TestCase):
             time.sleep(0.01)
         state = job.snapshot()
         self.assertEqual(state["status"], "failed")
-        self.assertEqual(state["error"], "RuntimeError: 上游没了")
+        self.assertEqual(state["error"], "RuntimeError: upstream went away")
         self.assertIn("completed_at", state)
 
     def test_the_snapshot_is_deep_enough_to_project_outside_the_lock(self):

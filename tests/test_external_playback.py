@@ -184,7 +184,7 @@ class PlaybackTrackingTests(unittest.TestCase):
 
         def connect():
             if connections:
-                raise OSError('mpv 只接一次连接')
+                raise OSError('mpv accepts one connection only')
             connections.append(ours)
             return tracking.MpvProbe(tracking.SocketChannel(ours))
         reports = self._run(connect, **options)

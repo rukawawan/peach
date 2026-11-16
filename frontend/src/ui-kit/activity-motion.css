@@ -1,0 +1,70 @@
+/* 语义动画（`activity-motion.ts`）的样式。移植自 loading.dev（npm 包 `loading-dev` 0.3.6，
+   https://github.com/jakubkrehel/loading revision 755235bf7eea3dfb05ec4c3661088e3521ee2d75，MIT，
+   原文见 `web/vendor/loading-dev-LICENSE.txt`）：周期、关键帧、错相公式与尺寸比例照上游 `src/*.tsx`
+   与 `src/motion.ts`，与用户脚本同一次移植。改动：错相由 `:nth-child()` 写死 `animation-delay`
+   （上游 `calc(周期 * (--ld-step - 段数) / 段数)` 的展开值），Gather 四块的拉拢方向同样写在 CSS 里，
+   不写内联样式；`--ld-size` 不取上游的 20px，按 `data-size` 跟字号走；颜色取强调色。
+   动画写在元素上，`web/css/01-base.css` 的全局减少动效规则会把它们停在静帧；`data-still` 是排队中
+   卡片要的静帧，与减少动效同一副样子（上游减少动效时 LinearDots 透明度 .75、Blocks 缩到 .8）。 */
+.ui-activity{--ld-size:var(--icon-inline);display:inline-grid;flex:none;box-sizing:border-box;width:var(--ld-size);
+  height:var(--ld-size);color:var(--color-accent-500);vertical-align:middle}
+.ui-activity[data-size="block"]{--ld-size:calc(var(--icon-inline) * 2)}
+/* 封面格里与卡片角标同一档：按封面格状态字（`--fs-xs`）算，密集网格小一档。 */
+.ui-activity[data-size="card"]{--ld-size:2em;font-size:var(--fs-xs)}
+body[data-density="dense"] .ui-activity[data-size="card"]{--ld-size:1.5em}
+/* 标题加一行说明的两行图标位：与两行文字同高，React 岛 `base.css` 的 `--icon-lead`。 */
+.ui-activity[data-size="lead"]{--ld-size:var(--icon-lead,2.25rem)}
+.ui-activity svg{display:block;width:100%;height:100%}
+
+/* Clock 1200ms、Radar 1500ms：一段扇形绕画框中心匀速转。 */
+@keyframes ui-activity-rotate{to{transform:rotate(360deg)}}
+.ui-activity-spin{transform-origin:center;animation:ui-activity-rotate 1200ms linear infinite}
+.ui-activity[data-activity="radar"] .ui-activity-spin{animation-duration:1500ms}
+
+/* LinearDots 900ms：三颗点依次由实到半透明再回来。 */
+@keyframes ui-activity-fade{0%{opacity:1}66.67%{opacity:.5}100%{opacity:1}}
+.ui-activity[data-activity="linear-dots"]{display:inline-flex;align-items:center;justify-content:center;gap:calc(var(--ld-size) * .1875)}
+.ui-activity[data-activity="linear-dots"] i{width:calc(var(--ld-size) * .1875);height:calc(var(--ld-size) * .1875);
+  border-radius:9999px;background:currentColor;animation:ui-activity-fade 900ms linear infinite}
+.ui-activity[data-activity="linear-dots"] i:nth-child(1){animation-delay:-900ms}
+.ui-activity[data-activity="linear-dots"] i:nth-child(2){animation-delay:-600ms}
+.ui-activity[data-activity="linear-dots"] i:nth-child(3){animation-delay:-300ms}
+
+/* Gather 1600ms：四块往中心拉拢，整组转 90°。拉拢距离 21.1% = (24 - 8) / 2 / 38。 */
+@keyframes ui-activity-pull{0%,100%{transform:translate(0,0)}30%,60%{transform:translate(calc(var(--ld-x) * 21.1%),calc(var(--ld-y) * 21.1%))}}
+@keyframes ui-activity-turn{0%,30%{transform:rotate(0)}60%,100%{transform:rotate(90deg)}}
+.ui-activity[data-activity="gather"]>span{display:grid;grid-template-columns:1fr 1fr;gap:24%;width:100%;height:100%;
+  animation:ui-activity-turn 1600ms ease-in-out infinite}
+.ui-activity[data-activity="gather"] i{--ld-x:1;--ld-y:1;border-radius:calc(var(--ld-size) * .14);background:currentColor;
+  animation:ui-activity-pull 1600ms ease-in-out infinite}
+.ui-activity[data-activity="gather"] i:nth-child(2){--ld-x:-1}
+.ui-activity[data-activity="gather"] i:nth-child(3){--ld-y:-1}
+.ui-activity[data-activity="gather"] i:nth-child(4){--ld-x:-1;--ld-y:-1}
+
+/* Blocks 1300ms：3×3 方块按对角线依次缩没再长回（上游默认 `diagonal`，五段）。 */
+@keyframes ui-activity-block{0%,70%,100%{transform:scale(1)}35%{transform:scale(0)}}
+.ui-activity[data-activity="blocks"]{grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:calc(var(--ld-size) * .1)}
+.ui-activity[data-activity="blocks"] i{border-radius:calc(var(--ld-size) * .0625);background:currentColor;
+  animation:ui-activity-block 1300ms ease-in-out infinite;animation-delay:-1300ms}
+.ui-activity[data-activity="blocks"] i:is(:nth-child(2),:nth-child(4)){animation-delay:-1040ms}
+.ui-activity[data-activity="blocks"] i:is(:nth-child(3),:nth-child(5),:nth-child(7)){animation-delay:-780ms}
+.ui-activity[data-activity="blocks"] i:is(:nth-child(6),:nth-child(8)){animation-delay:-520ms}
+.ui-activity[data-activity="blocks"] i:nth-child(9){animation-delay:-260ms}
+
+/* 静帧：排队的卡片与减少动效。Clock 停下来换成表盘加指针，转动时不画表盘。 */
+.ui-activity-face{display:none}
+.ui-activity[data-still] .ui-activity-face{display:inline}
+.ui-activity[data-still] .ui-activity-spin{display:none}
+.ui-activity[data-still],.ui-activity[data-still] *{animation:none}
+.ui-activity[data-still][data-activity="linear-dots"] i{opacity:.75}
+.ui-activity[data-still][data-activity="blocks"] i{transform:scale(.8)}
+@media (prefers-reduced-motion:reduce){
+  .ui-activity .ui-activity-face{display:inline}
+  .ui-activity[data-activity="clock"] .ui-activity-spin{display:none}
+  .ui-activity[data-activity="linear-dots"] i{opacity:.75}
+  .ui-activity[data-activity="blocks"] i{transform:scale(.8)}
+}
+
+/* 遗留层的一行后台状态（`activityStatusHtml`）：与 React `ActivityStatus` 同一副样子。 */
+.ui-activity-status{display:inline-flex;align-items:center;min-width:0;gap:8px;color:var(--muted)}
+.ui-activity-status>span:last-child{min-width:0;overflow-wrap:anywhere}

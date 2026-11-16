@@ -284,7 +284,7 @@ it('检查回执保留新增、更新与失败，详细统计由完整结果承�
       history_skipped: 862, probed: 241 },
     { ok: false },
   ] } as CheckJob;
-  expect(checkReceipt(job)).toBe('已检查 2 个来源：新增 3 条 · 更新 2933 条 · 1 个失败');
+  expect(checkReceipt(job)).toBe('已检查 2 个来源：新增 3 条 · 更新 2,933 条 · 1 个失败');
   expect(checkSummary(job)).toContain('跳过 281 条无资源');
   expect(checkSummary(job)).toContain('回查 241 条');
   expect(checkReceipt({ results: [{ ok: true }] })).toBe('已检查 1 个来源：没有更新');
@@ -1275,7 +1275,7 @@ it('等待时说的话跟着这一趟查的是名字还是链接走', async () =
     return said;
   };
   // 按名字查的第一趟要下载创作者索引，几十秒没有动静得先说一声；贴链接不走索引。
-  expect(await hint('kou')).toContain('首次按名字查要下载创作者索引');
+  expect(await hint('kou')).toContain('首次按名字查要先下载索引');
   expect(await hint('https://kemono.test/kou')).toBe('识别中');
 });
 

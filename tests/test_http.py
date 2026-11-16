@@ -13,14 +13,15 @@ from peach.http import (CurlCffiTransport, HttpRequest, HttpResponse, HttpxTrans
                         body_text, response_text)
 from peach.user_agent import USER_AGENT
 from peach import peach_proxy
+from peach.user_messages import UserValueError
 
 
 class PeachProxyTests(unittest.TestCase):
     def test_proxy_conflict_is_reported_on_outbound_request_and_leaves_local_startup_available(self):
-        with patch.object(peach_proxy, 'client_options', side_effect=ValueError('请选择 Peach 代理')):
+        with patch.object(peach_proxy, 'client_options', side_effect=UserValueError('errors.peachProxy.conflict')):
             for transport in (HttpxTransport(), CurlCffiTransport(impersonate='chrome')):
                 try:
-                    with self.assertRaisesRegex(ValueError, '请选择 Peach 代理'):
+                    with self.assertRaisesRegex(ValueError, '选择 Peach 代理'):
                         transport(HttpRequest('GET', 'https://example.invalid', {}), 2, 100)
                 finally:
                     transport.close()

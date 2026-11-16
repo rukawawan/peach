@@ -10,6 +10,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 
+from peach.interface_text import dev as t
 from peach.catalog_rules import duration_clusters, normalise_code_key
 from peach.catalog_versions import filename_matches_code
 from peach.review_csv import write_rows
@@ -19,26 +20,38 @@ from peach.web_state import WebContract
 
 FIELDS = ('code', 'asset_id', 'name', 'disposal', 'resolution', 'duration', 'size',
           'status', 'version_id', 'version_label', 'part_ids')
+#: 同番号组的 `status`：版本已归组、分卷已归组（其余或版本待复核）、番号证据冲突或未取得、缺时长、
+#: 重复文件候选、剪辑或分卷关系待复核。
+VERSIONS_GROUPED = 'versions-grouped'
+PARTS_GROUPED = 'parts-grouped'
+PARTS_GROUPED_VERSIONS_PENDING = 'parts-grouped-versions-pending'
+PARTS_GROUPED_REST_PENDING = 'parts-grouped-rest-pending'
+CODE_EVIDENCE_CONFLICT = 'code-evidence-conflict'
+MISSING_DURATION = 'missing-duration'
+DUPLICATE_CANDIDATES = 'duplicate-candidates'
+RELATION_PENDING = 'relation-pending'
+#: `asset_counts` 里 `disposal` 为空（还在库里）那一项的键。
+IN_LIBRARY = 'in-library'
 
 
 def group_status(code, items, parts_by_id, editions) -> str:
     live = [row for row in items if row.get('disposal') is None]
     grouped = [row for row in live if row['id'] in parts_by_id]
     if code in editions:
-        return '版本已归组'
+        return VERSIONS_GROUPED
     if len(grouped) == len(live) and len(live) > 1:
         if len({parts_by_id[row['id']][0]['id'] for row in grouped}) > 1:
-            return '分卷已归组；版本待复核'
-        return '分卷已归组'
+            return PARTS_GROUPED_VERSIONS_PENDING
+        return PARTS_GROUPED
     if len(grouped) > 1:
-        return '分卷已归组；其余待复核'
+        return PARTS_GROUPED_REST_PENDING
     if not all(filename_matches_code(row) for row in live):
-        return '番号证据冲突或未取得'
+        return CODE_EVIDENCE_CONFLICT
     if any(float(row.get('duration') or 0) <= 0 for row in live):
-        return '缺少时长证据'
+        return MISSING_DURATION
     if len(live) > 1 and any(len(cluster) > 1 for cluster in duration_clusters(live)):
-        return '重复文件候选'
-    return '剪辑或分卷关系待复核'
+        return DUPLICATE_CANDIDATES
+    return RELATION_PENDING
 
 
 def audit(database: Path, output: Path, baseline: Path | None = None) -> dict:
@@ -74,7 +87,7 @@ def audit(database: Path, output: Path, baseline: Path | None = None) -> dict:
                 'part_ids': '|'.join(str(part['id']) for part in parts_by_id.get(row['id'], [])),
             })
     with open_readonly(database) as connection:
-        totals = {row[0] or '在库': row[1] for row in connection.execute(
+        totals = {row[0] or IN_LIBRARY: row[1] for row in connection.execute(
             'SELECT disposal,count(*) FROM asset GROUP BY disposal')}
     summary = {'asset_counts': totals, 'coded_video_files': len(rows),
                'filename_code_projections': [row['id'] for row in rows if not row['raw_code']],
@@ -86,7 +99,7 @@ def audit(database: Path, output: Path, baseline: Path | None = None) -> dict:
     if baseline:
         initial = json.loads(baseline.read_text(encoding='utf-8'))
         newly_folded = {code: status for code, status in live_statuses.items()
-                        if code in initial['ungrouped'] and status in ('版本已归组', '分卷已归组')}
+                        if code in initial['ungrouped'] and status in (VERSIONS_GROUPED, PARTS_GROUPED)}
         summary['newly_folded_groups'] = newly_folded
         summary['baseline_groups_unfolded'] = [
             code for code, members in initial['parts'].items()
@@ -97,7 +110,7 @@ def audit(database: Path, output: Path, baseline: Path | None = None) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_catalog_versions.description"))
     parser.add_argument('--db', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--baseline', type=Path)

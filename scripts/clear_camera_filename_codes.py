@@ -29,6 +29,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.catalog_rules import release_code_from_filename  # noqa: E402
 from peach.field_owners import is_protected, owner_of, script_owner, write_owned_fields  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write  # noqa: E402
 
 OWNER = script_owner("clear-camera-filename-codes")
@@ -51,9 +52,9 @@ def bogus_rows(connection: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=t("clear_camera_filename_codes.description"))
     add_ledger_write_args(parser)
-    parser.add_argument("--json", action="store_true", help="机器可读输出")
+    parser.add_argument("--json", action="store_true", help=t("clear_camera_filename_codes.jsonHelp"))
     args = parser.parse_args(argv)
 
     connection = open_for_write(args)
@@ -74,13 +75,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        verb = "已清除" if args.apply else "将清除"
         for item in clear:
-            print(f"{verb}  #{item['id']}  {item['code']:<12} {item['name']}")
+            print(t("clear_camera_filename_codes.clearedRow" if args.apply
+                    else "clear_camera_filename_codes.willClearRow",
+                    id=item["id"], code=f"{item['code']:<12}", name=item["name"]))
         for item in protected:
-            print(f"保留    #{item['id']}  {item['code']:<12} {item['name']}（归属 {item['owner']}）")
-        print(f"{verb} {len(clear)} 行，保留 {len(protected)} 行；"
-              f"相机式番号 {before['camera_codes']} → {report.get('after', before)['camera_codes']}")
+            print(t("clear_camera_filename_codes.keptRow", id=item["id"], code=f"{item['code']:<12}",
+                    name=item["name"], owner=item["owner"]))
+        print(t("clear_camera_filename_codes.clearedSummary" if args.apply
+                else "clear_camera_filename_codes.willClearSummary",
+                clear=len(clear), kept=len(protected), before=before["camera_codes"],
+                after=report.get("after", before)["camera_codes"]))
         if "integrity" in report:
             print(f"integrity_check={report['integrity']} foreign_key_violations={report['foreign_key_violations']}")
     return 0

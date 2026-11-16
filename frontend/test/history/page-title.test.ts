@@ -19,6 +19,8 @@ it('换页及另一条详情读取期间不沿用上一条的身份', () => {
 
 it('首页三栏与搜索结果各有自己的标签，其他地址交给路由登记', () => {
   expect(homeRouteLabel('/', '?jav=1')).toBe('JAV');
+  expect(homeRouteLabel('/', '?orient=portrait')).toBe('竖屏');
+  // 旧书签里的 `orient=竖屏` 照认。
   expect(homeRouteLabel('/', '?orient=%E7%AB%96%E5%B1%8F')).toBe('竖屏');
   expect(homeRouteLabel('/', '?jav=1&q=%20abp%20')).toBe('搜索 abp');
   expect(homeRouteLabel('/', '')).toBe('');

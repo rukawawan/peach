@@ -489,7 +489,7 @@ class HeaderRepairStoreTests(unittest.TestCase):
 
         def build(source: Path, ffprobe: Path):
             attempts.append(source)
-            raise RepairUnavailable("测试用：这个片源修不了")
+            raise RepairUnavailable("errors.mp4repair.boxesAfterMdat")
 
         with patch.object(mp4repair, "repaired_header", build):
             outcomes = [self.store.repair_now(6297, self.source) for _ in range(3)]
@@ -507,7 +507,7 @@ class HeaderRepairStoreTests(unittest.TestCase):
         repairs = HeaderRepairStore(self.root / 'managed-cache', _Resolver(), runs=runs)
         def build(_source, _ffprobe, *, progress):
             progress(20, 100)
-            raise RepairUnavailable('ffprobe 连续 900 秒没有解码输出')
+            raise RepairUnavailable('errors.mp4repair.probeIdle', {'seconds': 900})
         with patch.object(mp4repair, 'repaired_header', build):
             repairs.request(6297, self.source)
             job = next(iter(repairs._jobs.values()))

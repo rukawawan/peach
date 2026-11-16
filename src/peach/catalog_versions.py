@@ -8,6 +8,8 @@ from .catalog_rules import (
     names_without_shared_part_tail, normalise_code_key, ordered_multipart_items,
     _jav_code_pattern, duration_clusters, part_marker, release_code_from_filename,
 )
+from . import interface_text
+from .catalog_vocabulary import CENSORED, EDITION_LABEL_CODE_PREFIX, PROCESSING_MARKERS
 from .field_owners import owner_of
 from .metadata import identifies_code
 
@@ -26,8 +28,8 @@ def resolution_label(row: dict) -> str:
 
 def version_signature(row: dict) -> tuple[str, str, str]:
     name = str(row.get('name') or '')
-    processing = '修复' if '修复' in name else '美颜' if '美颜' in name else ''
-    return str(row.get('edition') or '有码'), resolution_label(row), processing
+    processing = next((marker for marker in PROCESSING_MARKERS if marker in name), '')
+    return str(row.get('edition') or CENSORED), resolution_label(row), processing
 
 
 def filename_matches_code(row: dict) -> bool:
@@ -111,8 +113,15 @@ def foldable_versions(versions: list[dict]) -> bool:
     return max(durations) - min(durations) <= max(15, max(durations) * .10)
 
 
-def version_labels(versions: list[dict]) -> list[str]:
-    """只在组内需要区分的维度上显示规格，卷数单独承载。"""
+#: 同规格的整片与分卷并存时，版本名后面标的形式。
+MULTIPART_CODE = 'labels.catalogVersions.multipart'
+SINGLE_FILE_CODE = 'labels.catalogVersions.singleFile'
+_SEPARATOR = {'text': ' · '}
+
+
+def version_label_parts(versions: list[dict]) -> list[list[dict]]:
+    """每个版本的版本名，按段给（前端 `partsLabel` 的形状）：版次是 `labels.catalogEdition.<id>`，
+    规格与处理标记取自文件名，原样给 `text`。只在组内需要区分的维度上显示规格，卷数单独承载。"""
     show_spec = len({version['signature'] for version in versions}) > 1
     same_editions = len({version['signature'][0] for version in versions}) == 1
     forms = len({version['multipart'] for version in versions}) > 1
@@ -120,10 +129,19 @@ def version_labels(versions: list[dict]) -> list[str]:
     for version in versions:
         edition, resolution, processing = version['signature']
         spec = (resolution + (' ' if resolution and processing else '') + processing).strip()
-        label = spec if show_spec and same_editions and spec else edition
-        if show_spec and not same_editions and spec:
-            label += ' · ' + spec
+        if show_spec and same_editions and spec:
+            parts = [{'text': spec}]
+        else:
+            parts = [{'code': EDITION_LABEL_CODE_PREFIX + edition}]
+            if show_spec and spec:
+                parts += [_SEPARATOR, {'text': spec}]
         if forms and len({version['signature'] for version in versions}) == 1:
-            label += ' · ' + ('分卷版' if version['multipart'] else '完整文件')
-        labels.append(label)
+            parts += [_SEPARATOR, {'code': MULTIPART_CODE if version['multipart'] else SINGLE_FILE_CODE}]
+        labels.append(parts)
     return labels
+
+
+def label_text(parts: list[dict]) -> str:
+    """按段的版本名按 zh-CN 渲染成一句，给只读原字段的旧前端。"""
+    return ''.join(part['text'] if 'text' in part else interface_text.text(f"server:{part['code']}", part.get('params'))
+                   for part in parts)

@@ -3,22 +3,24 @@ import { fmtSize } from '@peach/legacy/core';
 import { ResourceChip } from './resource-chip';
 
 import { isActive, type TaskResourceMetric, type TaskRunPayload } from './tasks';
+import { codedText } from '../../core/server-text';
+import { interfaceLanguage, t } from '../../i18n';
 
 const METRICS = {
   cpu: { name: 'CPU', color: 'blue' },
   gpu: { name: 'GPU', color: 'purple' },
-  network: { name: '网络', color: 'cyan' },
+  network: { name: t('manage:taskResources.network'), color: 'cyan' },
 } as const;
 
 function unavailable(metric: TaskResourceMetric) {
-  if (metric.state === 'sampling') return '采样中';
-  return metric.via === 'cloud' ? '网盘读取' : '未取得';
+  if (metric.state === 'sampling') return t('manage:taskResources.sampling');
+  return metric.via === 'cloud' ? t('manage:taskResources.viaCloudDrive') : t('manage:taskResources.unavailable');
 }
 
 /* 读数为 0 说的是这一轮没占用这项资源，直接写「未使用」，不让人去读一个 0。 */
 function reading(key: 'cpu' | 'gpu' | 'network', value: number) {
-  if (value === 0) return '未使用';
-  return key === 'network' ? `${fmtSize(value)}/s` : `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+  if (value === 0) return t('manage:taskResources.idle');
+  return key === 'network' ? `${fmtSize(value)}/s` : `${value.toLocaleString(interfaceLanguage, { maximumFractionDigits: 1 })}%`;
 }
 
 export function TaskResources({ run, active = isActive(run) || Boolean(run.control) }: {
@@ -34,7 +36,7 @@ export function TaskResources({ run, active = isActive(run) || Boolean(run.contr
       const ready = metric.state === 'ready' && value !== null;
       const high = ready && metric.high;
       const label = ready ? reading(key, value) : unavailable(metric);
-      const explanation = [metric.reason, high ? '当前为高占用。' : ''].filter(Boolean).join('\n');
+      const explanation = [metric.reason ? codedText(metric, 'reason') : '', high ? t('manage:taskResources.highUsage') : ''].filter(Boolean).join('\n');
       return <ResourceChip key={key} color={appearance.color} high={high}
         tabIndex={explanation ? 0 : undefined} title={explanation || undefined}
         data-task-resource={key} data-resource-state={metric.state} data-resource-via={metric.via} data-resource-high={high || undefined}

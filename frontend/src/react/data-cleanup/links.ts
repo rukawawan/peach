@@ -47,6 +47,9 @@ export interface LinkRow {
   label: string;
   url: string;
   note: string;
+  /** 取不到时那句的 code 与参数；有译文时显示译文。 */
+  note_code?: string;
+  note_params?: Record<string, unknown>;
 }
 
 export interface LinkCheckState {

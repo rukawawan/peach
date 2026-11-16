@@ -59,6 +59,8 @@ def _windows_reveal(path: Path) -> None:
 
 def reveal_path(path: Path) -> bool:
     """在本机文件管理器中定位文件；不支持的平台返回 False。"""
+    if os.environ.get('PEACH_HEADLESS_MANAGED') == '1':
+        return False
     if os.name == "nt":
         _windows_reveal(path)
         return True

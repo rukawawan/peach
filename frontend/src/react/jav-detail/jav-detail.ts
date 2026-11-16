@@ -14,7 +14,8 @@ export interface JavDetail {
   source_url: string; wanted: boolean; want_id: number | null;
 }
 export interface JavEntityRef extends FaceRef { name: string; gender?: 'female' | 'male' | 'unknown'; has_logo?: boolean; source_actor_id?: string; source_avatar?: boolean }
-export interface JavReview { id: string; username: string; content: string; score?: number; created_at: string }
+/** 一条评论。没有用户名时 `username` 是服务端给的「匿名用户」原文，`username_code` 是它的 code。 */
+export interface JavReview { id: string; username: string; username_code?: string; content: string; score?: number; created_at: string }
 export interface JavReviews { ok: boolean; items: JavReview[]; page: number; more: boolean; message?: string; checked_at?: string; cache_stale?: boolean }
 export interface JavDetailProps {
   code: string; readOnly: boolean;

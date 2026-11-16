@@ -1,4 +1,5 @@
 import { createRevealSourceAction } from './source-action';
+import { completeReveal } from '../react/components/server-path-dialog';
 import { emptyEntityFilters, parseEntityFilters, entityFilterSearch, parseMediaView, entityViewSearch } from '../react/entity-page/entity-route';
 import { photoViewActive as hasPhotoView } from '../react/entity-page/photo-surface';
 import { createEntityApplication } from '../react/entity-page/entity-application';
@@ -28,6 +29,7 @@ import { FILTER_WAITING, filterControlsSkeletonHtml } from './../filter-controls
 import { cardRatio, gridLayout } from './../appearance/layout';
 import { islandShortcutsEntry } from './../island-skeleton';
 import { catalogContentSkeletonHtml } from '../catalog-content-skeleton';
+import { t } from '../i18n';
 export const entityState = { ENTITY_FILTER_KEYS: undefined, emptyEntityFilters: undefined, parseEntityFilters: undefined, entityFilterSearch: undefined, cloneBarsContext: undefined, activeFilterState: undefined, entityPageView: undefined, entityPageWall: undefined, entityPageRevision: undefined, entityPageCurrent: undefined, entityPageLive: undefined, EMPTY_ENTITY_MEDIA: undefined, parseMediaView: undefined, entityViewSearch: undefined, entityBodyCanLoadMore: undefined, entityBodySkeleton: undefined, entityPageHelpers: undefined, entityFollowActions: undefined, SOURCE_HINTS: undefined, sourceHint: undefined, syncedText: undefined, sourceToolButtons: undefined, application: undefined };
 
 export function entityPageEntry(){
@@ -48,7 +50,7 @@ export function sortKeys(current,dir,jav=javActive()){
   return sortOptions(jav).map(([key,label])=>{
     const pressed=current===key,next=nextSortState(key,current,dir);
     return {key,label,pressed,dir:pressed&&sortDirWord(key,dir)?(dir==='asc'?'asc':'desc'):'',
-      ariaLabel:next?`按${label}${next.dir?sortDirWord(next.sort,next.dir):''}排序`:''}});
+      ariaLabel:next?t('shell:entitySort.ariaLabel', { label, direction: next.dir?sortDirWord(next.sort,next.dir):'' }):''}});
 }
 
 export function routeEntityPage(kind,name,filters,media=entityState.EMPTY_ENTITY_MEDIA,options={}){
@@ -74,7 +76,8 @@ export function setPhotoSize(value){entityState.photos.setSize(value)}
 
 export const revealSource = createRevealSourceAction({
   request:id=>api('/api/reveal',{method:'POST',body:JSON.stringify({id})}),
-  success:()=>receiptsState.toast({text:'已在资源管理器中显示'}),
+  success:()=>receiptsState.toast({text:t('shell:sourceTools.revealed')}),
+  complete:completeReveal,
   failureText:error=>entityState.sourceHint(error instanceof Error?error.message:String(error)),
 });
 
@@ -87,15 +90,17 @@ export async function syncForIsland(id){
 }
 
 export async function syncMissing(id,status,done){
-  status.textContent='正在核对目录…';
+  status.textContent=t('shell:sourceTools.checking');
   try{
     const r=await api('/api/purge-missing',{method:'POST',body:JSON.stringify({id})});
     if(r.ok===false){status.textContent=entityState.sourceHint(r.error);return}
     status.textContent=r.removed
-      ? `${entityState.syncedText(r)}（核对 ${r.checked} 项${r.unreadable?`，${r.unreadable} 项未能读取`:''}）`
+      ? r.unreadable
+        ? t('shell:sourceTools.checkedSummaryUnreadable', { summary: entityState.syncedText(r), count: r.checked, unreadable: r.unreadable })
+        : t('shell:sourceTools.checkedSummary', { summary: entityState.syncedText(r), count: r.checked })
       : r.unreadable
-        ? `目录有 ${r.unreadable} 项暂时无法读取，本次未改动`
-        : `目录内 ${r.checked} 项都还在，无需改动`;
+        ? t('shell:sourceTools.unreadable', { count: r.unreadable })
+        : t('shell:sourceTools.allPresent', { count: r.checked });
     if(r.removed){
       const ids=(r.items||[]).filter(item=>item.disposal!=='reattached').map(item=>item.id);
       if(done)done(r);
@@ -103,8 +108,8 @@ export async function syncMissing(id,status,done){
         await api('/api/batch',{method:'POST',body:JSON.stringify({ids,operation:'restore'})});
         if(done)done({removed:0,restored:ids.length});
       }:null});
-    }else receiptsState.actionReceipt('目录核对完成，无需改动');
-  }catch(e){status.textContent=entityState.sourceHint(e.message);receiptsState.actionFailure('核对目录',e)}
+    }else receiptsState.actionReceipt(t('shell:sourceTools.noChanges'));
+  }catch(e){status.textContent=entityState.sourceHint(e.message);receiptsState.actionFailure(t('shell:sourceTools.checkAction'),e)}
 }
 
 export function sourceTools(id){return `<div class="srctools">${entityState.sourceToolButtons(id)}
@@ -121,16 +126,16 @@ export function wireSourceTools(root,done){
 
 export async function entityAliasForm(mine,write){
   const form=formModal({
-    title:'添加别名',
-    description:'图库按名字查找图片，添加别名可能找到更多备选图片；也可以将别名设为统一显示的名称。',
-    body:`<label class="modalfield"><span>别名</span>
+    title:t('shell:entityAlias.add'),
+    description:t('shell:entityAlias.hint'),
+    body:`<label class="modalfield"><span>${t('shell:entityAlias.fieldLabel')}</span>
         <input class="geist-input" name="alias" maxlength="80" autocomplete="off"
-          placeholder="另一种写法，或另一个艺名"></label>`
-      +(mine.length?`<div class="modalfield"><span>自己添过的</span>
+          placeholder="${esc(t('shell:entityAlias.placeholder'))}"></label>`
+      +(mine.length?`<div class="modalfield"><span>${t('shell:entityAlias.addedByYou')}</span>
         <div class="aliaschips">${mine.map(one=>`<span class="aliaschip">${esc(one)}
           <button type="button" data-alias-drop="${esc(one)}"
-            aria-label="撤销别名 ${esc(one)}">${icon('x')}</button></span>`).join('')}</div></div>`:''),
-    confirmLabel:'添加别名',
+            aria-label="${esc(t('shell:entityAlias.removeNamed', { alias: one }))}">${icon('x')}</button></span>`).join('')}</div></div>`:''),
+    confirmLabel:t('shell:entityAlias.add'),
     confirmDisabled:true,
     onConfirm:()=>write({alias:field.value.trim()})});
   const field=form.dialog.querySelector('[name=alias]');
@@ -141,23 +146,23 @@ export async function entityAliasForm(mine,write){
     const gone=chip.dataset.aliasDrop;
     form.close();
     try{await write({alias:gone,remove:true})}
-    catch(error){receiptsState.actionFailure('撤销别名',error);return}
-    receiptsState.actionReceipt(`已撤销别名 ${gone}`,{undo:async()=>{await write({alias:gone})}});
+    catch(error){receiptsState.actionFailure(t('shell:entityAlias.removeAction'),error);return}
+    receiptsState.actionReceipt(t('shell:entityAlias.removed', { alias: gone }),{undo:async()=>{await write({alias:gone})}});
   }));
   const {confirmed,result}=await form.done;
   if(!confirmed)return;
-  if(result?.added)receiptsState.actionReceipt(`已添加别名 ${result.alias}`,{undo:async()=>{
+  if(result?.added)receiptsState.actionReceipt(t('shell:entityAlias.added', { alias: result.alias }),{undo:async()=>{
     await write({alias:result.alias,remove:true})}});
-  else receiptsState.actionReceipt(`${result?.alias} 已经是这份档案中的名字`);
+  else receiptsState.actionReceipt(t('shell:entityAlias.exists', { alias: result?.alias }));
 }
 
 export function showEntityLoading(kind,name){
   const jav=['performer','studio'].includes(kind)&&feedState.hasEntityPart(kind,name,'jav');
-  const head=`<div data-filter-row="bottom" class="flex min-w-0 items-center gap-3 px-3 py-2 min-h-12"><h3 data-entity-readout><span data-skeleton="count" class="relative inline-block h-3.5 w-24 rounded-md align-middle skeleton-sheen"></span></h3>${islandShortcutsEntry()}${kind==='agency'?'':filterControlsSkeletonHtml(sortKeys(state.sort,state.dir,jav),jav?{name:'jav-layout',label:'JAV 卡片版式',value:javLayout(),options:JAV_LAYOUTS}:null)}</div>`;
-  const top=kind==='agency'?'':`<div data-entity-media><button type="button" data-media-view="videos" aria-label="视频" aria-pressed="true" ${FILTER_WAITING}>${icon('play')}</button><button type="button" data-media-view="photos" data-media-icon="image" aria-label="照片" ${FILTER_WAITING}>${icon('pics')}</button></div><span data-entity-sep></span><div data-entity-scroll><div data-entity-states>${catalogState.catalogViews().map(view=>`<button type="button" data-entity-state="${esc(view.k)}" aria-pressed="${state.state===view.k}" ${FILTER_WAITING}>${esc(view.label)}</button>`).join('')}<span data-entity-sep></span></div>`;
+  const head=`<div data-filter-row="bottom" class="flex min-w-0 items-center gap-3 px-3 py-2 min-h-12"><h3 data-entity-readout><span data-skeleton="count" class="relative inline-block h-3.5 w-24 rounded-md align-middle skeleton-sheen"></span></h3>${islandShortcutsEntry()}${kind==='agency'?'':filterControlsSkeletonHtml(sortKeys(state.sort,state.dir,jav),jav?{name:'jav-layout',label:t('shell:cardLayout.jav'),value:javLayout(),options:JAV_LAYOUTS}:null)}</div>`;
+  const top=kind==='agency'?'':`<div data-entity-media><button type="button" data-media-view="videos" aria-label="${t('catalog:shared.videos')}" aria-pressed="true" ${FILTER_WAITING}>${icon('play')}</button><button type="button" data-media-view="photos" data-media-icon="image" aria-label="${t('catalog:entityFilter.photos')}" ${FILTER_WAITING}>${icon('pics')}</button></div><span data-entity-sep></span><div data-entity-scroll><div data-entity-states>${catalogState.catalogViews().map(view=>`<button type="button" data-entity-state="${esc(view.k)}" aria-pressed="${state.state===view.k}" ${FILTER_WAITING}>${esc(view.label)}</button>`).join('')}<span data-entity-sep></span></div>`;
   const body=kind==='agency'
     ?indexSkeletonHtml({kind:'performers',layout:indexState.peopleIndexLayout()})
-    :catalogContentSkeletonHtml('正在读取作品',cardRatio(gridLayout({active:jav,home:false,portrait:false})));
+    :catalogContentSkeletonHtml(t('shell:skeleton.loadingVideos'),cardRatio(gridLayout({active:jav,home:false,portrait:false})));
   const placeholder=entitySkeletonHtml(kind,head,body,top);
   if($('#index').firstElementChild?.dataset.skeleton!==`entity/${kind}`){
     $('#index').innerHTML=placeholder;
@@ -178,10 +183,14 @@ export function syncEntitySkeletonParts(kind,name){
     ()=>skeleton.querySelector('.entityprofile')?.insertAdjacentHTML('beforeend',feedState.factsSkeleton()));
 }
 
+/* 「找不到这个X」按索引各写一句：英文要单数小写的名词，不能拿索引页的复数标题去拼。 */
+const MISSING_TITLES={performers:'shell:entityMissing.performer',creators:'shell:entityMissing.seller',studios:'shell:entityMissing.studio',
+  agencies:'shell:entityMissing.agency',series:'shell:entityMissing.series',tags:'shell:entityMissing.tag'};
+
 export function showEntityMissing(kind){
-  const index=ENTITY_ROUTES[kind]||kind,title=INDEX_TITLES[index]||'条目';
-  const actions=INDEX_TITLES[index]?`<a class="geist-button primary" href="/${index}">返回${title}列表</a>`:'';
-  $('#index').innerHTML=preferencesState.emptyState('search-x',`找不到这个${title}`,'名字可能拼错了，或者已经合并到别的名字下；回列表里重新找。',{actions});
+  const index=ENTITY_ROUTES[kind]||kind,title=INDEX_TITLES[index];
+  const actions=title?`<a class="geist-button primary" href="/${index}">${esc(t('shell:entityMissing.backToList', { title }))}</a>`:'';
+  $('#index').innerHTML=preferencesState.emptyState('search-x',t(MISSING_TITLES[index]||'shell:entityMissing.item'),t('shell:entityMissing.hint'),{actions});
 }
 
 export function openEntity(kind,name){openRoutedPage(entityState.application.fresh(kind,name))}
@@ -226,21 +235,21 @@ entityState.entityPageHelpers = {
 entityState.entityFollowActions = {...followState.followFeedActions,
   route:()=>{},shuffle:()=>{},loaded:()=>{},toggleSelection:()=>{}};
 entityState.SOURCE_HINTS = {
-  'source offline':'媒体库无法访问，暂时无法核对文件；恢复连接后重试',
-  'source not mapped':'本机没有映射这个来源的盘符',
-  'file missing':'找不到源文件；点击右侧的扫描按钮，重新检查目录并更新数据库记录',
-  'unsupported platform':'当前服务端系统不支持直接定位文件',
-  'reveal failed':'打开文件管理器失败，请重试',
+  'source offline':t('shell:sourceTools.libraryOffline'),
+  'source not mapped':t('shell:sourceTools.notMapped'),
+  'file missing':t('shell:sourceTools.fileMissing'),
+  'unsupported platform':t('shell:sourceTools.unsupportedPlatform'),
+  'reveal failed':t('shell:sourceTools.revealFailed'),
 };
 entityState.sourceHint = message=>entityState.SOURCE_HINTS[message]||message;
-entityState.syncedText = r=>[r.trashed?`已把 ${r.trashed} 项移入回收站`:'',
-  r.vanished?`${r.vanished} 项带个人记录，已标为已消失`:'',
-  r.reattached?`${r.reattached} 项的记录已接到库里的另一个版本`:''].filter(Boolean).join('，');
+entityState.syncedText = r=>[r.trashed?t('shell:sourceTools.trashed', { count: r.trashed }):'',
+  r.vanished?t('shell:sourceTools.vanished', { count: r.vanished }):'',
+  r.reattached?t('shell:sourceTools.reattached', { count: r.reattached }):''].filter(Boolean).join(t('shell:sourceTools.resultSeparator'));
 entityState.sourceToolButtons = id=>`
-    <button type="button" data-reveal="${id}" title="在文件管理器里打开源文件所在目录"
-      aria-label="定位源文件">${icon('folder-open')}</button>
-    <button type="button" data-sync="${id}" title="核对该目录：磁盘上已删除的移入 Peach 回收站，带个人记录的标为已消失"
-      aria-label="同步删除">${icon('folder-sync')}</button>`;
+    <button type="button" data-reveal="${id}" title="${esc(t('catalog:detailSource.revealTip'))}"
+      aria-label="${esc(t('catalog:detailSource.reveal'))}">${icon('folder-open')}</button>
+    <button type="button" data-sync="${id}" title="${esc(t('catalog:detailSource.syncDeletionsTip'))}"
+      aria-label="${esc(t('catalog:detailSource.syncDeletions'))}">${icon('folder-sync')}</button>`;
 }
 
 export function connectPhotoController(){

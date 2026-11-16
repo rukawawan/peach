@@ -429,4 +429,4 @@ class GpuCounterTests(unittest.TestCase):
         values, state, reason = counter.sample()
         self.assertIsNone(values)
         self.assertEqual(state, 'unavailable')
-        self.assertIn('0xc0000bc6', reason)
+        self.assertEqual(reason, {'code': 'labels.gpuUsage.collectFailed', 'params': {'code': '0xc0000bc6'}})

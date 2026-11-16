@@ -8,7 +8,7 @@
 
 - **目录页**：链接落在「有哪些人」那一层。修法是在站点索引里按名字找回本人页。
 - **检索页**：把「这个人在那边是谁」交给站内检索去猜。只有账本里存着那个站的 id
-  才换成直达页；没有 id 就标 `保留检索页` 交给用户，**不按名字拼一个直达地址**——
+  才换成直达页；没有 id 就标 `keep-search`（保留检索页）交给用户，**不按名字拼一个直达地址**——
   拼出来的地址打开是 404 还算好的，打开是别人才麻烦。
 - **明文 http**：站点已提供 https 时升级。
 - **HTML 实体未还原**：`model.php?alias=x&amp;id=176` 是从页面源码里抄地址时把 `&amp;`
@@ -24,7 +24,7 @@
 
 纯粹换协议或还原实体时，新旧是同一页，标题里未必有人名（博客的标题常是栏目名）。
 这时改判「新地址的标题和旧地址完全一致」——那是比人名更强的同一页证据。两条都不
-成立就写 `未取得`，不进计划。
+成立就写 `missed`，不进计划。
 
 限流按 `peach-batch-jobs`：同一域名两次请求至少隔 `--interval` 秒，整轮有
 `--max-requests` 上限，取回的页面在本轮内缓存（几十条链接共用同一张索引页）。
@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.entities import name_chain   # noqa: E402
 from peach.http import HttpRequest, HttpxTransport, response_text   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.link_repair import (   # noqa: E402
     anchors_naming, bare_root, confirms, directory_reason, empty_path_segment,
     html_entity_leak, index_candidates, is_search_page, page_title, same_document_path,
@@ -58,19 +59,26 @@ from peach.scripting import (   # noqa: E402
     open_for_write, open_readonly, verify_after_write,
 )
 
-DIRECTORY = "目录页"
-SEARCH = "检索页"
-PLAIN_HTTP = "明文 http"
-ENTITY_LEAK = "HTML 实体未还原"
-EMPTY_SEGMENT = "路径含空段"
-DUPLICATE = "同实体同站点多条"
+#: `problem` 列（几类并存时用 `+` 连起来，也随修复记进 `entity_link.metadata.repaired_from`）：
+#: 目录页、检索页、明文 http、HTML 实体未还原、路径含空段、同实体同站点多条。
+DIRECTORY = "directory-page"
+SEARCH = "search-page"
+PLAIN_HTTP = "plain-http"
+ENTITY_LEAK = "html-entity"
+EMPTY_SEGMENT = "empty-segment"
+DUPLICATE = "duplicate"
 
-FIX_REDISCOVER = "站内索引按名字重探直达页"
-FIX_DIRECT_ID = "换成账本 id 拼的直达页"
-FIX_KEEP_SEARCH = "保留检索页"
-FIX_HTTPS = "升级到 https"
-FIX_ENTITY = "还原 HTML 实体"
-FIX_REPORT_ONLY = "只报，等用户决定"
+#: `fix` 列：站内索引按名字重探直达页、换成账本 id 拼的直达页、保留检索页、升级到 https、还原 HTML 实体、
+#: 只报等用户决定。
+FIX_REDISCOVER = "rediscover"
+FIX_DIRECT_ID = "direct-id"
+FIX_KEEP_SEARCH = "keep-search"
+FIX_HTTPS = "https"
+FIX_ENTITY = "unescape-entities"
+FIX_REPORT_ONLY = "report-only"
+#: `verdict` 列：确认可写、没取到、新地址就是原地址、写入时撞上唯一约束整行跳过；没有直达 id 的检索页记
+#: `FIX_KEEP_SEARCH`。
+OK, MISSED, ALREADY_TARGET, UNIQUE_CLASH = "ok", "missed", "already-target", "unique-clash"
 
 #: 一条链接可能同时犯几条。修法按这个顺序挑主修法：重探出来的地址本来就是站点现在
 #: 给的形态，协议和实体的问题跟着一起没了，反过来不成立。
@@ -115,7 +123,7 @@ def trust_context() -> ssl.SSLContext:
     httpx 默认只信 certifi，而 `www.crusegroup.net` 这类站少发中间证书，certifi 一侧
     验不过——浏览器靠自己缓存的中间证书补上，所以在浏览器里看不出问题。用系统库是把
     判据对齐到这台机器平时的信任面，**不是**关掉校验：校验一律严格，验不过就写
-    `未取得` 并把原始错误留在复核表里，绝不改用 http 的成功去声称 https 通了。
+    `missed` 并把原始错误留在复核表里，绝不改用 http 的成功去声称 https 通了。
     """
     return ssl.create_default_context()
 
@@ -215,27 +223,26 @@ def review(links: list[dict]) -> list[dict]:
         if row["link_kind"] == "official":
             reason = directory_reason(url, deeper[host])
             if shared[url] > 1:
-                reason = f"{shared[url]} 个实体共用这一个地址"
+                reason = t("repair_entity_links.sharedUrl", count=shared[url])
             if reason:
                 problems.append((DIRECTORY, FIX_REDISCOVER, reason))
         if is_search_page(url):
             provider = DIRECT_PAGES.get(host, ("", ""))[0]
             has_id = bool(provider and row["refs"].get(provider))
             problems.append((SEARCH, FIX_DIRECT_ID if has_id else FIX_KEEP_SEARCH,
-                             f"账本里有 {provider} id" if has_id
-                             else "账本里没有这个站的直达 id"))
+                             t("repair_entity_links.hasDirectId", provider=provider) if has_id
+                             else t("repair_entity_links.noDirectId")))
         if html_entity_leak(url):
-            problems.append((ENTITY_LEAK, FIX_ENTITY,
-                             "服务端收到的参数名带 amp; 前缀，真正的参数因此丢失"))
+            problems.append((ENTITY_LEAK, FIX_ENTITY, t("repair_entity_links.entityLeak")))
         if urlsplit(url).scheme == "http":
-            problems.append((PLAIN_HTTP, FIX_HTTPS, "账本里存的是明文 http"))
+            problems.append((PLAIN_HTTP, FIX_HTTPS, t("repair_entity_links.plainHttp")))
         if empty_path_segment(url):
-            problems.append((EMPTY_SEGMENT, FIX_REPORT_ONLY, "路径里有空段"))
+            problems.append((EMPTY_SEGMENT, FIX_REPORT_ONLY, t("repair_entity_links.emptySegment")))
         peers = by_site[(row["entity_id"], host)]
         if len(peers) > 1:
             problems.append((DUPLICATE, FIX_REPORT_ONLY,
-                             f"该实体在这个站上有 {len(peers)} 条链接："
-                             f"{'、'.join(str(peer) for peer in peers)}"))
+                             t("repair_entity_links.duplicateLinks", count=len(peers),
+                               ids=list(str(peer) for peer in peers))))
         row["problems"] = problems
     return [row for row in links if row["problems"]]
 
@@ -327,12 +334,12 @@ def plan_one(fetcher: Fetcher, row: dict) -> dict:
         "link_id": row["link_id"], "entity_id": row["entity_id"], "kind": row["kind"],
         "name": row["name"], "link_kind": row["link_kind"], "label": row["label"],
         "url": row["url"], "fix": fix, "evidence": evidence,
-        "problem": "；".join(item[0] for item in row["problems"])}
+        "problem": "+".join(item[0] for item in row["problems"])}
     if fix == FIX_KEEP_SEARCH:
-        plan.update(verdict=FIX_KEEP_SEARCH, check="没有直达 id，不按名字拼地址")
+        plan.update(verdict=FIX_KEEP_SEARCH, check=t("repair_entity_links.noDirectId"))
         return plan
     if fetcher.exhausted:
-        plan.update(verdict="未取得", check="本轮请求上限已用完")
+        plan.update(verdict=MISSED, check=t("repair_entity_links.requestBudgetUsed"))
         return plan
 
     if fix == FIX_REDISCOVER:
@@ -350,11 +357,11 @@ def plan_one(fetcher: Fetcher, row: dict) -> dict:
         new_url, note = confirm_replacement(fetcher, row["url"], candidate, row["chain"])
 
     if not new_url:
-        plan.update(verdict="未取得", check=note)
+        plan.update(verdict=MISSED, check=note)
     elif new_url == row["url"]:
-        plan.update(new_url=new_url, verdict="已是目标", check=note)
+        plan.update(new_url=new_url, verdict=ALREADY_TARGET, check=note)
     else:
-        plan.update(new_url=new_url, verdict="ok", check=note)
+        plan.update(new_url=new_url, verdict=OK, check=note)
     return plan
 
 
@@ -391,15 +398,15 @@ def write_plan(connection: sqlite3.Connection, plans: list[dict], now: str) -> d
     """把 verdict 为 ok 的行写进 `entity_link`。返回这一轮的处置计数。"""
     tally = {"updated": 0, "skipped_unique": 0}
     for plan in plans:
-        if plan["verdict"] != "ok":
+        if plan["verdict"] != OK:
             continue
         link_id, entity_id, new_url = int(plan["link_id"]), int(plan["entity_id"]), plan["new_url"]
         clash = connection.execute(
             "SELECT id FROM entity_link WHERE entity_id=? AND url=? AND id<>?",
             (entity_id, new_url, link_id)).fetchone()
         if clash is not None:
-            plan["verdict"] = "撞上唯一约束，整行跳过"
-            plan["check"] += f"；该实体已有 id={clash[0]} 指向这个地址"
+            plan["verdict"] = UNIQUE_CLASH
+            plan["check"] += t("repair_entity_links.uniqueClash", id=clash[0])
             tally["skipped_unique"] += 1
             continue
         stored = connection.execute(
@@ -420,19 +427,19 @@ def write_plan(connection: sqlite3.Connection, plans: list[dict], now: str) -> d
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("repair_entity_links.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--audit-output", type=Path, required=True,
-                        help="全库审计表：一条链接犯几条问题就写几行")
-    parser.add_argument("--output", type=Path, required=True, help="修复计划表")
+                        help=t("repair_entity_links.auditOutputHelp"))
+    parser.add_argument("--output", type=Path, required=True, help=t("repair_entity_links.outputHelp"))
     parser.add_argument("--offline", action="store_true",
-                        help="只做审计，不发任何请求")
+                        help=t("repair_entity_links.offlineHelp"))
     parser.add_argument("--interval", type=float, default=2.0,
-                        help="同一域名两次请求之间的最小间隔（秒）")
+                        help=t("repair_entity_links.intervalHelp"))
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--max-requests", type=int, default=600,
-                        help="整轮的请求总量上限")
-    parser.add_argument("--limit", type=int, default=0, help="只处理前若干条待修链接")
+                        help=t("repair_entity_links.maxRequestsHelp"))
+    parser.add_argument("--limit", type=int, default=0, help=t("repair_entity_links.limitHelp"))
     return parser
 
 
@@ -451,12 +458,12 @@ def main(argv: list[str] | None = None) -> int:
     counted: dict[str, int] = defaultdict(int)
     for row in audit:
         counted[row["problem"]] += 1
-    print({"链接": len(findings), "问题行": len(audit), **counted,
-           "audit": str(args.audit_output)})
+    print({t("repair_entity_links.linksKey"): len(findings), t("repair_entity_links.problemRowsKey"): len(audit),
+           **counted, "audit": str(args.audit_output)})
 
     if args.offline:
         write_rows(args.output, FIELDS, [])
-        print("只做审计，没有发请求")
+        print(t("repair_entity_links.offlineDone"))
         return 0
 
     todo = [row for row in findings if primary(row)]
@@ -471,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             integrity = writable.execute("PRAGMA integrity_check").fetchone()[0]
             if str(integrity) != "ok":
-                raise SystemExit(f"写入前 integrity_check 不是 ok：{integrity}")
+                raise SystemExit(t("repair_entity_links.integrityBeforeWrite", result=integrity))
             before = counts_of(writable, {"entity_link": "SELECT count(*) FROM entity_link"})
             tally = write_plan(writable, plans, now)
             writable.commit()
@@ -479,14 +486,15 @@ def main(argv: list[str] | None = None) -> int:
             after = counts_of(writable, {"entity_link": "SELECT count(*) FROM entity_link"})
         finally:
             writable.close()
-        print({"写入": tally, "前": before, "后": after,
-               "integrity_check": integrity, "foreign_key_check 违规": violations})
+        print({t("repair_entity_links.writtenKey"): tally, t("repair_entity_links.beforeKey"): before,
+               t("repair_entity_links.afterKey"): after, "integrity_check": integrity,
+               t("repair_entity_links.foreignKeysKey"): violations})
 
     write_rows(args.output, FIELDS, plans)
     verdicts: dict[str, int] = defaultdict(int)
     for plan in plans:
         verdicts[plan["verdict"]] += 1
-    print({"待修": len(plans), **verdicts, "请求数": fetcher.used,
+    print({t("repair_entity_links.toRepairKey"): len(plans), **verdicts, t("repair_entity_links.requestsKey"): fetcher.used,
            "output": str(args.output)})
     return 0
 

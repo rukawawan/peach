@@ -15,16 +15,37 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from .user_messages import UserFacingError
+
 
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 
 
-class FollowSourceError(RuntimeError):
-    pass
+class FollowSourceError(UserFacingError, RuntimeError):
+    """追更来源取回、解析或登记失败。`code` 与参数见 `user_messages.UserFacingError`。
+
+    状态码沿用 500：带 code 之前它是普通 `RuntimeError`，漏到接口层按服务端故障回 500，
+    错误上报也照常收（上报只滤掉 4xx）。改成 400 会让来源故障从上报里消失。
+    """
+
+    status_code = 500
+
+
+def internal_error(detail: str) -> FollowSourceError:
+    """只给开发者看的内部错误：调用方传错参数、不可能出现的状态。
+
+    仍是 `FollowSourceError`，按它捕获的地方照旧接得住；模板只有 `{{detail}}`，`detail`
+    写英文原文，两种界面语言都照原文显示。
+    """
+    return FollowSourceError("errors.follow.internal", {"detail": detail})
 
 
 class FollowHistoryEnd(FollowSourceError):
     """A valid backfill response that means there are no older items."""
+
+    def __init__(self, code: str = "errors.follow.historyEnd", params=None, *,
+                 status_code: int | None = None):
+        super().__init__(code, params, status_code=status_code)
 
 
 class FollowSourceRateLimited(FollowSourceError):
@@ -33,8 +54,9 @@ class FollowSourceRateLimited(FollowSourceError):
     `retry_after` 是来源给的等待秒数，没给就是 None，由冷却方按默认时长处理。
     """
 
-    def __init__(self, message: str, retry_after: float | None = None):
-        super().__init__(message)
+    def __init__(self, code: str, params=None, *, retry_after: float | None = None,
+                 status_code: int | None = None):
+        super().__init__(code, params, status_code=status_code)
         self.retry_after = retry_after
 
 
@@ -60,4 +82,4 @@ def write_immutable(path: Path, payload: bytes) -> None:
             handle.write(payload)
     except FileExistsError:
         if path.read_bytes() != payload:
-            raise FollowSourceError("immutable follow snapshot collision")
+            raise internal_error("immutable follow snapshot collision")

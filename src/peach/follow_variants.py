@@ -127,7 +127,7 @@ class VariantVerdict:
 def normalize_handle(value: str) -> str:
     """把创作者手柄压成只含小写字母数字的比较形式。"""
     folded = unicodedata.normalize("NFKC", value).casefold()
-    return re.sub(r"[^0-9a-z一-鿿぀-ヿ]+", "", folded)
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff\u3040-\u30ff]+", "", folded)
 
 
 def _looks_like_alias(token: str, aliases: frozenset[str]) -> bool:

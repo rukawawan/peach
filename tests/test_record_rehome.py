@@ -214,7 +214,7 @@ class RecordRehomeTests(unittest.TestCase):
                 "--db", str(self.db), "--logo-root", str(self.root / "logos"),
                 "--source", record_rehome.AUTO_SOURCE, "--batch", planned[0]["batch"],
                 "--apply", "--backup", str(self.root / "backup.db")]), 0)
-        self.assertIn("'撤回接回': 1", printed.getvalue())
+        self.assertIn("'reverted_rehomes': 1", printed.getvalue())
         self.assertEqual(self.query("SELECT id,disposal,rating FROM asset ORDER BY id"),
                          [(7, "vanished", 4), (new_id, None, None)])
         for table in ("asset_preference", "watch_queue", "playlist_item", "asset_quality_goal",

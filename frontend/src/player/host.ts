@@ -3,6 +3,7 @@
  * 播放器是命令式模块，不持有这些状态：设置归遗留壳的 `appSettings`（存在 localStorage 的
  * `peach.settings.v1` 里），回执归全站那一份 Toast，舞台的氛围光与剧场模式类挂在 `#stage` 上。
  * 挂播放器之前由持有方调一次 `configurePlayer` 接上。 */
+import { t } from '../i18n';
 
 /** 播放器读写的那几项设置。对象由持有方给出，播放器改了就地写回再调 `save`。 */
 export interface PlayerSettings {
@@ -32,6 +33,6 @@ let current: PlayerHost | null = null;
 export function configurePlayer(host: PlayerHost): void { current = host }
 
 export function playerHost(): PlayerHost {
-  if (!current) throw new Error('播放器还没有接上宿主（configurePlayer）');
+  if (!current) throw new Error(t('catalog:playerControls.hostMissing'));
   return current;
 }

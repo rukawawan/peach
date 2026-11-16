@@ -59,7 +59,7 @@ class WesternProfileTests(unittest.TestCase):
             entity_id = connection.execute("INSERT INTO entity(kind,canonical_name,normalized_name,created_at,updated_at) VALUES('performer','Christy White','christy white','t','t')").lastrowid
             connection.executemany("INSERT INTO entity_link(entity_id,link_kind,label,url,hostname,created_at,updated_at) VALUES(?,?,?,?,?,'t','t')",
                                    [(entity_id, 'social', 'X', 'https://x.com/christy_a', 'x.com'),
-                                    (entity_id, 'official', '官网', 'https://christy.example/', 'christy.example')])
+                                    (entity_id, 'official', 'official-site', 'https://christy.example/', 'christy.example')])
             body = self.page() + (b'<div id="socialicons"><a class="proficon x" href="https://twitter.com/christy_b">X</a>'
                                   b'<a class="proficon www" href="https://linktr.ee/christy">Web</a>'
                                   b'<a class="proficon instagram" href="https://www.instagram.com/christy">IG</a></div>')

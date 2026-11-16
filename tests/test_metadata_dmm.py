@@ -11,6 +11,7 @@ from peach.scraping_access import SourcePaused
 from peach.sources import DMM, DmmSource, FailureReason, Page, Session, SourceFailure
 from peach.sources.dmm import (ACTRESS_WORKS_QUERY, DETAIL_ATTEMPTS, DETAIL_QUERY, SEARCH_LIMIT, SEARCH_QUERY, code_parts,
                                code_from_cid, guessed_cid, matching_cids, release_date)
+from peach.metadata import relayed
 
 ENDPOINT = "https://api.video.dmm.co.jp/graphql"
 PAGE_URL = "https://video.dmm.co.jp/av/content/?id=ssis00057"
@@ -71,6 +72,11 @@ class CodeMappingTests(unittest.TestCase):
                                   "48midv00012ai": "MIDV-012AI"}.items():
             self.assertEqual(code_from_cid(product), expected)
         self.assertEqual(code_from_cid("opaque_cid"), "")
+
+    def test_sod_bonus_edition_maps_to_the_regular_release(self):
+        # 特典版（官方番号 SDJS-304-V）是通常版正片加特典映像，番号归到通常版。
+        for product, expected in {"1sdjs00304v": "SDJS-304", "1start00644v": "START-644"}.items():
+            self.assertEqual(code_from_cid(product), expected)
 
     def test_code_parts_keep_the_numeric_prefix_and_the_digits_as_written(self):
         self.assertEqual(code_parts("SSIS-057"), ("", "SSIS", "057"))
@@ -231,13 +237,13 @@ class DmmSourceTests(unittest.TestCase):
 
     def test_transport_tiers_keep_their_semantics(self):
         with self.assertRaises(SourceFailure) as caught:
-            DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": Unavailable("HTTP 503")})))
+            DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": Unavailable(*relayed("HTTP 503"))})))
         self.assertEqual((caught.exception.reason, caught.exception.status_code), (FailureReason.SERVER_ERROR, 503))
         with self.assertRaises(SourceFailure) as caught:
-            DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": Unavailable("HTTP 422")})))
+            DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": Unavailable(*relayed("HTTP 422"))})))
         self.assertEqual((caught.exception.reason, caught.exception.status_code), (FailureReason.NETWORK, 422))
         with self.assertRaises(SourcePaused):
-            DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": SourcePaused("来源正在冷却")})))
+            DmmSource().query("SSIS-057", session=Session(graphql(items={"ssis00057": SourcePaused("errors.scrapingAccess.coolingDown")})))
 
 
 def listed(cid, *, status=None, date="2026-10-30T00:00:00+09:00", cast=("森日向子",), maker="ムーディーズ"):

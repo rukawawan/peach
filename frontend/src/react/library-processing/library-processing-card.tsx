@@ -41,24 +41,17 @@ import { TrafficProgress } from './processing-traffic';
 import { ProcessingControls } from './processing-controls';
 import { downloadIssueList, exportProcessingIssues } from './issue-export';
 import { busyProps, useAction } from '../settings/use-action';
-import { SourceMark } from '../settings/section';
-import { useLibraryTints, type LibraryTint } from '../components/library-tint';
+import { useLibraryTints } from '../components/library-tint';
+import { LibraryLabel } from '../components/library-label';
 import { useOrderedLibraries } from '../components/library-order';
+import { jobText } from '../../core/server-text';
+import { t } from '../../i18n';
 
-const ALL_LIBRARIES = { id: '', name: '所有媒体库', icon: 'database' };
-
-function LibraryLabel({ library }: { library: Pick<LibraryTint, 'id' | 'name' | 'icon'> }) {
-  return <span className="flex min-w-0 items-center gap-2">
-    <span data-library={library.id} className="inline-flex shrink-0 text-(--library-color)">
-      <SourceMark mark={library.icon} />
-    </span>
-    <span className="truncate">{library.name}</span>
-  </span>;
-}
+const ALL_LIBRARIES = { id: '', name: t('manage:scanFetch.allLibraries'), icon: 'database' };
 
 /* 中文正文写成常量：JSX 里换行的文字会在接缝处多出一个空格，中文句子里看得见。
    卡片正文与首屏骨架共用 `SCAN_CARD_TEXT`（`management.ts`）。 */
-const STALLED_TEXT = '这一项耗时较长，暂时没有新进展。任务结束后可以重试未完成的部分。';
+const STALLED_TEXT = t('manage:scanFetch.stalled');
 /* 补齐女优资料是落库之后的一步，一趟里常常什么都不用补，那时这句话不出现：
    四个读数全是 0 还写一句「别名 0 个」，读的人分不清是没得补还是这一步没跑。 */
 const profileText = (state: LibraryProcessingData) => {
@@ -67,18 +60,19 @@ const profileText = (state: LibraryProcessingData) => {
   const conflicts = state.performer_profile_conflicts || 0;
   const failed = state.performer_profile_failed || 0;
   if (!aliases && !avatars && !conflicts && !failed) return '';
-  const parts = [`补齐女优资料：别名 ${aliases} 个，头像 ${avatars} 张`];
-  if (conflicts) parts.push(`${conflicts} 项同名人物资料需要确认是否为同一人`);
-  if (failed) parts.push(`${failed} 张头像未取得`);
-  return `${parts.join('，')}。`;
+  const parts = [t('manage:scanFetch.profilesFilled', { count: aliases, avatars })];
+  if (conflicts) parts.push(t('manage:scanFetch.profileConflicts', { count: conflicts }));
+  if (failed) parts.push(t('manage:scanFetch.avatarsNotFound', { count: failed }));
+  return t('manage:scanFetch.profileSentence', { parts: parts.join(t('shell:format.clauseSeparator')) });
 };
 
 const receiptText = (state: LibraryProcessingData) =>
-  state.requested_stage === 'previews' ? `已生成 ${state.previews || 0} 部视频预览。`
-  : `已扫描 ${state.scanned || 0} 个文件，识别 ${state.identified || 0} 个番号，`
-  + `取得 ${state.candidates || 0} 组作品资料，自动保存 ${state.auto_applied || 0} 条。`
-  + (state.previews ? `已生成 ${state.previews} 部视频预览。` : '')
-  + profileText(state);
+  state.requested_stage === 'previews' ? t('manage:scanFetch.previewsGenerated', { count: state.previews || 0 })
+  : [
+    t('manage:scanFetch.receipt', { count: state.scanned || 0, identified: state.identified || 0, candidates: state.candidates || 0, autoApplied: state.auto_applied || 0 }),
+    state.previews ? t('manage:scanFetch.previewsGenerated', { count: state.previews }) : '',
+    profileText(state),
+  ].filter(Boolean).join(t('shell:format.sentenceGap'));
 
 /** 卡片外面那一块：这一趟怎么了。逐条明细要展开才读，完整清单在状态给出的日志文件里。 */
 function Outcome(
@@ -116,35 +110,35 @@ function Outcome(
   const exportButton = state.issue_count && !active
     ? <Button variant="secondary" size="small" {...busyProps(!!exporter.busy)} onClick={() => void exporter.run('export',
         signal => exportProcessingIssues(state, signal), contents => {
-          downloadIssueList(state.job_id!, contents); toast('已导出问题清单');
-        })}>导出完整问题清单</Button>
+          downloadIssueList(state.job_id!, contents); toast(t('manage:scanFetch.issuesExported'));
+        })}>{t('manage:scanFetch.exportIssues')}</Button>
     : null;
   const body = failed
-    ? [problem || state.error || '处理未完成，请重试', partial ? PARTIAL_RESULT_TEXT : '', notes].filter(Boolean).join('\n')
-    : notes || `这一趟有 ${(state.issue_count || 0).toLocaleString()} 项问题。`;
+    ? [problem || jobText(state, 'error') || t('manage:scanFetch.failedRetry'), partial ? PARTIAL_RESULT_TEXT : '', notes].filter(Boolean).join('\n')
+    : notes || t('manage:scanFetch.runIssues', { count: state.issue_count || 0 });
   return (
     /* 空着时整块收起：`aria-live` 的容器留着一条空轨道，卡片底下就凭空多出一个间距。 */
     <div aria-live="polite" className="flex flex-col gap-4 empty:hidden">
       {slow
         ? <SlowItemNote state={state} slow={slow} />
         : state.status === 'running' && state.stalled
-        ? <Note tone="warning" title="处理较慢">{STALLED_TEXT}</Note>
+        ? <Note tone="warning" title={t('manage:scanFetch.slowTitle')}>{STALLED_TEXT}</Note>
         : null}
       {settled?.status === 'complete'
-        ? <Note tone="success" title="处理完成">{receiptText(settled)}</Note>
+        ? <Note tone="success" title={t('manage:taskOutcome.complete')}>{receiptText(settled)}</Note>
         : null}
       {/* 取消不止是眼前点的那一下：命令行、任务中心取消的、重开页面才读到的，都留这一句。 */}
-      {(settled ?? state).status === 'cancelled' && !state.archived ? <Note tone="neutral" title="已取消上次任务">
-        已取得的资料和预览已保留，这一轮不会自动继续，需要时重新同步。
+      {(settled ?? state).status === 'cancelled' && !state.archived ? <Note tone="neutral" title={t('manage:scanFetch.canceledTitle')}>
+        {t('manage:scanFetch.canceledBody')}
       </Note> : null}
       {issues
         ? <Note tone={!failed ? 'neutral' : partial ? 'warning' : 'error'} className="gap-0 p-3"
-            title={!failed ? undefined : partial ? '处理已结束，部分项目需处理' : '处理未完成'}
+            title={!failed ? undefined : partial ? t('manage:taskOutcome.partial') : t('manage:scanFetch.failedTitle')}
             action={<div className="flex flex-wrap items-center gap-2">
-              {partial ? <LinkButton href={ALL_CONTENT_URL} size="small" trailingIcon={RiArrowRightLine}>查看全部内容</LinkButton> : null}
-              {retryable ? <Button variant="secondary" size="small" aria-label="立即重试未完成项" onClick={onRetry}>立即重试</Button> : null}
-              {archivable ? <Button variant="secondary" size="small" aria-label="归档提示" {...busyProps(!!archive.busy)}
-                onClick={() => setArchived(true)}>归档</Button> : null}
+              {partial ? <LinkButton href={ALL_CONTENT_URL} size="small" trailingIcon={RiArrowRightLine}>{t('manage:scanFetch.viewAllContent')}</LinkButton> : null}
+              {retryable ? <Button variant="secondary" size="small" aria-label={t('manage:scanFetch.retryNowLabel')} onClick={onRetry}>{t('manage:shared.retryNow')}</Button> : null}
+              {archivable ? <Button variant="secondary" size="small" aria-label={t('manage:scanFetch.archiveLabel')} {...busyProps(!!archive.busy)}
+                onClick={() => setArchived(true)}>{t('manage:scanFetch.archive')}</Button> : null}
             </div>}
             extra={<>
               {/* 三层东西叠在同一块提示里：一句结论、一份清单、一条日志地址。各自之间
@@ -167,7 +161,7 @@ function Outcome(
                 </div> : null}
               {/* 日志地址与分隔线使用次级文字色；导出读的是同一份记录，排在打开位置旁边。 */}
               {log ? <div className="-mx-3 mt-3 border-t border-current/20 px-3 pt-3 text-text-secondary">
-                  <PathLine path={log} prefix="完整记录：" className="text-caption-1-regular"
+                  <PathLine path={log} prefix={t('manage:scanFetch.fullLogPrefix')} className="text-caption-1-regular"
                     action={exportButton} onRevealed={toast} />
                 </div>
               : exportButton ? <div className="-mx-3 mt-3 flex justify-end border-t border-current/20 px-3 pt-3">{exportButton}</div>
@@ -178,8 +172,8 @@ function Outcome(
         : null}
       {state.archived && archivedHere === state.job_id && !problem
         ? <Note tone="neutral" action={<Button variant="secondary" size="small" {...busyProps(!!archive.busy)}
-              onClick={() => setArchived(false)}>撤销</Button>}>
-            已归档上一趟的问题提示，完整记录仍保留。
+              onClick={() => setArchived(false)}>{t('manage:shared.undo')}</Button>}>
+            {t('manage:scanFetch.archivedBody')}
           </Note>
         : null}
       {exporter.error || archive.error ? <Note tone="warning">{exporter.error || archive.error}</Note> : null}
@@ -193,7 +187,7 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
   const tints = useLibraryTints({ names: true });
   const libraries = useOrderedLibraries([...tints.values()].filter(library => library.name), library => library.id);
   const selectedLibrary = libraryId
-    ? tints.get(libraryId) || { id: libraryId, name: '媒体库已不存在', icon: 'database' }
+    ? tints.get(libraryId) || { id: libraryId, name: t('manage:scanFetch.libraryMissing'), icon: 'database' }
     : ALL_LIBRARIES;
   const { job, settled, forget } = useLibraryProcessingJob(props);
   const start = useMutation({
@@ -233,12 +227,12 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
 
   return (
     <div className="flex flex-col gap-4">
-      <Fieldset layout="stack" label="扫描与采集" footer={
+      <Fieldset layout="stack" label={t('manage:scanFetch.title')} footer={
         <>
-          <LinkButton href="/sources" size="small" trailingIcon={RiArrowRightLine}>来源和凭证</LinkButton>
-          <LinkButton href="/settings/diagnostics" size="small" trailingIcon={RiArrowRightLine}>诊断与日志</LinkButton>
+          <LinkButton href="/sources" size="small" trailingIcon={RiArrowRightLine}>{t('manage:managePages.sources')}</LinkButton>
+          <LinkButton href="/settings/diagnostics" size="small" trailingIcon={RiArrowRightLine}>{t('manage:managePages.diagnostics')}</LinkButton>
           {state.candidates
-            ? <LinkButton href="/review" size="small" trailingIcon={RiArrowRightLine}>复核资料</LinkButton>
+            ? <LinkButton href="/review" size="small" trailingIcon={RiArrowRightLine}>{t('manage:scanFetch.reviewMetadata')}</LinkButton>
             : null}
           {/* 日常同步保留独立入口，原任务的定向重试只处理该任务的失败项。 */}
           <ProcessingActions scan libraryId={libraryId} libraryName={libraryId ? selectedLibrary.name : undefined} busy={start.isPending} occupied={processingActive(state)} metadataOnly={state?.metadata_only}
@@ -248,33 +242,33 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <FieldsetTitle>扫描与采集</FieldsetTitle>
+              <FieldsetTitle>{t('manage:scanFetch.title')}</FieldsetTitle>
               {state.new_asset_count ? <Chip variant="caption" color="blue">
-                <span className="tabular-nums">{libraryId ? '所有媒体库 · ' : ''}{state.new_asset_count.toLocaleString()} 部待补全</span>
+                <span className="tabular-nums">{t(libraryId ? 'manage:scanFetch.allLibrariesPending' : 'manage:scanFetch.pendingCount', { count: state.new_asset_count })}</span>
               </Chip> : null}
             </div>
             {hidden && (processingActive(state) || state.status === 'failed' || job.isError)
               ? <Button variant="secondary" size="small" onClick={() => setProcessingNoticeVisible(noticeKey, true)}>
-                  显示进度浮窗
+                  {t('manage:scanFetch.showProgressPanel')}
                 </Button> : null}
           </div>
           <p className="text-body-2-regular text-text-secondary">{SCAN_CARD_TEXT}</p>
           <div className="w-full max-w-80">
-            <p id="processingLibraryLabel" className="mb-1 text-body-2-medium text-text-secondary">媒体库</p>
+            <p id="processingLibraryLabel" className="mb-1 text-body-2-medium text-text-secondary">{t('manage:shared.library')}</p>
             <Select aria-labelledby="processingLibraryLabel" selectedKey={libraryId || 'all'} isDisabled={start.isPending || !libraries.length}
               renderValue={<LibraryLabel library={selectedLibrary} />}
               onSelectionChange={key => { if (key !== null) setLibraryId(key === 'all' ? '' : String(key)) }}>
-              <SelectItem id="all" textValue="所有媒体库"><LibraryLabel library={ALL_LIBRARIES} /></SelectItem>
+              <SelectItem id="all" textValue={t('manage:scanFetch.allLibraries')}><LibraryLabel library={ALL_LIBRARIES} /></SelectItem>
               {libraries.map(library => <SelectItem id={library.id} key={library.id} textValue={library.name}>
                 <LibraryLabel library={library} />
               </SelectItem>)}
             </Select>
           </div>
           {processingActive(state) && state.library_name ? <p className="text-body-2-regular text-text-secondary">
-            当前任务媒体库：{state.library_name}
+            {t('manage:scanFetch.currentLibraryName', { name: state.library_name })}
           </p> : null}
           {state.status === 'paused' && !state.total
-            ? <span className="self-start"><StatusLabel>已暂停</StatusLabel></span>
+            ? <span className="self-start"><StatusLabel>{t('manage:taskStatus.paused')}</StatusLabel></span>
             : processingActive(state)
             ? <ProcessingProgress state={state} />
             : null}

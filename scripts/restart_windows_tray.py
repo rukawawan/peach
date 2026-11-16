@@ -26,6 +26,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import DATABASE_PATH, STATE_DIR
+from peach.interface_text import dev as t
 from peach.jobs import process_alive
 from peach.runtime_prepare import Dependencies, RestartPreparation, read_record, task_gate
 from peach.windows_restart import (
@@ -41,21 +42,21 @@ def preparation() -> RestartPreparation:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="静默无窗口地重启 Windows Peach 托盘及子服务")
+    parser = argparse.ArgumentParser(description=t("restart_windows_tray.description"))
     parser.add_argument("--target", type=Path,
                         default=PROJECT_ROOT / "dist" / "Peach" / "Peach.exe")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--source", action="store_true",
-                        help="重启源码部署的托盘（pythonw -m peach.tray），不做换包")
+                        help=t("restart_windows_tray.helpSource"))
     parser.add_argument("--swap-from", type=Path, default=None,
-                        help="旧托盘退出后把这个暂存包换上生产入口，失败自动回退")
+                        help=t("restart_windows_tray.helpSwapFrom"))
     parser.add_argument("--force", action="store_true",
-                        help="有重启后续跑不了的任务也照样重启")
+                        help=t("restart_windows_tray.helpForce"))
     args = parser.parse_args(argv)
     # 源码托盘没有生产入口可换，`--swap-from` 在这条路上无处可去。默默忽略它的话，
     # 命令照样退出 0、照样打印 ok，而那个包根本没换上——换包失败最不能是静默的。
     if args.source and args.swap_from:
-        parser.error("--source 不能与 --swap-from 同用：源码托盘没有可换的生产入口")
+        parser.error(t("restart_windows_tray.sourceWithSwap"))
 
     gate = task_gate(DATABASE_PATH, host=socket.gethostname(), alive=process_alive)
     if gate.refused and not args.force:
@@ -76,17 +77,17 @@ def main(argv: list[str] | None = None) -> int:
         startup = read_record(STATE_DIR, pid=result.new_tray_pid)
         payload["startup"] = startup
         if startup is None:
-            payload["message"] += "；未取得新托盘的启动准备记录"
+            payload["message"] += t("restart_windows_tray.noStartupRecord")
         elif not startup.get("ok"):
-            failed = "；".join(step["message"] for step in startup.get("steps", ())
+            failed = t("common.clauseSeparator").join(step["message"] for step in startup.get("steps", ())
                               if step.get("state") in ("failed", "stale"))
             payload["ok"] = False
             if failed:
-                payload["message"] += f"；新托盘启动准备失败：{failed}"
+                payload["message"] += t("restart_windows_tray.startupFailed", steps=failed)
             elif any(step.get("state") == "pending" for step in startup.get("steps", ())):
-                payload["message"] += "；新托盘服务仍在启动，请查看托盘状态"
+                payload["message"] += t("restart_windows_tray.stillStarting")
             else:
-                payload["message"] += "；新托盘启动准备未完成"
+                payload["message"] += t("restart_windows_tray.startupIncomplete")
     print(json.dumps(payload, ensure_ascii=False))
     return 0 if payload["ok"] else 1
 

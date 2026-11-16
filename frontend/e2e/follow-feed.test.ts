@@ -371,7 +371,7 @@ describe('关注页岛', () => {
       await searchIs(page, '?author=name%3Amira&tag=loop&work=zelda');
       const drops = await page.locator('[data-follow-drop]').evaluateAll((buttons) =>
         buttons.map((button) => (button as HTMLElement).dataset.followDropKind));
-      assert.deepEqual(drops, ['创作者', '题材', '标签'], `组合条的条件不对：${JSON.stringify(drops)}`);
+      assert.deepEqual(drops, ['creator', 'franchise', 'tag'], `组合条的条件不对：${JSON.stringify(drops)}`);
       const [readout, combo, list] = await page.evaluate(() => ['[data-follow-readout]', '[data-follow-combo]',
         '[data-follow-list-body]'].map((selector) => document.querySelector(selector)!.getBoundingClientRect()));
       assert.ok(readout!.bottom <= combo!.top + 1 && combo!.bottom <= list!.top + 1,

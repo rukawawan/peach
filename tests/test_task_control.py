@@ -362,6 +362,42 @@ class TaskControlTests(unittest.TestCase):
         self.assertFalse(job.thread.is_alive())
         self.assertEqual(self.store.get(run_id).status, 'succeeded')
 
+    def test_paused_work_rereads_its_control_slowly_and_wakes_on_a_resume_from_this_process(self):
+        finish = self.event()
+        progress = []
+
+        def work(job, identity):
+            while not finish.is_set():
+                task_control.checkpoint()
+                progress.append(identity)
+                time.sleep(.01)
+            job.update(identity, status='complete')
+
+        _job, original = self.start(work)
+        self.wait_until(lambda: len(progress) >= 2)
+        run_id = original['run_id']
+        task_control.request(self.store, run_id, 'pause')
+        self.wait_until(lambda: self.state(run_id)['state'] == 'paused')
+        reads = []
+        intent = task_control.intent
+        with patch.object(task_control, 'intent', side_effect=lambda *args: reads.append(1) or intent(*args)):
+            time.sleep(1.5)
+        # 停稳之后约每秒重读一次控制文件，而不是每 0.1 秒。
+        self.assertLessEqual(len(reads), 3)
+        paused_count = len(progress)
+        resumed = time.monotonic()
+        task_control.request(self.store, run_id, 'resume')
+        self.wait_until(lambda: len(progress) > paused_count)
+        self.assertLess(time.monotonic() - resumed, .5)
+        # 别的进程写下的继续（本进程收不到叫醒）在一个重读间隔内生效。
+        task_control.request(self.store, run_id, 'pause')
+        self.wait_until(lambda: self.state(run_id)['state'] == 'paused')
+        paused_count = len(progress)
+        with update_tasks._mutex(update_tasks.state_for(self.db)):
+            task_control._request(self.store, run_id, 'resume')
+        self.wait_until(lambda: len(progress) > paused_count, timeout=task_control.PAUSED_POLL_SECONDS + 1)
+        finish.set()
+
     def test_cancel_stays_running_until_work_exits_and_rejects_a_stale_resume(self):
         entered, reach_checkpoint = self.event(), self.event()
         unwinding, allow_exit = self.event(), self.event()

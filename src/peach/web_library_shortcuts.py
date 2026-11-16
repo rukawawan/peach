@@ -6,9 +6,11 @@ import time
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
+from . import interface_text
 from .catalog_rules import solo_performer_clause
 from .library_favorites import KEY, favorite_entry, favorite_entries, favorite_entities
 from .profiles import DEFAULT_PROFILE_ID, read_settings
+from .user_messages import UserValueError
 from .web_catalog import VISIBLE_CATALOG_ASSET, entity_ref
 
 QUERY_KEYS = frozenset({"loc", "creator", "studio", "owner", "tag", "tag_match", "len",
@@ -36,13 +38,13 @@ def _snapshot(c, settings):
 
 def clean_href(raw):
     if not isinstance(raw, str) or len(raw) > 4096:
-        raise ValueError("筛选地址过长或格式不正确")
+        raise UserValueError("api.libraryShortcuts.invalidFilterHref")
     parsed = urlsplit(raw)
     if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in PATHS:
-        raise ValueError("只能保存馆藏筛选")
+        raise UserValueError("api.libraryShortcuts.collectionFiltersOnly")
     pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=40)
     if any(key not in QUERY_KEYS or len(value) > 1000 for key, value in pairs):
-        raise ValueError("筛选包含不支持的条件")
+        raise UserValueError("api.libraryShortcuts.unsupportedFilterCondition")
     query = urlencode(dict(pairs))
     return parsed.path + ("?" + query if query else "")
 
@@ -84,7 +86,9 @@ def _favorite_art(contract, row, representative):
         row['image_fallbacks'] = ref.get('source_avatar_fallbacks', [])
     elif row['kind'] not in {'studio', 'agency'} and representative and contract.has_avatar(*representative):
         row['image_url'] = f'/avatar?id={representative[0]}'
-        row['image_label'] = row['name'] + ' · 代表作'
+        params = {'name': row['name']}
+        row['image_label'] = interface_text.text('server:labels.webLibraryShortcuts.representativeImage', params)
+        row['image_label_code'], row['image_label_params'] = 'labels.webLibraryShortcuts.representativeImage', params
 
 
 def favorite_ids(connection):
@@ -95,7 +99,7 @@ def _reorder_filters(rows, ids):
     by_id = {row["id"]: row for row in rows}
     if (not isinstance(ids, list) or any(not isinstance(key, str) for key in ids)
             or len(ids) != len(by_id) or set(ids) != set(by_id)):
-        raise ValueError("筛选列表已变化，请重新打开后排序")
+        raise UserValueError("api.libraryShortcuts.filtersChanged")
     return [by_id[key] for key in ids]
 
 
@@ -107,34 +111,34 @@ def w_library_shortcuts(contract, body):
         if action == "favorite":
             item = favorite_entry(c, body)
             if item is None or not isinstance(body.get("on"), bool):
-                raise ValueError("收藏对象不存在或状态不正确")
+                raise UserValueError("api.libraryShortcuts.invalidFavorite")
             if item.get('scope') == 'online' and body['on']:
                 from .web_follow import online_tag_inventory
                 tag = next((row for row in online_tag_inventory(c) if row['id'] == item['tag_id']), None)
                 if tag is None:
-                    raise ValueError('在线标签不存在，请刷新后重试')
+                    raise UserValueError("api.libraryShortcuts.onlineTagMissing")
                 item['name'] = tag['k']
             data["favorites"] = [row for row in data["favorites"] if row["key"] != item["key"]]
             if body["on"]:
                 if len(data["favorites"]) >= 1000:
-                    raise ValueError("最多收藏 1000 项")
+                    raise UserValueError("api.libraryShortcuts.favoritesLimit")
                 data["favorites"].append(item)
         elif action == "save_filter":
             name = body.get("name")
             if not isinstance(name, str) or not 0 < len(name.strip()) <= 80:
-                raise ValueError("筛选名称须为 1 到 80 个字符")
+                raise UserValueError("api.libraryShortcuts.filterNameLength")
             if len(data["filters"]) >= 100:
-                raise ValueError("最多保存 100 个筛选")
+                raise UserValueError("api.libraryShortcuts.filtersLimit")
             data["filters"].append({"id": uuid.uuid4().hex, "name": name.strip(), "href": clean_href(body.get("href"))})
         elif action == "delete_filter":
             data["filters"] = [row for row in data["filters"] if row["id"] != body.get("id")]
         elif action == "reorder_filters":
             data["filters"] = _reorder_filters(data["filters"], body.get("ids"))
         else:
-            raise ValueError("不支持的收藏操作")
+            raise UserValueError("api.libraryShortcuts.unsupportedAction")
         settings[KEY] = data
         updated = c.execute("UPDATE profile SET settings_json=?,updated_at=? WHERE id=?",
                             (json.dumps(settings, ensure_ascii=False), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), DEFAULT_PROFILE_ID)).rowcount
         if not updated:
-            raise ValueError("当前用户设置不存在")
+            raise UserValueError("api.libraryShortcuts.profileMissing")
     return {"ok": True, **q_library_shortcuts(contract)}

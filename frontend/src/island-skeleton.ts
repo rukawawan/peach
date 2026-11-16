@@ -6,6 +6,7 @@
  * icon / label 四张表），悬停、按下、焦点环留给接管后的真按键。 */
 
 import { esc } from '@peach/legacy/core';
+import { t } from './i18n';
 
 type Variant = 'primary' | 'secondary' | 'ghost';
 type Size = 'medium' | 'small';
@@ -37,7 +38,7 @@ export const islandGlyph = (name: string, cls: string): string =>
 /** 收藏入口在页面等待阶段保留图标与尺寸，交互由已就绪的页面接管。玻璃筛选条里取紧凑档，
  *  实体页标题右侧的工具行取默认档，与 `react/styles.css` 里 `[data-filter-action]` 的两档同高。 */
 export function islandShortcutsEntry(size: 'compact' | 'default' = 'compact'): string {
-  return `<span data-shortcuts-entry class="inline-flex flex-none"><button type="button" data-shortcuts-trigger data-filter-action data-skeleton-action disabled tabindex="-1" aria-label="我的收藏" title="我的收藏" class="inline-grid ${size === 'default' ? 'size-9' : 'size-8'} flex-none place-items-center rounded-(--control-radius) border border-(--border-10) bg-(--surface) text-(--muted)">${islandGlyph('star', 'size-4')}</button></span>`;
+  return `<span data-shortcuts-entry class="inline-flex flex-none"><button type="button" data-shortcuts-trigger data-filter-action data-skeleton-action disabled tabindex="-1" aria-label="${t('settings:favoritesPanel.title')}" title="${t('settings:favoritesPanel.title')}" class="inline-grid ${size === 'default' ? 'size-9' : 'size-8'} flex-none place-items-center rounded-(--control-radius) border border-(--border-10) bg-(--surface) text-(--muted)">${islandGlyph('star', 'size-4')}</button></span>`;
 }
 
 /** 与 Board Input 的中号外框、前缀和正文使用相同几何。 */

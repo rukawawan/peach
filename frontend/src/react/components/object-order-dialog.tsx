@@ -6,6 +6,7 @@ import { ModalFrame } from './modal-frame';
 import { NavigationOrderRows } from './navigation-order';
 import { Note } from './note';
 import { busyProps } from '../settings/use-action';
+import { t } from '../../i18n';
 
 /** 对象顺序先在弹层内调整，保存时由对象自己的端点一次写入。 */
 export function ObjectOrderDialog({ title, items, save, close }: {
@@ -30,8 +31,8 @@ export function ObjectOrderDialog({ title, items, save, close }: {
       </div>
       {problem ? <Note tone="error">{problem}</Note> : null}
       <div className="flex justify-between gap-4 p-3">
-        <Button variant="secondary" disabled={saving} onClick={close}>取消</Button>
-        <Button {...busyProps(saving)} onClick={() => void submit()}>保存顺序</Button>
+        <Button variant="secondary" disabled={saving} onClick={close}>{t('shell:shared.cancel')}</Button>
+        <Button {...busyProps(saving)} onClick={() => void submit()}>{t('shell:objectOrder.save')}</Button>
       </div>
     </div>
   </ModalFrame>;

@@ -13,20 +13,21 @@ import httpx
 from peach.task_retry import RETRY_DELAYS, retry_delay, transient_delay
 from peach.sources.base import FailureReason, SourceFailure
 from peach import migrations
+from peach.metadata import relayed
 
 
 class RetryPolicyTests(unittest.TestCase):
     def test_network_and_temporary_file_errors_back_off_then_stop(self):
-        for error in [TimeoutError(), ConnectionResetError(), OSError(errno.EBUSY, '文件暂时被占用'),
-                      SourceFailure(FailureReason.NETWORK, '请求未取得')]:
+        for error in [TimeoutError(), ConnectionResetError(), OSError(errno.EBUSY, 'Device or resource busy'),
+                      SourceFailure(FailureReason.NETWORK, *relayed('connection reset'))]:
             with self.subTest(error=type(error).__name__):
                 self.assertEqual([retry_delay(error, index) for index in range(4)], [*RETRY_DELAYS, None])
 
     def test_credentials_integrity_disk_and_program_errors_do_not_retry(self):
-        for error in [PermissionError(), FileNotFoundError(), OSError(errno.ENOSPC, '磁盘已满'),
+        for error in [PermissionError(), FileNotFoundError(), OSError(errno.ENOSPC, 'No space left on device'),
                       sqlite3.IntegrityError(), ValueError(), RuntimeError(),
-                      SourceFailure(FailureReason.AUTH_REQUIRED, '需要登录'),
-                      SourceFailure(FailureReason.PARSE_ERROR, '页面已改版')]:
+                      SourceFailure(FailureReason.AUTH_REQUIRED, 'errors.javdb.loginRequired'),
+                      SourceFailure(FailureReason.PARSE_ERROR, 'errors.avbase.unrecognized')]:
             with self.subTest(error=type(error).__name__):
                 self.assertIsNone(transient_delay(error))
 
@@ -79,10 +80,13 @@ class RetryUpgradeTests(unittest.TestCase):
                      r'C:\Media\film.mp4', 'failed', '需要检查挂载'))
                 connection.commit()
                 before = dict(connection.execute('SELECT * FROM download_task').fetchone())
-            self.assertEqual([item.version for item in migrations.upgrade(database, directory)], ['0051', '0052', '0053', '0054'])
+            self.assertEqual([item.version for item in migrations.upgrade(database, directory)], ['0051', '0052', '0053', '0054', '0055', '0056', '0057'])
             with closing(sqlite3.connect(database)) as connection:
                 connection.row_factory = sqlite3.Row
                 after = dict(connection.execute('SELECT * FROM download_task').fetchone())
             self.assertEqual(after.pop('postprocess_retries'), 0)
+            # 0056 加的 code 列不回填：旧行照原文显示。
+            codes = ('failure_detail_code', 'failure_detail_params', 'postprocess_detail_code', 'postprocess_detail_params')
+            self.assertEqual({name: after.pop(name) for name in codes}, dict.fromkeys(codes))
             self.assertEqual(after, before)
             self.assertEqual(migrations.upgrade(database, directory), [])

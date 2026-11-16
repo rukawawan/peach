@@ -13,6 +13,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from peach.interface_text import dev as t
 from peach.config import DATABASE_PATH
 from peach.scripting import open_readonly
 from peach.web_contract import WebContract, q_related
@@ -61,7 +62,7 @@ def run(database: Path, count: int, limit: int) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_related_ranker.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--seeds", type=int, default=20)
     parser.add_argument("--limit", type=int, default=12)

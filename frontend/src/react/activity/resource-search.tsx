@@ -13,19 +13,27 @@ import type { MediaPage } from '../catalog-grid/types';
 import type { DownloadPrefill } from './cloud-download-dialog';
 import { sameWorkCode } from './work-code';
 import { composingKey } from '../components/ime';
+import { codedText, serverLabelList } from '../../core/server-text';
+import { joinList, t } from '../../i18n';
 
 interface Candidate {
   id: string; uri: string; name: string; size: number; seeders: number; origins: string[];
   resolution: number; codec: string; chinese: boolean; uncensored: boolean;
 }
-interface Result { state: string; items: Candidate[]; warnings: string[]; error: string }
+/** 搜索结果：`error`、`warnings` 是 zh-CN 原句，旁边的 code 与参数给当前语言。 */
+interface Result {
+  state: string; items: Candidate[]; error: string; error_code?: string; error_params?: Record<string, unknown>;
+  warnings: string[]; warning_codes?: (string | null)[]; warning_params?: (Record<string, unknown> | null)[];
+}
 
 function SearchSpinner({ className }: { className?: string }) {
   return <span className={className} aria-hidden dangerouslySetInnerHTML={{ __html: spinnerHtml('') }} />;
 }
 
 function preferredGoal(reason: string | undefined): string {
+  // i18n-exempt: 服务端给的升级原因原文，按原值判断
   if (['中字', '中文字幕'].includes(reason?.trim() ?? '')) return 'chinese';
+  // i18n-exempt: 服务端给的升级原因原文，按原值判断
   if (['无码', '无码流出', '无码破解'].includes(reason?.trim() ?? '')) return 'uncensored';
   return 'quality';
 }
@@ -64,46 +72,47 @@ export function ResourceSearch({ initialCode, reason, choose, onSearch, onWork }
       void apiGet<MediaPage>(`/api/items?jav=1&q=${encodeURIComponent(requested)}&limit=10`, controller.signal).then(page => {
         if (controller.signal.aborted) return;
         const item = (page.items || []).find(row => sameWorkCode(row.code, requested));
-        onWork(item ? { code: item.code, title: String(item.catalog_title || item.name || ''), performers: item.performers?.join('、'),
+        onWork(item ? { code: item.code, title: String(item.catalog_title || item.name || ''), performers: item.performers ? joinList(item.performers) : undefined,
           release_date: String(item.release_date || ''), duration: item.duration, studio: item.studio,
           cover: item.has_cover ? coverUrl(item, true) : '', origin: `asset:${item.id}` } : null);
       }, () => { if (!controller.signal.aborted) onWork(null) });
     }
   };
   return (
-    <section aria-label="查找资源" aria-busy={Boolean(action.busy)} className="flex min-w-0 flex-col gap-4">
-      {reason ? <Help>版本目标：{reason}。可在下方调整搜索优先项；完整度与水印需要逐条复核。</Help> : null}
-      <Input label="按番号查找资源" value={code} maxLength={80} placeholder="输入番号，按回车搜索" enterKeyHint="search"
+    <section aria-label={t('manage:resourceSearch.searchTorrents')} aria-busy={Boolean(action.busy)} className="flex min-w-0 flex-col gap-4">
+      {reason ? <Help>{t('manage:resourceSearch.goal', { reason })}</Help> : null}
+      <Input label={t('manage:resourceSearch.byCode')} value={code} maxLength={80} placeholder={t('manage:resourceSearch.placeholder')} enterKeyHint="search"
         leadingIcon={action.busy ? SearchSpinner : RiSearchLine}
         isReadOnly={Boolean(action.busy)} aria-busy={Boolean(action.busy)} onChange={setCode} onKeyDown={(event) => {
           if (event.key === 'Enter' && !composingKey(event.nativeEvent)) { event.preventDefault(); search() }
         }} />
       <div className="flex flex-col gap-1">
-        <FieldLabel>优先寻找</FieldLabel>
-        <Select aria-label="优先寻找" selectedKey={goal} isDisabled={Boolean(action.busy)}
+        <FieldLabel>{t('manage:resourceSearch.prefer')}</FieldLabel>
+        <Select aria-label={t('manage:resourceSearch.prefer')} selectedKey={goal} isDisabled={Boolean(action.busy)}
           onSelectionChange={(key) => { if (key !== null) setGoal(String(key)) }}>
-          <SelectItem id="quality">高清</SelectItem><SelectItem id="chinese">中字</SelectItem>
-          <SelectItem id="uncensored">无码</SelectItem>
+          <SelectItem id="quality">{t('manage:resourceSearch.hd')}</SelectItem><SelectItem id="chinese">{t('manage:shared.chineseSubs')}</SelectItem>
+          <SelectItem id="uncensored">{t('manage:shared.uncensored')}</SelectItem>
         </Select>
       </div>
       <div className="flex gap-3 max-sm:flex-col">
-        <Input label="最小体积（GiB）" inputMode="decimal" value={min} onChange={setMin} />
-        <Input label="最大体积（GiB）" inputMode="decimal" value={max} onChange={setMax} />
+        <Input label={t('manage:resourceSearch.minSize')} inputMode="decimal" value={min} onChange={setMin} />
+        <Input label={t('manage:resourceSearch.maxSize')} inputMode="decimal" value={max} onChange={setMax} />
       </div>
-      {action.busy ? <Help role="status">正在搜索资源</Help> : null}
+      {action.busy ? <Help role="status">{t('manage:resourceSearch.searching')}</Help> : null}
       {action.error ? <ErrorText>{action.error}</ErrorText> : null}
-      {result?.error ? <Help role="status">{result.error}</Help> : null}
-      {result?.state === 'ready' && !result.items.length ? <Help role="status">没有符合条件的资源。</Help> : null}
-      {result?.warnings.map((warning) => <Help key={warning}>{warning}</Help>)}
+      {result?.error ? <Help role="status">{codedText(result, 'error')}</Help> : null}
+      {result?.state === 'ready' && !result.items.length ? <Help role="status">{t('manage:resourceSearch.noResults')}</Help> : null}
+      {result ? serverLabelList(result.warnings, result.warning_codes, result.warning_params)
+        .map((warning) => <Help key={warning}>{warning}</Help>) : null}
       {result?.items.length ? <ul className="flex min-w-0 flex-col gap-4">
         {result.items.map((item) => <li key={item.id} className="flex min-w-0 flex-col gap-2 border-t border-separator-border pt-4">
           <p className="break-words text-body-2-medium text-text-primary">{item.name}</p>
-          <Help>{[item.size > 0 ? `${(item.size / 1024 ** 3).toFixed(2)} GiB` : '体积未取得', item.seeders >= 0 ? `${item.seeders} 个做种` : '做种未取得',
-            item.resolution ? `${item.resolution}p` : '', item.codec, item.chinese ? '中字' : '',
-            item.uncensored ? '无码' : '', item.origins.join('、')].filter(Boolean).join(' · ')}</Help>
+          <Help>{[item.size > 0 ? `${(item.size / 1024 ** 3).toFixed(2)} GiB` : t('manage:resourceSearch.sizeNotFound'), item.seeders >= 0 ? t('manage:resourceSearch.seeders', { count: item.seeders }) : t('manage:resourceSearch.seedersNotFound'),
+            item.resolution ? `${item.resolution}p` : '', item.codec, item.chinese ? t('manage:shared.chineseSubs') : '',
+            item.uncensored ? t('manage:shared.uncensored') : '', joinList(item.origins)].filter(Boolean).join(' · ')}</Help>
           <div><Button type="button" variant="secondary" onClick={() => {
             choose(item.uri, searched); setSelected(item.id);
-          }}>{selected === item.id ? '已填入磁力' : '选用此资源'}</Button></div>
+          }}>{selected === item.id ? t('manage:resourceSearch.magnetFilled') : t('manage:resourceSearch.useTorrent')}</Button></div>
         </li>)}
       </ul> : null}
     </section>

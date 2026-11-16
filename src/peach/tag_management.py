@@ -6,8 +6,10 @@ import json
 from datetime import datetime, timezone
 
 from .catalog_rules import canonical_tag_name, clean_tag_name, tag_cat
+from .catalog_vocabulary import is_performer_marker
 from .entities import _transfer_favorites, merge_entity, normalize_entity_name
 from .metadata_policy import SOURCE_SPECS
+from .user_messages import UserValueError
 
 _OFFICIAL_TAG_SOURCES = tuple(f'javinizer:{name}:tag' for name, spec in SOURCE_SPECS.items() if spec.official)
 
@@ -73,36 +75,36 @@ def duplicate_groups(rows: list[dict]) -> list[list[int]]:
 def _ids(body: dict) -> list[int]:
     values = body.get('ids')
     if not isinstance(values, list) or not values or len(values) > 2000 or any(type(value) is not int or value <= 0 for value in values):
-        raise ValueError('请选择有效的标签，单次最多 2000 个')
+        raise UserValueError('errors.tagManagement.selectionInvalid')
     return sorted(set(values))
 
 
 def _validate_rename(rows, ids, name):
     """改名须对应一个有效名称，并避开其他实体及其别名。"""
-    if len(ids) != 1 or not name or len(name) > 80 or name.startswith('演员:'):
-        raise ValueError('标签名须为 1 至 80 个字符')
+    if len(ids) != 1 or not name or len(name) > 80 or is_performer_marker(name):
+        raise UserValueError('errors.tagManagement.nameInvalid')
     key = normalize_entity_name(canonical_tag_name(name))
     for row in rows:
         if row['entity_id'] != ids[0] and key in {normalize_entity_name(canonical_tag_name(word)) for word in [row['k'], *row['aliases']]}:
-            raise ValueError(f'「{name}」已属于标签「{row["k"]}」，请使用合并标签')
+            raise UserValueError('errors.tagManagement.nameTaken', {'name': name, 'tag': row['k']})
 
 
 def preview(connection, body: dict) -> dict:
     operation = body.get('operation')
     if operation not in {'rename', 'merge', 'hide', 'restore', 'repair'}:
-        raise ValueError('未知的标签操作')
+        raise ValueError('unknown tag operation')
     rows = tag_rows(connection)
     groups = duplicate_groups(rows)
     ids = sorted({value for group in groups for value in group}) if operation == 'repair' else _ids(body)
     selected = [row for row in rows if row['entity_id'] in ids]
     if len(selected) != len(ids):
-        raise ValueError('标签已变化，请刷新后重试')
+        raise UserValueError('errors.tagManagement.tagsChanged')
     name = clean_tag_name(str(body.get('name', '')))
     target = body.get('target_id')
     if operation == 'rename':
         _validate_rename(rows, ids, name)
     if operation == 'merge' and (len(ids) < 2 or type(target) is not int or target not in ids):
-        raise ValueError('请选择至少两个标签，并从中选择保留的标签')
+        raise UserValueError('errors.tagManagement.mergeSelection')
     marks = ','.join('?' for _ in ids) or 'NULL'
     assets = [row[0] for row in connection.execute(
         f'SELECT DISTINCT asset_id FROM asset_entity WHERE entity_id IN ({marks}) ORDER BY asset_id', ids)]
@@ -135,7 +137,7 @@ def _merge(connection, source: dict, target: dict, stamp: str) -> None:
 def apply_plan(connection, body: dict) -> dict:
     plan = preview(connection, body)
     if body.get('token') != plan['token']:
-        raise ValueError('标签已变化，请重新预览操作范围')
+        raise UserValueError('errors.tagManagement.previewStale')
     foreign_keys_before = set(map(tuple, connection.execute('PRAGMA foreign_key_check')))
     stamp = datetime.now(timezone.utc).isoformat()
     operation = plan['operation']
@@ -163,5 +165,5 @@ def apply_plan(connection, body: dict) -> dict:
             connection.execute("UPDATE entity SET metadata_json=json_set(metadata_json,'$.user_tag_hidden',?),updated_at=? WHERE id=?",
                                (int(operation == 'hide'), stamp, row['entity_id']))
     if set(map(tuple, connection.execute('PRAGMA foreign_key_check'))) - foreign_keys_before:
-        raise ValueError('标签操作未通过外键检查')
+        raise ValueError('tag operation failed the foreign key check')
     return {'ok': True, 'operation': operation, 'tags': len(rows), 'assets': plan['assets']}

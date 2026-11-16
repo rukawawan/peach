@@ -8,7 +8,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, type QueryKey } from '@tanstack/react-query';
 
+import { withBackoff } from '../polling';
 import { queryClient } from './query';
+import { runningTask, useRefetchOnTask } from './running-tasks';
 
 export interface JobState { status?: string }
 
@@ -22,8 +24,9 @@ export interface BackgroundJobOptions<Job extends JobState, Args, Data> {
   /** 缓存里存的是整张卡、任务只占一格时：任务在哪一格，新快照怎么换进去。 */
   jobOf?: (data: Data) => Job | undefined;
   withJob?: (data: Data | undefined, job: Job) => Data | undefined;
-  /** 闲着时多久问一次。任务可能从别的页面或上一次会话里起来的页面才需要；默认不问。 */
-  idlePollMs?: number;
+  /** 任务中心登记这种任务用的 `task_key`。任务可能从别的页面或上一次会话里起来的页面给它：
+   *  闲着时不问，全站那一处（`running_tasks`）报出它在跑、缓存里却还不是在跑时重取一次接上。 */
+  taskKey?: string;
   onStarted?: (started: Job) => void;
   onError?: (cause: unknown) => void;
   /** 本次跟完的那一趟到了终态，只调一次。 */
@@ -36,7 +39,7 @@ const replaced = <Job, Data>(_data: Data | undefined, job: Job) => job as unknow
 export function useBackgroundJob<Job extends JobState, Args = void, Data = Job>(
   options: BackgroundJobOptions<Job, Args, Data>,
 ) {
-  const { queryKey, jobOf = itself<Job, Data>, withJob = replaced<Job, Data>, idlePollMs } = options;
+  const { queryKey, jobOf = itself<Job, Data>, withJob = replaced<Job, Data>, taskKey } = options;
   /** 本次是不是在跟一趟：启动过，或者本次见过它在跑。 */
   const [tracking, setTracking] = useState(false);
   /** 本次跟完的那一趟。首屏读到的旧终态不算，它不会走到这里。 */
@@ -48,9 +51,16 @@ export function useBackgroundJob<Job extends JobState, Args = void, Data = Job>(
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => hooks.current.queryFn({ signal }),
-    refetchInterval: (current) => {
-      const data = current.state.data;
-      return data !== undefined && jobOf(data)?.status === 'running' ? JOB_RUNNING_POLL_MS : (idlePollMs ?? false);
+    /* 在跑两秒一次，读失败退避；闲着不问。 */
+    refetchInterval: withBackoff<Data>((data) =>
+      (data !== undefined && jobOf(data)?.status === 'running' ? JOB_RUNNING_POLL_MS : false)),
+  });
+  useRefetchOnTask(taskKey ? [taskKey] : [], queryKey, {
+    enabled: !!taskKey,
+    needed: (tasks) => {
+      const cached = queryClient.getQueryData<Data>(queryKey);
+      return runningTask(taskKey || '', tasks)?.status === 'running'
+        && (cached === undefined || jobOf(cached)?.status !== 'running');
     },
   });
   const start = useMutation({

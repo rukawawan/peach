@@ -26,7 +26,7 @@ RUN_METADATA = frozenset({
 CREDENTIAL_FLAGS = frozenset({'GITHUB_TOKEN', 'CI_JOB_TOKEN', 'CI_REGISTRY_PASSWORD',
                               'CI_DEPENDENCY_PROXY_PASSWORD'})
 ENTRY_FLAGS = frozenset({'PYTHONPATH', 'PEACH_REPORTING_TEST_MODE', 'PEACH_TEST_RUN_TEMP',
-                         'PEACH_E2E_CHROME'})
+                         'PEACH_E2E_CHROME', 'PEACH_LANGUAGE'})
 
 
 def _file_digest(path: str) -> str:

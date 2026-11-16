@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import TOOLS_DIR
+from .user_messages import UserFacingError
 
 #: opencv_zoo 的 PP-OCRv3 定版检测模型。走 media. 域名的原因和 YuNet 一样：
 #: 仓库用 Git LFS，raw. 域名只会回一个指针文件。
@@ -75,7 +76,7 @@ MASK_DILATE = 3
 MAX_MARKS = 4
 
 
-class WatermarkModelUnavailable(RuntimeError):
+class WatermarkModelUnavailable(UserFacingError, RuntimeError):
     """模型取不到。调用方据此决定跳过还是整轮停下，不要静默当成「没有水印」。"""
 
 
@@ -108,19 +109,19 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
     if target.is_file() and _digest(target) == MODEL_SHA256:
         return target
     if not allow_download:
-        raise WatermarkModelUnavailable(f"文字检测模型不在 {target}，且不允许下载")
+        raise WatermarkModelUnavailable("errors.avatarWatermark.modelMissing", {"path": str(target)})
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(target.suffix + ".part")
     try:
         partial.write_bytes(read_url(MODEL_URL, timeout=60))
     except (OSError, httpx.HTTPError) as error:
         partial.unlink(missing_ok=True)
-        raise WatermarkModelUnavailable(f"取文字检测模型失败：{error}") from error
+        raise WatermarkModelUnavailable("errors.avatarWatermark.downloadFailed", {"error": str(error)}) from error
     digest = _digest(partial)
     if digest != MODEL_SHA256:
         partial.unlink(missing_ok=True)
-        raise WatermarkModelUnavailable(
-            f"文字检测模型校验不符：期望 {MODEL_SHA256}，实际 {digest}")
+        raise WatermarkModelUnavailable("errors.avatarWatermark.checksumMismatch",
+                                        {"expected": MODEL_SHA256, "actual": digest})
     partial.replace(target)
     return target
 

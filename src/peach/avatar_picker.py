@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import gfriends, images, jav_poster_crop
+from . import gfriends, images, interface_text, jav_poster_crop
 from .avatar_cover_face import WHOLE_COVER_PROVIDERS, face_square
 from .avatar_face import read_sidecar
 from .catalog_rules import normalise_code_key
@@ -43,6 +43,7 @@ from .avatar_provider import (
     install_entity_avatar, provenance_now,
 )
 from .http import HttpRequest, HttpTransport, public_https_url, resolves_publicly
+from .user_messages import UserFacingError
 
 #: 一次最多给页面列这么多张。同名候选最多的人有十几张，再多就不是选图而是翻图册了。
 MAX_CHOICES = 40
@@ -56,25 +57,28 @@ MAX_IMAGE_BYTES = 16 * 1024 * 1024
 FETCH_TIMEOUT = 30
 #: 证据里的 `provider` 是采集路线的代号，摆到格子底下要换成来源本身的名字：
 #: `jae:actress.html#joyu117` 这种串回答的是「批处理怎么再找到它」，不是「这张图哪来的」。
-#: 表里没有的按代号原样显示——新来源接进来时先露一个代号，好过盖成一个含混的
-#: 「其他」：看到代号的人才知道该来这里补一行。
+#: 值是来源名的 code（`labels.avatarPicker.source.<id>`，ADR-0159）；品牌名本身不译，在 `BRAND_SOURCES`。
+#: 两张表里都没有的显示「来源未记录」。
 SOURCE_NAMES = {
-    "gfriends": "图库",
-    "jae": "展会名录",
-    "social-web": "社交主页",
-    "follow-content": "在线作品",
-    "cover": "作品封面",
-    "cover-fallback": "作品封面",
-    "cover-face": "封面人脸",
-    "babepedia": "Babepedia",
-    "kmib": "官网",
-    "picker": "自己挑的",
-    "history": "取过的图",
-    "asset": "作品画面",
-    "code-cover": "番号封面",
-    "url": "地址",
-    "upload": "本机",
+    "gfriends": "labels.avatarPicker.source.gallery",
+    "jae": "labels.avatarPicker.source.expoDirectory",
+    "social-web": "labels.avatarPicker.source.socialProfile",
+    "follow-content": "labels.avatarPicker.source.onlineVideo",
+    "cover": "labels.avatarPicker.source.videoCover",
+    "cover-fallback": "labels.avatarPicker.source.videoCover",
+    "cover-face": "labels.avatarPicker.source.coverFace",
+    "kmib": "labels.avatarPicker.source.officialSite",
+    "picker": "labels.avatarPicker.source.picked",
+    "history": "labels.avatarPicker.source.fetched",
+    "asset": "labels.avatarPicker.source.videoStill",
+    "code-cover": "labels.avatarPicker.source.codeCover",
+    "url": "labels.avatarPicker.source.address",
+    "upload": "labels.avatarPicker.source.thisDevice",
 }
+BRAND_SOURCES = {"babepedia": "Babepedia"}
+#: 证据没说清来源时的来源名；品牌名与账号名（`X @…`、`lit.link @…`）原样填进 `NAMED_SOURCE`。
+UNKNOWN_SOURCE = "labels.avatarPicker.sourceUnknown"
+NAMED_SOURCE = "labels.avatarPicker.named"
 #: 按番号取来的封面放在这个来源目录里。它不属于任何人，所以只存对象、不写证据：
 #: 证据按 `performer-<id>-*` 存，写了就会冒充成某个人「取过的图」。
 CODE_COVER_CACHE = "code-cover"
@@ -86,8 +90,9 @@ SHEET_CELLS = 9
 #: 手填地址取来的图放在这个来源目录里，按地址存。框选、确认都从这里读，不再出网；
 #: 装上去时来源记录的 `provider` 也是它，整张装的那一份和取来的落在同一条记录上。
 ADDRESS_CACHE = "url"
-#: 发布账号没有本人身份依据时，作品画面格子上的说明。
-STAND_IN_NOTE = "代表作画面，非本人"
+#: 发布账号没有本人身份依据时，作品画面格子上的说明；有片名时接在说明后面。
+STAND_IN_NOTE = "labels.avatarPicker.standIn"
+STAND_IN_NOTE_WITH_TITLE = "labels.avatarPicker.standInWithTitle"
 
 
 #: 图库索引取失败后，隔这么久才再试。头像框一天能开几十次，离线时每开一次就出网
@@ -97,8 +102,8 @@ INDEX_RETRY_SECONDS = 15 * 60
 LOGGER = logging.getLogger(__name__)
 
 
-class PickerError(RuntimeError):
-    """这一次换不成，原因可以直接给用户看。"""
+class PickerError(UserFacingError, RuntimeError):
+    """这一次换不成，原因可以直接给用户看：写成 code 与参数，换头像端点用 `error_fields` 带给页面。"""
 
 
 class IndexRefresher:
@@ -159,7 +164,7 @@ class IndexRefresher:
                 if close is not None:
                     close()
         except Exception as error:
-            LOGGER.warning("图库索引未取得：%s", error)
+            LOGGER.warning("Gallery index unavailable: %s", error)
             with self._lock:
                 self._failed_at = time.monotonic()
                 self.error = str(error)
@@ -214,6 +219,15 @@ class Choice:
     #: 图库与历史按内容寻址，九宫格从视频抽帧，都不会原地变，是空串。
     version: str = ""
     user_cropped: bool = False
+    #: `label` 的来源名部分的 code 与参数（ADR-0159），页面按它取译文，再按 `user_cropped` 与 `cover_code`
+    #: 接上「已裁剪」与番号；空串表示 `label` 本身是内容（图库分类、番号、片名），原样显示。
+    label_code: str = ""
+    label_params: tuple[tuple[str, object], ...] = ()
+    #: 整张作品封面那一格的番号，`label` 末尾那一段。
+    cover_code: str = ""
+    #: `detail` 的 code 与参数；空串表示 `detail` 是内容（文件名、地址、片名）。
+    detail_code: str = ""
+    detail_params: tuple[tuple[str, object], ...] = ()
 
     def as_dict(self) -> dict:
         focus = (dict(zip(("x0", "y0", "x1", "y1"), self.focus))
@@ -223,7 +237,10 @@ class Choice:
                 "detail": self.detail, "found_by": self.found_by,
                 "current": self.current, "crop": self.crop,
                 "bases": list(self.bases), "focus": focus, "cast": self.cast,
-                "version": self.version, "user_cropped": self.user_cropped}
+                "version": self.version, "user_cropped": self.user_cropped,
+                "label_code": self.label_code, "label_params": dict(self.label_params),
+                "cover_code": self.cover_code,
+                "detail_code": self.detail_code, "detail_params": dict(self.detail_params)}
 
 
 def cover_version(cover: Path | None) -> str:
@@ -239,7 +256,7 @@ def cover_version(cover: Path | None) -> str:
 def _check_version(cover: Path | None, version: str | None) -> None:
     """框是在 `version` 那一张封面上画的；封面此后被换过，同一组坐标就落在别的地方。"""
     if version is not None and cover_version(cover) != version:
-        raise PickerError("这张封面刚换过，返回备选图片重新框一次")
+        raise PickerError("errors.avatarPicker.coverChanged")
 
 
 def name_chain(connection: sqlite3.Connection, entity_id: int) -> list[str]:
@@ -328,29 +345,33 @@ def _history_records(providers_root: Path, entity_id: int) -> dict[str, list[dic
     return records
 
 
-def _history_source_label(record: dict) -> str:
-    """标签只使用证据明确给出的站点、账号或图库分类。"""
+def _history_source_label(record: dict) -> tuple[str, dict]:
+    """来源名的 code 与参数。标签只使用证据明确给出的站点、账号或图库分类。"""
     provider = str(record.get("provider") or "")
     external_id = str(record.get("external_id") or "")
     url = str(record.get("upstream_url") or "")
     host = urllib.parse.urlsplit(url).hostname or ""
     if provider == "social-web":
         if host == "pbs.twimg.com":
-            return f"X @{external_id[2:]}" if external_id.startswith("x:") else "X"
+            return NAMED_SOURCE, {"name": f"X @{external_id[2:]}" if external_id.startswith("x:") else "X"}
         page = urllib.parse.urlsplit(external_id)
         if page.hostname == "lit.link" and page.path.strip("/"):
-            return f"lit.link @{page.path.strip('/')}"
+            return NAMED_SOURCE, {"name": f"lit.link @{page.path.strip('/')}"}
         if host in ("prd.storage.lit.link", "prd.resource-api.lit.link"):
-            return "lit.link"
-        return "来源未记录"
+            return NAMED_SOURCE, {"name": "lit.link"}
+        return UNKNOWN_SOURCE, {}
     if provider == "gfriends":
         category, _, _ = external_id.partition("/")
-        return f"图库 · {gfriends.category_label(category)}" if category else "图库"
+        if category:
+            return "labels.avatarPicker.galleryCategory", {"category": gfriends.category_label(category)}
+        return SOURCE_NAMES["gfriends"], {}
     if provider in ("history", "picker", ""):
-        return "来源未记录"
+        return UNKNOWN_SOURCE, {}
     if provider == "url":
-        return f"图片地址 · {host}" if host else "来源未记录"
-    return SOURCE_NAMES.get(provider, "来源未记录")
+        return ("labels.avatarPicker.imageAddress", {"host": host}) if host else (UNKNOWN_SOURCE, {})
+    if provider in BRAND_SOURCES:
+        return NAMED_SOURCE, {"name": BRAND_SOURCES[provider]}
+    return SOURCE_NAMES.get(provider, UNKNOWN_SOURCE), {}
 
 
 def _history_source(records: dict[str, list[dict]], digest: str) -> dict:
@@ -360,7 +381,7 @@ def _history_source(records: dict[str, list[dict]], digest: str) -> dict:
     while digest in records and digest not in visited:
         visited.add(digest)
         record = min(records[digest], key=lambda row: (
-            _history_source_label(row) == "来源未记录",
+            _history_source_label(row)[0] == UNKNOWN_SOURCE,
             row.get("provider") in ("history", "picker")))
         if record.get("provider") != "history":
             return record
@@ -398,13 +419,14 @@ def _history(providers_root: Path, entity_id: int, current: str,
         record = evidence[0]
         source = _history_source(records, digest)
         provider = str(source.get("provider") or "")
-        label = _history_source_label(source)
+        label_code, label_params = _history_source_label(source)
+        label = interface_text.text(f"server:{label_code}", label_params)
         cropped = any(row.get("source_kind") == "user_cropped" for row in evidence)
         if cropped:
-            label += " · 已裁剪"
+            label = interface_text.text("server:labels.avatarPicker.cropped", {"label": label})
         width, height = int(record.get("width") or 0), int(record.get("height") or 0)
         whole = provider in WHOLE_COVER_PROVIDERS and not cropped
-        focus, cast = None, 0
+        focus, cast, key = None, 0, ""
         if whole:
             key = normalise_code_key(source.get("external_id"))
             label = f"{label} {key}".strip()
@@ -417,6 +439,7 @@ def _history(providers_root: Path, entity_id: int, current: str,
         source_url = str(source.get("upstream_url") or "")
         out.append(Choice(
             ref=f"sha256:{digest}", source="history", label=label,
+            label_code=label_code, label_params=tuple(label_params.items()), cover_code=key,
             width=width, height=height,
             detail=source_url if source_url.startswith(("https://", "http://")) else "",
             current=digest == current, crop=whole, focus=focus, cast=cast,
@@ -479,11 +502,18 @@ def asset_artwork(connection: sqlite3.Connection, cover_root: Path,
             "SELECT count(DISTINCT entity_id) FROM asset_entity WHERE asset_id=? AND role='performer'",
             (int(asset_id),)).fetchone()[0]
         cast = artwork_cast_size(cover, cast)
+        title = str(title or "")
+        label_code = "" if code or title else "labels.avatarPicker.assetFallback"
+        label_params = (("id", int(asset_id)),) if label_code else ()
+        detail_code = (STAND_IN_NOTE_WITH_TITLE if title else STAND_IN_NOTE) if stand_in else ""
+        detail_params = (("title", title),) if detail_code and title else ()
         found.append((width * height, order, Choice(
             ref=bases[0], source="asset",
-            label=str(code or title or f"作品 {asset_id}"),
+            label=str(code or title or interface_text.text(f"server:{label_code}", dict(label_params))),
+            label_code=label_code, label_params=label_params,
             width=width, height=height,
-            detail=" · ".join(filter(None, (STAND_IN_NOTE if stand_in else "", str(title or "")))),
+            detail=interface_text.text(f"server:{detail_code}", dict(detail_params)) if detail_code else title,
+            detail_code=detail_code, detail_params=detail_params,
             crop=True, bases=tuple(bases),
             focus=cover_focus(key, cover, _focus_face(read_sidecar(cover), cast), width, height)
             if size else None, cast=cast, version=cover_version(cover) if size else "")))
@@ -542,7 +572,7 @@ def code_cover(code: str, cover_root: Path | None, providers_root: Path,
     """
     key = normalise_code_key(code)
     if not key:
-        raise PickerError("认不出这个番号")
+        raise PickerError("errors.avatarPicker.codeUnrecognized")
     body, cover = _code_cover_bytes(key, cover_root, providers_root)
     if body is None:
         body = fetch(key)
@@ -550,7 +580,7 @@ def code_cover(code: str, cover_root: Path | None, providers_root: Path,
             _code_cover_url(key), body, accept_image(body))
     size = images.measure_image_size(body)
     if size is None:
-        raise PickerError("这个番号的封面不是一张能识别的图片")
+        raise PickerError("errors.avatarPicker.codeCoverUnrecognized")
     face = read_sidecar(cover) if cover is not None else None
     if face_square(face, *size) is None:
         face = probe(body)
@@ -572,7 +602,7 @@ def framed(ref: str, body: bytes, probe: Callable[[bytes], dict | None], *,
     body = images.upright(body)
     size = images.measure_image_size(body)
     if size is None:
-        raise PickerError("这不是一张能识别的图片")
+        raise PickerError("api.media.unrecognizedImage")
     return Choice(ref=ref, source=source, label=label, width=size[0], height=size[1],
                   bases=(ref,) if ref else (), focus=face_square(probe(body), *size))
 
@@ -587,7 +617,7 @@ def typed_address(url: str, providers_root: Path, fetch: Callable[[str], bytes],
     try:
         body = prepare_image(fetch(url))
     except PickerError as error:
-        raise PickerError(f"这个地址未取得可用图片：{error}") from error
+        raise PickerError("errors.avatarPicker.addressUnusable", {"reason": error.message}) from error
     AvatarCandidateCache(providers_root / ADDRESS_CACHE).store(url, body, accept_image(body))
     host = urllib.parse.urlsplit(url).hostname or url
     return framed(f"url:{url}", body, probe, source="url", label=host)
@@ -736,7 +766,7 @@ def _cached_object(providers_root: Path, digest: str) -> bytes:
     """按内容哈希取那张图。路径可能过期，内容不会。"""
     body = _object_bytes(providers_root, digest)
     if body is None:
-        raise PickerError("这张图不在本机缓存里了")
+        raise PickerError("errors.avatarPicker.notCached")
     return body
 
 
@@ -747,10 +777,11 @@ def fetch_image(transport: HttpTransport, url: str) -> bytes:
             HttpRequest("GET", url, {"Accept": "image/*"}),
             FETCH_TIMEOUT, MAX_IMAGE_BYTES)
     except Exception as error:  # noqa: BLE001 — 网络层什么都可能抛
-        raise PickerError(f"取不到这张图：{error}") from error
-    if response is None or response.status != 200:
-        status = "无响应" if response is None else f"HTTP {response.status}"
-        raise PickerError(f"取不到这张图：{status}")
+        raise PickerError("errors.avatarPicker.fetchFailed", {"error": str(error)}) from error
+    if response is None:
+        raise PickerError("errors.avatarPicker.fetchNoResponse")
+    if response.status != 200:
+        raise PickerError("errors.avatarPicker.fetchHttpStatus", {"status": response.status})
     return response.body
 
 
@@ -771,23 +802,23 @@ def allowed_source(url: str) -> bool:
 def prepare_image(body: bytes) -> bytes:
     """对头像各入口执行相同的格式转换与大小检查。"""
     if len(body) > MAX_IMAGE_BYTES:
-        raise PickerError("图片超过 16 MiB，请缩小后重新选择")
+        raise PickerError("errors.avatarPicker.imageOver16Mib")
     try:
         prepared = prepare_avatar(body)
     except AvatarImageError as error:
-        raise PickerError(str(error)) from error
+        raise PickerError(error.code, error.params) from error
     if len(prepared) > MAX_IMAGE_BYTES:
-        raise PickerError("图片转换后超过 16 MiB，请缩小后重新选择")
+        raise PickerError("errors.avatarPicker.convertedOver16Mib")
     return prepared
 
 
 def accept_image(body: bytes) -> InspectedAvatar:
     """确认这堆字节真是一张能用的图。格式由解码结果定，不看扩展名也不信响应头。"""
     if len(body) > MAX_IMAGE_BYTES:
-        raise PickerError("图太大了")
+        raise PickerError("errors.avatarPicker.imageTooLarge")
     inspected = inspect_avatar(body)
     if inspected is None:
-        raise PickerError("图片无法完整读取，请重新选择图片")
+        raise PickerError("errors.avatarPicker.imageIncomplete")
     return inspected
 
 
@@ -810,41 +841,43 @@ def _asset_image(ref: str, connection: sqlite3.Connection, entity_id: int,
     读出来，而资料页本来看不到那部作品。
     """
     if artwork is None:
-        raise PickerError("这一次取不到作品画面")
+        raise PickerError("errors.avatarPicker.artworkUnavailable")
     _, _, rest = ref.partition(":")
     raw_id, _, what = rest.partition(":")
     try:
         asset_id = int(raw_id)
     except ValueError as error:
-        raise PickerError("无法识别这张备选图片") from error
+        raise PickerError("errors.avatarPicker.choiceUnrecognized") from error
     row = connection.execute(
         "SELECT a.code FROM asset_entity ae JOIN asset a ON a.id=ae.asset_id "
         "WHERE ae.entity_id=? AND ae.asset_id=?",
         (int(entity_id), asset_id)).fetchone()
     if row is None:
-        raise PickerError("这部作品不在这个人名下")
+        raise PickerError("errors.avatarPicker.assetNotOwned")
     if what == "cover":
         key = artwork_key(asset_id, row[0])
         path = (Path(artwork.cover_root) / f"{key}.jpg") if key else None
-        label = "封面"
+        missing, unreadable, params = ("errors.avatarPicker.assetCoverNotLocal",
+                                       "errors.avatarPicker.assetCoverUnreadable", {})
         _check_version(path, version)
     elif what.startswith("cell"):
         try:
             cell = int(what[len("cell"):])
         except ValueError as error:
-            raise PickerError("无法识别这张备选图片") from error
+            raise PickerError("errors.avatarPicker.choiceUnrecognized") from error
         if not 0 <= cell < SHEET_CELLS:
-            raise PickerError("无法识别这张备选图片")
+            raise PickerError("errors.avatarPicker.choiceUnrecognized")
         path = artwork.frame(asset_id, cell)
-        label = f"第 {cell + 1} 格"
+        missing, unreadable, params = ("errors.avatarPicker.assetCellNotLocal",
+                                       "errors.avatarPicker.assetCellUnreadable", {"cell": cell + 1})
     else:
-        raise PickerError("无法识别这张备选图片")
+        raise PickerError("errors.avatarPicker.choiceUnrecognized")
     if path is None or not Path(path).is_file():
-        raise PickerError(f"这部作品的{label}还没有落在本机")
+        raise PickerError(missing, params)
     try:
         body = Path(path).read_bytes()
     except OSError as error:
-        raise PickerError(f"读不出这部作品的{label}") from error
+        raise PickerError(unreadable, params) from error
     return body, {"source": "avatar picker", "provider": "asset",
                   "external_id": f"{asset_id}:{what}",
                   "asset_id": asset_id, "asset_code": str(row[0] or ""),
@@ -867,7 +900,7 @@ def resolve(ref: str, connection: sqlite3.Connection, providers_root: Path,
     """
     if ref.startswith(("follow:", "follow-avatar:", "follow-link:")):
         if online is None:
-            raise PickerError("未取得在线备选头像")
+            raise PickerError("errors.avatarPicker.onlineUnavailable")
         return online(ref)
     if ref.startswith("sha256:"):
         digest = ref.split(":", 1)[1].strip().lower()
@@ -875,7 +908,7 @@ def resolve(ref: str, connection: sqlite3.Connection, providers_root: Path,
         records = _history_records(providers_root, entity_id)
         source = _history_source(records, digest)
         origin = {"source": "avatar picker", "provider": "history", "external_id": digest}
-        if _history_source_label(source) != "来源未记录":
+        if _history_source_label(source)[0] != UNKNOWN_SOURCE:
             origin.update({key: source[key] for key in (
                 "provider", "external_id", "upstream_url", "matched_name", "name_source") if key in source})
         if any(row.get("source_kind") == "user_cropped" for row in records.get(digest, ())):
@@ -890,7 +923,7 @@ def resolve(ref: str, connection: sqlite3.Connection, providers_root: Path,
         body, path = _code_cover_bytes(
             key, artwork.cover_root if artwork else None, providers_root) if key else (None, None)
         if body is None:
-            raise PickerError("这个番号的封面还没有取过")
+            raise PickerError("errors.avatarPicker.codeCoverNotFetched")
         _check_version(path, version)
         return body, {"source": "avatar picker", "provider": "code-cover",
                       "external_id": key, "asset_code": key}
@@ -899,16 +932,16 @@ def resolve(ref: str, connection: sqlite3.Connection, providers_root: Path,
         url = ref.split(":", 1)[1]
         body = AvatarCandidateCache(providers_root / ADDRESS_CACHE).lookup(url)
         if body is None:
-            raise PickerError("这个地址的图还没有取过")
+            raise PickerError("errors.avatarPicker.addressNotFetched")
         return body, {"source": "avatar picker", "provider": ADDRESS_CACHE,
                       "external_id": "", "upstream_url": url}
     if not ref.startswith("gfriends:"):
-        raise PickerError("无法识别这张备选图片")
+        raise PickerError("errors.avatarPicker.choiceUnrecognized")
     category, _, filename = ref.split(":", 1)[1].partition("/")
     index = gfriends.load_index(providers_root / GFRIENDS_CACHE)
     match = gfriends.candidates(index, name_chain(connection, entity_id))
     if (category, filename) not in match.finder:
-        raise PickerError("当前索引中没有这张备选图片")
+        raise PickerError("errors.avatarPicker.notInIndex")
     # 证据里记的是找到这一张的那个名字，不是整条链：事后要答的是「这张图凭什么算他」。
     matched = match.finder[(category, filename)]
     url = gfriends.image_url(category, filename)
@@ -916,7 +949,7 @@ def resolve(ref: str, connection: sqlite3.Connection, providers_root: Path,
     body = cache.lookup(url)
     if body is None:
         if transport is None:
-            raise PickerError("这张图还没下载过，而这一次不允许联网")
+            raise PickerError("errors.avatarPicker.offlineNotDownloaded")
         body = fetch_image(transport, url)
     return body, {"source": "avatar picker", "provider": "gfriends",
                   "gfriends_category": category, "gfriends_file": filename,
@@ -934,14 +967,14 @@ def crop(body: bytes, box: object) -> tuple[bytes, dict]:
     body = images.upright(body)
     size = images.measure_image_size(body)
     if size is None:
-        raise PickerError("这不是一张能识别的图片")
+        raise PickerError("api.media.unrecognizedImage")
     edges = images.clamp_box(box, size[0], size[1])
     if edges is None:
-        raise PickerError("框选的区域不成立")
+        raise PickerError("errors.avatarPicker.invalidCropBox")
     cropped = images.crop_to_box(
         body, (edges["x0"], edges["y0"], edges["x1"], edges["y1"]))
     if cropped is None:
-        raise PickerError("这一块裁不出来")
+        raise PickerError("errors.avatarPicker.cropFailed")
     return cropped, {"source_kind": "user_cropped",
                      "crop_box": [edges["x0"], edges["y0"], edges["x1"], edges["y1"]],
                      "crop_source_px": [size[0], size[1]]}

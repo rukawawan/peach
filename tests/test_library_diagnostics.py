@@ -53,7 +53,7 @@ class LibraryDiagnosticsTests(unittest.TestCase):
                          {'identification': 1, 'metadata': 1, 'cover': 1, 'duration': 2})
         self.assertEqual(groups['duration']['items'][0], {
             'id': 2, 'code': None, 'name': 'private-name', 'title': 'private-name',
-            'location': 'local', 'path': 'R:/private/2', 'duration': 0, 'size': None})
+            'location': 'local', 'path': 'R:/private/2', 'duration': 0, 'size': None, 'library_id': ''})
         self.assertEqual([row['id'] for row in groups['cover']['items']], [3])
         self.assertEqual(groups['cover']['items'][0]['code'], 'DEF-456')
         self.assertIsNotNone(result['issue_at'])
@@ -73,6 +73,19 @@ class LibraryDiagnosticsTests(unittest.TestCase):
         self.assertEqual(row['size'], 1048576)
         self.assertEqual(before, self.db.read_bytes())
 
+    def test_library_items_carry_the_same_library_id_as_the_catalog(self):
+        from peach import media_identity, settings_file
+        (self.root / 'config.toml').write_text("[media.locations]\nlocal = ['R:\\Media']\n"
+                                               "[media.libraries]\n'R:\\Media' = '收藏'\n", encoding='utf-8')
+        config = settings_file.load_config(environ={'PEACH_DATA_ROOT': str(self.root)})
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            connection.execute("UPDATE asset SET path='R:\\Media\\未识别文件.mp4' WHERE id=2")
+        items = {row['id']: row for row in diagnostics.library(self.settings, config)['groups']['duration']['items']}
+        expected = media_identity.ownership(config, 'R:\\Media\\未识别文件.mp4')['library_id']
+        self.assertTrue(expected)
+        self.assertEqual(items[2]['library_id'], expected)
+        self.assertEqual(items[3]['library_id'], '')
+
     def test_missing_database_and_broken_or_oversized_logs_are_unknown(self):
         self.db.unlink()
         self.assertTrue(all(row['count'] is None for row in diagnostics.library(self.settings, self.config)['groups'].values()))
@@ -91,7 +104,8 @@ class LibraryDiagnosticsTests(unittest.TestCase):
         self.assertIsNone(diagnostics.failures(self.config)[0])
 
     def test_large_lists_are_bounded_and_keep_the_total(self):
-        result = diagnostics.group('缺时长', [{'id': i, 'code': None} for i in range(1, 601)])
+        result = diagnostics.group('duration', [{'id': i, 'code': None} for i in range(1, 601)])
+        self.assertEqual((result['label'], result['label_code']), ('缺时长', 'labels.libraryDiagnostics.group.duration'))
         self.assertEqual(result['count'], 600)
         self.assertEqual(len(result['items']), 500)
         self.assertTrue(result['truncated'])

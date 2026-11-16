@@ -12,6 +12,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
 from peach.user_agent import USER_AGENT
 from peach.peach_proxy import read_url
 
@@ -28,7 +29,7 @@ RED_JOB_STATUSES = frozenset({"failed", "canceled"})
 class GitLabForge:
     def __init__(self, host: str, command):
         if not re.fullmatch(r"[a-zA-Z0-9.-]+(?::[0-9]+)?", host):
-            raise ValueError("GitLab 主机必须是域名，可附端口")
+            raise ValueError(t("release_forge.badHost"))
         self.host = host
         self.command = command
 
@@ -36,7 +37,7 @@ class GitLabForge:
         """`public=False` 给只有维护者凭据才读得到的端点：匿名重试注定再被拒，直接抛出。"""
         executable = os.environ.get("PEACH_GLAB") or shutil.which("glab")
         if not executable:
-            raise ValueError("GitLab 发布需要官方 glab；可用 PEACH_GLAB 指定其路径")
+            raise ValueError(t("release_forge.glabRequired"))
         path = f"projects/{quote(repo, safe='')}/{endpoint}"
         try:
             return json.loads(self.command(executable, "api", "--hostname", self.host,
@@ -62,7 +63,7 @@ class GitLabForge:
     def require_free_tag(self, repo: str, tag: str) -> None:
         query = urlencode({"search": f"^{re.escape(tag)}$", "per_page": 100})
         if any(item["name"] == tag for item in self.api(repo, f"repository/tags?{query}")):
-            raise ValueError(f"{tag} 已存在，不覆盖；发布新版本请先推进 __version__")
+            raise ValueError(t("release_forge.tagExists", tag=tag))
 
     def require_ancestor(self, repo: str, sha: str) -> None:
         remote = self.master_sha(repo)
@@ -70,9 +71,9 @@ class GitLabForge:
         self.command("git", "fetch", "--no-tags", self.remote_url(repo), "refs/heads/master")
         fetched = self.command("git", "rev-parse", "FETCH_HEAD")
         if fetched != remote:
-            raise ValueError("检查期间 GitLab master 已更新，请重新执行")
+            raise ValueError(t("release_forge.masterMoved"))
         if self.command("git", "merge-base", remote, sha) != sha:
-            raise ValueError("发布提交不属于远端 master 历史")
+            raise ValueError(t("release_forge.notOnMaster"))
 
     def test_runs(self, repo: str, sha: str) -> list[dict]:
         query = urlencode({"sha": sha, "ref": "master", "source": "push", "per_page": 100})
@@ -109,7 +110,7 @@ class GitLabForge:
             if len(batch) < 100:
                 break
         else:
-            raise ValueError("流水线任务超过可核对上限，发布检查未完成")
+            raise ValueError(t("release_forge.tooManyJobs"))
         selected = {}
         for job in jobs:
             if job["name"] not in selected or job["id"] > selected[job["name"]]["id"]:
@@ -164,7 +165,7 @@ class GitLabForge:
                or selected[name].get("allow_failure")
                or selected[name].get("commit", {}).get("id") != sha]
         if bad:
-            raise ValueError("GitLab 发布验证缺少同一提交的必需成功任务：" + "、".join(bad))
+            raise ValueError(t("release_forge.missingTestJobs", jobs=list(bad)))
 
     def require_rehearsal(self, repo: str, pipeline: int) -> None:
         """版本提交的流水线里，演练的标签作业必须都在且成功；缺一个都不打标签。"""
@@ -172,5 +173,4 @@ class GitLabForge:
         bad = [name for name in sorted(REHEARSAL_JOBS)
                if name not in selected or selected[name]["status"] != "success"]
         if bad:
-            raise ValueError("版本提交的发布演练没有全部通过，不打标签：" + "、".join(bad)
-                             + "。检查 .gitlab-ci.yml 的演练规则是否匹配版本提交，修好后再跑一次 --ship --apply")
+            raise ValueError(t("release_forge.rehearsalFailed", jobs=list(bad)))

@@ -10,17 +10,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from peach.cover_artwork import has_javdb_source
 from peach.fsutil import atomic_write_text
+from peach.interface_text import dev as t
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t('quarantine_javdb_covers.description'))
     parser.add_argument('--data-root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args(argv)
     root, report = args.data_root.resolve(), args.report.resolve()
     if not report.is_relative_to(root / 'review'):
-        parser.error('备份区必须位于当前 Peach 数据目录的 review 内')
+        parser.error(t('quarantine_javdb_covers.reportOutsideReview'))
     covers = root / 'generated/covers'
     paths = [path for path in sorted(covers.glob('*.jpg')) if has_javdb_source(path)]
     report.mkdir(parents=True, exist_ok=True)

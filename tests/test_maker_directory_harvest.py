@@ -94,12 +94,12 @@ class MatchTests(unittest.TestCase):
 
     def test_the_slug_matches_the_canonical_name_directly(self):
         self.assertEqual(self.module.match("prestige", "プレステージ", self.by_roman, self.by_text),
-                         (5630, "Prestige", "slug 归一相等"))
+                         (5630, "Prestige", "slug-equal"))
 
     def test_the_japanese_listing_name_matches_a_japanese_canonical_name(self):
         """账本里少数厂牌规范名本身就是日文，那一路只有日文名对得上。"""
         self.assertEqual(self.module.match("hibino", "ヒビノ", self.by_roman, self.by_text),
-                         (8624, "ヒビノ", "日文名相等"))
+                         (8624, "ヒビノ", "name-equal"))
 
     def test_the_slug_matches_a_japanese_alias(self):
         """`hmjm.gif` 的日文名是 `ハマジム`，账本规范名是 `HMJM`。
@@ -107,7 +107,7 @@ class MatchTests(unittest.TestCase):
         slug 一路先命中，这条守的是它命中的确实是同一家。
         """
         self.assertEqual(self.module.match("hmjm", "ハマジム", self.by_roman, self.by_text),
-                         (5597, "HMJM", "slug 归一相等"))
+                         (5597, "HMJM", "slug-equal"))
 
     def test_an_abbreviated_slug_falls_back_to_a_unique_prefix_candidate(self):
         """`waap.gif` 对 `Waap Entertainment`：slug 是缩写，只能靠前缀。
@@ -115,7 +115,7 @@ class MatchTests(unittest.TestCase):
         判据写进 `how` 列，让人知道这一条比前三路弱。
         """
         self.assertEqual(self.module.match("waap", "WAAP", self.by_roman, self.by_text),
-                         (8555, "Waap Entertainment", "前缀候选"))
+                         (8555, "Waap Entertainment", "prefix-candidate"))
 
     def test_an_ambiguous_prefix_is_not_a_candidate(self):
         """前缀撞上两家就没有候选：给人一个五五开的猜测，不如告诉他账本里没有。"""
@@ -289,12 +289,12 @@ class LogoStateTests(unittest.TestCase):
             root = Path(raw).resolve()
             (root / "Prestige.icon.img").write_bytes(b"x")
             (root / "Prestige.img").write_bytes(b"x")
-            self.assertEqual(self.module.logo_state("Prestige", root), "icon+主位")
-            self.assertEqual(self.module.logo_state("Flower", root), "无图")
+            self.assertEqual(self.module.logo_state("Prestige", root), "icon+main")
+            self.assertEqual(self.module.logo_state("Flower", root), "none")
 
     def test_a_missing_logo_root_reports_no_image_rather_than_raising(self):
         with tempfile.TemporaryDirectory() as raw:
-            self.assertEqual(self.module.logo_state("Prestige", Path(raw).resolve() / "nope"), "无图")
+            self.assertEqual(self.module.logo_state("Prestige", Path(raw).resolve() / "nope"), "none")
 
 
 if __name__ == "__main__":

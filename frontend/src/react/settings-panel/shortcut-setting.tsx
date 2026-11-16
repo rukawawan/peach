@@ -11,6 +11,7 @@ import {
   DEFAULT_SFW_SHORTCUT, formatShortcut, isApplePlatform, isModifierCode, recordShortcut, serializeShortcut, shortcutKeys,
   type Modifiers, type Shortcut,
 } from '../../keyboard-shortcut';
+import { t } from '../../i18n';
 
 /** 录好之后键帽停留多久再收回胶囊。 */
 const SETTLE_MS = 600;
@@ -62,23 +63,23 @@ export function ShortcutSetting({ current, onChange }: { current: Shortcut; onCh
   const keys: KeycapItem[] | null = saved ? caps(saved, saved.code, 'done')
     : !recording ? null
       : pressed.code ? caps(pressed.modifiers, pressed.code, problem ? 'invalid' : 'down')
-        : held ? [...caps(pressed.modifiers, null, 'down'), slot('键')] : [slot('修饰键'), slot('键')];
+        : held ? [...caps(pressed.modifiers, null, 'down'), slot(t('settings:sfwShortcut.keySlot'))] : [slot(t('settings:sfwShortcut.modifierSlot')), slot(t('settings:sfwShortcut.keySlot'))];
   const custom = serializeShortcut(current) !== DEFAULT_SFW_SHORTCUT;
-  const hint = saved ? `已改为 ${formatShortcut(saved, apple)}`
-    : recording ? (problem || '按下新的组合键，Esc 取消') : '输入框外随时开关。';
+  const hint = saved ? t('settings:sfwShortcut.changed', { shortcut: formatShortcut(saved, apple) })
+    : recording ? (problem || t('settings:sfwShortcut.recordHint')) : t('settings:sfwShortcut.help');
   return (
     <div data-setting-row="">
-      <span><b>SFW 快捷键</b><small id="sfwShortcutDescription" aria-live="polite">{hint}</small></span>
+      <span><b>{t('settings:sfwShortcut.title')}</b><small id="sfwShortcutDescription" aria-live="polite">{hint}</small></span>
       <div data-setting-shortcut="" className="peach-react">
         {keys ? <Keycaps keys={keys} plus={!apple} />
-          : <Kbd data-shortcut-keys="" aria-label={`当前快捷键 ${formatShortcut(current, apple)}`}>{formatShortcut(current, apple)}</Kbd>}
+          : <Kbd data-shortcut-keys="" aria-label={t('settings:sfwShortcut.current', { shortcut: formatShortcut(current, apple) })}>{formatShortcut(current, apple)}</Kbd>}
         {custom && !recording && !saved ? (
-          <Button variant="secondary" size="small" onClick={() => onChange(null)}>恢复默认</Button>
+          <Button variant="secondary" size="small" onClick={() => onChange(null)}>{t('settings:shared.reset')}</Button>
         ) : null}
         <Button variant={recording ? 'secondary' : 'primary'} size="small" aria-describedby="sfwShortcutDescription"
           onClick={() => { if (recording) stop(); else { setSaved(null); setRecording(true) } }}
           onBlur={stop}>
-          {recording ? '取消' : '更改'}
+          {recording ? t('settings:shared.cancel') : t('settings:sfwShortcut.change')}
         </Button>
       </div>
     </div>

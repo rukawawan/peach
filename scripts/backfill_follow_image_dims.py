@@ -40,6 +40,7 @@ from peach.follow_image_dims import ImageDimsUnavailable, positive_dims, probe_i
 from peach.follow_secrets import credential_store_for
 from peach.follow_sources import display_thumb_url, f95_attachment_media_items
 from peach.follow_store import FollowItemRow, FollowStore
+from peach.interface_text import dev as t
 from peach.follow_stream import FollowMediaResolver, FollowMediaUnavailable
 from peach.http import HttpTransport, HttpxTransport
 from peach.review_csv import write_rows
@@ -52,6 +53,9 @@ from peach.web_follow import _media_items as visible_media_of, _media_kind as me
 
 FIELDS = ("item_id", "provider", "external_id", "media", "mode", "result",
           "width", "height", "note")
+#: `result` 列：取到尺寸、没取到；`mode` 列：从归档读、发请求探测文件头。
+FOUND, MISSED = "found", "missed"
+FROM_ARCHIVE, FROM_PROBE = "archive", "probe"
 
 #: 同一主机两次探测的最小间隔。归档站对匿名请求限流很紧，一秒两次已经算快。
 DEFAULT_DELAY = 0.5
@@ -62,17 +66,17 @@ FLUSH_EVERY = 50
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="补齐关注图片的固有宽高")
+    parser = argparse.ArgumentParser(description=t("backfill_follow_image_dims.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--out", type=Path,
                         default=GENERATED_DIR / "follow-image-dims-backfill.csv")
     parser.add_argument("--archives", type=Path, default=SOURCES_DIR / "follow",
-                        help="原始响应归档根目录（各来源一个子目录）")
+                        help=t("backfill_follow_image_dims.archivesHelp"))
     parser.add_argument("--mode", choices=("all", "archives", "probe"), default="all",
-                        help="archives 只对归档、probe 只发请求，默认两路都走")
+                        help=t("backfill_follow_image_dims.modeHelp"))
     parser.add_argument("--provider", action="append", default=[],
-                        help="只处理这些来源，可重复给")
-    parser.add_argument("--limit", type=int, default=0, help="只处理前 N 张，0 为全部")
+                        help=t("backfill_follow_image_dims.providerHelp"))
+    parser.add_argument("--limit", type=int, default=0, help=t("backfill_follow_image_dims.limitHelp"))
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
     return parser
 
@@ -147,17 +151,17 @@ def probe_attempts(resolver: FollowMediaResolver, item: FollowItemRow, index: in
     thumb = str((media or {}).get("thumb_url") or "") if media is not None \
         else str(display_thumb_url(item) or "")
     if thumb.startswith("https://"):
-        attempts.append((thumb, {}, "缩略图"))
+        attempts.append((thumb, {}, t("backfill_follow_image_dims.viaThumbnail")))
     try:
         resolved = resolver.resolve(item, index)
     except FollowMediaUnavailable as error:
-        notes.append(f"解析器拒收：{error}")
+        notes.append(t("backfill_follow_image_dims.resolverRefused", error=error))
     else:
         headers = dict(resolved.headers or {})
         if resolved.referer:
             headers.setdefault("Referer", resolved.referer)
         if resolved.url != thumb:
-            attempts.append((resolved.url, headers, "媒体地址"))
+            attempts.append((resolved.url, headers, t("backfill_follow_image_dims.viaMediaUrl")))
     return attempts, notes
 
 
@@ -171,8 +175,9 @@ def probe_target(resolver: FollowMediaResolver, transport: HttpTransport,
         try:
             return probe_image_dims(transport, url, headers, timeout=PROBE_TIMEOUT), via
         except (ImageDimsUnavailable, OSError, httpx.HTTPError) as error:
-            notes.append(f"{via}：{type(error).__name__}: {error}"[:120])
-    return None, "；".join(notes) or "没有可问的地址"
+            notes.append(t("backfill_follow_image_dims.attemptFailed", via=via, error=type(error).__name__,
+                           detail=error)[:120])
+    return None, t("common.clauseSeparator").join(notes) or t("backfill_follow_image_dims.noAddress")
 
 
 def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int:
@@ -188,20 +193,20 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
     targets = pending_targets(items, providers)
     if args.limit:
         targets = targets[:args.limit]
-    print(f"关注条目 {len(items)} 条，待补尺寸 {len(targets)} 张", flush=True)
+    print(t("backfill_follow_image_dims.pending", items=len(items), targets=len(targets)), flush=True)
     if not targets:
         return 0
 
     archive = archived_dims(args.archives) if args.mode in ("all", "archives") else {}
     if args.mode in ("all", "archives"):
-        print(f"归档里有尺寸的 rule34.xxx 帖子 {len(archive)} 个", flush=True)
+        print(t("backfill_follow_image_dims.archived", count=len(archive)), flush=True)
 
     writer: sqlite3.Connection | None = None
     store: FollowStore | None = None
     before = after = 0
     if args.apply:
         writer = open_for_write(args)
-        print(f"备份：{args.backup}", flush=True)
+        print(t("backfill_follow_image_dims.backup", backup=args.backup), flush=True)
         before = writer.execute("SELECT COUNT(*) FROM follow_item").fetchone()[0]
         store = FollowStore(lambda: writer)
 
@@ -230,42 +235,42 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
             row = {"item_id": item.id, "provider": item.provider,
                    "external_id": item.external_id,
                    "media": "" if index is None else index,
-                   "mode": "", "result": "未取得", "width": "", "height": "", "note": ""}
+                   "mode": "", "result": MISSED, "width": "", "height": "", "note": ""}
             dims: tuple[int, int] | None = None
             if index is None and item.provider == "rule34xxx" and archive:
                 dims = archive.get(str(item.external_id))
-                row["mode"] = "归档"
+                row["mode"] = FROM_ARCHIVE
                 if dims is None:
-                    row["note"] = "归档里没有这个帖子"
+                    row["note"] = t("backfill_follow_image_dims.notArchived")
             if dims is None and resolver is not None:
                 dims, note = probe_target(resolver, transport, limiter, item, index, media)
-                row["mode"] = "探测"
+                row["mode"] = FROM_PROBE
                 row["note"] = note if dims is None else note
             if dims is not None:
                 found += 1
-                row["result"] = "取得"
+                row["result"] = FOUND
                 row["width"], row["height"] = dims
                 if store is not None:
                     if store.set_image_dims(item.id, *dims, media_index=index):
                         written += 1
                         since_flush += 1
                     else:
-                        row["note"] = "已有尺寸，未改动"
+                        row["note"] = t("backfill_follow_image_dims.alreadySized")
             log.append(row)
             if since_flush >= FLUSH_EVERY or position % 200 == 0:
                 flush()
-                print(f"{position}/{len(targets)}：已取得 {found}，已写入 {written}", flush=True)
+                print(t("backfill_follow_image_dims.progress", position=position, total=len(targets), found=found, written=written), flush=True)
     finally:
         flush()
 
-    print(f"取得 {found}/{len(targets)} 张 → {args.out}", flush=True)
+    print(t("backfill_follow_image_dims.found", found=found, total=len(targets), out=args.out), flush=True)
     if writer is None:
-        print(f"dry-run：可写入 {found} 张；加 --apply --backup 才真正写入")
+        print(t("backfill_follow_image_dims.dryRun", found=found))
         return 0
     after = writer.execute("SELECT COUNT(*) FROM follow_item").fetchone()[0]
     writer.close()
     # 条数必须不变：这一趟只补 metadata 里的两个数，不新增也不删除条目。
-    print(f"已写入 {written} 张；follow_item {before} → {after}")
+    print(t("backfill_follow_image_dims.written", written=written, before=before, after=after))
     return 0 if before == after else 1
 
 

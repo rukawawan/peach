@@ -11,6 +11,7 @@
 import { CLEANUP_CRUMB_PAGES } from './cleanup-tools';
 import { REPAIR_CENTER_PATH } from './history/settings-route';
 import { MANAGE_MENU_SECTIONS, normalizeManageOrder } from './application/navigation-items';
+import { t } from './i18n';
 
 export type ManageEntry = readonly [key: string, label: string, glyph: string];
 
@@ -38,20 +39,20 @@ export interface ManageHeaderProps {
    子页标题取这里的名字，「数据管理」显示在面包屑的上一级。 */
 export const MANAGE_CRUMB_PAGES: Readonly<Record<string, string>> = {
   ...CLEANUP_CRUMB_PAGES,
-  '/junk-files': '垃圾文件',
-  '/duplicates': '重复文件',
-  '/review': '人工复核',
-  '/trash': '回收站',
-  '/quality-goals': '高清版',
-  '/sources': '来源和凭证',
-  [REPAIR_CENTER_PATH]: '修复与迁移',
+  '/junk-files': t('manage:managePages.junkFiles'),
+  '/duplicates': t('manage:managePages.duplicates'),
+  '/review': t('manage:managePages.review'),
+  '/trash': t('manage:managePages.trash'),
+  '/quality-goals': t('manage:managePages.qualityGoals'),
+  '/sources': t('manage:managePages.sources'),
+  [REPAIR_CENTER_PATH]: t('manage:managePages.repairs'),
 };
 
 /** 面包屑的上一级：`key` 是管理条上按下的那一项。没写的子页都从数据管理进。 */
 export interface CrumbParent { key: string; label: string; href: string }
-const CLEANUP_PARENT: CrumbParent = { key: 'cleanup', label: '数据管理', href: '/data-cleanup' };
+const CLEANUP_PARENT: CrumbParent = { key: 'cleanup', label: t('manage:managePages.libraryTools'), href: '/data-cleanup' };
 const CRUMB_PARENTS: Readonly<Record<string, CrumbParent>> = {
-  [REPAIR_CENTER_PATH]: { key: 'configuration', label: '应用与维护', href: '/settings/maintenance' },
+  [REPAIR_CENTER_PATH]: { key: 'configuration', label: t('manage:managePages.maintenance'), href: '/settings/maintenance' },
 };
 export const crumbParent = (path: string): CrumbParent => CRUMB_PARENTS[path] ?? CLEANUP_PARENT;
 
@@ -79,7 +80,7 @@ export interface ManageHeaderView {
 }
 
 export const trashLedeText = ({ total, shown }: TrashCount) =>
-  `${total.toLocaleString()} 个符合 · 显示 ${shown.toLocaleString()}`;
+  t('manage:managePages.trashCount', { count: total, shown: shown.toLocaleString() });
 
 /** 页头这一刻画什么；不在管理区时是 null。 */
 export function manageHeaderView(props: ManageHeaderProps): ManageHeaderView | null {
@@ -117,7 +118,7 @@ export function manageHeaderSkeletonHtml(props: ManageHeaderProps): string {
       + `${glyph(mark)}<span>${escape(label)}</span></button>`;
   }).join('');
   const crumb = view.crumb
-    ? `<nav data-manage-crumb="" aria-label="Breadcrumb"><ol><li><a href="${escape(view.parent.href)}">${escape(view.parent.label)}</a>${glyph('chevron-right')}</li>`
+    ? `<nav data-manage-crumb="" aria-label="${escape(t('manage:manageHeader.breadcrumbLabel'))}"><ol><li><a href="${escape(view.parent.href)}">${escape(view.parent.label)}</a>${glyph('chevron-right')}</li>`
       + `<li aria-current="true"><span>${escape(view.crumb)}</span></li></ol></nav>`
     : '';
   const lede = view.lede.kind === 'none' ? ''
@@ -125,11 +126,11 @@ export function manageHeaderSkeletonHtml(props: ManageHeaderProps): string {
       : `<span data-lede-text="">${escape(view.lede.text)}</span>${view.lede.total ? EMPTY_TRASH_HTML : ''}`}</p>`;
   const keys = props.menu.map(([key]) => key);
   const reset = normalizeManageOrder(keys).join(',') === MANAGE_MENU_SECTIONS.join(',') ? ''
-    : `<button type="button" disabled data-navigation-menu="" aria-label="管理顶部菜单排序设置" aria-haspopup="dialog" aria-expanded="false">${glyph('ellipsis')}</button>`;
-  return `<nav data-manage-bar="" aria-label="管理"><div data-manage-menu="" data-pill-nav="" role="group">${menu}</div>${reset}<span data-manage-order-status="" role="status" aria-live="polite"></span></nav>`
+    : `<button type="button" disabled data-navigation-menu="" aria-label="${escape(t('shell:navigationOrder.menuLabel', { group: t('manage:manageHeader.menuOrderLabel') }))}" aria-haspopup="dialog" aria-expanded="false">${glyph('ellipsis')}</button>`;
+  return `<nav data-manage-bar="" aria-label="${escape(t('manage:manageHeader.barLabel'))}"><div data-manage-menu="" data-pill-nav="" role="group">${menu}</div>${reset}<span data-manage-order-status="" role="status" aria-live="polite"></span></nav>`
     + crumb
     + `<h2 data-manage-title=""${view.compact ? ' data-compact=""' : ''}>${escape(view.title)}</h2>`
     + lede;
 }
 
-const EMPTY_TRASH_HTML = '<button type="button" data-empty-trash="" title="永久删除回收站内容">清空回收站</button>';
+const EMPTY_TRASH_HTML = `<button type="button" data-empty-trash="" title="${escape(t('manage:manageHeader.emptyTrashTitle'))}">${escape(t('manage:shared.emptyTrash'))}</button>`;

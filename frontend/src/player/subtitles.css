@@ -20,6 +20,8 @@
 .vjs-peach-subtitle-search a{display:inline-block;margin:8px 16px;font-size:var(--fs-sm);color:#fff;text-decoration:underline}
 .vjs-peach-settings-menu .vjs-peach-subtitle-result{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:10px 16px;text-align:left;line-height:1.4;overflow-wrap:anywhere}
 .vjs-peach-subtitle-result small{color:rgba(255,255,255,.7);font-size:var(--fs-sm)}
+.vjs-peach-settings-menu .vjs-peach-subtitle-result[aria-busy="true"]{background:rgba(255,255,255,.12)}
+.vjs-peach-subtitle-result[data-subtitle-loaded] small{color:#fff}
 .vjs-peach-settings-menu:has([data-subtitle-style]){overscroll-behavior:contain}
 /* 原生 TextTrack 保留时间轴与辅助技术语义，显示层按已选外观绘制。 */
 .video-js[data-peach-captions] video::cue{color:transparent;background:transparent;text-shadow:none}

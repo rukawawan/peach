@@ -19,13 +19,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.review_csv import write_rows
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write
 from peach.tag_renames import FIELDS, apply_rows, collect
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="把退役标签名改成规范名，撤掉的粗桶整条删掉")
+    parser = argparse.ArgumentParser(description=t("rename_retired_tags.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "retired-tag-rename.csv")
@@ -38,13 +39,14 @@ def run(args: argparse.Namespace) -> int:
         rows = collect(connection)
         total = sum(row["assets"] + row["merged"] for row in rows)
         kept = sum(row["raw_kept"] for row in rows)
-        print(f"退役名 {len(rows)} 个，待改标注 {total} 条；来源原话保留 {kept} 条")
+        print(t("rename_retired_tags.summary", names=len(rows), total=total, kept=kept))
         for row in rows:
             if row["new"] and (row["assets"] or row["merged"]):
-                print(f"  {row['old']} → {row['new']}：改 {row['assets']} 条、"
-                      f"并 {row['merged']} 条、实体{row['entity'] or '无'}")
+                print(t("rename_retired_tags.renameRow", old=row['old'], new=row['new'], assets=row['assets'],
+                        merged=row['merged'], entity=row['entity'] or t("rename_retired_tags.none")))
             elif row["assets"]:
-                print(f"  {row['old']} 撤掉：删 {row['assets']} 条、实体{row['entity'] or '无'}")
+                print(t("rename_retired_tags.dropRow", old=row['old'], assets=row['assets'],
+                        entity=row['entity'] or t("rename_retired_tags.none")))
 
         if args.apply:
             before = counts_of(connection, {"asset_tag": "SELECT count(*) FROM asset_tag"})
@@ -57,18 +59,18 @@ def run(args: argparse.Namespace) -> int:
                 raise
             after = counts_of(connection, {"asset_tag": "SELECT count(*) FROM asset_tag"})
             integrity, violations = verify_after_write(connection)
-            print(f"已写入：改标注 {counts['tags']} 条、删重复与撤掉的 {counts['dropped']} 条、"
-                  f"动实体 {counts['entities']} 个")
-            print(f"  标注 {before['asset_tag']} → {after['asset_tag']}，"
-                  f"实体 {before['entity']} → {after['entity']}")
-            print(f"  自检：integrity_check={integrity}，外键违规 {violations} 条")
+            print(t("rename_retired_tags.written", tags=counts['tags'], dropped=counts['dropped'],
+                    entities=counts['entities']))
+            print(t("rename_retired_tags.counts", tags_before=before['asset_tag'], tags_after=after['asset_tag'],
+                    entities_before=before['entity'], entities_after=after['entity']))
+            print(t("rename_retired_tags.selfCheck", integrity=integrity, violations=violations))
     finally:
         connection.close()
 
     write_rows(args.review_csv, FIELDS, rows)
-    print(f"复核 CSV → {args.review_csv}")
+    print(t("rename_retired_tags.reviewCsv", path=args.review_csv))
     if not args.apply:
-        print("这是预览：未写 ledger。确认后再加 --apply --backup。")
+        print(t("rename_retired_tags.preview"))
     return 0
 
 

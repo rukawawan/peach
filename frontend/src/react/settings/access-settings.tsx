@@ -14,13 +14,15 @@ import { Note } from '../components/note';
 import { PasswordPair } from './password-pair';
 import { ErrorText, Footer, Help, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
+import { bodyFieldErrors } from '../../core/server-text';
+import { t } from '../../i18n';
 
 type FieldErrors = Partial<Record<'current_password' | 'password' | 'confirmation', string>>;
 
 const HELP: Partial<Record<AccessState['mode'], string>> = {
-  legacy: '当前使用系统生成的访问口令。改设自己的密码，或关闭登录要求。',
-  locked: '访问设置无法读取，请在本机检查配置文件。',
-  password: '已设置密码。新设备需要登录，登录时勾选「保持登录」可保持 30 天。',
+  legacy: t('settings:accessPassword.legacyHelp'),
+  locked: t('settings:accessPassword.lockedHelp'),
+  password: t('settings:accessPassword.passwordHelp'),
 };
 
 export function AccessSettings({ initial, receipt, devices, after }: AccessSettingsProps) {
@@ -36,10 +38,10 @@ export function AccessSettings({ initial, receipt, devices, after }: AccessSetti
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const issues: FieldErrors = {};
-    if (state.mode === 'password' && !current) issues.current_password = '请输入当前访问密码';
+    if (state.mode === 'password' && !current) issues.current_password = t('settings:accessPassword.enterCurrent');
     if (!disable) {
-      if (password.length < 8 || password.length > 256) issues.password = '访问密码需为 8–256 个字符';
-      if (password !== confirmation) issues.confirmation = '两次输入的密码不一致';
+      if (password.length < 8 || password.length > 256) issues.password = t('settings:accessPassword.lengthError');
+      if (password !== confirmation) issues.confirmation = t('settings:accessPassword.mismatch');
     }
     setFields(issues);
     if (Object.keys(issues).length) {
@@ -51,10 +53,10 @@ export function AccessSettings({ initial, receipt, devices, after }: AccessSetti
       current_password: current, password: disable ? '' : password, confirmation: disable ? '' : confirmation,
     }, 'POST', signal), (next) => {
       setState(next); setCurrent(''); setPassword(''); setConfirmation(''); setDisable(false); setFields({});
-      receipt(next.mode === 'open' ? '已关闭访问密码' : '已保存配置');
+      receipt(next.mode === 'open' ? t('settings:accessPassword.turnedOff') : t('settings:shared.settingsSaved'));
     }, (cause) => {
-      const payload = cause instanceof ApiError ? cause.body as { errors?: FieldErrors; detail?: { errors?: FieldErrors } } : null;
-      const errors = payload?.errors || payload?.detail?.errors;
+      const payload = cause instanceof ApiError ? cause.body as { detail?: unknown } : null;
+      const errors = bodyFieldErrors<FieldErrors>(payload) || bodyFieldErrors<FieldErrors>(payload?.detail);
       if (errors) setFields(errors); else action.setError(errorMessage(cause));
     });
   };
@@ -62,33 +64,33 @@ export function AccessSettings({ initial, receipt, devices, after }: AccessSetti
   const help = HELP[state.mode];
   const editable = state.mode !== 'locked';
   return (<>
-    <Section guide="access" title="访问密码" onSubmit={submit}>
+    <Section guide="access" title={t('settings:accessPassword.title')} onSubmit={submit}>
       <div ref={body}>
         <Stack>
           {help ? <Help>{help}</Help> : null}
           {state.mode === 'open'
-            ? <Note tone="warning" title="未设置访问密码">能连接到 Peach 的设备打开地址就能看馆藏，不需要登录。</Note>
+            ? <Note tone="warning" title={t('settings:accessPassword.notSet')}>{t('settings:accessPassword.openWarning')}</Note>
             : null}
           {state.mode === 'password' || state.mode === 'legacy'
-            ? <Checkbox isSelected={disable} onChange={setDisable}>关闭访问密码</Checkbox>
+            ? <Checkbox isSelected={disable} onChange={setDisable}>{t('settings:accessPassword.turnOff')}</Checkbox>
             : null}
           {state.mode === 'password'
-            ? <Input id="access-current" type="password" label="当前访问密码" autoComplete="current-password" maxLength={256}
+            ? <Input id="access-current" type="password" label={t('settings:accessPassword.current')} autoComplete="current-password" maxLength={256}
                 value={current} onChange={setCurrent} isRequired validationBehavior="aria"
                 isInvalid={Boolean(fields.current_password)} hint={fields.current_password} />
             : null}
           {editable && !disable
-            ? <PasswordPair label={state.mode === 'password' ? '新访问密码' : '设置访问密码'}
+            ? <PasswordPair label={state.mode === 'password' ? t('settings:accessPassword.new') : t('settings:accessPassword.set')}
                 password={password} confirmation={confirmation} onPassword={setPassword} onConfirmation={setConfirmation}
                 passwordError={fields.password} confirmationError={fields.confirmation}
-                passwordHint="至少 8 个字符。保存后其他设备需要重新登录。" />
+                passwordHint={t('settings:accessPassword.newHelp')} />
             : null}
-          {disable ? <Note tone="warning" title="访问范围">保存后，能连接到 Peach 的设备将直接访问馆藏。</Note> : null}
+          {disable ? <Note tone="warning" title={t('settings:accessPassword.scope')}>{t('settings:accessPassword.disableWarning')}</Note> : null}
           {action.error ? <ErrorText>{action.error}</ErrorText> : null}
         </Stack>
       </div>
       {editable
-        ? <Footer><Button type="submit" {...busyProps(action.busy === 'save')}>保存配置</Button></Footer>
+        ? <Footer><Button type="submit" {...busyProps(action.busy === 'save')}>{t('settings:shared.saveSettings')}</Button></Footer>
         : null}
     </Section>
     {devices && (state.mode === 'password' || state.mode === 'legacy') ? devices(state) : null}

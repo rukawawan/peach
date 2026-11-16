@@ -38,16 +38,22 @@ import sys
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
     __package__ = "scripts"
+from peach.interface_text import dev as t
+
 from . import co_author
 
 ROOT = Path(__file__).resolve().parents[1]
-DELIVERY_STEPS = [
-    "提交后预检（工作树根目录，PowerShell 7）："
-    "& .\\.venv\\Scripts\\python.exe -X utf8 .\\scripts\\agent_worktree.py preflight",
-    "测试：& .\\scripts\\test.ps1 full",
-    "交付：推送工作者分支并创建交付 PR，核对当前提交的 CI；ready 后由协调者 integrate",
-]
+
+
+def delivery_steps() -> list[str]:
+    return [
+        t("adopt_dependency_bump.stepPreflight",
+          command="& .\\.venv\\Scripts\\python.exe -X utf8 .\\scripts\\agent_worktree.py preflight"),
+        t("adopt_dependency_bump.stepTest", command="& .\\scripts\\test.ps1 full"),
+        t("adopt_dependency_bump.stepDeliver"),
+    ]
 
 #: 每份清单的接管方式。`manifests` 是从 Dependabot 分支套过来的文件，`derived` 是重算后
 #: 可能变的路径，`commands` 是重算命令，`checks` 只核对不产出文件。以 `/` 结尾的条目按
@@ -96,7 +102,7 @@ RECIPES = {
     },
     "actions": {
         "label": "GitHub Actions 工作流",
-        "manifests": (".github/workflows/",),
+        "manifests": (".github/workflows/", ".github/actions/setup-ffmpeg/"),
         "derived": (),
         "commands": (),
         "checks": (),
@@ -130,7 +136,8 @@ def run(command: tuple[str, ...] | list[str], *, capture: bool = True,
                             text=True, encoding="utf-8", errors="replace", check=False)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip() if capture else ""
-        raise RuntimeError(f"{' '.join(command)} 退出码 {result.returncode}\n{detail}")
+        raise RuntimeError(t("adopt_dependency_bump.commandFailed", command=' '.join(command),
+                             code=result.returncode, detail=detail))
     return (result.stdout or "") if capture else ""
 
 
@@ -148,14 +155,14 @@ def recipe_for(paths: list[str]) -> tuple[str, dict]:
     matched = [key for key, recipe in RECIPES.items()
                if any(matches(entry, path) for entry in recipe["manifests"] for path in paths)]
     if not matched:
-        known = "、".join(entry for recipe in RECIPES.values() for entry in recipe["manifests"])
-        raise RuntimeError(f"这个分支没有改动认得的清单（认得的是 {known}）")
+        known = [entry for recipe in RECIPES.values() for entry in recipe["manifests"]]
+        raise RuntimeError(t("adopt_dependency_bump.noKnownManifest", known=known))
     if len(matched) > 1:
-        raise RuntimeError(f"这个分支同时改了 {len(matched)} 份清单，逐份接管：{matched}")
+        raise RuntimeError(t("adopt_dependency_bump.severalManifests", count=len(matched), manifests=str(matched)))
     recipe = RECIPES[matched[0]]
     stray = [path for path in paths if not any(matches(entry, path) for entry in recipe["manifests"])]
     if stray:
-        raise RuntimeError(f"这个分支改了清单之外的文件：{stray}")
+        raise RuntimeError(t("adopt_dependency_bump.strayFiles", files=str(stray)))
     return matched[0], recipe
 
 
@@ -169,7 +176,7 @@ def open_pull_requests() -> list[dict]:
 def pull_request(pr: str) -> dict:
     payload = json.loads(run(("gh", "pr", "view", pr, "--json", "number,title,headRefName,state")))
     if payload["state"] != "OPEN":
-        raise RuntimeError(f"PR #{pr} 状态是 {payload['state']}，不是 OPEN")
+        raise RuntimeError(t("adopt_dependency_bump.notOpen", pr=pr, state=payload['state']))
     return payload
 
 
@@ -218,7 +225,7 @@ def bring_over(branch: str, manifests: tuple[str, ...], *, root: Path = ROOT,
                      run(("git", "diff", "--name-only", "--diff-filter=U"), root=root).splitlines()
                      if line]
         if conflicts:
-            raise ConflictError(f"origin/{branch} 与当前分支改到同一处，三方合并留下冲突",
+            raise ConflictError(t("adopt_dependency_bump.conflict", branch=branch),
                                 conflicts) from exc
         raise
     finally:
@@ -241,8 +248,7 @@ def commit_message(key: str, versions: list[str], pr: str | None,
     错在 `ready` 才报出来。
     """
     if co_author.FORM.fullmatch(signature) is None:
-        raise ValueError("--co-author 形态须为 工具 (模型 版本) <厂商 noreply>，如 "
-                         + co_author.EXAMPLE.partition(": ")[2])
+        raise ValueError(t("adopt_dependency_bump.badCoAuthor", example=co_author.EXAMPLE.partition(": ")[2]))
     recipe = RECIPES[key]
     origin = f"Dependabot PR #{pr}" if pr else "Dependabot 分支"
     if recipe["commands"]:
@@ -321,7 +327,7 @@ def adopt(pr: dict, *, apply: bool, signature: str, root: Path = ROOT) -> dict:
     stray = sorted(path for path in touched if not owned_by(recipe, path))
     result.update(versions=versions, files=landed, unexpected=stray, applied=False)
     if stray:
-        raise RuntimeError(f"PR #{number} 重算动到了清单与派生产物之外的文件，先看清楚：{stray}")
+        raise RuntimeError(t("adopt_dependency_bump.rebuildStray", pr=number, files=str(stray)))
     if apply:
         run(("git", "add", "--", *landed), root=root)
         message = root / "build" / f"adopt-{key}.txt"
@@ -349,16 +355,16 @@ def adopt_all(prs: list[dict], *, signature: str, root: Path = ROOT) -> dict:
             rebuild = [" ".join(command) for command in (*recipe["commands"], *recipe["checks"])]
             return {"ok": False, "error": str(exc), "stopped_at": pr["number"],
                     "conflicts": exc.files, "done": done,
-                    "next": [f"解开冲突：{'、'.join(exc.files)}",
-                             *(f"重算或核对：{command}" for command in rebuild),
+                    "next": [t("adopt_dependency_bump.nextResolve", files=list(exc.files)),
+                             *(t("adopt_dependency_bump.nextRebuild", command=command) for command in rebuild),
                              f"git add -- {' '.join(exc.files)}"
-                             + ("，连同重算改到的派生产物（看 git status）" if recipe["commands"] else ""),
+                             + (t("adopt_dependency_bump.nextWithDerived") if recipe["commands"] else ""),
                              f"git commit -F {message.relative_to(root).as_posix()}",
-                             "再跑一次 --all-open --apply，已接管的会跳过"]}
+                             t("adopt_dependency_bump.nextRerun")]}
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc), "stopped_at": pr["number"], "done": done}
-    next_steps = [*DELIVERY_STEPS,
-                  "推送 master 之后逐个收尾：",
+    next_steps = [*delivery_steps(),
+                  t("adopt_dependency_bump.nextCloseEach"),
                   *(close_command(item["pr"], item["recipe"]) for item in done)]
     return {"ok": True, "done": done, "next": next_steps if done else []}
 
@@ -376,28 +382,26 @@ def plan_all(prs: list[dict], *, root: Path = ROOT) -> dict:
             items.append({"pr": pr["number"], "title": pr["title"], "files": paths,
                           "error": str(exc)})
     return {"ok": all("error" not in item for item in items), "prs": items,
-            "next": ["加 --apply 逐个接管并提交"] if items else []}
+            "next": [t("adopt_dependency_bump.nextApply")] if items else []}
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=t("adopt_dependency_bump.description"))
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--pr", help="Dependabot 的 PR 编号")
-    source.add_argument("--branch", help="Dependabot 的分支名，跳过 gh 查询")
+    source.add_argument("--pr", help=t("adopt_dependency_bump.helpPr"))
+    source.add_argument("--branch", help=t("adopt_dependency_bump.helpBranch"))
     source.add_argument("--all-open", action="store_true",
-                        help="按编号从小到大接管全部 open 的 Dependabot PR")
-    parser.add_argument("--apply", action="store_true", help="暂存并提交；缺省只列计划")
+                        help=t("adopt_dependency_bump.helpAllOpen"))
+    parser.add_argument("--apply", action="store_true", help=t("adopt_dependency_bump.helpApply"))
     parser.add_argument("--co-author", required=True,
-                        help="本次提交的署名，形如 "
-                             "Claude Code (Opus 5) <noreply@anthropic.com>")
+                        help=t("adopt_dependency_bump.helpCoAuthor"))
     args = parser.parse_args(argv)
 
     try:
         if run(("git", "rev-parse", "--git-dir")).strip() == run(("git", "rev-parse", "--git-common-dir")).strip():
-            raise RuntimeError("这是主检出。主检出只做集成，先 "
-                               "`scripts/agent_worktree.py create --agent <名> --task deps-<包名>`。")
+            raise RuntimeError(t("adopt_dependency_bump.mainCheckout"))
         if run(("git", "status", "--porcelain")).strip():
-            raise RuntimeError("工作区不干净。接管会往里写重算出来的产物，先把手上的改动收掉。")
+            raise RuntimeError(t("adopt_dependency_bump.dirty"))
         if args.all_open:
             prs = open_pull_requests()
             plan = (adopt_all(prs, signature=args.co_author) if args.apply else plan_all(prs))
@@ -405,14 +409,13 @@ def main(argv: list[str] | None = None) -> int:
             pr = pull_request(args.pr) if args.pr else {"headRefName": args.branch}
             item = adopt(pr, apply=args.apply, signature=args.co_author)
             plan = {"ok": True, **item,
-                    "next": list(DELIVERY_STEPS)}
+                    "next": delivery_steps()}
             if item.get("already"):
                 plan["next"] = []
             elif not args.apply:
-                plan["next"].insert(0, "改动留在工作区未暂存："
-                                       f"`git restore -- {' '.join(item['files'])}` 撤销，加 --apply 提交")
+                plan["next"].insert(0, t("adopt_dependency_bump.nextUnstaged", files=' '.join(item['files'])))
             elif args.pr:
-                plan["next"].append("推送 master 之后收尾：" + close_command(item["pr"], item["recipe"]))
+                plan["next"].append(t("adopt_dependency_bump.nextClose", command=close_command(item["pr"], item["recipe"])))
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0 if plan["ok"] else 1
     except ConflictError as exc:

@@ -78,7 +78,7 @@ describe('配置表单与行间距', () => {
         assert.deepEqual(opened.problems, []);
       } finally { await opened.close() }
     });
-    it(`${viewport.name}：挂载目录的代理保护可切换且不越出视口`, async () => {
+    it(`${viewport.name}：挂载目录的流量保护可切换且不越出视口`, async () => {
       const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('这台电脑'), viewport);
       const { page } = opened;
       try {
@@ -111,7 +111,7 @@ describe('配置表单与行间距', () => {
         }));
         assert.deepEqual(marks, Array.from({ length: 12 }, () => ({ inline: true, sized: true })));
         assert.ok(!(await form.innerText()).includes('（只读）'));
-        assert.ok((await protectedFolder.textContent())?.includes('代理保护'));
+        assert.ok((await protectedFolder.textContent())?.includes('流量保护'));
         assert.ok((await form.locator('[data-media-read-policy="1"]').textContent())?.includes('正常读取'));
         if (!viewport.mobile) {
           const spread = (boxes: { y: number; height: number }[]) => {

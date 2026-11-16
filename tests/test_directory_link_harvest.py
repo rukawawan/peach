@@ -580,7 +580,7 @@ class JudgeTests(unittest.TestCase):
         page = self.page("laoshi", "https://laoshi.ink/actresses/actor-001.html",
                          ["波多野结衣", "波多野結衣"], ["https://x.com/hatano_yui"])
         rows, _ = self.judge([page], existing=existing)
-        self.assertEqual([row["verdict"] for row in rows], ["已有"])
+        self.assertEqual([row["verdict"] for row in rows], ["held"])
         self.assertIn("twitter.com/Hatano_Yui", rows[0]["evidence"])
 
     def test_a_different_account_on_a_platform_the_ledger_already_has_is_a_conflict(self):
@@ -601,13 +601,13 @@ class JudgeTests(unittest.TestCase):
         second = self.page("bstar", "https://bstar-pro.com/model.html?mid=1",
                            ["波多野結衣"], ["https://x.com/HATANO_YUI", "https://x.com/other"])
         rows, _ = self.judge([first, second], existing=existing)
-        self.assertEqual([row["verdict"] for row in rows], ["ok", "已有", "conflict"])
+        self.assertEqual([row["verdict"] for row in rows], ["ok", "held", "conflict"])
 
-    def test_a_name_matching_several_performers_is_需人工消歧_with_no_entity(self):
+    def test_a_name_matching_several_performers_is_ambiguous_with_no_entity(self):
         page = self.page("laoshi", "https://laoshi.ink/actresses/actor-9.html",
                          ["架空同名"], ["https://x.com/someone"])
         rows, _ = self.judge([page])
-        self.assertEqual(rows[0]["verdict"], "需人工消歧")
+        self.assertEqual(rows[0]["verdict"], "ambiguous")
         self.assertEqual(rows[0]["entity_id"], "")
         self.assertIn("架空同名、另一位同名", rows[0]["evidence"])
 
@@ -616,7 +616,7 @@ class JudgeTests(unittest.TestCase):
                          ["不在库里的人"], ["https://x.com/nobody"])
         rows, stats = self.judge([page])
         self.assertEqual(rows, [])
-        self.assertEqual(stats["页面不在账本"], 1)
+        self.assertEqual(stats["page-not-in-ledger"], 1)
 
     def test_a_matched_page_without_social_links_and_a_failed_page_both_leave_a_trace(self):
         """命中却没链接要写下来——否则看不出这个人在来源里是有页没号，还是根本没页。"""
@@ -625,8 +625,8 @@ class JudgeTests(unittest.TestCase):
                            note="未取得：HttpStatusError: HTTP 503")
         rows, stats = self.judge([empty, broken])
         self.assertEqual([(row["verdict"], row["entity_id"]) for row in rows],
-                         [("未取得", 1), ("未取得", "")])
-        self.assertEqual((stats["命中但无社媒"], stats["页面未取得"]), (1, 1))
+                         [("missed", 1), ("missed", "")])
+        self.assertEqual((stats["matched-without-socials"], stats["page-missed"]), (1, 1))
 
     def test_a_note_that_carries_a_name_chain_says_who_it_was_about(self):
         """按名字进的来源搜不到人也是结论；只写一个 URL 的话看不出这一行是谁的。"""
@@ -637,14 +637,14 @@ class JudgeTests(unittest.TestCase):
                               note="搜过名字链的 1 个写法，javdb 上没有这个人")
         rows, _ = self.judge([absent, ambiguous])
         self.assertEqual([(row["verdict"], row["entity_id"], row["name"]) for row in rows],
-                         [("未取得", 1, "波多野结衣"), ("未取得", "", "")],
+                         [("missed", 1, "波多野结衣"), ("missed", "", "")],
                          "名字对上不止一位时不认领，和链接一样的判据")
 
     def test_the_official_page_is_已有_when_the_ledger_already_holds_it(self):
         url = "https://bstar-pro.com/model.html?mid=355"
         page = self.page("bstar", url, ["瀬戸環奈"], [], official=(url, "Bstar"))
         rows, _ = self.judge([page], urls={2: {url}})
-        self.assertEqual([(row["link_kind"], row["verdict"]) for row in rows], [("official", "已有")])
+        self.assertEqual([(row["link_kind"], row["verdict"]) for row in rows], [("official", "held")])
 
     def test_an_own_site_is_judged_by_url_and_labelled_like_the_rest_of_the_ledger(self):
         """博客与本人官网没有 handle 可比，只按 URL 判重；标签统一成账本里那批写法。"""
@@ -655,7 +655,7 @@ class JudgeTests(unittest.TestCase):
             owned=[(blog, "公式ブログ"), (home, "")])
         rows, stats = self.judge([page])
         self.assertEqual([(row["link_kind"], row["label"], row["verdict"]) for row in rows],
-                         [("social", "博客", "ok"), ("official", "官方网站", "ok")])
+                         [("social", "blog", "ok"), ("official", "official-site", "ok")])
         self.assertIn("资料页写明的本人链接「公式ブログ」", rows[0]["evidence"])
         self.assertEqual(stats["ok"], 2)
 
@@ -663,7 +663,7 @@ class JudgeTests(unittest.TestCase):
         blog = "http://blog.livedoor.jp/hatano_yui/"
         page = self.module.page_record("jae", "p", ["波多野結衣"], [], owned=[(blog, "公式ブログ")])
         rows, _ = self.judge([page], urls={1: {blog}})
-        self.assertEqual([row["verdict"] for row in rows], ["已有"])
+        self.assertEqual([row["verdict"] for row in rows], ["held"])
 
 
 class OwnedLinkTests(unittest.TestCase):
@@ -678,11 +678,11 @@ class OwnedLinkTests(unittest.TestCase):
         for url in ("http://www.me-nana.alicejapan.co.jp/",
                     "http://plaza.rakuten.co.jp/rinsakuragi/",
                     "http://takasyo.blog.jp/"):
-            self.assertEqual(self.module.owned_link(url, "公式ブログ"), ("social", "博客"))
+            self.assertEqual(self.module.owned_link(url, "公式ブログ"), ("social", "blog"))
 
     def test_a_generic_line_falls_back_to_the_ledger_wording(self):
         for shown in ("公式ブログ", "オフィシャルブログ", "ブログ", "Official Blog"):
-            self.assertEqual(self.module.owned_link("http://ameblo.jp/x/", shown)[1], "博客")
+            self.assertEqual(self.module.owned_link("http://ameblo.jp/x/", shown)[1], "blog")
 
     def test_a_blog_that_has_a_name_keeps_it(self):
         self.assertEqual(self.module.owned_link("http://a.jp/", "公式ブログ「旬の果実」"),
@@ -692,7 +692,7 @@ class OwnedLinkTests(unittest.TestCase):
 
     def test_a_site_that_is_not_a_blog_keeps_classify_result(self):
         self.assertEqual(self.module.owned_link("https://eikawa-noa.com/", ""),
-                         ("official", "官方网站"))
+                         ("official", "official-site"))
 
 
 class PortraitTests(unittest.TestCase):
@@ -710,7 +710,7 @@ class PortraitTests(unittest.TestCase):
         self.assertEqual(self.rows([page]), [{
             "entity_id": "1", "kind": "performer", "name": "波多野结衣",
             "matched_name": "波多野結衣", "portrait_url": "http://www.jae.tokyo/x.jpg",
-            "source": "jae", "page": "p#YuiHatano", "verdict": "命中"}])
+            "source": "jae", "page": "p#YuiHatano", "verdict": "matched"}])
 
     def test_a_name_matching_several_performers_yields_no_portrait(self):
         """头像装错人和链接装错人是同一个错误，判据不能两套。"""
@@ -740,7 +740,7 @@ class ProbeTests(unittest.TestCase):
                                 url="https://www.instagram.com/setokanna_/", verdict="ok"),
                 self.module.row(entity_id=2, link_kind="official", url="https://bstar-pro.com/m",
                                 verdict="ok"),
-                self.module.row(entity_id=1, link_kind="social", url="https://x.com/x", verdict="已有")]
+                self.module.row(entity_id=1, link_kind="social", url="https://x.com/x", verdict="held")]
 
     def test_only_live_or_unverifiable_ok_rows_enter_the_install_queue(self):
         """来源可能是旧数据：封停的 X 账号不能装；Instagram 登出页看不出死活，标未验照装。
@@ -754,11 +754,12 @@ class ProbeTests(unittest.TestCase):
         rows = self.rows()
         existing = {2: {("X", "old_hatano"): "https://x.com/old_hatano"}}
         stats = self.module.probe_rows(rows, existing, site)
-        self.assertEqual([row["alive"] for row in rows], ["活", "疑似失效", "疑似失效", "未验", "", ""])
+        self.assertEqual([row["alive"] for row in rows], ["alive", "gone", "gone", "unverified", "", ""])
         self.assertIn("X 显示名「瀬戸環奈 (@kanna_seto0510) / X」", rows[0]["evidence"])
         self.assertIn("X 验活：登出页无资料，对照账号正常", rows[1]["evidence"])
+        # 冲突行只进复核表，旧号的验活结果按本机语言写。
         self.assertIn("数据库旧号 https://x.com/old_hatano：疑似失效", rows[2]["evidence"])
-        self.assertEqual(dict(stats), {"活": 1, "疑似失效": 2})
+        self.assertEqual(dict(stats), {"alive": 1, "gone": 2})
         queue = self.module.installable(rows)
         self.assertEqual([row["url"] for row in queue],
                          ["https://x.com/kanna_seto0510", "https://www.instagram.com/setokanna_/",
@@ -770,7 +771,7 @@ class ProbeTests(unittest.TestCase):
                         HttpStatusError=self.module.HttpStatusError)
         rows = [self.module.row(link_kind="social", url="https://x.com/gone_one", verdict="ok")]
         self.module.probe_rows(rows, {}, site)
-        self.assertEqual(rows[0]["alive"], "未取得")
+        self.assertEqual(rows[0]["alive"], "unknown")
         self.assertIn("限流", rows[0]["evidence"])
         self.assertEqual(len(self.module.installable(rows)), 1)
 
@@ -785,7 +786,7 @@ class ProbeTests(unittest.TestCase):
         rows = [self.module.row(link_kind="social", url="https://x.com/missing", verdict="ok"),
                 self.module.row(link_kind="social", url="https://x.com/boom", verdict="ok")]
         self.module.probe_rows(rows, {}, site)
-        self.assertEqual([row["alive"] for row in rows], ["疑似失效", "未取得"])
+        self.assertEqual([row["alive"] for row in rows], ["gone", "unknown"])
         self.assertEqual(len(self.module.installable(rows)), 1)
 
     def test_a_support_account_is_alive_but_not_this_person(self):
@@ -800,16 +801,16 @@ class ProbeTests(unittest.TestCase):
         rows = [self.module.row(entity_id=2, link_kind="social",
                                 url="https://x.com/yu_shinoda", verdict="ok")]
         stats = self.module.probe_rows(rows, {}, site)
-        self.assertEqual(rows[0]["verdict"], "应援账号")
-        self.assertEqual(rows[0]["alive"], "活")
+        self.assertEqual(rows[0]["verdict"], "fan-account")
+        self.assertEqual(rows[0]["alive"], "alive")
         self.assertIn("応援アカウント", rows[0]["evidence"])
-        self.assertEqual(dict(stats), {"活": 1, "应援账号": 1})
+        self.assertEqual(dict(stats), {"alive": 1, "fan-account": 1})
         self.assertEqual(self.module.installable(rows), [])
 
     def test_without_a_probe_site_every_social_row_is_marked_unverified(self):
         rows = self.rows()
         self.module.probe_rows(rows, {}, None)
-        self.assertEqual([row["alive"] for row in rows], ["未验", "未验", "未验", "未验", "", ""])
+        self.assertEqual([row["alive"] for row in rows], ["unverified", "unverified", "unverified", "unverified", "", ""])
 
 
 class CacheTests(unittest.TestCase):

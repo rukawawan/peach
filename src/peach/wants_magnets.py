@@ -11,8 +11,10 @@ import math
 import time
 from datetime import datetime, timezone
 
+from .coded_text import Said, coded
 from .sources import FailureReason, SourceFailure
 from .catalog_rules import normalise_code_key
+from .catalog_vocabulary import resource_item
 from .fsutil import atomic_write_text
 from .jav_cache import cache_fresh, cache_lifetime as cache_lifetime
 
@@ -67,8 +69,10 @@ class MagnetSearch:
                 if (type(saved) not in (int, float) or not math.isfinite(saved)
                         or saved > self.wallclock() or not reusable_result(row.get('result'))):
                     continue
+                # 旧版写进缓存的中文来源与属性（「JavDB 评论」「中字」「高清」）读入时换成 id。
+                result = {**row['result'], 'items': [resource_item(item) for item in row['result']['items']]}
                 self.cache[normalise_code_key(row['code'])] = (
-                    self.clock() - (self.wallclock() - saved), row['result'])
+                    self.clock() - (self.wallclock() - saved), result)
                 self.saved_wall[normalise_code_key(row['code'])] = saved
         except (OSError, ValueError, TypeError, AttributeError):
             return
@@ -147,12 +151,12 @@ class MagnetSearch:
             try:
                 result.update(self.fetcher(self.root, code))
                 if result['state'] == 'ready' and not reusable_result(result):
-                    result.update(state='error', error='资源链接未取得，请稍后重试或检查来源连接。')
+                    result.update(state='error', **coded('error', Said('labels.wantsMagnets.linksUnfetched')))
             except SourceFailure as error:
                 if error.reason != FailureReason.NOT_FOUND:
-                    result.update(state="error", error=str(error))
+                    result.update(state="error", **coded("error", Said(error.code, error.params)))
             except Exception:  # 来源异常只报告查询失败，不泄露请求或凭据
-                result.update(state="error", error="磁力抓取链未取得，请稍后重试或检查来源连接。")
+                result.update(state="error", **coded("error", Said("labels.wantsMagnets.chainUnfetched")))
             self.next_request = self.clock() + 3
             self._remember(code, result)
             return result

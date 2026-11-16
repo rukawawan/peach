@@ -109,7 +109,7 @@ def picture(candidate: Candidate, data: bytes) -> Picture:
     落进 `.jpg` 之后卡片就一直在动。"""
     with Image.open(io.BytesIO(data)) as image:
         if getattr(image, "is_animated", False):
-            raise ValueError(f"{candidate.url} 是动图")
+            raise ValueError(f"{candidate.url} is animated")
         image.load()
         return Picture(candidate, image.size, data, fingerprint(image))
 
@@ -219,27 +219,37 @@ def _unverified(pool: list[Picture], usable: int, fetched: int,
     （`_download`），交给 `_settled` 决定落空是不是确定答复。"""
     if not usable:
         if fetched:
-            raise _settled("社区来源给的封面都是动图或太小", missed)
-        raise Unavailable("社区来源的封面下载失败")
+            raise _settled("errors.communityCatalog.animatedOrSmall", missed)
+        raise Unavailable("errors.communityCatalog.downloadFailed")
     origins = sorted({one.origin for one in pool})
     if len(origins) > 1:
         # 几家都答了、图都下到了，只是互相对不上：再问还是这几张，交 `NotFound` 让采集任务记住。
-        raise _settled(f"{'、'.join(origins)} 给的封面不是同一张图，无法互相印证", missed)
+        raise _settled("errors.communityCatalog.mismatch", missed, {"origins": origins})
     allowed = [one for one in pool if not is_javdb_image(one.candidate.url)]
     if not allowed:
-        raise _settled('未取得无 JavDB 水印的封面', missed)
+        raise _settled(NO_UNWATERMARKED, missed)
     largest = max(allowed, key=lambda one: one.pixels)
     return largest.candidate, largest.size, largest.data, ()
 
 
-def _settled(message: str, missed: list[str]) -> Exception:
+#: 只剩 JavDB 水印图时那一句的 code；`cover_artwork` 拦水印图时也用它。
+NO_UNWATERMARKED = "errors.communityCatalog.noUnwatermarked"
+#: `_settled` 的几句落空原因各自带「另有几张没下载到」的那一版。
+_PARTLY_MISSED = {
+    "errors.communityCatalog.animatedOrSmall": "errors.communityCatalog.animatedOrSmallPartlyMissed",
+    "errors.communityCatalog.mismatch": "errors.communityCatalog.mismatchPartlyMissed",
+    NO_UNWATERMARKED: "errors.communityCatalog.noUnwatermarkedPartlyMissed",
+}
+
+
+def _settled(code: str, missed: list[str], params: dict | None = None) -> Exception:
     """图都下载到了才交 `NotFound`。有图没下载到时不下「没有」的结论（#342）：那一张可能正是能印证的、
     或不带 JavDB 水印的那张，下次再问答案可能就变了，交 `NotFound` 会被采集任务记成一周不问。
     没下到的全在冷却就是本趟没轮到（`SourcePaused`）。"""
     if not missed:
-        return NotFound(message)
+        return NotFound(code, params)
     kind = SourcePaused if all(outcome == "paused" for outcome in missed) else Unavailable
-    return kind(f"{message}；另有 {len(missed)} 张封面没下载到")
+    return kind(_PARTLY_MISSED[code], {**(params or {}), "count": len(missed)})
 
 
 def verified_cover(transport, code: str, works: list[tuple[str, dict]], *,
@@ -258,7 +268,7 @@ def verified_cover(transport, code: str, works: list[tuple[str, dict]], *,
     urls = {url: _candidate(url) for _source, payload in works for url in payload.get("cover_urls") or []
             if not is_cross_product_cover(code, url)}
     if not urls:
-        raise NotFound("社区来源没有这部片的封面")
+        raise NotFound("errors.communityCatalog.noCovers")
     siblings = tuple(one for one in siblings if not is_cross_product_cover(code, one.url))
     pool, fetched, usable, missed = _pictures(transport, urls, reference, siblings, deadline=deadline)
     best = None

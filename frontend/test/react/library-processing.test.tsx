@@ -9,6 +9,7 @@ import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { queryClient } from '../../src/react/query';
+import { RESULT_UPDATES_KEY } from '../../src/react/running-tasks';
 import {
   currentLine, LIBRARY_PROCESSING_KEY, notesLine, prefetchLibraryProcessing, processingLine, remainingTime, type LibraryProcessingData,
 } from '../../src/react/library-processing/library-processing';
@@ -110,6 +111,9 @@ function serve(reply: Reply) {
 /** 走完真实的首屏路径：先 prefetch 把 `first` 落进缓存，再换上用例自己的应答。
  *  首屏那一趟不进 `calls`，断言数的就是页面挂上去之后的来往。 */
 async function open(first: LibraryProcessingData, reply: Reply = () => first) {
+  /* 上一条用例的卡片在卸下之前会被 `afterEach` 里的 `publishLibraries([])` 叫醒重画，对已清空的
+     缓存再发一次读取；那一问晚回来会落进这一条的首屏。先清掉，首屏只认这一条的应答。 */
+  queryClient.clear();
   publishLibraries([{ id: 'library-one', name: '媒体库一', icon: 'database', color: 'blue' }]);
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => first })));
   await prefetchLibraryProcessing(new AbortController().signal);
@@ -219,7 +223,7 @@ it('已结束的部分结果提供浏览与定向重试，中断保持错误提�
   const banner = await mount(notice({ toast: vi.fn(), mode: 'notice' }));
   for (const surface of [host, banner]) {
     expect(surface.textContent).toContain('处理已结束，部分项目需处理');
-    expect(surface.textContent).toContain('已入库的视频可在全部内容中浏览');
+    expect(surface.textContent).toContain('已入库的视频已可浏览');
     expect(surface.querySelector('a[href="/?loc=&thumb=0"]')?.textContent).toBe('查看全部内容');
     expect(surface.querySelector('[role="alert"]')).toBeNull();
   }
@@ -348,7 +352,7 @@ it('失败时把问题清单折叠进错误提示，重试只交失败的那些�
   expect(details.parentElement?.className).toContain('border-t');
   /* 完整记录是出事之后自己去翻的东西，退回灰字，清单收着也看得见；旁边是打开它和
      导出它的两颗键，导出和这份记录排在一起。 */
-  const reveal = alert!.querySelector('button[aria-label="在资源管理器中显示"]')!;
+  const reveal = alert!.querySelector('button[aria-label="查看文件位置"]')!;
   expect(details.contains(reveal)).toBe(false);
   const logRow = reveal.closest('.text-text-secondary')!;
   expect(logRow.querySelector('p')?.textContent).toBe(`完整记录：${LOG}`);
@@ -392,6 +396,8 @@ it('读不回来时留住已有进度，只在旁边说一句连接中断', asyn
   await open({ status: 'running', checked: 3, total: 9, stage: '采集缺失资料' });
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })));
   vi.useFakeTimers();
+  // 轮询由任务面一处驱动，卡片读同一份缓存。
+  await mountRoot(notice({ toast: vi.fn(), mode: 'notice' }));
   const host = await mount(card({ toast: vi.fn() }));
   await tick(2000);
 
@@ -399,7 +405,7 @@ it('读不回来时留住已有进度，只在旁边说一句连接中断', asyn
   expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('3');
 });
 
-it('横幅从空闲发现后台任务，任务结束就收起、报一次完成，卸载之后不再敲库', async () => {
+it('横幅闲着不问，全站那一处报出任务在跑才接上，任务结束就收起、报一次完成，卸载之后不再敲库', async () => {
   vi.useFakeTimers();
   const toast = vi.fn();
   const job = { at: { status: 'running', stage: '采集缺失资料', checked: 2, total: 5 } as LibraryProcessingData };
@@ -407,10 +413,17 @@ it('横幅从空闲发现后台任务，任务结束就收起、报一次完成�
   const mounted = await mountRoot(notice({ toast, mode: 'notice' }));
 
   expect(mounted.host.textContent).toBe('');
-  await tick(10_000);
+  await tick(60_000);
+  expect(served.calls, '闲着的时候不该自己问').toHaveLength(0);
+  await act(async () => {
+    queryClient.setQueryData(RESULT_UPDATES_KEY, { running_tasks: [{ task_key: 'library-processing', run_id: 7, status: 'running' }] });
+  });
+  await tick(0);
+  expect(served.calls).toHaveLength(1);
   expect(mounted.host.textContent).toContain('采集缺失资料');
   expect(mounted.host.querySelector('a')?.getAttribute('href')).toBe('/data-cleanup#libraryProcessing');
-  expect(mounted.host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('40');
+  const ring = mounted.host.querySelector('[role="progressbar"]');
+  expect([ring?.getAttribute('aria-valuenow'), ring?.getAttribute('aria-valuemax')], '小环形报真实计数').toEqual(['2', '5']);
 
   job.at = { status: 'complete', job_id: 'one', identified: 3, candidates: 2 };
   await tick(2000);
@@ -424,12 +437,13 @@ it('横幅从空闲发现后台任务，任务结束就收起、报一次完成�
   expect(served.posts()).toEqual([]);
 });
 
-it('卡片被叫着盯任务时一直问，只在任务结束时报一次', async () => {
+it('卡片跟着任务面的轮询读到结束，只在任务结束时报一次', async () => {
   vi.useFakeTimers();
   const toast = vi.fn();
   await open({ status: 'running', job_id: 'one' }, () => ({ status: 'complete', job_id: 'one' }));
   const onComplete = vi.fn();
-  await mount(card({ toast, monitor: true, onComplete }));
+  await mountRoot(notice({ toast, mode: 'notice' }));
+  await mount(card({ toast, onComplete }));
 
   await tick(2000);
   expect(toast).toHaveBeenCalledTimes(1);
@@ -461,7 +475,7 @@ it('两个容器读同一趟任务：一个周期只问一次，撤掉一个另�
   vi.useFakeTimers();
   const served = await open({ status: 'running', checked: 2, total: 10, stage: '采集缺失资料' });
   const banner = await mountRoot(notice({ toast: vi.fn(), mode: 'notice' }));
-  const panel = await mountRoot(card({ toast: vi.fn(), monitor: true }));
+  const panel = await mountRoot(card({ toast: vi.fn() }));
 
   await tick(2000);
   expect(served.calls, '两处各存一份状态的话，卡片说完成、横幅还挂着进度').toHaveLength(1);
@@ -481,7 +495,7 @@ it('两个容器的等待秒数每秒推进，不增加轮询请求，换文件�
     current_asset_id: 1, current_action: 'reading_local_cover', waited_seconds: 33 };
   const served = await open(state);
   const banner = await mountRoot(notice({ toast: vi.fn(), mode: 'notice' }));
-  const panel = await mountRoot(card({ toast: vi.fn(), monitor: true }));
+  const panel = await mountRoot(card({ toast: vi.fn() }));
   expect(banner.host.textContent).toContain('已等待 33 秒');
   expect(panel.host.textContent).toContain('已等待 33 秒');
   await tick(1000);
@@ -509,16 +523,44 @@ it('两个容器的等待秒数每秒推进，不增加轮询请求，换文件�
   expect(served.calls).toHaveLength(requests);
 });
 
-it('卡片卸载之后轮询就停了', async () => {
+it('同一个键只由任务面一处轮询：只有卡片时不问，任务面卸下后也停', async () => {
   vi.useFakeTimers();
   const served = await open({ status: 'running', checked: 2, total: 10 });
-  const panel = await mountRoot(card({ toast: vi.fn(), monitor: true }));
+  const panel = await mountRoot(card({ toast: vi.fn() }));
+  await tick(4000);
+  expect(served.calls, '卡片只读缓存').toHaveLength(0);
+
+  const banner = await mountRoot(notice({ toast: vi.fn(), mode: 'notice' }));
   await tick(2000);
   expect(served.calls).toHaveLength(1);
 
-  await panel.unmount();
+  await banner.unmount();
   await tick(20_000);
   expect(served.calls, '离开这一页之后那棵根还活着的话，它会照原节律接着敲库').toHaveLength(1);
+  await panel.unmount();
+});
+
+it('在跑时读失败按 4、8、16 秒退避，读到了回到两秒', async () => {
+  vi.useFakeTimers();
+  await open({ status: 'running', checked: 2, total: 10 });
+  let fail = true;
+  const fetcher = vi.fn(async () => (fail ? { ok: false, status: 503, json: async () => ({}) }
+    : { ok: true, status: 200, json: async () => ({ status: 'running', checked: 3, total: 10 }) }));
+  vi.stubGlobal('fetch', fetcher);
+  await mountRoot(notice({ toast: vi.fn(), mode: 'notice' }));
+  await tick(2000);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await tick(3999);
+  expect(fetcher, '失败一次后等 4 秒').toHaveBeenCalledTimes(1);
+  await tick(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  await tick(8000);
+  expect(fetcher, '再失败等 8 秒').toHaveBeenCalledTimes(3);
+  fail = false;
+  await tick(16_000);
+  expect(fetcher).toHaveBeenCalledTimes(4);
+  await tick(2000);
+  expect(fetcher, '读到了回到两秒').toHaveBeenCalledTimes(5);
 });
 
 it('来源说没有的计数带千分位，等待时长按分、时、天进位', () => {
@@ -564,7 +606,7 @@ it('暂停与继续使用同一个任务号，暂停不是完成，暂停时仍�
   expect(bar[0]).toBe('任务详情');
   expect(bar.indexOf('暂停')).toBeGreaterThan(0);
   await click(buttonNamed('暂停', host));
-  expect(host.textContent).toContain('正在暂停，当前步骤结束后暂停');
+  expect(host.textContent).toContain('当前步骤结束后暂停');
   state = { ...state, status: 'paused' };
   await tick(2000);
   expect(buttonNamed('继续', host)).not.toBeNull();
@@ -660,7 +702,7 @@ it('处理较慢时各任务面显示等待进展，不沿用旧估时', async (
 });
 
 it('扫描总量未知时显示已发现文件数，已知阶段显示完成数', () => {
-  expect(processingLine({ status: 'running', stage: '扫描文件', scanned: 12345 }))
+  expect(processingLine({ status: 'running', stage: '扫描文件', stage_code: 'library.scanFiles', scanned: 12345 }))
     .toBe('扫描文件 · 已发现 12,345 个文件');
   expect(processingLine({ status: 'running', stage: '扫描文件', scanned: 2, checked: 9000 }))
     .toBe('扫描文件 · 已发现 2 个新文件 · 已核对 9,000 个已有文件');

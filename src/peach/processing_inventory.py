@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from .processing_traffic import ProcessingTraffic
 from .library_processing_scope import scoped_assets
+from .user_messages import UserValueError
 
 _SESSIONS = {}
 _LATEST = {}
@@ -114,7 +115,7 @@ def preview(config, db_path, stage, asset_ids, token=None, *, incremental=False,
         if token:
             session = _SESSIONS.get(token)
             if session is None or session.identity != _identity(config, db_path, stage, asset_ids, incremental):
-                raise ValueError('目录预检已结束，请重新打开同步弹窗')
+                raise UserValueError('errors.processingInventory.previewEnded')
         else:
             session = InventoryPreview(config, db_path, stage, asset_ids, incremental, library_id)
             token = uuid4().hex

@@ -12,8 +12,9 @@ Peach 的代码不连 Stash，适配层与离线导入脚本都已删除（ADR-0
 
 下面三条仍在影响账本，处理相关数据时要记着。
 
-- Stash 的身份模型是平的：上传者、合集和演员塞进同一个自由文本字段（`演员:` 前缀）。导入
-  进来的断言因此需要 `scripts/merge_duplicate_identities.py` 这类工具收拾，规范实体才是真相。
+- Stash 的身份模型是平的：上传者、合集和演员塞进同一个自由文本字段（账本里是 `performer:`
+  前缀，早先版本写作 `演员:`）。导入进来的断言因此需要 `scripts/merge_duplicate_identities.py`
+  这类工具收拾，规范实体才是真相。
 - `asset_tag` 的唯一键是 `(asset_id, tag)`，`INSERT OR IGNORE` 存不下同一断言的多个来源，
   provenance 只能靠 `source` 列近似表达。
 - `asset.rating` 的量纲是 Stash 的 rating100（0–100），五颗星按 20 的倍数写；撤销写 NULL。

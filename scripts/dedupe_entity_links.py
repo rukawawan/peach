@@ -35,6 +35,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args,
@@ -90,7 +91,7 @@ def collect(connection) -> list[dict]:
         for item in members:
             same = item is keep
             out.append(dict(item, verdict="keep" if same else "delete",
-                            note="" if same else f"与 {keep['link_id']} 同一个去处"))
+                            note="" if same else t("dedupe_entity_links.sameDestination", link=keep['link_id'])))
     return out
 
 
@@ -102,9 +103,9 @@ def apply_rows(connection, rows) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("dedupe_entity_links.description"))
     add_ledger_write_args(parser)
-    parser.add_argument("--out", help="把逐条判定写成 CSV 复核产物")
+    parser.add_argument("--out", help=t("dedupe_entity_links.outHelp"))
     args = parser.parse_args()
 
     connection = open_for_write(args)
@@ -115,18 +116,18 @@ def main() -> int:
             write_rows(args.out, FIELDS, rows, atomic=True, fill_missing=True)
         groups = sum(1 for row in rows if row["verdict"] == "keep")
         doomed = sum(1 for row in rows if row["verdict"] == "delete")
-        print(f"重复组 {groups}，多余链接 {doomed}")
+        print(t("dedupe_entity_links.summary", groups=groups, doomed=doomed))
         for row in rows:
             if row["verdict"] == "delete":
-                print(f"  删 {row['link_id']:5} {row['entity']}  {row['url']}")
+                print(t("dedupe_entity_links.deleteRow", link=f"{row['link_id']:5}", entity=row['entity'], url=row['url']))
         if not args.apply:
-            print("dry-run：没有写入。加 --apply --backup <路径> 才真的删。")
+            print(t("dedupe_entity_links.dryRun"))
             return 0
         removed = apply_rows(connection, rows)
         connection.commit()
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print(f"删除 {removed} 条")
+        print(t("dedupe_entity_links.removed", count=removed))
         for key in sorted(before):
             print(f"  {key}: {before[key]} -> {after[key]}")
         print(f"integrity_check={integrity} foreign_key_check={violations}")

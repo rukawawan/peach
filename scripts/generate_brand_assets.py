@@ -3,8 +3,16 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 from PIL import Image
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
 
 #: 页面里那枚站标的小图：侧栏 20–24 CSS px、登录卡 40 CSS px。页面用 `srcset` 按屏幕像素
 #: 密度挑一张，1024 那张原图只留给 README、托盘与打包。
@@ -55,7 +63,7 @@ def main() -> int:
     parser.add_argument("source", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("resources"))
     parser.add_argument("--small-only", action="store_true",
-                        help="source 是已生成的 1024 方形 peach-logo.png，只重出小图")
+                        help=t("generate_brand_assets.smallOnlyHelp"))
     args = parser.parse_args()
     if args.small_only:
         args.output_dir.mkdir(parents=True, exist_ok=True)

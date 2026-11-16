@@ -14,10 +14,12 @@ import sqlite3
 
 from urllib.parse import urlsplit
 
-from . import (company_profiles, entry_links, feeds, link_status, performer_header, web_feeds,
+from . import (company_profiles, entry_links, feeds, interface_text, link_status, performer_header, web_feeds,
                web_follow)
 from .catalog_rules import (LENGTH_TAGS, dir_expr, photo_set_title, solo_performer_clause, tag_cat)
-from .entities import normalize_entity_name, resolve_entity, resolve_entity_id, prefer_entity_name
+from .coded_text import Said, coded
+from .entities import (USER_ALIAS_SOURCE, normalize_entity_name, prefer_entity_name, resolve_entity,
+                       resolve_entity_id)
 from .social_links import ARCHIVE_HOSTS, is_archive
 from .media_sources import cost_for
 from .web_catalog import (
@@ -645,6 +647,16 @@ def entity_code_sets(contract: WebContract, c, kind: str, entity_id: int) -> lis
     return sets
 
 
+#: 取不到目录名的图集，标题用这句固定说法。
+PHOTO_SET_UNTITLED_CODE = "labels.photoSet.untitled"
+
+
+def photo_set_heading(directory: str, key: str = "title") -> dict:
+    """图集标题写成 `<key>`；取不到目录名时给固定说法，旁边带 `<key>_code` 让界面按语言显示。
+    目录名本身是内容，照原样。"""
+    return coded(key, photo_set_title(directory) or Said(PHOTO_SET_UNTITLED_CODE))
+
+
 def q_entity_photos(contract: WebContract, args):
     """实体名下的照片：本地图片分页放在 `items`；`sets` 是分组，`kind` 为 `dir` 的是本地目录图集，
     为 `code` 的是番号样张集（`entity_code_sets`）。`total` 只数本地图片，`sample_total` 数样张。"""
@@ -673,7 +685,7 @@ def q_entity_photos(contract: WebContract, args):
         sets = [{
             "id": item["id"],
             "kind": "dir",
-            "title": photo_set_title(item["dir"]),
+            **photo_set_heading(item["dir"]),
             "n": item["n"],
             "bytes": item["bytes"] or 0,
             "location": item["location"],
@@ -740,7 +752,7 @@ def q_photo_set(contract: WebContract, args):
                      (*par, limit, offset),
                  )]
         return {
-            "id": anchor["id"], "title": photo_set_title(directory),
+            "id": anchor["id"], **photo_set_heading(directory),
             "location": anchor["location"], "cost": cost_for(anchor['location'], anchor['path']),
             "total": total, "items": items, "seed": seed, "has_more": offset + len(items) < total,
         }
@@ -935,13 +947,11 @@ SUGGEST_WORKS = 4
 #: 挑近作时每人先取的候选数。有的片还没装封面、也没抽帧，要从后面几部补上。
 SUGGEST_WORK_CANDIDATES = SUGGEST_WORKS * 3
 
-#: 补全的分组顺序与显示名，顺序就是下拉栏里的先后。它只定在这里，界面照抄——
+#: 补全的分组顺序与显示名的 code，顺序就是下拉栏里的先后。它只定在这里，界面照抄——
 #: 两侧各排一次的话，改了一侧就会出现「后端认为最该先看的组显示在第三位」。
 #: 作品垫底：它的值是番号或整句标题，扫读成本比一个人名高。
-SUGGEST_GROUPS = (
-    ("performer", "女优"), ("creator", "创作者"), ("studio", "厂牌"),
-    ("agency", "事务所"), ("series", "系列"), ("tag", "标签"), ("asset", "视频"),
-)
+SUGGEST_GROUPS = tuple((kind, f"labels.webEntity.suggestGroup.{kind}") for kind in (
+    "performer", "creator", "studio", "agency", "series", "tag", "asset"))
 
 #: 直接挂在作品上的实体种类。事务所不在内：`asset_entity` 里没有它的行，
 #: 作品是它的成员拍的，所以它单走一条查询。
@@ -1287,14 +1297,10 @@ def q_suggest(contract: WebContract, q: str, limit: int = SUGGEST_GROUP_LIMIT,
                 item["has_logo"] = contract.has_logo(item["value"])
                 item["logo_version"] = contract.logo_version(item["value"])
     return {"q": query, "groups": [
-        {"kind": kind, "label": label, "total": totals.get(kind, 0), "items": buckets[kind]}
-        for kind, label in SUGGEST_GROUPS if buckets.get(kind)
+        {"kind": kind, "label": interface_text.text(f"server:{code}"), "label_code": code,
+         "total": totals.get(kind, 0), "items": buckets[kind]}
+        for kind, code in SUGGEST_GROUPS if buckets.get(kind)
     ]}
-
-
-#: 用户自己敲进来的别名记这个来源。它是唯一允许在界面上删掉的一类——刮削和合并留下的
-#: 那些是这个人真的用过的名字，删掉就问不出这条实体当初为什么长这样。
-USER_ALIAS_SOURCE = "user:alias"
 
 
 def w_entity_alias(contract: WebContract, body):

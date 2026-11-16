@@ -1,6 +1,6 @@
 import unittest
 
-from peach import related
+from peach import interface_text, related
 from peach.related import rank_related
 
 
@@ -9,7 +9,7 @@ def _closeness(left, right, weights):
 
 
 def _reasons(source, candidate):
-    return related._reasons_features(related._sets(source), related._sets(candidate))
+    return related._reason_codes(related._sets(source), related._sets(candidate))
 
 
 def _naive_rank(source, candidates, limit, *, seed=None, diversity=0.22):
@@ -43,7 +43,8 @@ def _naive_rank(source, candidates, limit, *, seed=None, diversity=0.22):
         pool.remove(choice)
         reasons = choice.pop("_reasons")
         relevance = choice.pop("_relevance")
-        choice["why"] = " · ".join(reasons[:2])
+        choice["why"] = " · ".join(map(related.reason_text, reasons[:2]))
+        choice["why_codes"] = reasons[:2]
         choice["shared_tags"] = sorted(related._sets(source)["tag"] & related._sets(choice)["tag"],
                                        key=lambda tag: (-weights.get(tag, 1.0), tag))
         choice["related_score"] = round(relevance, 4)
@@ -128,6 +129,13 @@ class RelatedRankerTests(unittest.TestCase):
         second = rank_related(source, candidates, 3, seed="fixed", diversity=0.4)
         self.assertEqual([row["id"] for row in first], [row["id"] for row in second])
         self.assertEqual(first[0]["why"], "同创作者 · 标签接近")
+
+    def test_reasons_carry_codes_for_the_interface_language(self):
+        source = {"id": 1, "entities": {"creator": {7}, "tag": {10}}}
+        ranked = rank_related(source, [{"id": 2, "entities": {"creator": {7}, "tag": {10}}}], 1, seed="fixed")
+        self.assertEqual(ranked[0]["why_codes"], ["labels.related.sameCreator", "labels.related.similarTags"])
+        self.assertEqual([interface_text.text(f"server:{code}", language="en") for code in ranked[0]["why_codes"]],
+                         ["Same creator", "Similar tags"])
 
     def test_unrelated_items_are_excluded(self):
         source = {"id": 1, "entities": {"tag": {10}}}

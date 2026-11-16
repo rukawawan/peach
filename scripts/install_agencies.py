@@ -31,6 +31,7 @@ if str(SRC_DIR) not in sys.path:
 from peach.entities import (   # noqa: E402,F401
     FORMER_PREFIX, agency_key, normalize_entity_name, rejected_agencies, split_name,
 )
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args,
@@ -103,7 +104,7 @@ def collect(connection) -> list[dict]:
                              if name in sites), "")
         blocked = [alias for alias in item["aliases"] if alias in taken]
         item["aliases"] = [alias for alias in item["aliases"] if alias not in taken]
-        item["note"] = (f"旧称 {'、'.join(blocked)} 是另一家现用名，不写别名"
+        item["note"] = (t("install_agencies.aliasTaken", blocked='、'.join(blocked))
                         if blocked else "")
     return sorted(found.values(), key=lambda item: (-len(item["member_ids"]), item["agency"]))
 
@@ -147,9 +148,9 @@ def apply_rows(connection, rows, stamp: str) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("install_agencies.description"))
     add_ledger_write_args(parser)
-    parser.add_argument("--out", help="把逐家事务所的计划写成 CSV 复核产物")
+    parser.add_argument("--out", help=t("install_agencies.outHelp"))
     args = parser.parse_args()
 
     connection = open_for_write(args)
@@ -163,19 +164,20 @@ def main() -> int:
             write_rows(args.out, FIELDS, report, atomic=True, fill_missing=True)
         members = sum(len(item["member_ids"]) for item in rows)
         sited = sum(1 for item in rows if item["site"])
-        print(f"事务所 {len(rows)} 家，成员 {members} 位，有官网 {sited} 家")
+        print(t("install_agencies.summary", count=len(rows), members=members, sited=sited))
         for item in report:
             if item["note"]:
-                print(f"  ! {item['agency']}：{item['note']}")
+                print(t("install_agencies.agencyNote", agency=item['agency'], note=item['note']))
         if not args.apply:
-            print("dry-run：没有写入。加 --apply --backup <路径> 才真的写。")
+            print(t("install_agencies.dryRun"))
             return 0
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         done = apply_rows(connection, rows, stamp)
         connection.commit()
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print("写入：" + "，".join(f"{key} {value}" for key, value in done.items()))
+        print(t("install_agencies.written", agencies=done["事务所"], aliases=done["别名"],
+                memberships=done["归属"], sites=done["官网"]))
         for key in sorted(before):
             print(f"  {key}: {before[key]} -> {after[key]}")
         print(f"integrity_check={integrity} foreign_key_check={violations}")

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import httpx
 from PIL import Image
 
+from peach import interface_text
 from peach.http import HttpRequest, HttpResponse, HttpxTransport
 from peach.scraping_access import (SourceTransport, client_for, cookie_jar, describe,
                                    save, source_for, values_for)
@@ -642,7 +643,7 @@ class ScrapingAccessTests(unittest.TestCase):
 
     def test_cover_failure_explains_observed_cause_without_exposing_urls(self):
         from peach.web_scraping import _fetch_cover
-        from peach.jav_cover_fetch import Unavailable
+        from peach.jav_cover_fetch import NotFound
         contract = SimpleNamespace(cover_root=self.root, candidate_root=self.root,
                                    follow_secrets_root=self.root / "secrets", follow_sources_root=self.root)
         cases = [(403, "access_denied"), (503, "source_error"), (404, "no_candidate"), (None, "network")]
@@ -652,7 +653,7 @@ class ScrapingAccessTests(unittest.TestCase):
                     transport(HttpRequest("GET", "https://example.test/private?token=secret", {}), 1, 100)
                 except httpx.TransportError:
                     pass
-                raise Unavailable("所有渠道都没有候选")
+                raise NotFound("errors.javCoverFetch.noCandidates")
             with self.subTest(reason=reason), patch("peach.jav_cover_fetch.best_cover", side_effect=fetch), \
                     patch("peach.web_scraping.SourceTransport") as factory:
                 if status is None:
@@ -668,21 +669,34 @@ class ScrapingAccessTests(unittest.TestCase):
     def test_unreachable_dmm_image_hosts_point_at_the_connection_setting(self):
         """中国移动宽带直连 DMM 图片主机大多在握手后被断开：封面比较和连接检查都要把人
         指到 DMM / FANZA 的连接方式上，而不是说官方没有图、或让人去官网登录。"""
-        from peach.web_scraping import MOBILE_BROADBAND_HINT, _fetch_cover
-        from peach.jav_cover_fetch import HOSTS_UNREACHABLE, CoverConnectError
+        from peach.source_checks import MOBILE_BROADBAND_HINT
+        from peach.web_scraping import _fetch_cover
+        from peach.jav_cover_fetch import HOSTS_UNREACHABLE, HOSTS_UNREACHABLE_CODE, CoverConnectError
         contract = SimpleNamespace(cover_root=self.root, candidate_root=self.root,
                                    follow_secrets_root=self.root / "secrets", follow_sources_root=self.root)
-        with patch("peach.jav_cover_fetch.best_cover", side_effect=CoverConnectError(HOSTS_UNREACHABLE)), \
+        with patch("peach.jav_cover_fetch.best_cover", side_effect=CoverConnectError(HOSTS_UNREACHABLE_CODE)), \
                 patch("peach.web_scraping.SourceTransport"):
             result = _fetch_cover(contract, "ABW-232")
         self.assertEqual(result["reason"], "network")
-        self.assertIn(MOBILE_BROADBAND_HINT, result["error"])
+        self.assertEqual(result["error"], f"{HOSTS_UNREACHABLE}，未能完成封面比较；{MOBILE_BROADBAND_HINT}已有图片保留。")
+        english = "".join(interface_text.text(f"server:{part['code']}", part["params"], language="en")
+                          for part in result["error_parts"])
+        self.assertEqual(english, "Can't connect to any official image host, so the cover comparison didn't finish. "
+                                  "On China Mobile broadband, direct connections to DMM image hosts are often dropped "
+                                  "after the handshake; set the DMM / FANZA connection to the Peach proxy. "
+                                  "The existing image was kept.")
         with patch("peach.source_checks.SourceTransport") as factory:
             factory.return_value.side_effect = httpx.ConnectError("EOF occurred in violation of protocol")
             checks = {item["label"]: item for item in
                       w_scraping_check(SimpleNamespace(follow_secrets_root=self.root), {"source": "dmm"})["results"]}
         self.assertIn(MOBILE_BROADBAND_HINT, checks["高清图片 CDN"]["message"])
         self.assertNotIn(MOBILE_BROADBAND_HINT, checks["来源页面"]["message"])
+        cdn = checks["高清图片 CDN"]
+        self.assertEqual((cdn["target"], checks["来源页面"]["target"]), ("cdn", "page"))
+        self.assertEqual(interface_text.text(f"server:{cdn['label_code']}", language="en"), "HD image CDN")
+        self.assertEqual(interface_text.text(f"server:{cdn['message_code']}", cdn["message_params"], language="en"),
+                         "Can't connect. On China Mobile broadband, direct connections to DMM image hosts are often "
+                         "dropped after the handshake; set the DMM / FANZA connection to the Peach proxy.")
 
 
 class BrowserFallbackTests(unittest.TestCase):

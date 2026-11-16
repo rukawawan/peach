@@ -11,17 +11,25 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import interface_text
 from .platform import root_status
 
 HEALTHY_INTERVAL = 600.0
 DEGRADED_INTERVAL = 60.0
 PROBE_TIMEOUT = 5.0
 MAX_PENDING = 4
-MESSAGES = {
-    "ok": "可读取", "permission_denied": "没有权限读取", "missing": "目录不存在",
-    "not_directory": "目标不是目录", "unavailable": "目录读取失败",
-    "unmapped": "未配置挂载点", "checking": "正在检测", "timeout": "探测未返回",
+#: 各状态给人看的说明（ADR-0159）；文字在语言资源里。
+MESSAGE_CODES = {
+    "ok": "labels.mountReachability.ok", "permission_denied": "labels.mountReachability.permission_denied",
+    "missing": "labels.mountReachability.missing", "not_directory": "labels.mountReachability.not_directory",
+    "unavailable": "labels.mountReachability.unavailable", "unmapped": "labels.mountReachability.unmapped",
+    "checking": "labels.mountReachability.checking", "timeout": "labels.mountReachability.timeout",
 }
+SOURCE_MESSAGE_CODE = "labels.mountReachability.sourceState"
+
+
+def _text(code, params=None):
+    return interface_text.text(f"server:{code}", params)
 FAILURES = frozenset({"permission_denied", "missing", "not_directory", "unavailable", "unmapped"})
 
 
@@ -158,24 +166,31 @@ class MountReachability:
                     "declared": root.declared,
                     "resolved": str(root.path) if root.path is not None else None,
                     "mapped": root.path is not None, "online": online, "state": state,
-                    "message": MESSAGES[state], "checked_at": entry.checked_at if entry else None,
+                    "message": _text(MESSAGE_CODES[state]), "message_code": MESSAGE_CODES[state],
+                    "checked_at": entry.checked_at if entry else None,
                 })
         for row in grouped.values():
             roots = row["roots"]
             failed = next((root for root in roots if root["online"] is False), None)
             unknown = next((root for root in roots if root["online"] is None), None)
             status = failed or unknown
+            # 来源名是用户起的，原样作参数；状态说明嵌成另一句，按同一语言渲染。
+            params = {"label": row["label"], "state": {"code": status["message_code"]}} if status else {}
             row.update(mapped=all(root["mapped"] for root in roots),
                        online=True if any(root["online"] is True for root in roots) else None if unknown else False,
                        state=status["state"] if status else "ok",
-                       message=f"{row['label']}：{status['message']}" if status else "",
+                       message=_text(SOURCE_MESSAGE_CODE, params) if status else "",
+                       message_code=SOURCE_MESSAGE_CODE if status else None, message_params=params,
                        checked_at=min((root["checked_at"] for root in roots
                                        if root["checked_at"] is not None), default=None))
         return list(grouped.values())
 
     def summary(self) -> dict:
-        rows = [{key: row[key] for key in ("location", "label", "online", "state", "message", "checked_at")}
+        rows = [{key: row[key] for key in ("location", "label", "online", "state", "message", "message_code",
+                                           "message_params", "checked_at")}
                 for row in self.sources()]
-        warnings = [row["message"] for row in rows if row["state"] in FAILURES]
-        return {"state": "degraded" if warnings else "checking" if any(
-            row["online"] is None for row in rows) else "ok", "sources": rows, "warnings": warnings}
+        failed = [row for row in rows if row["state"] in FAILURES]
+        return {"state": "degraded" if failed else "checking" if any(
+            row["online"] is None for row in rows) else "ok", "sources": rows,
+            "warnings": [row["message"] for row in failed],
+            "warning_codes": [{"code": row["message_code"], "params": row["message_params"]} for row in failed]}

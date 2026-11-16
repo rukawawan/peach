@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from peach import library_sharing, remote_reporting
+from peach.interface_text import dev as t
 
 TARGETS = {"dsn": "PEACH_SENTRY_DSN", "library_dsn": "PEACH_LIBRARY_SENTRY_DSN"}
 
@@ -27,11 +28,12 @@ def reporting_config(*, require: bool = False) -> dict[str, str]:
         return config
     missing = [name for key, name in TARGETS.items() if not config[key]]
     if missing:
-        raise SystemExit(f"发行构建缺少 CI 变量：{'、'.join(missing)}")
+        raise SystemExit(t("write_reporting_config.missingVariables",
+                           names=missing))
     if remote_reporting.dsn() != config["dsn"]:
-        raise SystemExit("PEACH_SENTRY_DSN 不是 Sentry 托管服务的公开 DSN")
+        raise SystemExit(t("write_reporting_config.badDsn"))
     if library_sharing.target() != config["library_dsn"]:
-        raise SystemExit("PEACH_LIBRARY_SENTRY_DSN 不是公开 DSN，或与错误诊断指向同一 Sentry 项目")
+        raise SystemExit(t("write_reporting_config.badLibraryDsn"))
     return config
 
 
@@ -42,9 +44,9 @@ def write(output: Path, *, require: bool = False) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("write_reporting_config.description"))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--require", action="store_true", help="发行构建：两项 DSN 必须齐全且合法")
+    parser.add_argument("--require", action="store_true", help=t("write_reporting_config.requireHelp"))
     args = parser.parse_args()
     print(write(args.output, require=args.require))
     return 0

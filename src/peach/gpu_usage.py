@@ -9,21 +9,26 @@ import sys
 from ctypes import wintypes
 
 
+def unavailable_reason(name, **params):
+    """读不到 GPU 占用的原因（ADR-0159）：`labels.gpuUsage.<名字>`。"""
+    return {'code': 'labels.gpuUsage.' + name, 'params': params}
+
+
 class GpuCounters:
     def __init__(self):
         self.dll = None
         self.query = ctypes.c_void_p()
         self.counter = ctypes.c_void_p()
         self.collected = False
-        self.error = '当前平台未提供逐进程 GPU 计数器'
+        self.error = unavailable_reason('noCounters')
         if sys.platform == 'darwin':
-            self.error = '当前版本尚未接入 macOS 的逐进程 GPU 计数；不能使用整机占用代替任务占用'
+            self.error = unavailable_reason('macos')
         if os.name != 'nt':
             return
         try:
             self.dll = ctypes.WinDLL('pdh')
         except OSError:
-            self.error = 'Windows GPU 计数器组件未取得'
+            self.error = unavailable_reason('windowsComponent')
             return
         self.dll.PdhOpenQueryW.argtypes = (wintypes.LPCWSTR, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p))
         self.dll.PdhAddEnglishCounterW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_size_t,
@@ -40,7 +45,7 @@ class GpuCounters:
         if not code:
             code = self.dll.PdhAddEnglishCounterW(
                 self.query, r'\GPU Engine(*)\Utilization Percentage', 0, ctypes.byref(self.counter))
-        self.error = f'GPU 计数器未取得（0x{code:08x}）' if code else ''
+        self.error = unavailable_reason('openFailed', code=f'0x{code:08x}') if code else ''
         if code:
             self.close()
 
@@ -49,20 +54,20 @@ class GpuCounters:
             return None, 'unavailable', self.error
         code = self.dll.PdhCollectQueryData(self.query)
         if code:
-            return None, 'unavailable', f'GPU 计数器读取失败（0x{code:08x}）'
+            return None, 'unavailable', unavailable_reason('collectFailed', code=f'0x{code:08x}')
         if not self.collected:
             self.collected = True
-            return None, 'sampling', '等待下一次 GPU 采样'
+            return None, 'sampling', unavailable_reason('waiting')
         size, count = wintypes.DWORD(), wintypes.DWORD()
         code = self.dll.PdhGetFormattedCounterArrayW(
             self.counter, 0x200, ctypes.byref(size), ctypes.byref(count), None)
         if code != 0x800007D2:
-            return None, 'unavailable', f'GPU 计数器明细未取得（0x{code:08x}）'
+            return None, 'unavailable', unavailable_reason('detailMissing', code=f'0x{code:08x}')
         buffer = ctypes.create_string_buffer(size.value)
         code = self.dll.PdhGetFormattedCounterArrayW(
             self.counter, 0x200, ctypes.byref(size), ctypes.byref(count), buffer)
         if code:
-            return None, 'unavailable', f'GPU 计数器明细读取失败（0x{code:08x}）'
+            return None, 'unavailable', unavailable_reason('detailFailed', code=f'0x{code:08x}')
 
         class Value(ctypes.Union):
             _fields_ = [('number', ctypes.c_double), ('large', ctypes.c_longlong)]

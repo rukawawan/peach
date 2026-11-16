@@ -9,6 +9,13 @@ import subprocess
 import sys
 import time
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
+
 TRANSPORT_ERROR = re.compile(r"(?m)^npm (?:error|ERR!) code (?:ECONNRESET|ETIMEDOUT|EAI_AGAIN)\s*$")
 
 
@@ -24,13 +31,13 @@ def install(project: Path, *, ignore_scripts: bool = False, runner=subprocess.ru
             return 0
         if attempt == 2 or not TRANSPORT_ERROR.search(result.stderr):
             return result.returncode
-        print(f"npm 依赖下载中断，保留已校验缓存重试：{attempt + 1}/3", flush=True)
+        print(t("npm_ci.retrying", attempt=attempt + 1), flush=True)
         sleep(5 * (attempt + 1))
     return 1
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("npm_ci.description"))
     parser.add_argument("--prefix", type=Path, default=Path("."))
     parser.add_argument("--ignore-scripts", action="store_true")
     args = parser.parse_args()

@@ -170,7 +170,9 @@ class ReferenceUpdateTests(unittest.TestCase):
              "readme-atlas", "readme-javinfo-cli", "readme-javinfo-mcp",
              "readme-javinfo-legacy",
              "evilcharts-registry",
-             "youtube-stats-buffer-20260829", "skullet-skeleton"},
+             "youtube-stats-buffer-20260829", "skullet-skeleton",
+             "loading-dev-clock", "loading-dev-radar", "loading-dev-linear-dots", "loading-dev-gather",
+             "loading-dev-blocks", "loading-dev-motion"},
         )
         self.assertNotEqual(
             sources["vercel-report-design"]["url"],

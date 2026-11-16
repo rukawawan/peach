@@ -11,6 +11,7 @@ import { ButtonLink } from '@/components/base/buttons/button';
 
 import { apiGet } from '../../api';
 import { Fact, FactList, Footer, Help, Rows, Section, Stack } from './section';
+import { t } from '../../i18n';
 
 export interface CertificateState {
   /** openssl `-fingerprint -sha256` 的写法：冒号分隔的大写十六进制。 */
@@ -41,9 +42,9 @@ export function QrCode({ rows, label }: { rows: string[]; label: string }) {
 }
 
 const STEPS: readonly [string, string][] = [
-  ['iPhone／iPad', '用相机扫码，在 Safari 中允许下载描述文件；到「设置 → 通用 → VPN 与设备管理」安装它，再到「设置 → 通用 → 关于本机 → 证书信任设置」打开这张证书的完全信任。'],
-  ['Android', '扫码下载后，到「设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书」选择下载的文件。菜单名称因厂商而异。'],
-  ['电脑', '点「下载证书」。Windows 双击文件，安装到「受信任的根证书颁发机构」；macOS 在「钥匙串访问」里把它设为「始终信任」。'],
+  [t('settings:certificateTrust.iosDevices'), t('settings:certificateTrust.iosSteps')],
+  ['Android', t('settings:certificateTrust.androidSteps')],
+  [t('settings:certificateTrust.computer'), t('settings:certificateTrust.computerSteps')],
 ];
 
 export function CertificateTrust({ initial }: { initial: CertificateState }) {
@@ -58,21 +59,21 @@ export function CertificateTrust({ initial }: { initial: CertificateState }) {
   const groups = ca.fingerprint.split(':');
   const quarters = [0, 8, 16, 24].map(start => groups.slice(start, start + 8).join(':'));
   return (
-    <Section title="其他设备信任 HTTPS 证书">
+    <Section title={t('settings:certificateTrust.title')}>
       <Stack>
-        <Help>手机、平板和其他电脑第一次打开 HTTPS 地址时会提示证书不受信任。在那台设备上安装并信任本机 CA 证书后不再提示。证书只含公开部分，不含私钥。</Help>
+        <Help>{t('settings:certificateTrust.help')}</Help>
         <div className="flex min-w-0 flex-wrap items-start gap-4">
-          <QrCode rows={ca.qr} label="手机扫码下载本机 CA 证书" />
+          <QrCode rows={ca.qr} label={t('settings:certificateTrust.qrLabel')} />
           <div className="flex min-w-0 flex-1 basis-64 flex-col gap-2">
             <FactList>
-              <Fact term="SHA-256 指纹">
+              <Fact term={t('settings:certificateTrust.fingerprint')}>
                 <span className="flex max-w-sm flex-wrap justify-end gap-x-2 font-mono text-caption-1-regular">
                   {quarters.map((quarter, index) => <span key={index} className="whitespace-nowrap">{quarter}</span>)}
                 </span>
               </Fact>
-              <Fact term="有效期至">{ca.not_after}</Fact>
+              <Fact term={t('settings:certificateTrust.validUntil')}>{ca.not_after}</Fact>
             </FactList>
-            <Help>二维码 10 分钟内有效，页面开着时会自动更新。Android 打不开 .local 地址时，在这台电脑上改用局域网 IP 打开本页再扫码。</Help>
+            <Help>{t('settings:certificateTrust.qrHelp')}</Help>
           </div>
         </div>
       </Stack>
@@ -80,10 +81,10 @@ export function CertificateTrust({ initial }: { initial: CertificateState }) {
         {STEPS.map(([label, text]) => <SettingsRow key={label} label={label} description={text} />)}
       </Rows>
       <Stack divided>
-        <Help>装好后在设备的证书详情里核对 SHA-256 指纹，与上面一致才算装对。</Help>
+        <Help>{t('settings:certificateTrust.verifyHelp')}</Help>
       </Stack>
       <Footer>
-        <ButtonLink href={ca.download} download="peach-local-ca.crt" leadingIcon={RiDownloadLine}>下载证书</ButtonLink>
+        <ButtonLink href={ca.download} download="peach-local-ca.crt" leadingIcon={RiDownloadLine}>{t('settings:certificateTrust.download')}</ButtonLink>
       </Footer>
     </Section>
   );

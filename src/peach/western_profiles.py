@@ -7,15 +7,18 @@ from datetime import date
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlsplit
 
+from .coded_text import Said
+from .content_words import LINK_LABEL_OFFICIAL, RAW_ALIASES_KEY, RAW_NAME_KEY
 from .http import public_https_url
 from .western_artwork import babepedia_page
 from .performer_profiles import read_profile, write_profile
 from .performer_alias_followup import land as land_aliases
 from .social_links import canonical_url, handle, host_of, platform
+from .user_messages import UserValueError
 
 MONTHS = {name: i for i, name in enumerate(('January', 'February', 'March', 'April', 'May',
     'June', 'July', 'August', 'September', 'October', 'November', 'December'), 1)}
-LINK_NAMES = {'www': '官网', 'instagram': 'Instagram', 'x': 'X', 'tiktok': 'TikTok',
+LINK_NAMES = {'www': LINK_LABEL_OFFICIAL, 'instagram': 'Instagram', 'x': 'X', 'tiktok': 'TikTok',
     'onlyfans': 'OnlyFans', 'onlyfansfree': 'OnlyFans', 'twitch': 'Twitch',
     'imdb': 'IMDb', 'iafd': 'IAFD', 'facebook': 'Facebook', 'youtube': 'YouTube'}
 
@@ -29,7 +32,7 @@ def profile(http, name: str, aliases=(), *, profile_url='') -> dict:
         if label is not None and value is not None:
             key = label.get_text(' ', strip=True).rstrip(':')
             fields[key] = value.get_text(' ', strip=True)
-    result = {'raw': {**fields, '名前': found, '別名': names}, 'tags': []}
+    result = {'raw': {**fields, RAW_NAME_KEY: found, RAW_ALIASES_KEY: names}, 'tags': []}
     born = re.search(r'(\d{1,2})(?:st|nd|rd|th) of ([A-Za-z]+) (\d{4})', fields.get('Born', ''))
     if born and born[2] in MONTHS:
         try:
@@ -75,7 +78,7 @@ def land(connection, entity_id: int, expected_name: str, record: dict, *, batch:
     """仅补空资料，别名走同名占用判据，现有链接保留。调用方持有事务。"""
     current = connection.execute('SELECT kind,canonical_name FROM entity WHERE id=?', (entity_id,)).fetchone()
     if not current or current[0] not in ('performer', 'creator') or current[1] != expected_name:
-        raise ValueError('艺人身份已变化，请重新预览')
+        raise UserValueError("errors.westernProfiles.identityChanged")
     held = read_profile(connection, entity_id)
     written = False
     if held is None:
@@ -112,11 +115,11 @@ def link_conflict(link_kind: str, url: str, existing: list) -> str:
     都是两处来源说法不一，留在回执里等人看。
     """
     if link_kind == 'official' and any(kind == 'official' for kind, _url in existing):
-        return '已有官网'
+        return Said('labels.westernProfiles.conflict.officialExists')
     site = platform(url)
     for _kind, held in existing:
         if site and platform(held) == site and handle(held) != handle(url):
-            return f'{site} 已登记另一个账号'
+            return Said('labels.westernProfiles.conflict.otherAccount', site=site)
         if not site and link_kind != 'official' and host_of(held) == host_of(url):
-            return f'{host_of(url)} 已登记另一页'
+            return Said('labels.westernProfiles.conflict.otherPage', host=host_of(url))
     return ''

@@ -22,6 +22,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.user_agent import USER_AGENT  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.peach_proxy import read_url
 
 MANIFEST_PATH = Path(__file__).resolve().parent / "demo-portraits.json"
@@ -95,12 +96,11 @@ def fetch(portrait: Portrait, cache_dir: Path, *, opener=None) -> Path:
         with opener(request, timeout=60) as response:
             body = response.read(MAX_IMAGE_BYTES + 1)
     if len(body) > MAX_IMAGE_BYTES:
-        raise RuntimeError(f"{portrait.name} 的图超过 {MAX_IMAGE_BYTES} 字节，取错了东西")
+        raise RuntimeError(t("demo_portraits.tooLarge", name=portrait.name, limit=MAX_IMAGE_BYTES))
     digest = hashlib.sha256(body).hexdigest()
     if digest != portrait.sha256:
-        raise RuntimeError(
-            f"{portrait.name} 的图与清单对不上：清单 {portrait.sha256[:16]}，取到 {digest[:16]}。"
-            "图库换了这一张，重新人工看过再更新清单。")
+        raise RuntimeError(t("demo_portraits.digestMismatch", name=portrait.name,
+                             expected=portrait.sha256[:16], actual=digest[:16]))
     target.write_bytes(body)
     return target
 

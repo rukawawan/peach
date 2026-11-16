@@ -16,8 +16,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 import httpx
 
-from peach import release_signing, settings_file, standalone_update as update
+from peach import interface_text, release_signing, settings_file, standalone_update as update
 from peach import update_packages
+from peach.user_messages import UserValueError
 from scripts.package_windows_release import package as package_release
 from scripts.smoke_split_update import verify as verify_split
 from support.ledger import fresh_ledger
@@ -112,7 +113,7 @@ class MediaToolInstallTests(unittest.TestCase):
         self.downloads.append(url)
         shutil.copy2(self.package, archive)
         if archive.stat().st_size != size or update_packages.digest(archive) != digest:
-            raise ValueError('更新包校验失败，请重新下载')
+            raise UserValueError('errors.standaloneUpdate.checksumFailed')
 
     def entries(self):
         """`tools` 下除安装锁以外的条目。filelock 释放时只在 Windows 上删锁文件，macOS、Linux 上会留着。"""
@@ -124,7 +125,7 @@ class MediaToolInstallTests(unittest.TestCase):
 
     def test_installs_the_verified_package_into_the_data_directory_and_reports_its_version(self):
         from peach import media_tools
-        self.assertEqual(self.install(), '已安装 untrunc（abc1234）')
+        self.assertEqual(self.install()['message'], '已安装 untrunc（abc1234）')
         self.assertEqual((self.tools / 'untrunc' / 'untrunc.exe').read_bytes(), 'untrunc.exe 内容'.encode())
         self.assertEqual(media_tools.installed_version(self.tools, 'untrunc'), 'abc1234')
         self.assertEqual(self.entries(), ['untrunc'])
@@ -139,10 +140,13 @@ class MediaToolInstallTests(unittest.TestCase):
 
     def test_installing_again_skips_the_download_until_a_file_stops_matching(self):
         self.install()
-        self.assertEqual(self.install(), 'untrunc 已安装（abc1234），无需重新下载')
+        receipt = self.install()
+        self.assertEqual(receipt['message'], 'untrunc 已安装（abc1234），无需重新下载')
+        self.assertEqual(interface_text.text(f"server:{receipt['message_code']}", receipt['message_params'], 'en'),
+                         'untrunc is already installed (abc1234). No download needed.')
         self.assertEqual(len(self.downloads), 1)
         (self.tools / 'untrunc' / 'NOTICE.md').write_text('改坏了', encoding='utf-8')
-        self.assertEqual(self.install(), '已安装 untrunc（abc1234）')
+        self.assertEqual(self.install()['message'], '已安装 untrunc（abc1234）')
         self.assertEqual(len(self.downloads), 2)
 
     def test_an_interrupted_install_is_cleared_by_the_next_one(self):
@@ -313,6 +317,22 @@ class StandaloneUpdateTests(unittest.TestCase):
         with patch.object(update.time, "time", return_value=10**12):
             self.assertEqual(update.public()["state"], "error")
         self.assertNotIn("target", update.public())
+
+    def test_progress_carries_its_code_and_a_plain_message_drops_the_previous_one(self):
+        update.write({}, state="downloading", **update.message_fields("jobMessage.standaloneUpdate.complete",
+                                                                       {"version": "1.2.0"}))
+        state = update.public()
+        self.assertEqual(state["message"], "已更新至 1.2.0")
+        self.assertEqual(interface_text.text(f"server:{state['message_code']}", state["message_params"], "en"),
+                         "Updated to 1.2.0")
+        update.write(update.read(), state="error", message="OSError: disk full")
+        self.assertNotIn("message_code", update.public())
+        update.write({}, state="downloading", progress=22)
+        with patch.object(update.time, "time", return_value=10**12):
+            stale = update.public()
+        self.assertEqual(stale["message_code"], "jobMessage.standaloneUpdate.interrupted")
+        self.assertEqual(interface_text.text("server:jobMessage.standaloneUpdate.interrupted", None, "en"),
+                         "The update was interrupted. Try again.")
 
     def test_restart_requires_ready_and_only_records_intent(self):
         with patch.object(update.distribution, "standalone", return_value=True), patch.object(update.sys, "platform", "win32"):
@@ -627,7 +647,7 @@ class StandaloneUpdateTests(unittest.TestCase):
         release.update(full_url=release["asset_url"].rsplit("/", 1)[0] + "/" + full.name,
                        full_size=full.stat().st_size, full_digest="sha256:" + update_packages.digest(full))
         (target / "cloudflared.exe").unlink()
-        with patch.object(update.update_packages, "read_manifest", side_effect=ValueError("更新包工具清单无效")):
+        with patch.object(update.update_packages, "read_manifest", side_effect=UserValueError("errors.updatePackages.manifestInvalid")):
             state, requests = self.prepare_fixture(target, output, release)
         self.assertEqual(state["state"], "ready", state)
         self.assertEqual(requests, [archive.name, full.name], "清单读不了时不再下单个工具包")
@@ -759,6 +779,69 @@ class StandaloneUpdateTests(unittest.TestCase):
         self.assertEqual(self.config.path.read_text(encoding='utf-8'), 'original config')
         self.assertEqual((recovery / 'job.json').read_text(encoding='utf-8'), 'saved checkpoint')
         self.assertFalse(repairs.exists())
+
+    def transaction(self, ident, *parts):
+        directory = self.root / f'.app-update-{ident}'
+        for part in parts:
+            (directory / part).mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def test_a_finished_update_removes_its_transaction_and_older_finished_ones(self):
+        target = self.root / 'app'; (target / '_internal').mkdir(parents=True)
+        current, older, failed, pending = (f'{n}' * 32 for n in 'abcd')
+        installed = self.transaction(current, 'backup/_internal', 'helper/_internal', 'stage', 'tool-ffmpeg')
+        (installed / 'package.zip').write_bytes(b'zip')
+        (installed / 'helper/Peach.exe').write_text('old', encoding='utf-8')
+        previous = self.transaction(older, 'backup', 'helper')
+        rolled_back = self.transaction(failed, 'failed', 'helper')
+        unfinished = self.transaction(pending, 'backup', 'stage/Peach')
+        not_ours = self.transaction('fixture', 'backup')
+        (self.root / 'Peach Media').mkdir()
+        backups = self.state / 'update-backups'
+        for age, ident in enumerate((current, older, failed, 'e' * 32)):
+            (backups / ident).mkdir(parents=True)
+            (backups / ident / 'ledger.db').write_bytes(b'db')
+            os.utime(backups / ident, (1_000_000 - age * 1000,) * 2)
+        (backups / 'fixture').mkdir()
+        update.write({'id': current, 'version': update.__version__}, state='complete')
+        with patch.object(update.sys, 'executable', str(target / 'Peach.exe')), patch.object(
+                update, '_running_from', return_value=False):
+            self.assertFalse(update.sweep())
+        self.assertFalse(installed.exists())
+        self.assertFalse(previous.exists())
+        for kept in (rolled_back, unfinished, not_ours, target, self.root / 'Peach Media'):
+            self.assertTrue(kept.is_dir(), kept)
+        self.assertEqual(sorted(path.name for path in backups.iterdir()), sorted([current, older, 'fixture']))
+
+    def test_cleanup_waits_while_an_update_runs_or_its_helper_is_still_alive(self):
+        target = self.root / 'app'; target.mkdir()
+        ident = 'f' * 32
+        installed = self.transaction(ident, 'backup', 'helper')
+        with patch.object(update.sys, 'executable', str(target / 'Peach.exe')):
+            for state in ('installing', 'ready'):
+                update.write({'id': ident, 'version': update.__version__}, state=state)
+                with patch.object(update, '_running_from', return_value=False):
+                    self.assertTrue(update.sweep(), state)
+            update.write({'id': ident, 'version': update.__version__}, state='complete')
+            with patch.object(update, '_running_from', return_value=True):
+                self.assertTrue(update.sweep())
+            self.assertTrue(installed.is_dir())
+            for state, version in (('error', update.__version__), ('complete', '0.0.0')):
+                update.write({'id': ident, 'version': version}, state=state)
+                with patch.object(update, '_running_from', return_value=False):
+                    self.assertFalse(update.sweep())
+                self.assertTrue(installed.is_dir(), state)
+
+    def test_tray_poll_starts_the_cleanup_once_in_the_background(self):
+        tray = Mock()
+        update.write({'id': 'a' * 32}, state='complete')
+        with patch.object(update.distribution, 'standalone', return_value=True), patch.object(
+                update, '_sweep_started', update.threading.Event()), patch.object(update.threading, 'Thread') as thread:
+            update.poll(tray)
+            update.poll(tray)
+        thread.assert_called_once()
+        self.assertEqual(thread.call_args.kwargs['target'], update._sweep_in_background)
+        thread.return_value.start.assert_called_once_with()
 
     def test_running_installation_is_detected_by_the_current_executable_and_version(self):
         target = self.root / 'app'

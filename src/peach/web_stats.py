@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -18,6 +19,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from .catalog_rules import tag_cat
+from .catalog_vocabulary import LENGTH_BANDS, QUALITY_BANDS
 from . import media_libraries, settings_file
 from .config import LOCATION_ROOT_DECLARATIONS
 from .fsutil import atomic_write_text
@@ -25,11 +27,15 @@ from .platform import is_unmapped, root_online, system_volume, translate_ledger_
 from .taste_history import (
     analyze_history,
     build_taste_dashboard,
+    phrase_fields,
     refresh_history,
     remove_history_source,
     store_version,
+    taste_phrase,
+    taste_text,
     write_manifest,
 )
+from .user_messages import UserFacingError, UserInterruptedError, UserRuntimeError, error_fields, message_fields
 from .web_activity import DEFAULT_PROFILE_ID
 from .web_catalog import attach_avatar_availability, tag_is_not_a_performer_name, tag_not_hidden
 from .media_sources import cost_for
@@ -184,11 +190,14 @@ def taste_snapshot(contract: WebContract, window: str, *, retry: bool = False) -
         worker.join(None if empty else TASTE_FRESH_WAIT)
     with _TASTE_LOCK:
         if snapshot.payload is None:
-            raise snapshot.error or RuntimeError("口味分析未取得")
+            # 没有结果也没有错误：按内部故障回 500，与改成 code 之前相同。
+            raise snapshot.error or UserRuntimeError("errors.webStats.tasteNotFound", status_code=500)
         stale = snapshot.version != version
         result = {**snapshot.payload, "computed_at": snapshot.computed_at, "stale": stale}
         if stale and snapshot.failed_version == version and snapshot.error is not None:
             result["error"] = str(snapshot.error) or type(snapshot.error).__name__
+            if isinstance(snapshot.error, UserFacingError):
+                result.update(error_fields(snapshot.error))
         return result
 
 
@@ -266,9 +275,11 @@ def w_taste_refresh(contract: WebContract, body, *, progress=None, checkpoint=No
             result = w_taste_refresh(contract, {**body, "background": False},
                 progress=lambda **fields: job.update(job_id, **fields),
                 checkpoint=lambda **fields: job.checkpoint(job_id, **fields), resume_state=job.snapshot())
-            job.update(job_id, **result, status="complete", message="部分浏览记录未取得" if result["warnings"] else "口味分析已更新", completed_at=time.time())
+            job.update(job_id, **result, status="complete", **message_fields(
+                "jobMessage.webStats.partialHistory" if result["warnings"] else "jobMessage.webStats.analysisUpdated"),
+                completed_at=time.time())
         return job.start(work, restart=True, initial={
-            "stage": "discovering", "message": "正在查找 Peach 主机上的浏览器资料"},
+            "stage": "discovering", **message_fields("jobMessage.webStats.findingProfiles")},
             recovery={'background': True, 'window': body.get('window') or 'all'})
     window = str(body.get("window") or "all")
     sources = enabled_history_sources(contract.taste_history_store)
@@ -282,7 +293,7 @@ def w_taste_refresh(contract: WebContract, body, *, progress=None, checkpoint=No
         profile_keys = [f'{kind}:{source.browser}:{source.profile}:{source.path}'
                         for kind, selected, _refresh in plans for source in selected]
         if checkpoint and not checkpoint(profile_keys=profile_keys):
-            raise InterruptedError('口味读取已停止')
+            raise UserInterruptedError("errors.webStats.tasteReadStopped")
     def profile_progress(**fields):
         if progress:
             progress(**{**fields, 'checked': len(completed), 'total': len(profile_keys)})
@@ -297,15 +308,27 @@ def w_taste_refresh(contract: WebContract, body, *, progress=None, checkpoint=No
                 completed.add(key)
             if checkpoint and not checkpoint(refresh_results=results.copy(), completed_profiles=sorted(completed),
                                               checked=len(completed), total=len(profile_keys)):
-                raise InterruptedError('口味读取已停止')
+                raise UserInterruptedError("errors.webStats.tasteReadStopped")
     if contract.taste_history_store.is_file():
         analysis = analyze_history(contract.taste_history_store, contract.taste_history_root, progress=progress)
         write_manifest(contract.taste_history_manifest, results, analysis)
     contract.cache_bust()
     if progress:
-        progress(stage="dashboard", checked=0, total=None, message="正在汇总口味分布、标签与创作者排名")
-    return {"refresh": results, "warnings": [f"{row['browser']} · {row['profile']}：{row['error']}"
-            for row in results if row.get("status") == "failed"], "dashboard": q_taste(contract, {"window": window})}
+        progress(stage="dashboard", checked=0, total=None, **message_fields("jobMessage.webStats.summarizing"))
+    return {"refresh": results, **_refresh_warnings(results), "dashboard": q_taste(contract, {"window": window})}
+
+
+def _refresh_warnings(results: list[dict]) -> dict:
+    """没读成的来源各一条：`warnings` 是按 zh-CN 渲染好的原句，`warning_codes`、`warning_params` 与它一一对应。
+    续跑时接上的旧结果没有 `error_code`，原因照原文放进参数。"""
+    params = [{"browser": row["browser"],
+               "profile": taste_phrase(BOOKMARK_PROFILE_CODE, {"profile": row["profile"]}, fallback=row["profile"])
+               if row.get("kind") == "bookmarks" else row["profile"],
+               "reason": taste_phrase(row["error_code"], row.get("error_params"), fallback=str(row["error"]))
+               if row.get("error_code") else str(row["error"])}
+              for row in results if row.get("status") == "failed"]
+    return {"warnings": [taste_text(REFRESH_WARNING_CODE, item) for item in params],
+            "warning_codes": [REFRESH_WARNING_CODE] * len(params), "warning_params": params}
 
 
 def w_taste_source(contract: WebContract, body):
@@ -350,20 +373,44 @@ def w_search_history(contract: WebContract, body):
         )
     return {"ok": True, "operation": operation}
 
-_STORAGE_LABELS = {
-    "system": "系统盘",
-    "local": "资源盘",
-    "115": "115 网盘",
-    "pikpak": "PikPak 网盘",
-}
+#: 有显示名的存储卷种类：`taste.volume.<种类>.name`，一个来源有几个根时用 `.numbered` 带序号。
+#: 不在这里的来源代号原样显示。
+STORAGE_KINDS = ("system", "local", "115", "pikpak")
+REFRESH_WARNING_CODE = "taste.refreshWarning"
+#: 书签来源的资料名：「资料名 · 书签」，按界面语言写。
+BOOKMARK_PROFILE_CODE = "taste.bookmarkProfile"
+
+
+def _volume_label(kind: str, index: int | None = None) -> dict:
+    """存储卷的显示名：`label` 原文，配 `label_code` 与 `label_params`。"""
+    if kind not in STORAGE_KINDS:
+        return {"label": kind if index is None else f"{kind} {index}", "label_code": None, "label_params": {}}
+    if index is None:
+        return phrase_fields("label", code=f"taste.volume.{kind}.name")
+    return phrase_fields("label", code=f"taste.volume.{kind}.numbered", params={"index": index})
+
+
+def _volume_key(root) -> tuple[object, ...]:
+    """根目录所在的那块卷：同一块卷上的几个根读到的是同一份容量，汇总时只算一次。
+
+    `st_dev` 在 Windows 上是卷序列号，网盘挂载没有卷 GUID 也有它；POSIX 上是设备号。
+    读不到或为 0（有的挂载不报序列号）就认不出是哪块卷，按根各算一卷。
+    """
+    try:
+        device = os.stat(root).st_dev
+    except OSError:
+        device = 0
+    return ("device", device) if device else ("root", os.path.normcase(str(root)))
 
 
 def _storage_volumes() -> list[dict[str, object]]:
-    """返回当前主机可验证的系统卷、资源盘和网盘容量。"""
-    declarations = [("system", _STORAGE_LABELS["system"], system_volume(), True)] + [
+    """返回当前主机可验证的系统卷、资源盘和网盘容量。
+
+    一个根一行；取得容量的行带私有的 `_volume`，供 `_storage_stats` 按卷汇总，输出前去掉。
+    """
+    declarations = [("system", _volume_label("system"), system_volume(), True)] + [
         # 一个来源有几个根就几行；同名来源用序号区分，单根不加。
-        (location,
-         _STORAGE_LABELS.get(location, location) + (f" {index + 1}" if len(roots) > 1 else ""),
+        (location, _volume_label(location, index + 1 if len(roots) > 1 else None),
          translate_ledger_path(root), False)
         for location, roots in LOCATION_ROOT_DECLARATIONS.items()
         for index, root in enumerate(roots)
@@ -373,7 +420,7 @@ def _storage_volumes() -> list[dict[str, object]]:
         mounted = not is_unmapped(root) and (is_system or root_online(root))
         row: dict[str, object] = {
             "kind": kind,
-            "label": label,
+            **label,
             "root": str(root) if not is_unmapped(root) else None,
             "online": mounted,
             "free": None,
@@ -387,6 +434,7 @@ def _storage_volumes() -> list[dict[str, object]]:
                     free=usage.free,
                     used=max(usage.total - usage.free, 0),
                     total=usage.total,
+                    _volume=_volume_key(root),
                 )
             except OSError:
                 pass
@@ -400,18 +448,22 @@ PRESENT = "COALESCE(disposal,'')<>'vanished' AND NOT peach_is_local_extra(name,p
 PRESENT_A = "COALESCE(a.disposal,'')<>'vanished' AND NOT peach_is_local_extra(a.name,a.path)"
 
 
-#: 视频的时长与画质分档，顺序同 `media_probe.context_fields` 的判据：由短到长、由高到低。
-LENGTH_BANDS = ("速食", "短", "中", "长")
-QUALITY_BANDS = ("4K", "2K", "1080P", "720P", "低画质")
+#: 视频的时长与画质分档（`LENGTH_BANDS`、`QUALITY_BANDS`）是账本 `ctx_length`、`ctx_quality` 的取值，
+#: 定义在 `catalog_vocabulary`；时长档的显示名由前端按取值给。
+#: 画质档里要翻译的那一档（最低一档的取值是中文词）的显示名 code；其余档名本身就是通用写法。
+QUALITY_LABEL_CODES = {QUALITY_BANDS[-1]: "taste.qualityBand.low"}
 
 
-def _bands(c, column: str, order: tuple[str, ...]) -> list[dict[str, object]]:
-    """一列分档的视频数。判据里的档位按顺序全列出来，没有视频的读 0；账本里多出的档排在后面。"""
+def _bands(c, column: str, order: tuple[str, ...], codes: dict[str, str] | None = None) -> list[dict[str, object]]:
+    """一列分档的视频数。判据里的档位按顺序全列出来，没有视频的读 0；账本里多出的档排在后面。
+    `codes` 里有的档带上显示名的 `label_code`。"""
     counts = {row[0]: row[1] for row in c.execute(
         f"SELECT {column},count(*) FROM asset WHERE medium='video' AND {column} IS NOT NULL "
         f"AND {PRESENT} GROUP BY {column}")}
     extra = sorted(key for key in counts if key not in order)
-    return [{"k": key, "n": counts.get(key, 0)} for key in (*order, *extra)]
+    codes = codes or {}
+    return [{"k": key, "n": counts.get(key, 0), **({"label_code": codes[key]} if key in codes else {})}
+            for key in (*order, *extra)]
 
 
 #: 在线追更的一条播放不算进来的条件：它关联的馆藏视频自己已经有这一项。和 `online_played`
@@ -506,7 +558,7 @@ def _ledger_stats(contract: WebContract, libraries) -> dict:
             "SELECT medium k, count(*) n, COALESCE(sum(size),0) bytes "
             f"FROM asset WHERE {PRESENT} GROUP BY medium ORDER BY bytes DESC")]
         out["by_length"] = _bands(c, "ctx_length", LENGTH_BANDS)
-        out["by_quality"] = _bands(c, "ctx_quality", QUALITY_BANDS)
+        out["by_quality"] = _bands(c, "ctx_quality", QUALITY_BANDS, QUALITY_LABEL_CODES)
         out["by_library"] = []
         for library, (clause, params) in libraries:
             counts = c.execute(
@@ -537,17 +589,15 @@ def _ledger_stats(contract: WebContract, libraries) -> dict:
         out["tag_source"] = [dict(r) for r in c.execute(
             "SELECT source k, count(*) n, count(DISTINCT asset_id) assets "
             "FROM asset_tag GROUP BY source ORDER BY n DESC")]
-        out["tag_cov"] = one("SELECT count(DISTINCT asset_id) FROM asset_tag "
-                             f"WHERE asset_id IN (SELECT id FROM asset WHERE {PRESENT}) "
-                             "AND source IN ('name','r18','vision','vision-creator',"
-                             "'vision_creator','vision_creator_review')")
+        # 内容标签与详情页同一口径：不按写入来源挑（刮削、批次、复核、手动都算），
+        # 只去掉演员名和用户隐藏的标签；覆盖与排行用同一判据。
+        content_tags = ("FROM asset_tag t JOIN asset a ON a.id=t.asset_id "
+                        f"WHERE a.medium='video' AND {PRESENT_A} "
+                        "AND " + tag_is_not_a_performer_name("peach_normalize(t.tag)") + " "
+                        "AND " + tag_not_hidden('t.asset_id', 'peach_normalize(t.tag)') + " ")
+        out["tag_cov"] = one("SELECT count(DISTINCT t.asset_id) " + content_tags)
         out["top_tags"] = [dict(r, cat=tag_cat(r["k"])) for r in c.execute(
-            "SELECT t.tag k, count(*) n FROM asset_tag t JOIN asset a ON a.id=t.asset_id "
-            f"WHERE a.medium='video' AND {PRESENT_A} AND t.source IN ('name','r18','vision','vision-creator',"
-            "'vision_creator','vision_creator_review') "
-            "AND " + tag_is_not_a_performer_name("peach_normalize(t.tag)") + " "
-            "AND " + tag_not_hidden('t.asset_id', 'peach_normalize(t.tag)') + ' ' +
-            "GROUP BY t.tag ORDER BY n DESC LIMIT 30")]
+            "SELECT t.tag k, count(*) n " + content_tags + "GROUP BY t.tag ORDER BY n DESC LIMIT 30")]
         tables = {row[0] for row in c.execute(
             "SELECT name FROM sqlite_schema WHERE type='table'"
         )}
@@ -602,11 +652,18 @@ def _ledger_stats(contract: WebContract, libraries) -> dict:
 
 
 def _storage_stats() -> dict:
-    out = {"storage_volumes": _storage_volumes()}
-    measured = [row for row in out["storage_volumes"] if row["total"] is not None]
+    """存储卷列表一个根一行；汇总按卷算，同一块盘上配了几个根也只计一次容量和一个卷。"""
+    rows = _storage_volumes()
+    # 没取得容量的行认不出卷，各算一个。
+    keys = [row.pop("_volume", None) or ("row", index) for index, row in enumerate(rows)]
+    volumes: dict[object, dict[str, object]] = {}
+    for key, row in zip(keys, rows):
+        volumes.setdefault(key, row)
+    measured = [row for row in volumes.values() if row["total"] is not None]
+    out = {"storage_volumes": rows}
     out["storage_summary"] = {
-        "volumes": len(out["storage_volumes"]),
-        "online": sum(1 for row in out["storage_volumes"] if row["online"]),
+        "volumes": len(volumes),
+        "online": len({key for key, row in zip(keys, rows) if row["online"]}),
         "measured": len(measured),
         "free": sum(int(row["free"]) for row in measured),
         "used": sum(int(row["used"]) for row in measured),

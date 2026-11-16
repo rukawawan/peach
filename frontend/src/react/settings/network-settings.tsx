@@ -17,6 +17,7 @@ import { ProxyAddressField, ProxyModeSelect } from './peach-proxy-fields';
 import { TunnelSettings } from './tunnel-settings';
 import { ErrorText, Footer, Rows, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
+import { t } from '../../i18n';
 
 export function NetworkSettings({ data, receipt, panel, issues }: ConfigurationGroupProps) {
   return (
@@ -47,13 +48,13 @@ export function PeachProxy({ initial, receipt }: { initial: PeachProxyState; rec
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void action.run('save', (signal) => apiSend<PeachProxyState>('/api/configuration/peach-proxy', { mode, proxy: address }, 'POST', signal),
-      (next) => { setSaved(next); setAddress(''); receipt('已保存配置'); });
+      (next) => { setSaved(next); setAddress(''); receipt(t('settings:shared.settingsSaved')); });
   };
 
   return (
-    <Section id="peachProxy" guide="proxy" title="Peach 代理" onSubmit={submit}>
+    <Section id="peachProxy" guide="proxy" title={t('settings:peachProxy.title')} onSubmit={submit}>
       <Rows>
-        <SettingsRow label="连接方式" description="Peach 访问外网和采集来源时使用。">
+        <SettingsRow label={t('settings:peachProxy.mode')} description={t('settings:peachProxy.modeHelp')}>
           <ProxyModeSelect mode={mode} onChange={setMode} />
         </SettingsRow>
       </Rows>
@@ -62,12 +63,12 @@ export function PeachProxy({ initial, receipt }: { initial: PeachProxyState; rec
           {mode === 'proxy'
             ? <ProxyAddressField id="peachProxyAddress" value={address} onChange={setAddress} saved={saved.proxy_saved} />
             : null}
-          {saved.needs_selection ? <Note tone="warning" title="需要选择连接方式">已有来源的代理地址不同，请选择公共连接方式。</Note> : null}
+          {saved.needs_selection ? <Note tone="warning" title={t('settings:peachProxy.chooseMode')}>{t('settings:peachProxy.modeConflict')}</Note> : null}
           {action.error ? <ErrorText>{action.error}</ErrorText> : null}
         </Stack>
       ) : null}
       <Footer>
-        <Button type="submit" {...busyProps(action.busy === 'save')}>保存配置</Button>
+        <Button type="submit" {...busyProps(action.busy === 'save')}>{t('settings:shared.saveSettings')}</Button>
       </Footer>
     </Section>
   );

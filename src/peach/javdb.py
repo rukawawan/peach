@@ -24,6 +24,7 @@ import html as html_lib
 import re
 
 from .social_links import name_key
+from .source_page_words import JAVDB_COUNT, JAVDB_LOGIN, JAVDB_RECORD_KIND, JAVDB_UNCENSORED
 
 BASE = "https://javdb.com/"
 SEARCH = BASE + "search?f=actor&q={}"
@@ -44,15 +45,15 @@ INFO = re.compile(r'class="info">([^<]*)<')
 NAME = re.compile(r'class="actor-section-name">([^<]*)<')
 META = re.compile(r'class="section-meta">([^<]*)<')
 #: 「323 部影片」也在 `section-meta` 里，它不是名字。
-COUNT = re.compile(r"^\d+\s*部影片$")
+COUNT = re.compile(JAVDB_COUNT)
 #: 一部分资料页要登录才给，回的是登入页而不是 401/403。同一位女优在站上常有两条
 #: 记录（有碼那条公开、無碼那条要登录），搜索结果把两条都给出来，所以这不是抓失败。
-LOGIN = re.compile(r"<title>\s*登入\s*\|")
+LOGIN = re.compile(JAVDB_LOGIN)
 ACTOR_ID = re.compile(r'href="/actors/([A-Za-z0-9]+)/collect"')
 
 #: 同一位女优的无码那条记录，现名后面挂着 `(無碼)`。它是记录类型不是名字的一部分，
 #: 留着会让 `木下ひまり(無碼)` 与 `木下ひまり` 变成两个人。
-RECORD_KIND = re.compile(r"[(（](?:無碼|无码|有碼|有码|流出|破解|中文字幕)[)）]\s*$")
+RECORD_KIND = re.compile(JAVDB_RECORD_KIND)
 
 _TAG = re.compile(r"<[^>]+>")
 
@@ -148,7 +149,7 @@ def one_person(cards: list[dict]) -> bool:
 
 
 #: 無碼那条卡片上的标记。繁体界面写 `無碼`，简体界面写 `无码`。
-UNCENSORED = frozenset({"無碼", "无码"})
+UNCENSORED = JAVDB_UNCENSORED
 
 
 def card_uncensored(card: dict) -> bool | None:

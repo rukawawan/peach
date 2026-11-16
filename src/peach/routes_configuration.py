@@ -33,18 +33,19 @@ from . import (access, auth, certs, data_storage, distribution, entry_links, err
                web_downloads)
 from .config import REPLICATION_ENABLED
 from .jobs import JobAlreadyRunning
-from .routes_auth import (FIRST_ACCESS_DENIED, login_mode, origin_allowed, require_auth, require_authenticated_client, safe_next, same_origin,
+from .routes_auth import (FIRST_ACCESS_DENIED_CODE, login_mode, origin_allowed, require_auth, require_authenticated_client, safe_next, same_origin,
                           set_auth_cookie, sessions as access_sessions)
-from .web_entry import runtime_fact_entries
+from .web_entry import field_errors, runtime_fact_entries
+from .user_messages import UserFacingError, UserOSError, UserTimeoutError, UserValueError, error_detail, message_fields
 from .web_local_access import local_client, managed_configuration
-from . import (release_updates, standalone_update, peach_proxy, desktop_startup, desktop_uninstall, docker_update,
-               media_tools)
+from . import (interface_text, release_updates, standalone_update, peach_proxy, desktop_startup, desktop_uninstall,
+               docker_update, media_tools)
 
 router = APIRouter()
 _SAVE_LOCK = threading.Lock()
 RELOAD_NAME = onboarding.RELOAD_NAME
-#: 直接由 CLI 管理的服务使用设置文件。
-FILE_MANAGED_NOTICE = "这个部署由配置文件管理服务；在本机编辑下方的设置文件。"
+#: 直接由 CLI 管理的服务使用设置文件：配置页不能编辑时给的那句话。
+FILE_MANAGED_NOTICE = "labels.configuration.fileManagedNotice"
 
 
 def dev_environment() -> bool:
@@ -63,7 +64,7 @@ def revision(config) -> str:
 
 def local_only(request: Request) -> None:
     if not local_client(request):
-        raise HTTPException(403, "请在运行 Peach 的电脑上打开配置")
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
 
 
 @router.get("/api/diagnostics")
@@ -71,7 +72,7 @@ def system_diagnostics(request: Request, args: dict[str, str] = Depends(require_
     """本机诊断与 doctor JSON 共用报告；媒体来源只读后台快照。"""
     from . import diagnostics
     if not local_client(request):
-        raise HTTPException(403, "请在运行 Peach 的电脑上打开系统诊断")
+        raise HTTPException(403, message_fields("api.configuration.openDiagnosticsOnHost"))
     return diagnostics.report(request.app.state.settings, request.app.state.mount_reachability.summary())
 
 
@@ -108,14 +109,14 @@ def diagnostic_export_start(request: Request, body: dict = Body(default_factory=
     same_origin(request)
     kind, codes = body.get('kind'), body.get('codes', '')
     if not isinstance(codes, str):
-        raise HTTPException(400, '请填写有效番号')
+        raise HTTPException(400, message_fields('api.configuration.invalidCode'))
     browser = diagnostic_context.browser_header(request.headers.get('x-peach-browser-diagnostics', ''),
                                                  user_agent=request.headers.get('user-agent', ''))
     try:
         return diagnostic_exports.manager(request).start(kind, codes, browser=browser,
             report=lambda: diagnostics.report(request.app.state.settings, request.app.state.mount_reachability.summary()))
     except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.post('/api/diagnostics/exports/{identity}/cancel')
@@ -126,7 +127,7 @@ def diagnostic_export_cancel(request: Request, identity: str, _args=Depends(requ
     try:
         return manager(request).cancel(identity)
     except ValueError as error:
-        raise HTTPException(409, str(error)) from error
+        raise HTTPException(409, error_detail(error)) from error
 
 
 @router.get('/api/diagnostics/exports/{identity}/download')
@@ -137,7 +138,7 @@ def diagnostic_export_download(request: Request, identity: str, _args=Depends(re
     try:
         path, name = manager(request).download(identity)
     except FileNotFoundError as error:
-        raise HTTPException(404, str(error)) from error
+        raise HTTPException(404, error_detail(error)) from error
     return BufferedFileResponse(path, filename=name, media_type='application/zip', headers={'Cache-Control': 'no-store'})
 
 
@@ -152,7 +153,7 @@ def _client_error_budget(request: Request) -> None:
         while recent and now - recent[0] >= 60:
             recent.popleft()
         if len(recent) >= 20:
-            raise HTTPException(429, '错误记录过于频繁')
+            raise HTTPException(429, message_fields('api.configuration.clientErrorRateLimited'))
         recent.append(now)
 
 
@@ -169,7 +170,7 @@ def _record_browser_context(request: Request, context: dict) -> bool:
         if any(saved == key for _, saved in recent):
             return False
         if local_event('browser-context', **context) is None:
-            raise HTTPException(503, '错误日志无法写入')
+            raise HTTPException(503, message_fields('api.configuration.errorLogUnwritable'))
         recent.append((now, key))
     return True
 
@@ -185,13 +186,13 @@ async def client_error(request: Request):
     async for part in request.stream():
         body.extend(part)
         if len(body) > 16 * 1024:
-            raise HTTPException(413, "错误记录过长")
+            raise HTTPException(413, message_fields("api.configuration.clientErrorTooLong"))
     try:
         data = json.loads(body)
     except (ValueError, UnicodeError):
-        raise HTTPException(400, "错误记录格式无效") from None
+        raise HTTPException(400, message_fields("api.configuration.clientErrorInvalid")) from None
     if not isinstance(data, dict) or not isinstance(data.get("message"), str):
-        raise HTTPException(400, "错误记录缺少原因")
+        raise HTTPException(400, message_fields("api.configuration.clientErrorMissingMessage"))
     fields = {key: value[:6000] for key in ("message", "stack", "kind", "page", "source_file", "error_name")
               if isinstance(value := data.get(key), str)}
     fields.update({key: value for key in ('line', 'column')
@@ -214,7 +215,7 @@ async def client_error(request: Request):
         recorded = error_reporting.event('browser', **fields)
         error_reporting.local_event('browser-context', **context)
     if recorded is None:
-        raise HTTPException(503, "错误日志无法写入")
+        raise HTTPException(503, message_fields("api.configuration.errorLogUnwritable"))
     return {"recorded": True}
 
 
@@ -226,18 +227,28 @@ def configurable(request: Request) -> bool:
             and local_client(request))
 
 
-def _read_section(result: dict, key: str, title: str, reader) -> None:
-    """各配置区域独立读取；故障留痕并提供重试信息。"""
+def _read_section(result: dict, key: str, reader) -> None:
+    """各配置区域独立读取；故障留痕并提供重试信息。
+
+    区域名是 `labels.configuration.section.<键的驼峰写法>`。`section_errors[键]` 的 `title`、`message` 是 zh-CN
+    原句；`title_code`／`title_params`（`section` 是 zh-CN 区域名）、`section_code` 与 `message_code` 给页面按当前语言渲染。
+    """
     try:
         result[key] = reader()
     except Exception as error:
         error_id = uuid.uuid4().hex
+        section_code = "labels.configuration.section." + "".join(
+            part if index == 0 else part.capitalize() for index, part in enumerate(key.split("_")))
+        section = interface_text.text(f"server:{section_code}")
         result.setdefault("section_errors", {})[key] = {
-            "title": f"{title}未取得", "message": "请重新读取；持续失败时导出诊断报告。",
+            "title": interface_text.text("server:labels.configuration.sectionUnavailable", {"section": section}),
+            "title_code": "labels.configuration.sectionUnavailable", "title_params": {"section": section},
+            "section_code": section_code,
+            **message_fields("labels.configuration.sectionRetry"),
             "error_id": error_id,
         }
         error_reporting.event("logging", error, logger=__name__, level="ERROR",
-                              message=f"配置区域 {key} 读取失败", section=key, error_id=error_id)
+                              message=f"configuration section {key} could not be read", section=key, error_id=error_id)
 
 
 def snapshot(config, reachability=None) -> dict[str, Any]:
@@ -251,7 +262,9 @@ def snapshot(config, reachability=None) -> dict[str, Any]:
     media = config.mounts.get("local") or config.locations.get("local", ())
     result = {
         "editable": editable,
-        "notice": "" if editable else FILE_MANAGED_NOTICE,
+        # 不能编辑时的原因：`notice` 是 zh-CN 原句，`notice_code` 给页面按当前语言渲染。
+        "notice": "" if editable else interface_text.text(f"server:{FILE_MANAGED_NOTICE}"),
+        "notice_code": "" if editable else FILE_MANAGED_NOTICE,
         "revision": revision(config),
         "media_dirs": list(media),
         # 媒体库按持久身份计数，与侧栏切换器和 `/api/libraries` 共用分组。
@@ -262,25 +275,25 @@ def snapshot(config, reachability=None) -> dict[str, Any]:
         "facts": [],
     }
     readers = (
-        ("remote_reporting", "错误诊断设置", lambda: remote_reporting.snapshot(config)),
-        ("library_sharing", "馆藏上传设置", lambda: library_sharing.snapshot(config)),
-        ("startup", "开机启动设置", lambda: desktop_startup.snapshot(config)),
-        ("uninstall", "卸载信息", lambda: desktop_uninstall.snapshot(config)),
-        ("storage", "存储空间", lambda: data_storage.snapshot(config)),
-        ("peach_proxy", "Peach 代理", lambda: peach_proxy.describe(config.directory("secrets"))),
-        ("entry_links", "外部入口", lambda: entry_links.snapshot(config.directory("state"))),
-        ("updates", "版本更新", release_updates.snapshot),
-        ("update_job", "更新任务", standalone_update.public),
-        ("access", "访问设置", lambda: access.public(access.load(config.directory("secrets") / "access.json"))),
-        ("media_sources", "媒体目录", lambda: media_configuration.rows(
+        ("remote_reporting", lambda: remote_reporting.snapshot(config)),
+        ("library_sharing", lambda: library_sharing.snapshot(config)),
+        ("startup", lambda: desktop_startup.snapshot(config)),
+        ("uninstall", lambda: desktop_uninstall.snapshot(config)),
+        ("storage", lambda: data_storage.snapshot(config)),
+        ("peach_proxy", lambda: peach_proxy.describe(config.directory("secrets"))),
+        ("entry_links", lambda: entry_links.snapshot(config.directory("state"))),
+        ("updates", release_updates.snapshot),
+        ("update_job", standalone_update.public),
+        ("access", lambda: access.public(access.load(config.directory("secrets") / "access.json"))),
+        ("media_sources", lambda: media_configuration.rows(
             config, windows=os.name == "nt", probe=True,
             known=media_configuration.reachability_states(reachability))),
-        ("library_count", "媒体库状态", lambda: len(media_libraries.libraries(config))),
-        ("mount_dependencies", "挂载依赖", media_configuration.mount_dependencies),
-        ("facts", "运行信息", lambda: runtime_fact_entries(config)),
+        ("library_count", lambda: len(media_libraries.libraries(config))),
+        ("mount_dependencies", media_configuration.mount_dependencies),
+        ("facts", lambda: runtime_fact_entries(config)),
     )
-    for key, title, reader in readers:
-        _read_section(result, key, title, reader)
+    for key, reader in readers:
+        _read_section(result, key, reader)
     return result
 
 
@@ -294,7 +307,7 @@ def tunnel_payload(config, state: tunnel.TunnelSnapshot, enabled: bool) -> dict[
         "enabled": enabled,
         "state": state.state,
         "url": state.url,
-        "error": state.error,
+        "error": state.error, "error_code": state.error_code, "error_params": dict(state.error_params),
         "available": tunnel.resolve_binary(config.tunnel.binary) is not None,
         "mode": (getattr(config.tunnel, "mode", "") or tunnel.QUICK_MODE).strip().lower(),
         "hostname": getattr(config.tunnel, "hostname", ""),
@@ -365,19 +378,19 @@ def read_configuration(request: Request, _args=Depends(require_auth)):
     local_only(request)
     config = settings_file.load_config()
     if not config.present:
-        raise HTTPException(409, "请先完成首次设置")
+        raise HTTPException(409, message_fields("api.configuration.setupRequired"))
     result = snapshot(config, getattr(request.app.state, "mount_reachability", None))
-    _read_section(result, 'network', '访问地址', lambda: network_payload(request, config))
+    _read_section(result, 'network', lambda: network_payload(request, config))
     sync = getattr(request.app.state, "sync", None)
     result["ledger_read_only"] = bool(sync is not None and sync.read_only)
-    _read_section(result, "api_token", "访问口令", lambda: api_token_payload(request))
-    _read_section(result, "certificate", "HTTPS 证书", lambda: certificate_payload(request))
-    _read_section(result, "tunnel", "公网入口", lambda: tunnel_payload(
+    _read_section(result, "api_token", lambda: api_token_payload(request))
+    _read_section(result, "certificate", lambda: certificate_payload(request))
+    _read_section(result, "tunnel", lambda: tunnel_payload(
         config, request.app.state.tunnel.snapshot(), config.tunnel.enabled))
-    _read_section(result, "automatic_updates", "自动更新", lambda: request.app.state.automatic_updates.snapshot())
+    _read_section(result, "automatic_updates", lambda: request.app.state.automatic_updates.snapshot())
     # 这一路已经过了 `local_only`，密钥可以给出来：用户要把它抄进 CloudDrive2。
-    _read_section(result, "push_discovery", "推送发现", lambda: push_discovery_payload(request))
-    _read_section(result, "downloads", "下载设置", lambda: web_downloads.settings_payload(*_downloads(request)))
+    _read_section(result, "push_discovery", lambda: push_discovery_payload(request))
+    _read_section(result, "downloads", lambda: web_downloads.settings_payload(*_downloads(request)))
     if result.get("automatic_updates", {}).get("result"):
         result["updates"] = result["automatic_updates"]["result"]
     return result
@@ -397,7 +410,7 @@ def save_remote_reporting(request: Request, body: dict = Body(...), _args=Depend
     try:
         return remote_reporting.save(body)
     except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.get("/api/configuration/library-sharing/preview")
@@ -407,7 +420,7 @@ def preview_library_sharing(request: Request, _args=Depends(require_auth)):
     try:
         return JSONResponse(request.app.state.library_sharing.preview(), headers={"Cache-Control": "no-store"})
     except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.post("/api/configuration/library-sharing")
@@ -417,7 +430,7 @@ def save_library_sharing(request: Request, body: dict = Body(...), _args=Depends
     try:
         return request.app.state.library_sharing.save(body)
     except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.post("/api/configuration/automatic-updates")
@@ -427,7 +440,7 @@ def save_automatic_updates(request: Request, body: dict = Body(...), _args=Depen
     try:
         return request.app.state.automatic_updates.save(body)
     except (ValueError, OSError, Timeout) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/media-tools")
@@ -440,10 +453,10 @@ def install_media_tool(request: Request, body: dict = Body(...), _args=Depends(r
     same_origin(request)
     config = settings_file.load_config()
     try:
-        message = media_tools.install(config.directory("tools"), str(body.get("tool", "")))
+        receipt = media_tools.install(config.directory("tools"), str(body.get("tool", "")))
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return {"message": message, "facts": runtime_fact_entries(config)}
+        raise HTTPException(400, error_detail(exc)) from exc
+    return {**receipt, "facts": runtime_fact_entries(config)}
 
 
 @router.post("/api/configuration/peach-proxy")
@@ -453,7 +466,7 @@ def save_peach_proxy(request: Request, body: dict = Body(...), _args=Depends(req
     try:
         saved = peach_proxy.save(settings_file.load_config().directory("secrets"), body)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
     request.app.state.network_reachability.refresh()
     return saved
 
@@ -485,7 +498,7 @@ def save_entry_links(request: Request, body: dict = Body(...), _args=Depends(req
     try:
         return entry_links.save(settings_file.load_config().directory("state"), body)
     except (ValueError, OSError, Timeout) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/push-discovery")
@@ -495,7 +508,7 @@ def save_push_discovery(request: Request, body: dict = Body(...), _args=Depends(
     try:
         return push_discovery_payload(request, request.app.state.push_discovery.save(body))
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/push-discovery/secret")
@@ -506,7 +519,7 @@ def rotate_push_discovery_secret(request: Request, _args=Depends(require_auth)):
     try:
         return push_discovery_payload(request, request.app.state.push_discovery.rotate_secret())
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 def _downloads(request: Request):
@@ -523,9 +536,9 @@ def read_cloud_proxies(request: Request, _args=Depends(require_auth)):
     try:
         result = clouddrive_proxy.read(settings_file.load_config())
     except DownloadError:
-        raise HTTPException(502, "无法读取 CloudDrive2 代理配置，请检查连接和令牌权限") from None
+        raise HTTPException(502, message_fields("api.configuration.cloudProxiesUnreadable")) from None
     except (ValueError, OSError) as error:
-        raise HTTPException(400, str(error)) from None
+        raise HTTPException(400, error_detail(error)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -538,11 +551,11 @@ def save_cloud_proxies(request: Request, body: dict = Body(...), _args=Depends(r
     try:
         result = clouddrive_proxy.save(settings_file.load_config(), body)
     except clouddrive_proxy.ProxyConflict as error:
-        raise HTTPException(409, str(error)) from None
+        raise HTTPException(409, error_detail(error)) from None
     except DownloadError:
-        raise HTTPException(502, "未能确认 CloudDrive2 已保存，请重新读取配置后核对") from None
+        raise HTTPException(502, message_fields("api.configuration.cloudProxiesUnconfirmed")) from None
     except (ValueError, OSError) as error:
-        raise HTTPException(400, str(error)) from None
+        raise HTTPException(400, error_detail(error)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -553,7 +566,7 @@ def get_indexers(request: Request, _args=Depends(require_auth)):
     try:
         return Indexers(request.app.state.downloads.credentials).public()
     except (ValueError, OSError):
-        raise HTTPException(400, "索引器配置读不出来") from None
+        raise HTTPException(400, message_fields("api.configuration.indexersUnreadable")) from None
 
 
 @router.post("/api/configuration/indexers")
@@ -564,9 +577,9 @@ def save_indexers(request: Request, body: dict = Body(...), _args=Depends(requir
     try:
         return Indexers(request.app.state.downloads.credentials).save(body)
     except ValueError as error:
-        raise HTTPException(400, str(error)) from None
+        raise HTTPException(400, error_detail(error)) from None
     except OSError:
-        raise HTTPException(400, "索引器配置没有保存，请检查本机凭据目录权限") from None
+        raise HTTPException(400, message_fields("api.configuration.indexersNotSaved")) from None
 
 
 @router.post("/api/configuration/downloads")
@@ -580,7 +593,7 @@ def save_downloads(request: Request, body: dict = Body(...), _args=Depends(requi
     try:
         return web_downloads.save_settings(service, body, roots)
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.get("/api/configuration/downloads/check")
@@ -591,7 +604,7 @@ def check_saved_downloads(request: Request, _args=Depends(require_auth)):
     try:
         return web_downloads.check_clouddrive(service, {})
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/downloads/check")
@@ -604,7 +617,7 @@ def check_downloads(request: Request, body: dict = Body(default={}), _args=Depen
     try:
         return web_downloads.check_clouddrive(service, body)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/downloads/folder")
@@ -616,7 +629,7 @@ def create_download_folder(request: Request, body: dict = Body(...), _args=Depen
     try:
         return web_downloads.create_clouddrive_folder(service, body)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/downloads/pikpak/login")
@@ -627,7 +640,7 @@ def login_pikpak(request: Request, body: dict = Body(...), _args=Depends(require
     try:
         return web_downloads.pikpak_login(service, body, roots)
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/downloads/pikpak/browser-login")
@@ -639,7 +652,7 @@ def start_pikpak_browser_login(request: Request, _args=Depends(require_auth)):
     try:
         return web_downloads.pikpak_browser_start(service, roots)
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
 
 
 @router.get("/api/configuration/downloads/pikpak/browser-login")
@@ -673,32 +686,37 @@ def save_startup(request: Request, body: dict = Body(...), _args=Depends(require
         return desktop_startup.save(settings_file.load_config(), enabled=body.get("enabled"), silent=body.get("silent"),
                                     desktop=body.get("desktop"))
     except (ValueError, OSError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
+
+
+#: 卸载请求里页面带上的确认值，挡住误发的请求；用户不输入它，与界面语言无关。旧页面（升级后浏览器里
+#: 还开着的那一页）发的是中文原值，一并认。
+UNINSTALL_CONFIRMATIONS = frozenset({"uninstall-peach", "卸载 Peach"})
 
 
 @router.post("/api/configuration/uninstall")
 def uninstall(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
     local_only(request)
     same_origin(request)
-    if body.get("confirmation") != "卸载 Peach":
-        raise HTTPException(400, "请确认卸载 Peach")
+    if body.get("confirmation") not in UNINSTALL_CONFIRMATIONS:
+        raise HTTPException(400, message_fields("api.configuration.confirmUninstall"))
     from .jobs import BackgroundJob
     from .task_runs import task_label
     # 写出是哪几个：开机后自动跑的关注、订阅检查不在用户印象里，只说「后台任务」没处可找。
     running = dict.fromkeys(task_label(job.task_key) for job in vars(request.app.state.web_contract).values()
                             if isinstance(job, BackgroundJob) and (job.snapshot() or {}).get("status") == "running")
     if running:
-        raise HTTPException(409, f"{'、'.join(running)}正在运行，请在任务中心等它完成或取消后再卸载")
+        raise HTTPException(409, message_fields("api.configuration.uninstallTasksRunning", {"tasks": "、".join(running)}))
     try:
         return desktop_uninstall.request(settings_file.load_config(), body.get("delete_data"))
     except (ValueError, Timeout) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 def _storage_config():
     config = settings_file.load_config()
     if not config.present:
-        raise HTTPException(409, "请先完成首次设置")
+        raise HTTPException(409, message_fields("api.configuration.setupRequired"))
     return config
 
 
@@ -717,7 +735,7 @@ def measure_storage(request: Request, _args=Depends(require_auth)):
     try:
         data_storage.JOBS.start(config, "measure")
     except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
     return data_storage.snapshot(config)
 
 
@@ -731,9 +749,9 @@ def save_storage_policy(request: Request, body: dict[str, Any] = Body(default_fa
     try:
         storage_budget.save_policy(config, body)
     except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
     except OSError as error:
-        raise HTTPException(500, f'容量设置保存失败：{error}') from error
+        raise HTTPException(500, message_fields('api.configuration.storagePolicySaveFailed', {'error': str(error)})) from error
     return data_storage.snapshot(config)
 
 
@@ -745,7 +763,7 @@ def read_external_cache(request: Request, _args=Depends(require_auth)):
     try:
         return storage_external_cache.read(_storage_config())
     except (ValueError, OSError, DownloadError) as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.post("/api/configuration/storage/clean")
@@ -758,11 +776,11 @@ def clean_storage(request: Request, body: dict[str, Any] = Body(default_factory=
     raw = body.get("categories", [body.get("category")])
     categories = raw if isinstance(raw, list) else []
     if not categories or any(not isinstance(key, str) or key not in data_storage.CLEANABLE for key in categories):
-        raise HTTPException(400, "这一类不能在这里清理")
+        raise HTTPException(400, message_fields("api.configuration.categoryNotCleanable"))
     try:
         data_storage.JOBS.start(config, categories)
     except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
     return data_storage.snapshot(config)
 
 
@@ -776,9 +794,10 @@ def relocate_storage(request: Request, body: dict[str, Any] = Body(default_facto
     try:
         return data_storage.request(config, body.get("target"))
     except ValueError as exc:
-        raise HTTPException(400, {"message": "无法迁移到这个位置", "errors": {"target": str(exc)}}) from exc
+        raise HTTPException(400, {**message_fields("api.configuration.relocateRejected"),
+                                  **field_errors({"target": exc})}) from exc
     except Timeout as exc:
-        raise HTTPException(409, "迁移请求正在处理") from exc
+        raise HTTPException(409, message_fields("api.configuration.relocateBusy")) from exc
 
 
 def _ledger_backups(request: Request):
@@ -800,7 +819,7 @@ def backup_ledger(request: Request, _args=Depends(require_auth)):
     try:
         return _ledger_backups(request).start_backup()
     except (ValueError, JobAlreadyRunning) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/ledger-backups/restore")
@@ -810,11 +829,11 @@ def restore_ledger(request: Request, body: dict[str, Any] = Body(default_factory
     local_only(request)
     same_origin(request)
     if body.get("confirm") is not True:
-        raise HTTPException(400, "恢复会替换当前账本，请先确认")
+        raise HTTPException(400, message_fields("api.configuration.restoreConfirmRequired"))
     try:
         return _ledger_backups(request).start_restore(body.get("id"))
     except (ValueError, JobAlreadyRunning) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.get("/api/configuration/updates")
@@ -827,10 +846,14 @@ def check_updates(request: Request, _args=Depends(require_auth)):
 
 @router.get('/api/client-updates')
 def client_updates(request: Request, _args=Depends(require_auth)):
+    """页面顶部横幅读的更新状态。启动迁移期间照常回应、不碰账本：升级修复的进度要查账本，先报未开始。"""
     from .client_updates import snapshot
     result = snapshot(request.app.state.automatic_updates)
     result['update_job'] = standalone_update.public()
-    result['repairs'] = request.app.state.upgrade_repairs.snapshot()
+    migration = request.app.state.ledger_migration
+    result['ledger_migration'] = migration.payload()
+    result['repairs'] = ({'state': 'pending', 'items': [], 'available': request.app.state.upgrade_repairs.available}
+                         if migration.running else request.app.state.upgrade_repairs.snapshot())
     return result
 
 
@@ -881,7 +904,7 @@ def acknowledge_release_notice(request: Request, body: dict[str, Any] = Body(def
     from . import __version__, release_notice
     same_origin(request)
     if body.get('version') != __version__:
-        raise HTTPException(409, '已更新到新版本，请刷新页面')
+        raise HTTPException(409, message_fields('api.configuration.newVersionInstalled'))
     with request.app.state.web_contract.write_transaction() as connection:
         release_notice.acknowledge(connection, __version__)
     return {'ok': True, 'seen': __version__}
@@ -895,7 +918,7 @@ async def retry_upgrade_repairs(request: Request, _args=Depends(require_auth)):
     same_origin(request)
     try:
         if await asyncio.to_thread(_installation_in_progress, request.app.state.settings.db_path):
-            raise ValueError('正在安装更新，请稍后重试')
+            raise UserValueError('api.configuration.updateInstalling')
         service = request.app.state.upgrade_repairs
         activation = getattr(request.app.state, 'ledger_activation', None)
         if activation is not None and not request.app.state.ledger_background_ready:
@@ -904,7 +927,7 @@ async def retry_upgrade_repairs(request: Request, _args=Depends(require_auth)):
         await asyncio.to_thread(service.retry)
         return service.snapshot()
     except (ValueError, OSError, Timeout) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 def _repair_center(request: Request) -> dict:
@@ -944,11 +967,11 @@ async def include_cloud_display_dimensions(request: Request, _args=Depends(requi
     same_origin(request)
     try:
         if await asyncio.to_thread(_installation_in_progress, request.app.state.settings.db_path):
-            raise ValueError('正在安装更新，请稍后重试')
+            raise UserValueError('api.configuration.updateInstalling')
         await asyncio.to_thread(request.app.state.upgrade_repairs.include_cloud_display_dimensions)
         return _repair_center(request)
     except (ValueError, OSError, Timeout) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.post('/api/configuration/repairs/follow-evidence')
@@ -958,11 +981,11 @@ def reclaim_follow_evidence(request: Request, _args=Depends(require_auth)):
     same_origin(request)
     try:
         if not request.app.state.upgrade_repairs.available:
-            raise ValueError('只在本机写入端可用')
+            raise UserValueError('api.configuration.primaryOnly')
         request.app.state.follow_evidence.start()
         return _repair_center(request)
     except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.get('/api/configuration/upgrade-repairs/review')
@@ -971,7 +994,7 @@ def upgrade_repairs_review(request: Request, _args=Depends(require_auth)):
     service = request.app.state.upgrade_repairs
     path = service.root / 'catalog-review.json'
     if not path.is_file():
-        raise HTTPException(404, '暂无升级复核记录')
+        raise HTTPException(404, message_fields('api.configuration.noUpgradeReview'))
     return Response(path.read_bytes(), media_type='application/json',
                     headers={'Content-Disposition': 'attachment; filename="upgrade-review.json"'})
 
@@ -982,11 +1005,11 @@ def run_docker_update(request: Request, _args=Depends(require_auth)):
     local_only(request)
     same_origin(request)
     if not distribution.docker():
-        raise HTTPException(404, "只有 Docker 镜像有一键更新")
+        raise HTTPException(404, message_fields("api.configuration.dockerUpdateOnly"))
     try:
         return docker_update.trigger()
     except (ValueError, OSError) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.get("/api/configuration/update-status")
@@ -1001,7 +1024,7 @@ def download_update(request: Request, _args=Depends(require_auth)):
     try:
         return standalone_update.start()
     except (ValueError, Timeout) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.post("/api/configuration/update-restart")
@@ -1010,7 +1033,7 @@ def restart_update(request: Request, _args=Depends(require_auth)):
     try:
         return standalone_update.request_restart()
     except (ValueError, Timeout) as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
 
 
 @router.post('/api/configuration/smb/test')
@@ -1032,7 +1055,7 @@ def test_smb_connection(request: Request, body: dict[str, Any] = Body(default_fa
         username = body.get('smb_username', values.get('username', ''))
         password = body.get('smb_password') or (values.get('password', '') if username == values.get('username', '') else '')
         if not isinstance(username, str) or not isinstance(password, str):
-            raise ValueError('SMB 账号和密码必须是文字')
+            raise UserValueError('api.configuration.smbCredentialsNotText')
         transport = SmbTransport(SmbConnection(host, share, username=username, password=password, port=port,
                                              encrypt=body.get('smb_encrypt') is True, timeout=8))
         try:
@@ -1041,11 +1064,11 @@ def test_smb_connection(request: Request, body: dict[str, Any] = Body(default_fa
             transport.close()
         return {'readable': True, 'directories': [entry.name for entry in entries if entry.is_dir and not entry.is_symlink][:500]}
     except ValueError as error:
-        raise HTTPException(400, str(error)) from None
+        raise HTTPException(400, error_detail(error)) from None
     except PermissionError:
-        raise HTTPException(403, 'SMB 登录失败或没有读取权限，请检查账号、密码和共享权限') from None
+        raise HTTPException(403, message_fields('api.configuration.smbAccessDenied')) from None
     except OSError:
-        raise HTTPException(502, 'SMB 共享无法读取，请检查地址、共享名和网络连接') from None
+        raise HTTPException(502, message_fields('api.configuration.smbUnreadable')) from None
 
 
 def _validate(body: dict[str, Any], config) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1068,14 +1091,14 @@ def _validate(body: dict[str, Any], config) -> tuple[dict[str, Any], dict[str, A
                                  locations=prepared.locations, mounts=prepared.mounts,
                                  media_costs=prepared.media_costs)
             except ValueError as exc:
-                problems = [str(exc)] * len(sources)
+                problems = [exc] * len(sources)
         names, icons = {}, {}
         if not problems:
             for index, row in enumerate(sources):
                 name = str(row.get("library", "")).strip()
                 if len(name) > 80 or any(ord(char) < 32 for char in name):
                     problems = [""] * len(body["media_sources"])
-                    problems[index] = "媒体库名称请使用 1 到 80 个可见字符"
+                    problems[index] = UserValueError("errors.mediaIdentity.libraryNameInvalid")
                     break
                 root = str(media_configuration.PureWindowsPath(row.get('root') or row['path']))
                 if name:
@@ -1084,7 +1107,7 @@ def _validate(body: dict[str, Any], config) -> tuple[dict[str, Any], dict[str, A
                 glyph = str(row.get("library_icon", ""))
                 if glyph and glyph not in LIBRARY_ICONS:
                     problems = [""] * len(body["media_sources"])
-                    problems[index] = "请选择列表中的媒体库图标"
+                    problems[index] = UserValueError("errors.mediaIdentity.libraryIconInvalid")
                     break
                 if glyph:
                     icons[root] = glyph
@@ -1102,7 +1125,7 @@ def _validate(body: dict[str, Any], config) -> tuple[dict[str, Any], dict[str, A
                                  library_names=prepared.library_names, library_icons=prepared.library_icons,
                                  media_costs=prepared.media_costs)
             except ValueError as exc:
-                problems = [str(exc)] * max(1, len(rows))
+                problems = [exc] * max(1, len(rows))
     if problems:
         errors["media_dirs"] = problems
     else:
@@ -1121,27 +1144,28 @@ def _validate_server(body, config):
         if distribution.standalone():
             onboarding.check_available_port(port, config.server.port)
         elif port != config.server.port:
-            raise ValueError("访问端口由托盘管理")
+            raise UserValueError("api.configuration.portManagedByTray")
         validated["port"] = port
     except ValueError as exc:
-        errors["port"] = str(exc)
+        errors["port"] = exc
     for field, validator in (('host', onboarding.validate_host), ('mdns_name', onboarding.validate_mdns_name)):
         if field not in body:
             continue
         try:
             if not isinstance(body[field], str):
-                raise ValueError('请选择访问范围' if field == 'host' else '请填写局域网名称')
+                raise UserValueError('api.configuration.hostRequired' if field == 'host'
+                                     else 'api.configuration.mdnsNameRequired')
             value = validator(body[field])
             if not distribution.standalone() and value != getattr(config.server, field):
-                raise ValueError('访问范围与名称由服务启动配置管理')
+                raise UserValueError('api.configuration.serverManagedByLaunch')
             validated[field] = value
         except ValueError as exc:
-            errors[field] = str(exc)
+            errors[field] = exc
     return errors, validated
 
 
 def _close_tunnel_without_password(request: Request) -> str:
-    """没有访问密码就不能留着公网入口；这里当场停掉并把开关写回关闭。
+    """没有访问密码就不能留着公网入口；这里当场停掉并把开关写回关闭。返回给用户那句话的 code，没停什么时为空串。
 
     启动前的检查挡不住这条路径：隧道是在有密码时起来的，密码被关掉之后它还在转发。
     """
@@ -1164,8 +1188,18 @@ def _close_tunnel_without_password(request: Request) -> str:
                     force=True,
                 )
     except (Timeout, OSError, ValueError):
-        return "临时远程链接已停止；设置文件未能写入，请在本机检查设置文件。"
-    return "已停止临时远程链接：没有访问密码时不保留公网入口。"
+        return "labels.configuration.tunnelStoppedUnsaved"
+    return "labels.configuration.tunnelStopped"
+
+
+def _field_failure(field: str, error: Exception) -> dict[str, Any]:
+    """总话与出错字段是同一句：明细带 code，字段底下写同一句，`error_codes` 里同一个 code。"""
+    detail = error_detail(error)
+    return {**(detail if isinstance(detail, dict) else {"message": detail}), **field_errors({field: error})}
+
+
+def _field_error(code: str, field: str) -> dict[str, Any]:
+    return _field_failure(field, UserValueError(code))
 
 
 @router.post("/api/configuration/access")
@@ -1175,41 +1209,42 @@ def save_access(request: Request, body: dict[str, Any] = Body(default_factory=di
     same_origin(request)
     path = request.app.state.settings.access_path
     if not request.app.state.settings.configured or path is None:
-        raise HTTPException(409, "请先完成首次设置")
+        raise HTTPException(409, message_fields("api.configuration.setupRequired"))
     if any(not isinstance(body.get(key, ""), str) for key in ("password", "confirmation", "current_password")):
-        raise HTTPException(400, "密码需要是文字")
+        raise HTTPException(400, message_fields("api.configuration.passwordNotText"))
     password = body.get("password", "")
     if body.get("action") not in {"set", "disable"}:
-        raise HTTPException(400, "请选择设置或关闭密码")
+        raise HTTPException(400, message_fields("api.configuration.chooseSetOrDisable"))
     if body["action"] == "set" and not password:
-        raise HTTPException(400, {"message": "请输入访问密码", "errors": {"password": "请输入访问密码"}})
+        raise HTTPException(400, _field_error("api.configuration.passwordRequired", "password"))
     if body["action"] == "disable" and body.get("confirm_disable") is not True:
-        raise HTTPException(400, "关闭访问密码前先勾选确认")
+        raise HTTPException(400, message_fields("api.configuration.confirmDisablePassword"))
     try:
         try:
             access.validate_password(password, body.get("confirmation", ""))
         except ValueError as exc:
             field = "confirmation" if password != body.get("confirmation", "") else "password"
-            raise HTTPException(400, {"message": str(exc), "errors": {field: str(exc)}}) from exc
+            raise HTTPException(400, _field_failure(field, exc)) from exc
         path.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(path.with_suffix(".lock")), timeout=0):
             policy = access.load(path)
             if body.get("revision") != policy["revision"]:
-                raise HTTPException(409, "访问设置已变更，请刷新后再保存")
+                raise HTTPException(409, message_fields("api.configuration.accessChanged"))
             if policy["mode"] == "locked":
-                raise HTTPException(409, "访问设置无法读取，请在本机检查配置文件")
+                raise HTTPException(409, message_fields("api.configuration.accessUnreadable"))
             if policy["mode"] == "password" and not access.verify(policy, body.get("current_password", "")):
-                raise HTTPException(400, {"message": "当前访问密码不正确", "errors": {"current_password": "当前访问密码不正确"}})
+                raise HTTPException(400, _field_error("api.configuration.currentPasswordWrong", "current_password"))
             policy = access.save(path, password if body["action"] == "set" else "")
     except Timeout:
-        raise HTTPException(409, "访问设置正在保存，请稍后重试") from None
+        raise HTTPException(409, message_fields("api.configuration.accessSaving")) from None
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, error_detail(exc)) from exc
     payload = access.public(policy)
     if policy["mode"] != "password":
         notice = _close_tunnel_without_password(request)
         if notice:
-            payload["tunnel_notice"] = notice
+            payload["tunnel_notice"] = interface_text.text(f"server:{notice}")
+            payload["tunnel_notice_code"] = notice
     response = JSONResponse(payload, headers={"Cache-Control": "no-store"})
     response.delete_cookie("tok", path="/")
     response.delete_cookie(access.COOKIE, path="/")
@@ -1232,31 +1267,31 @@ def first_access(request: Request, body: dict[str, Any] = Body(default_factory=d
         raise HTTPException(404, "not found")
     mode = login_mode(request)
     if mode == "password":
-        raise HTTPException(409, "访问设置已完成，请刷新页面")
+        raise HTTPException(409, message_fields("api.configuration.accessAlreadySet"))
     if mode != "setup":
-        raise HTTPException(403, FIRST_ACCESS_DENIED)
+        raise HTTPException(403, message_fields(FIRST_ACCESS_DENIED_CODE))
     if not origin_allowed(request, guard="first-access", tunnels=False):
-        raise HTTPException(403, "请从 Peach 访问设置页提交")
+        raise HTTPException(403, message_fields("api.configuration.submitFromAccessPage"))
     if any(not isinstance(body.get(key, ""), str) for key in ("password", "confirmation", "next")):
-        raise HTTPException(400, "密码需要是文字")
+        raise HTTPException(400, message_fields("api.configuration.passwordNotText"))
     choice, password = body.get("mode"), body.get("password", "")
     if choice not in {"password", "open"}:
-        raise HTTPException(400, "请选择设置访问密码或免登录")
+        raise HTTPException(400, message_fields("api.configuration.chooseFirstAccess"))
     if choice == "password":
         if not password:
-            raise HTTPException(400, {"message": "请输入访问密码", "errors": {"password": "请输入访问密码"}})
+            raise HTTPException(400, _field_error("api.configuration.passwordRequired", "password"))
         try:
             access.validate_password(password, body.get("confirmation", ""))
         except ValueError as exc:
             field = "confirmation" if password != body.get("confirmation", "") else "password"
-            raise HTTPException(400, {"message": str(exc), "errors": {field: str(exc)}}) from exc
+            raise HTTPException(400, _field_failure(field, exc)) from exc
     try:
         with FileLock(str(path.with_suffix(".lock")), timeout=0):
             if access.load(path)["mode"] != "legacy":
-                raise HTTPException(409, "访问设置已完成，请刷新页面")
+                raise HTTPException(409, message_fields("api.configuration.accessAlreadySet"))
             policy = access.save(path, password if choice == "password" else "")
     except Timeout:
-        raise HTTPException(409, "访问设置正在保存，请稍后重试") from None
+        raise HTTPException(409, message_fields("api.configuration.accessSaving")) from None
     if policy["mode"] != "password":
         _close_tunnel_without_password(request)
     response = JSONResponse({"url": safe_next(body.get("next", "/"))}, headers={"Cache-Control": "no-store"})
@@ -1293,37 +1328,43 @@ def revoke_access_sessions(request: Request, body: dict[str, Any] = Body(default
     store = access_sessions(request)
     session_id, others = body.get("id"), body.get("scope") == "others"
     if store is None or (not others and not isinstance(session_id, str)) or (others and session_id is not None):
-        raise HTTPException(400, "请选择要撤销的设备")
+        raise HTTPException(400, message_fields("api.configuration.chooseDeviceToRevoke"))
     policy = access.load(request.app.state.settings.access_path)
     if body.get("revision") != policy["revision"]:
-        raise HTTPException(409, "访问设置已变更，请刷新后再操作")
+        raise HTTPException(409, message_fields("api.configuration.accessChangedRetry"))
     current = access.digest(request.cookies.get(access.COOKIE, ""))
     if not others and any(row["id"] == session_id and row["current"] for row in store.rows(policy["revision"], current)):
-        raise HTTPException(400, "不能在这里撤销本机")
+        raise HTTPException(400, message_fields("api.configuration.cannotRevokeThisDevice"))
     try:
         removed = store.revoke(policy["revision"], session_id="" if others else session_id, keep=current)
     except Timeout:
-        raise HTTPException(409, "设备记录正在写入，请稍后重试") from None
+        raise HTTPException(409, message_fields("api.configuration.sessionsWriting")) from None
     if not others and not removed:
-        raise HTTPException(404, "这台设备已经不在列表里了")
+        raise HTTPException(404, message_fields("api.configuration.deviceGone"))
     return JSONResponse({**_access_sessions(request), "removed": removed}, headers={"Cache-Control": "no-store"})
 
 
 _TOKEN_LOCK = threading.Lock()
 
 
+def _token_fixed(settings) -> str:
+    """访问口令换不了的原因对应的 code；能换时为空串。"""
+    if not settings.token:
+        return "api.configuration.tokenNotUsed"
+    if settings.token_file is None:
+        return "api.configuration.tokenFromLaunch"
+    return ""
+
+
 def api_token_payload(request: Request) -> dict[str, Any]:
     """访问口令能不能在这里换。口令本身不回给页面，只在换的那一次响应里给新值（ADR-0142）。"""
     settings = request.app.state.settings
-    if not settings.token:
-        reason = "这次启动没有使用访问口令。"
-    elif settings.token_file is None:
-        reason = "口令由启动参数 --token 或环境变量 PEACH_TOKEN 指定，请在那里更换。"
-    else:
-        reason = ""
+    fixed = _token_fixed(settings)
+    reason = message_fields(fixed)["message"] if fixed else ""
     # 两台机器互取复核结果时发的是自己的口令，换了这边，另一台要换成同一份文件。
     paired = REPLICATION_ENABLED or bool(settings.review_writer_origin)
-    return {"rotatable": not reason, "reason": reason, "paired": paired}
+    # `reason` 是 zh-CN 原句，`reason_code` 给页面按当前语言渲染。
+    return {"rotatable": not fixed, "reason": reason, "reason_code": fixed, "paired": paired}
 
 
 @router.post("/api/configuration/access/token/rotate")
@@ -1336,12 +1377,12 @@ def rotate_api_token(request: Request, _args=Depends(require_auth)):
     local_only(request)
     same_origin(request)
     state = api_token_payload(request)
-    if not state["rotatable"]:
-        raise HTTPException(409, state["reason"])
+    if fixed := _token_fixed(request.app.state.settings):
+        raise HTTPException(409, message_fields(fixed))
     settings = request.app.state.settings
     policy = access.load(settings.access_path)
     if policy["mode"] == "locked":
-        raise HTTPException(409, "访问设置无法读取，请在本机检查配置文件")
+        raise HTTPException(409, message_fields("api.configuration.accessUnreadable"))
     store = access_sessions(request)
     current = access.digest(request.cookies.get(access.COOKIE, ""))
     signed_out = (sum(not row["current"] for row in store.rows(policy["revision"], current))
@@ -1414,7 +1455,7 @@ def read_certificate(request: Request, _args=Depends(require_auth)):
     local_only(request)
     payload = certificate_payload(request)
     if payload is None:
-        raise HTTPException(404, "这台电脑没有提供 HTTPS 的本机证书")
+        raise HTTPException(404, message_fields("api.configuration.noLocalCertificate"))
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
@@ -1430,13 +1471,13 @@ def download_ca_certificate(request: Request, k: str = ""):
         try:
             _link_signer().loads(k, max_age=_LINK_AGE)
         except BadData:
-            raise HTTPException(403, "二维码已过期，请在配置页重新扫码") from None
+            raise HTTPException(403, message_fields("api.configuration.qrExpired")) from None
     else:
         require_auth(request)
     settings = request.app.state.settings
     ca = certs.public_ca(certs.CertificateFiles.under(settings.secrets_root / "tls").ca_cert)
     if ca is None or not settings.tls_enabled:
-        raise HTTPException(404, "这台电脑没有提供 HTTPS 的本机证书")
+        raise HTTPException(404, message_fields("api.configuration.noLocalCertificate"))
     return Response(ca.pem, media_type="application/x-x509-ca-cert", headers={
         "Content-Disposition": 'attachment; filename="peach-local-ca.crt"', "Cache-Control": "no-store"})
 
@@ -1450,7 +1491,7 @@ def tunnel_changes(config, body: dict[str, Any]) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     for key in ("mode", "hostname", "token"):
         if key in body and not isinstance(body[key], str):
-            raise HTTPException(400, f"{key} 必须是文字")
+            raise HTTPException(400, message_fields("api.configuration.fieldNotText", {"field": key}))
     try:
         if "mode" in body:
             changes["mode"] = tunnel.normalize_mode(body["mode"])
@@ -1458,12 +1499,12 @@ def tunnel_changes(config, body: dict[str, Any]) -> dict[str, Any]:
             changes["hostname"] = tunnel.normalize_hostname(body["hostname"])
     except tunnel.TunnelError as exc:
         field = "mode" if "mode" in body and "mode" not in changes else "hostname"
-        raise HTTPException(400, {"message": str(exc), "errors": {field: str(exc)}}) from exc
+        raise HTTPException(400, _field_failure(field, exc)) from exc
     if body.get("token", "").strip():
         changes["token"] = body["token"].strip()
     mode = changes.get("mode") or (getattr(config.tunnel, "mode", "") or tunnel.QUICK_MODE)
     if mode == tunnel.NAMED_MODE and distribution.standalone():
-        raise HTTPException(400, tunnel.STANDALONE_NAMED_ERROR)
+        raise HTTPException(400, message_fields("errors.tunnel.standaloneQuickOnly"))
     return changes
 
 
@@ -1475,12 +1516,12 @@ def save_tunnel(request: Request, body: dict[str, Any] = Body(default_factory=di
     same_origin(request)
     config = settings_file.load_config()
     if not config.present:
-        raise HTTPException(409, "请先完成首次设置")
+        raise HTTPException(409, message_fields("api.configuration.setupRequired"))
     if body.get("revision") != revision(config):
-        raise HTTPException(409, "设置已变更，请刷新后再保存")
+        raise HTTPException(409, message_fields("api.configuration.settingsChanged"))
     enabled = body.get("enabled")
     if not isinstance(enabled, bool):
-        raise HTTPException(400, "enabled 必须是 true 或 false")
+        raise HTTPException(400, message_fields("api.configuration.enabledNotBoolean"))
     updated = replace(
         config, tunnel=replace(config.tunnel, enabled=enabled, **tunnel_changes(config, body)),
     )
@@ -1504,23 +1545,23 @@ def save_tunnel(request: Request, body: dict[str, Any] = Body(default_factory=di
             )
             state = manager.start(plan)
         except tunnel.TunnelError as exc:
-            raise HTTPException(409, str(exc)) from exc
+            raise HTTPException(409, error_detail(exc)) from exc
     try:
         with FileLock(str(config.path.with_suffix(".lock")), timeout=0):
             current = settings_file.load_config()
             if revision(current) != revision(config):
                 if started_here:
                     manager.stop()
-                raise HTTPException(409, "设置已变更，请刷新后再保存")
+                raise HTTPException(409, message_fields("api.configuration.settingsChanged"))
             settings_file.write(updated, force=True)
     except Timeout:
         if started_here:
             manager.stop()
-        raise HTTPException(409, "设置正在保存，请稍后重试") from None
+        raise HTTPException(409, message_fields("api.configuration.settingsSaving")) from None
     except OSError as exc:
         if started_here:
             manager.stop()
-        raise HTTPException(500, f"设置写入失败：{exc}") from exc
+        raise HTTPException(500, message_fields("api.configuration.settingsWriteFailed", {"error": str(exc)})) from exc
     if not enabled:
         state = manager.stop()
     return {**tunnel_payload(updated, state, enabled), "revision": revision(updated)}
@@ -1529,20 +1570,38 @@ def save_tunnel(request: Request, body: dict[str, Any] = Body(default_factory=di
 @router.post("/api/pick-folder")
 def pick_folder(request: Request, body: dict[str, Any] = Body(default_factory=dict),
                 _args=Depends(require_auth)):
-    """让运行 Peach 的这台电脑弹系统文件夹对话框，选中的绝对路径交回页面。
+    """桌面返回系统选择结果，无桌面返回媒体根内的只读目录快照。
 
-    只对本机连接开放：系统对话框显示在运行 Peach 的电脑上。首启页和配置页共用这一条，
-    所以不要求独立包。对话框是模态的，一次只开一个；用户取消时 `path` 为 None。
+    两种模式共用认证、本机或受管局域网访问、同源检查。首启页与配置页共用此入口。
     """
     local_only(request)
     same_origin(request)
     initial = body.get("initial")
+    purpose = body.get('purpose', 'media')
+    if not isinstance(purpose, str) or purpose not in {'media', 'data'}:
+        raise UserValueError("errors.nasDirectories.invalidPurpose")
+    from . import nas_directories
+    if not nas_directories.available():
+        if purpose == 'data':
+            # 说明文字由页面按 container 选，容器的数据卷位置在宿主机上定，页面只读。
+            container = os.environ.get('PEACH_DISTRIBUTION') == 'docker'
+            return {'mode': 'manual', 'path': initial if isinstance(initial, str) else '',
+                    'editable': not container, 'container': container}
+        try:
+            return nas_directories.browse(settings_file.load_config(), initial if isinstance(initial, str) else '',
+                                          start=body.get('start') is True, offset=body.get('offset', 0))
+        except UserFacingError:
+            raise
+        except TimeoutError as exc:
+            raise UserTimeoutError("errors.nasDirectories.timedOut", status_code=504) from exc
+        except OSError as exc:
+            raise UserOSError("errors.nasDirectories.unreadable", status_code=409) from exc
     try:
         path = folder_picker.pick_folder(initial if isinstance(initial, str) and initial else None)
     except folder_picker.PickerBusy as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, error_detail(exc)) from exc
     except folder_picker.PickerUnavailable as exc:
-        raise HTTPException(501, str(exc)) from exc
+        raise HTTPException(501, error_detail(exc)) from exc
     return {"path": path}
 
 
@@ -1551,18 +1610,18 @@ def save_configuration(request: Request, body: dict[str, Any] = Body(default_fac
                        _args=Depends(require_auth)):
     local_only(request)
     if not managed_configuration():
-        raise HTTPException(409, "此部署通过配置文件管理服务")
+        raise HTTPException(409, message_fields("api.configuration.fileManaged"))
     same_origin(request)
     with _SAVE_LOCK:
         config = settings_file.load_config()
         if not config.present:
-            raise HTTPException(409, "请先完成首次设置")
+            raise HTTPException(409, message_fields("api.configuration.setupRequired"))
         if body.get("revision") != revision(config):
-            raise HTTPException(409, "配置已变更，请刷新后再保存")
+            raise HTTPException(409, message_fields("api.configuration.configurationChanged"))
         errors, validated = _validate(body, config)
         if errors:
             # 400 的响应体带每个字段的原因：页面把它写回出错的那一行底下，不是弹一句总话。
-            raise HTTPException(400, {"message": "有几项需要修改", "errors": errors})
+            raise HTTPException(400, {**message_fields("api.configuration.needsChanges"), **field_errors(errors)})
         paths = validated["media_dirs"]
         locations, mounts = dict(config.locations), dict(config.mounts)
         if "locations" in validated:
@@ -1578,7 +1637,8 @@ def save_configuration(request: Request, body: dict[str, Any] = Body(default_fac
                 [{"location": "local", "path": str(path)} for path in paths], windows=False, config=config)
             local_roots, local_mounts, problems = media_configuration.validate(sources, windows=False, config=config)
             if problems:
-                raise HTTPException(400, {"message": "有几项需要修改", "errors": {"media_dirs": problems}})
+                raise HTTPException(400, {**message_fields("api.configuration.needsChanges"),
+                                          **field_errors({"media_dirs": problems})})
             locations["local"], mounts["local"] = local_roots["local"], local_mounts["local"]
             validated["library_names"] = {**config.library_names, **{
                 row["root"]: row["library"] for row in sources if row.get("library")}}
@@ -1607,7 +1667,7 @@ def save_configuration(request: Request, body: dict[str, Any] = Body(default_fac
             config.directory("state").mkdir(parents=True, exist_ok=True)
             (config.directory("state") / RELOAD_NAME).write_text("reload", encoding="utf-8")
         except OSError as exc:
-            raise HTTPException(500, f"配置保存失败：{exc}") from exc
+            raise HTTPException(500, message_fields("api.configuration.configurationSaveFailed", {"error": str(exc)})) from exc
     url = f"http://127.0.0.1:{prepared.server.port}/" if distribution.standalone() else str(request.base_url)
     return {"saved": True, "url": url,
             "revision": revision(prepared)}

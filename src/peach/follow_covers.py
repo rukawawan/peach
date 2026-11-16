@@ -107,14 +107,14 @@ class FollowCoverService:
             media_index = videos[0] if videos else None
             if media is not None and media != media_index:
                 if media not in videos:
-                    raise FollowCoverUnavailable("点名的媒体不是这篇帖子里的视频")
+                    raise FollowCoverUnavailable("requested media isn't a video in this post")
                 media_index, slot = media, f"m{media}-"
         elif media is not None:
-            raise FollowCoverUnavailable("只有 fanbox 帖子能按媒体取视频封面")
+            raise FollowCoverUnavailable("only fanbox posts support video covers by media")
         if not (item.provider == "fanbox" and media_index is not None) and (
                 item.provider != "rule34paheal"
                 or str(item.metadata.get("media_kind") or "") != "video"):
-            raise FollowCoverUnavailable("该条目不需要生成视频封面")
+            raise FollowCoverUnavailable("this item doesn't need a generated video cover")
         try:
             target = (self.media_resolver.resolve(item, media_index)
                       if media_index is not None else self.media_resolver.resolve(item))
@@ -122,7 +122,7 @@ class FollowCoverService:
             raise FollowCoverUnavailable(str(exc)) from exc
         choice = self.resolver.ffmpeg()
         if choice is None:
-            raise FollowCoverUnavailable("ffmpeg 不可用")
+            raise FollowCoverUnavailable("ffmpeg unavailable")
 
         fingerprint = hashlib.sha256(
             f"{_CACHE_VERSION}\0{target.url}".encode("utf-8")
@@ -135,14 +135,14 @@ class FollowCoverService:
         # 抽帧失败回的是不缓存的占位图，下一次渲染就会再来；不记住失败，每次都要
         # 重跑一遍 FFmpeg 去读上游正片。
         if self._recent_miss(destination.name):
-            raise FollowCoverUnavailable("视频封面生成失败")
+            raise FollowCoverUnavailable("video cover generation failed")
 
         lock = self._lock_for(destination.name)
         with lock:
             if destination.is_file():
                 return destination
             if self._recent_miss(destination.name):
-                raise FollowCoverUnavailable("视频封面生成失败")
+                raise FollowCoverUnavailable("video cover generation failed")
             self._extract_frame(choice, target, destination)
             # URL 变化时留下旧帧没有价值；只清理同一条目、同一个视频的旧缓存。
             for stale in self.root.glob(f"{item.id}-*.jpg"):
@@ -175,11 +175,11 @@ class FollowCoverService:
             if (result.returncode != 0 or not temporary.is_file()
                     or temporary.stat().st_size == 0):
                 self._remember_miss(destination.name)
-                raise FollowCoverUnavailable("视频封面生成失败")
+                raise FollowCoverUnavailable("video cover generation failed")
             os.replace(temporary, destination)
         except (OSError, subprocess.TimeoutExpired) as exc:
             self._remember_miss(destination.name)
-            raise FollowCoverUnavailable("视频封面生成失败") from exc
+            raise FollowCoverUnavailable("video cover generation failed") from exc
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -203,23 +203,23 @@ class FollowCoverService:
         urls = tuple(url for url in dict.fromkeys((item.thumb_url or "", *others))
                      if proxyable("rule34video", url))[:8]
         if not urls:
-            raise FollowCoverUnavailable("该作品没有可用的封面地址")
+            raise FollowCoverUnavailable("no usable cover URL for this video")
         miss_key = hashlib.sha256("\0".join(urls).encode("utf-8")).hexdigest()
         if self._recent_miss(miss_key) or self.media_resolver.cooling(item.provider):
-            raise FollowCoverUnavailable("该作品的封面未取得")
+            raise FollowCoverUnavailable("cover for this video not fetched")
         with self._lock_for(destination.name):
             if destination.is_file():
                 return destination
             if self._recent_miss(miss_key) or self.media_resolver.cooling(item.provider):
-                raise FollowCoverUnavailable("该作品的封面未取得")
+                raise FollowCoverUnavailable("cover for this video not fetched")
             with self._poster_slots:
                 fetched = self._fetch_poster(item, urls, destination)
             if fetched is None:
                 # 来源在冷却：不是这张图的问题，冷却结束后照常再取，不记失败。
-                raise FollowCoverUnavailable("来源限流冷却中")
+                raise FollowCoverUnavailable("source is cooling down after rate limiting")
             if not fetched:
                 self._remember_miss(miss_key)
-                raise FollowCoverUnavailable("该作品的封面未取得")
+                raise FollowCoverUnavailable("cover for this video not fetched")
             # 自己的 poster 地址变了才会换名；同一条目只留当前这一份。
             for stale in self.root.glob(f"{item.id}-poster-*.jpg"):
                 if stale != destination and not stale.name.endswith(".tmp.jpg"):

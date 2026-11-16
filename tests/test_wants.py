@@ -187,7 +187,7 @@ class ReconcileTests(WantFixture):
                 "--db", str(self.db), "--logo-root", str(self.root / "logos"),
                 "--source", wants.AUTO_SOURCE, "--batch", planned[0]["acquired_batch"],
                 "--apply", "--backup", str(self.root / "backup.db")]), 0)
-        self.assertIn("'想要回到待找': 2", printed.getvalue())
+        self.assertIn("'reopened_wants': 2", printed.getvalue())
         self.assertEqual(self.query(
             "SELECT code,state,search_count,acquired_asset_id,acquired_batch FROM want_item ORDER BY id"),
             [("SSIS-950", "wanted", 0, None, None), ("SSIS-951", "given_up", 3, None, None)])

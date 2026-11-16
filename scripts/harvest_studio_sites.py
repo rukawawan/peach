@@ -14,19 +14,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import studio_sites as sites   # noqa: E402
 from peach.config import STATE_DIR   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
 from peach.review_csv import read_rows, write_rows   # noqa: E402
 from peach.scripting import open_readonly   # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, required=True, help="账本路径")
+    parser = argparse.ArgumentParser(description=t("harvest_studio_sites.description"))
+    parser.add_argument("--db", type=Path, required=True, help=t("harvest_studio_sites.dbHelp"))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--seeds", type=Path, help="人工查到的 studio,site 表，优先于推导域名")
+    parser.add_argument("--seeds", type=Path, help=t("harvest_studio_sites.sitesHelp"))
     parser.add_argument("--min-assets", type=int, default=3)
     parser.add_argument("--only", nargs="*", default=[],
-                        help="只处理这几个厂牌，按 canonical_name 给；给了就不看作品数")
+                        help=t("harvest_studio_sites.onlyHelp"))
     parser.add_argument("--interval", type=float, default=1.2)
     # httpx 把这个标量同时用作 connect 与 read 超时，死域名因此最多吃两份。首轮用 20
     # 秒的代价是整批三个多小时；真站实测都在 2 秒内响应，8 秒已经宽裕得多。

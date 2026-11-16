@@ -322,6 +322,13 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-follo
   min-height: calc(var(--card-meta-block) + 16px);
   contain-intrinsic-block-size: auto var(--card-meta-block);
 }
+/* 宽松档的关注卡元信息区不跳过渲染，按实际内容定高：标题一行或两行、日期随卡宽折到第二行，
+   有「署名含」时再多一行，固定估计套不上，跳过时卡片进视口才长高，上方的卡一长视口就被挪开。
+   封面照旧跳过；密集档的标题与署名各钉一行，估计准，照旧跳过。 */
+body:not([data-density="dense"]) .peach-react [data-follow-list]:not([data-follow-wall]) [data-follow-item] [data-media-meta] {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
+}
 /* 窄屏关注卡按实际内容定高，紧凑视图的长标题保留两行。 */
 @media (max-width: 760px) {
   body .peach-react [data-follow-list] [data-follow-item] [data-media-meta] {

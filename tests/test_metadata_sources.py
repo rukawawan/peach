@@ -11,7 +11,7 @@ from peach import scraping_access
 from peach.http import HttpResponse
 from peach.jav_cover_fetch import DeadlineExceeded, HostLimitedTransport, NotFound, Unavailable
 from peach.library_processing import PROVIDER_NAMES, SOURCE_INTERVALS, SOURCE_LABELS
-from peach.metadata import MetadataProviderError
+from peach.metadata import MetadataProviderError, relayed
 from peach.metadata_policy import SOURCE_SPECS
 from peach.metadata_routes import FC2_STAGE
 from peach.scraping_access import FIRST_BLOCKED_PAUSE, SourcePaused, SourceTransport, cooldown_state
@@ -92,7 +92,7 @@ class JavDBResourceTests(unittest.TestCase):
         file_hash = 'b' * 32
         magnet = {'id': 'magnet:' + digest, 'protocol': 'magnet', 'info_hash': digest,
                   'uri': f'magnet:?xt=urn:btih:{digest}', 'name': '演示', 'size': '4.00GB', 'files': '2',
-                  'date': '2026-10-01', 'attributes': ['中字'], 'source': 'JavDB',
+                  'date': '2026-10-01', 'attributes': ['chinese-subtitles'], 'source': 'JavDB',
                   'source_url': 'https://javdb.com/v/demo', 'origins': ['JavDB']}
         text = (f'magnet:?xt=urn:btih:{digest.upper()} ed2k://|file|another-name|123456|{file_hash}|/\n'
                 f'ed2k://|file|demo%20file.mkv|123456|{file_hash.upper()}|/\n'
@@ -101,7 +101,7 @@ class JavDBResourceTests(unittest.TestCase):
         items = merge_resources([magnet, *comments])
         self.assertEqual([item['protocol'] for item in items], ['magnet', 'ed2k', 'url'])
         self.assertEqual(items[0]['size'], '4.00GB')
-        self.assertEqual(items[0]['attributes'], ['中字'])
+        self.assertEqual(items[0]['attributes'], ['chinese-subtitles'])
         self.assertEqual(len(items[0]['origins']), 2)
         self.assertEqual(items[1]['name'], 'another-name')
         self.assertEqual(items[1]['size'], '123,456 B')
@@ -118,7 +118,7 @@ class DemoSource(SiteSource):
 
     def parse(self, page, code):
         if page.text == "gate":
-            raise SourceFailure(FailureReason.AUTH_REQUIRED, "Demo 要求登录")
+            raise SourceFailure(FailureReason.AUTH_REQUIRED, "errors.javdb.loginRequired")
         return SiteRecord(source=self.config.name, provenance=self.config.provider, code=code,
                           source_url=page.url, title=page.text)
 
@@ -204,16 +204,16 @@ class ContractTests(unittest.TestCase):
                                (500, FailureReason.SERVER_ERROR), (503, FailureReason.SERVER_ERROR),
                                (418, FailureReason.NETWORK)):
             with self.subTest(status=status):
-                failure = http_failure(Unavailable(f"HTTP {status}"))
+                failure = http_failure(Unavailable(*relayed(f"HTTP {status}")))
                 self.assertEqual((failure.reason, failure.status_code, failure.message), (reason, status, f"HTTP {status}"))
-        self.assertEqual(http_failure(NotFound("来源给的是占位图")).reason, FailureReason.NOT_FOUND)
+        self.assertEqual(http_failure(NotFound("errors.javCoverFetch.placeholder")).reason, FailureReason.NOT_FOUND)
 
     def test_query_passes_parse_failures_through_and_leaves_transport_signals_alone(self):
         """冷却、预算与连接失败由传输层抛、由调用方按原语义处理，契约不改写它们。"""
         with self.assertRaises(SourceFailure) as caught:
             DemoSource().query("ABC-001", session=Session(serve({"https://demo.test/ABC-001": b"gate"})))
         self.assertEqual(caught.exception.reason, FailureReason.AUTH_REQUIRED)
-        for signal in (SourcePaused("来源正在冷却"), DeadlineExceeded("动作预算已用尽"),
+        for signal in (SourcePaused("errors.scrapingAccess.coolingDown"), DeadlineExceeded("errors.javCoverFetch.deadline"),
                        httpx.TransportError("来源连接未取得")):
             with self.subTest(signal=type(signal).__name__), \
                     patch("peach.jav_cover_fetch.NETWORK_RETRY_DELAYS", ()), \
@@ -252,17 +252,18 @@ class FailureReasonTests(unittest.TestCase):
                          {FailureReason.NOT_FOUND, FailureReason.GONE, FailureReason.NO_USABLE_METADATA})
 
     def test_provider_errors_keep_the_three_tier_semantics(self):
-        auth = SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, "撞上 Cloudflare 挑战页", status_code=403)
+        auth = SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, "errors.base.cloudflareUpdateCookie", {"label": "AVSOX"},
+                             status_code=403)
         error = auth.provider_error("AVSOX")
         self.assertIsInstance(error, MetadataProviderError)
         self.assertEqual((error.kind, error.status_code, error.retryable, error.temporary, error.detail),
                          ("auth", 403, False, True, "cloudflare_challenge"))
-        self.assertEqual(str(error), "AVSOX 需要登录或已被拒绝：撞上 Cloudflare 挑战页")
-        missing = SourceFailure(FailureReason.NOT_FOUND, "javdb 没有这个番号").provider_error("javdb")
+        self.assertEqual(str(error), "AVSOX 需要登录或已被拒绝：AVSOX 要求 Cloudflare 验证，请在采集设置里更新 Cookie")
+        missing = SourceFailure(FailureReason.NOT_FOUND, "errors.javdb.notFound").provider_error("javdb")
         self.assertEqual((missing.kind, str(missing)), ("not_found", "javdb 没有这个番号"))
-        parse = SourceFailure(FailureReason.PARSE_ERROR, "结构对不上").provider_error("javdb")
+        parse = SourceFailure(FailureReason.PARSE_ERROR, "errors.avbase.unrecognized").provider_error("javdb")
         self.assertEqual((parse.kind, parse.retryable, parse.temporary), ("unavailable", False, False))
-        timeout = SourceFailure(FailureReason.TIMEOUT, "超时", detail="curl 28").provider_error("javdb")
+        timeout = SourceFailure(FailureReason.TIMEOUT, "errors.javdb.budgetExceeded", detail="curl 28").provider_error("javdb")
         self.assertEqual((timeout.kind, timeout.retryable, timeout.temporary, timeout.detail),
                          ("unavailable", True, True, "curl 28"))
         self.assertEqual(PERMANENT_REASONS, {FailureReason.PARSE_ERROR})
@@ -274,7 +275,7 @@ class FailureReasonTests(unittest.TestCase):
                                             FailureReason.RATE_LIMITED: "rate_limited"})
         for reason in FailureReason:
             with self.subTest(reason=reason):
-                self.assertEqual(SourceFailure(reason, "").cooldown_action, COOLDOWN_ACTIONS.get(reason, ""))
+                self.assertEqual(SourceFailure(reason, *relayed("HTTP 503")).cooldown_action, COOLDOWN_ACTIONS.get(reason, ""))
         self.assertEqual(set(COOLDOWN_ACTIONS.values()), {"blocked", "rate_limited"},
                          "两档就是 scraping_access.pause_source 的 refused=True / retry_after 两档")
 
@@ -330,7 +331,7 @@ class SiteCooldownTests(unittest.TestCase):
             reason = FailureReason.NOT_FOUND
 
             def parse(self, page, code):
-                raise SourceFailure(self.reason, "demo")
+                raise SourceFailure(self.reason, *relayed("HTTP 503"))
 
         config = SiteConfig(name="javbus", label="JavBus", provider="javbus-page", base_url="https://www.javbus.com",
                             domains=("javbus.com",), stage="community")
@@ -354,7 +355,7 @@ class SiteCooldownTests(unittest.TestCase):
         """子类的 `query` 包着基类的 `query`（`r18dev`），同一个失败只翻一次倍。"""
         class Nested(DemoSource):
             def parse(self, page, code):
-                raise SourceFailure(FailureReason.IP_BANNED, "demo")
+                raise SourceFailure(FailureReason.IP_BANNED, "errors.scrapingAccess.ipBanned", {"label": "javdb"})
 
             def query(self, code, *, session):
                 with self.holding(session):

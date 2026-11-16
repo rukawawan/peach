@@ -24,6 +24,7 @@ from peach.entities import apply_directory_rejections, derived_directory_rejecti
 from peach.entity_classification import downgrade_untrusted_observed, untrusted_observed  # noqa: E402
 from peach.field_owners import script_owner  # noqa: E402
 from peach.fsutil import atomic_write_text  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write  # noqa: E402
 
 REVIEWER = script_owner('repair_identity_claims')
@@ -61,10 +62,10 @@ def _by_source(rows) -> dict[str, int]:
 
 
 def main(argv=None) -> int:
-    parser = add_ledger_write_args(argparse.ArgumentParser(description='存量身份断言降级与目录级否定'))
-    parser.add_argument('--downgrade', action='store_true', help='只处理非代码判据的 observed 降级')
-    parser.add_argument('--directories', action='store_true', help='只处理由作品级否定派生的目录级否定')
-    parser.add_argument('--report', type=Path, help='完整计划写成 JSON')
+    parser = add_ledger_write_args(argparse.ArgumentParser(description=t('repair_identity_claims.description')))
+    parser.add_argument('--downgrade', action='store_true', help=t('repair_identity_claims.downgradeHelp'))
+    parser.add_argument('--directories', action='store_true', help=t('repair_identity_claims.directoriesHelp'))
+    parser.add_argument('--report', type=Path, help=t('repair_identity_claims.reportHelp'))
     args = parser.parse_args(argv)
     both = not (args.downgrade or args.directories)
     selected = {'downgrade': args.downgrade or both, 'directories': args.directories or both}
@@ -86,13 +87,13 @@ def main(argv=None) -> int:
             integrity, violations = verify_after_write(connection)
             if integrity != 'ok' or violations > known_violations:
                 connection.rollback()
-                print(json.dumps({'error': '完整性或外键自检未通过', 'integrity': integrity,
+                print(json.dumps({'error': t('repair_identity_claims.selfCheckFailed'),'integrity': integrity,
                                   'foreign_key_violations': violations}, ensure_ascii=False), file=sys.stderr)
                 return 1
             connection.commit()
             output['after'] = counts_of(connection, EXTRA_COUNTS)
         else:
-            output['dry_run'] = '未写 ledger；加 --apply --backup <路径> 才写入'
+            output['dry_run'] = t('repair_identity_claims.dryRun')
         print(json.dumps(output, ensure_ascii=False, indent=2))
     finally:
         connection.close()

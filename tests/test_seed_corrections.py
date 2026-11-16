@@ -219,7 +219,7 @@ class CorrectionTests(SeedPackCase):
         pack["entities"].append({"kind": "performer", "name": "另一位艺人", "aliases": [],
                                  "refs": copy.deepcopy(pack["entities"][0]["refs"]), "links": []})
         before = list(self.target.iterdump())
-        with self.assertRaisesRegex(ValueError, "编号身份冲突"):
+        with self.assertRaisesRegex(ValueError, "identity conflict"):
             seed_pack.land(self.target, pack)
         self.assertEqual(list(self.target.iterdump()), before)
 

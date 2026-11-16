@@ -12,6 +12,7 @@ from peach.jav_cover_fetch import NotFound
 from peach.review_csv import read_candidates, read_rows
 from scripts.fc2_cast_review import build_parser, run
 from support.ledger import fresh_ledger
+from peach.metadata import relayed
 
 
 class _Mirror:
@@ -25,7 +26,7 @@ class _Mirror:
         self.asked.append((source, code))
         page = self.pages.get(code)
         if page is None:
-            raise NotFound("HTTP 404")
+            raise NotFound(*relayed("HTTP 404"))
         if isinstance(page, Exception):
             raise page
         return page

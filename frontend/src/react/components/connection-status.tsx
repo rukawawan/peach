@@ -1,6 +1,7 @@
 import { StatusDot } from '@/components/base/badges/status-dot';
 import { cx } from '@/utils/cx';
 import type { ReactNode } from 'react';
+import { t } from '../../i18n';
 import './connection-status.css';
 
 type ConnectionTone = 'success' | 'warning' | 'progress' | 'neutral' | 'error';
@@ -22,6 +23,6 @@ export function ConnectionStatus({ online, tone, children }: {
     data-connection-tone={color}
     className={cx('inline-flex items-center gap-1.5 whitespace-nowrap text-body-2-medium', TEXT[color])}>
     <StatusDot color={color === 'success' ? 'green' : color === 'warning' ? 'yellow' : 'indigo'} />
-    {children ?? (online === true ? '在线' : online === false ? '离线' : '未检测')}
+    {children ?? (online === true ? t('shell:storageLabel.online') : online === false ? t('shell:connectionStatus.offline') : t('shell:connectionStatus.notChecked'))}
   </span>;
 }

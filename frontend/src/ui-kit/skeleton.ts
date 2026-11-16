@@ -2,6 +2,7 @@
    到货时把占位换成真内容。由共享源码直接引用，随 `peach-app.js` 发出。 */
 import { esc } from '../core';
 import { tagSkeletonHtml } from '../tag-skeleton';
+import { t } from '../i18n';
 
 /**
  * 占位换成真内容：旧的那一屏抬成盖在容器上的一层淡出，新内容同时从模糊里清晰起来。
@@ -32,8 +33,8 @@ export function revealSkeleton(container:any,write:()=>void):void{
 }
 
 export function configurationSkeletonHtml():string{
-  const groups:[string,number][]=[['通用',2],['媒体',2],['下载',2],['网络与访问',3],['维护',3]];
-  return `<div class="ui-configpage" data-skeleton="configuration" role="status" aria-label="正在读取配置">${groups.map(([label,count])=>`<h2 class="ui-configgroup" aria-hidden="true">${label}</h2>${Array.from({length:count},()=>`<div class="configfieldset config-skeleton-card" aria-hidden="true"><div class="geist-fieldset-content"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div><footer class="geist-fieldset-footer"><span class="skeleton"></span></footer></div>`).join('')}`).join('')}</div>`;
+  const groups:[string,number][]=[[t('navigation:configurationSections.library'),2],[t('navigation:configurationSections.feeds'),2],[t('navigation:configurationSections.downloads'),2],[t('navigation:configurationSections.network'),3],[t('navigation:configurationSections.maintenance'),3]];
+  return `<div class="ui-configpage" data-skeleton="configuration" role="status" aria-label="${t('shell:skeleton.loadingSettings')}">${groups.map(([label,count])=>`<h2 class="ui-configgroup" aria-hidden="true">${label}</h2>${Array.from({length:count},()=>`<div class="configfieldset config-skeleton-card" aria-hidden="true"><div class="geist-fieldset-content"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div><footer class="geist-fieldset-footer"><span class="skeleton"></span></footer></div>`).join('')}`).join('')}</div>`;
 }
 
 /** Geist Skeleton: reserve a large content region while its structure is loading. */
@@ -41,7 +42,7 @@ export function configurationSkeletonHtml():string{
    而行政界面往往只有两三个大区。多画的块加载完就消失，那不是占位是误报。
    `cardRatio` 是卡片封面的宽高比，交给调用方按真卡的版式给：大图版式的正封是竖的，
    骨架照 16:9 铺的话，内容一到整屏卡片都要被拉高一截。 */
-export function skeletonHtml(label='正在读取内容',{className='',variant='panel',count=6,fill=true,gridClass='',gridSize='',cardRatio=0}={}):string{
+export function skeletonHtml(label=t('shell:loadingSkeleton.content'),{className='',variant='panel',count=6,fill=true,gridClass='',gridSize='',cardRatio=0}={}):string{
   const kind=new Set(['panel','cards','dashboard']).has(variant)?variant:'panel';
   const body=kind==='cards'
     ?Array.from({length:Math.max(1,count)},
@@ -74,7 +75,7 @@ export function indexSkeletonHtml({kind,layout='big',mode='alphabet'}:{kind?:str
   const company=kind==='studios'||kind==='agencies'||kind==='series';
   const cell='<span class="icell"><span class="ring skeleton"></span><span class="nm skeleton">&nbsp;</span><span class="n skeleton">&nbsp;</span></span>';
   const body=`<div class="igrid" data-cells="${company?'company':'people'}" data-layout="${esc(layout)}">${cell.repeat(12)}</div>`;
-  const label='正在读取索引';
+  const label=t('shell:loadingSkeleton.index');
   return `<div class="skeletonpanel index-skeleton" data-skeleton="index/${esc(kind)}/${esc(layout)}/${esc(mode)}" data-fill=""
     role="status" aria-label="${label}"><span class="sr-only">${label}</span><section aria-hidden="true">${body}</section></div>`;
 }

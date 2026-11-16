@@ -20,6 +20,12 @@ from peach.gpu_linux import LinuxGpuCounters
 from peach.gpu_usage import GpuCounters
 
 
+def said(reason, language='zh-CN'):
+    """GPU 读数原因是一句带 code 的话（ADR-0159），按语言渲染出来再比对。"""
+    from peach import interface_text
+    return interface_text.text(f"server:{reason['code']}", reason.get('params'), language)
+
+
 class PlatformCpuTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -123,7 +129,7 @@ class PlatformCpuTests(unittest.TestCase):
         values, state, reason = counter.sample()
         self.assertIsNone(values)
         self.assertEqual(state, 'unavailable')
-        self.assertIn('macOS', reason)
+        self.assertIn('macOS', said(reason))
 
 
 class LinuxGpuTests(unittest.TestCase):
@@ -178,7 +184,7 @@ class LinuxGpuTests(unittest.TestCase):
         values, state, reason = self.sample({10: 1.0, 20: 2.0})
         self.assertIsNone(values)
         self.assertEqual(state, 'unavailable')
-        self.assertIn('共享', reason)
+        self.assertIn('共享', said(reason))
 
     def test_missing_container_device_or_process_permissions_are_unavailable(self):
         self.devices.rmdir()
@@ -188,7 +194,7 @@ class LinuxGpuTests(unittest.TestCase):
             values, state, reason = self.sample()
         self.assertIsNone(values)
         self.assertEqual(state, 'unavailable')
-        self.assertIn('denied', reason)
+        self.assertIn('denied', said(reason))
 
     def test_driver_without_engine_counters_is_not_idle_zero(self):
         path = self.fd(10, 4, 0)
@@ -196,7 +202,7 @@ class LinuxGpuTests(unittest.TestCase):
         values, state, reason = self.sample()
         self.assertIsNone(values)
         self.assertEqual(state, 'unavailable')
-        self.assertIn('未提供', reason)
+        self.assertIn('未提供', said(reason))
 
     def test_readable_process_with_no_gpu_descriptors_is_idle(self):
         folder = self.root / 'proc/10/fdinfo'

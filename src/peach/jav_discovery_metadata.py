@@ -12,10 +12,11 @@ from urllib.parse import urlsplit
 from .catalog_rules import normalise_code_key
 from .fsutil import atomic_write_text
 from .javdb_public import (PUBLIC_API, PublicBudgetExceeded, PublicRequestBudget, PublicSourceUnavailable,
-                          public_cache_scope, cache_checked_at, cache_error)
+                          public_cache_scope, cache_checked_at, cache_failure)
 from .jav_cache import cache_fresh
 from .javdb_identity import RULE
 from .jobs import BackgroundJob
+from .metadata import relay_args
 
 MAX_ITEMS = 100
 MAX_RECORDS = 2048
@@ -198,8 +199,8 @@ class DiscoveryMetadata:
                 try:
                     movie = self.api.movie(code, refresh=True) if refresh else self.api.movie(code)
                     self.remember(code, movie, checked_at=cache_checked_at('movie:' + code, exact=True))
-                    if cache_error('movie:' + code):
-                        raise PublicSourceUnavailable(cache_error('movie:' + code))
+                    if failure := cache_failure('movie:' + code):
+                        raise PublicSourceUnavailable(*relay_args(failure))
                     successful.add(code)
                     failures.discard(code)
                 except PublicBudgetExceeded:

@@ -7,6 +7,9 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+from peach.jav_cover_fetch import NotFound
+from peach.metadata import relayed
+
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
@@ -281,11 +284,11 @@ class DurationEvidenceTests(unittest.TestCase):
         # `bbsxv.xyz-DOCP-324` 目录里只有一条 90 秒的广告，DOCP-324 本身 120 分钟。
         confirmed, reason = confirm.duration_confirms_code(90, 120)
         self.assertFalse(confirmed)
-        self.assertIn("超出容差", reason)
+        self.assertIn("outside tolerance", reason)
 
     def test_no_runtime_from_the_source_decides_nothing(self):
         self.assertEqual(confirm.duration_confirms_code(3600, None),
-                         (False, "来源没有给片长"))
+                         (False, "the source gave no runtime"))
 
     def test_the_longest_video_is_the_feature(self):
         """目录里还躺着论坛文宣和封面图，拿它们比片长必然对不上。"""
@@ -307,12 +310,12 @@ class ConfirmScriptTests(unittest.TestCase):
 
         def query(self, code, **_):
             self.asked.append(code)
-            raise LookupError("r18.dev 没有这个番号")
+            raise NotFound(*relayed("HTTP 404"))
 
         def community(self, code, **_):
             runtime = self.runtimes.get(code)
             if runtime is None:
-                raise LookupError("社区来源都没有这个番号")
+                raise NotFound("errors.libraryProcessing.communitySaidNo")
             # 真实返回顺序里 javbus 排在 javdb 前面，`n0780` 它报的是 36 分。
             return [("javbus", {"runtime": 36}), ("javdb", {"runtime": runtime})]
 

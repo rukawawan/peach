@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from . import interface_text
 from .processing_traffic_plan import MIB, typical_size
 
 
@@ -68,15 +69,17 @@ class ProcessingStorage:
         volumes = {}
         from .storage_budget import load_policy, reserve_bytes
         policy = load_policy(self.config)
+        # 显示名是 code（ADR-0159）：`labels` 放 zh-CN 原文，`label_codes` 同序。
         for path, label, retained, transient in (
-                (self.generated, '预览与封面', generated, 0),
-                (self.sources, '影片资料', source_bytes, 0),
-                (self.temporary, '临时文件', 0, temporary)):
+                (self.generated, 'labels.processingTraffic.previews', generated, 0),
+                (self.sources, 'labels.processingTraffic.metadata', source_bytes, 0),
+                (self.temporary, 'labels.processingTraffic.temporary', 0, temporary)):
             key, free, mount, total = volume_space(path)
-            volume = volumes.setdefault(key, dict(path=mount, labels=[], free_bytes=free,
+            volume = volumes.setdefault(key, dict(path=mount, labels=[], label_codes=[], free_bytes=free,
                 estimated_bytes=0, temporary_bytes=0,
                 reserve_bytes=reserve_bytes(policy, total) if total is not None else None))
-            volume['labels'].append(label)
+            volume['labels'].append(interface_text.text(f'server:{label}'))
+            volume['label_codes'].append(label)
             volume['estimated_bytes'] += retained
             volume['temporary_bytes'] += transient
         for volume in volumes.values():

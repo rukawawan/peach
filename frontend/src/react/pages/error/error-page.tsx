@@ -8,15 +8,16 @@ import { ButtonLink } from '@/components/base/buttons/button';
 
 import { AuthCard } from '../auth-card';
 import type { PageData } from '../page-data';
+import { t } from '../../../i18n';
 
 const TITLES: Readonly<Record<string, string>> = {
-  403: '这里不能打开',
-  404: '四〇四',
-  409: '现在不能这样做',
+  403: t('shell:errorPage.forbidden'),
+  404: t('shell:errorPage.notFound'),
+  409: t('shell:errorPage.conflict'),
 };
 
 export function errorTitle(status: string | undefined): string {
-  return TITLES[status ?? ''] ?? '出了点问题';
+  return TITLES[status ?? ''] ?? t('shell:errorPage.generic');
 }
 
 export function ErrorPage({ data }: { data: PageData }) {
@@ -26,7 +27,7 @@ export function ErrorPage({ data }: { data: PageData }) {
   }, [title]);
   return (
     <AuthCard title={title} lede={data.status === '404' ? undefined : data.detail}>
-      <ButtonLink href="/" className="self-start">返回首页</ButtonLink>
+      <ButtonLink href="/" className="self-start">{t('shell:errorPage.goHome')}</ButtonLink>
     </AuthCard>
   );
 }

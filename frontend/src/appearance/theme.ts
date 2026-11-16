@@ -6,10 +6,11 @@
  * meta 各代表一档，选中的那枚开到 `all`、另一枚关成 `not all`，否则手机上的地址栏还留在系统那一档。
  * `index.html` 的首屏内联脚本做的是同三件事，它只负责第一帧，之后都从这里出。 */
 import { appSettingsStore } from './settings';
+import { t } from '../i18n';
 
 /** `[值, 显示名, 字形]`：设置面板那一组三档。显示器那枚字形说的是「跟着这台显示器」。 */
 export const THEME_OPTIONS: readonly (readonly [value: string, label: string, icon: string])[] = [
-  ['system', '跟随系统', 'monitor'], ['light', '浅色', 'sun'], ['dark', '深色', 'moon'],
+  ['system', t('settings:shared.followSystem'), 'monitor'], ['light', t('settings:theme.light'), 'sun'], ['dark', t('settings:theme.dark'), 'moon'],
 ];
 
 let systemDark: MediaQueryList | null = null;

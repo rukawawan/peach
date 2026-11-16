@@ -15,6 +15,8 @@ from peach.repository import LedgerDatabase
 from peach.task_runs import (
     TaskRunConflict,
     TaskRunStore,
+    item_progress,
+    run_error,
     stamp,
     task_label,
 )
@@ -116,9 +118,55 @@ class TaskRunStoreTests(unittest.TestCase):
         skipped = self.store.query(status="cancelled")[0]
         self.assertEqual(skipped.trigger, "scheduled")
         self.assertEqual(skipped.result_summary["blocked_by"], first.id)
-        self.assertIn(str(first.id), skipped.error)
+        self.assertEqual(skipped.error, f"与第 {first.id} 轮（手动触发）冲突，本次跳过")
+        self.assertEqual((skipped.error_code, skipped.error_params),
+                         ("taskRun.error.skippedBy", {"run": first.id, "trigger": "manual"}))
         # 跳过的那一轮从没开跑，所以没有开始时刻可报。
         self.assertIsNone(skipped.started_at)
+
+    def test_a_progress_label_keeps_its_code_and_a_plain_one_clears_it(self):
+        run = self.store.start("entity-avatar", trigger="manual", **item_progress("entity-avatar", "涼森れむ"))
+        stored = self.store.get(run.id)
+        self.assertEqual((stored.progress_label, stored.progress_code, stored.progress_params),
+                         ("资料图片补全：涼森れむ", "taskRun.progress.item", {"name": "涼森れむ"}))
+        self.assertTrue(self.store.progress(run.id, current=1, throttle=0))
+        self.assertEqual(self.store.get(run.id).progress_code, "taskRun.progress.item")
+        # 只给原文的那一句不能沿用上一句的 code，否则界面会把它译成上一句。
+        self.assertTrue(self.store.progress(run.id, label="比对封面", throttle=0))
+        self.assertEqual(self.store.get(run.id).payload()["progress_code"], "")
+        self.store.suspend(run.id)
+        waiting = self.store.get(run.id)
+        self.assertEqual((waiting.progress_label, waiting.progress_code),
+                         ("等待安装完成后继续", "taskRun.progress.waitingForUpdate"))
+
+    def test_coded_text_is_not_stored_and_is_rendered_when_read(self):
+        # ADR-0159：带 code 的说明与结束原因只存 code 与参数，读出时按资源渲染；没有 code 的原文照存。
+        from peach.task_outcomes import part, said
+        run = self.store.start("entity-avatar", trigger="manual", **item_progress("entity-avatar", "涼森れむ"))
+        self.store.finish(run.id, "succeeded", summary={"name": "涼森れむ", **said(part("installed")),
+                                                         **said(part("sourceCover", code="ABC-001"), field="source")})
+        failed = self.store.start("demo", trigger="manual")
+        self.store.finish(failed.id, "failed", error="RuntimeError: 原文")
+        with closing(sqlite3.connect(self.db)) as connection:
+            rows = dict(connection.execute("SELECT id, coalesce(progress_label,'') || '|' || coalesce(error,'') "
+                                           "FROM task_run").fetchall())
+        self.assertEqual(rows, {run.id: "|", failed.id: "|RuntimeError: 原文"})
+        payload = self.store.get(run.id).payload()
+        self.assertEqual(payload["progress_label"], "资料图片补全：涼森れむ")
+        self.assertEqual((payload["result_summary"]["outcome"], payload["result_summary"]["source"]),
+                         ("已保存资料图片", "作品封面 ABC-001"))
+        self.assertEqual(payload["result_summary"]["outcome_parts"], [{"code": "installed", "params": {}}])
+
+    def test_queued_followups_carry_the_code_of_their_label(self):
+        from peach.followups import Followup
+        parent = self.store.start("library-processing", trigger="manual")
+        queued = self.store.enqueue_followups(parent.id, [
+            Followup.item("entity-avatar:performer:1", "entity-avatar", "涼森れむ").as_row(),
+            ("studio-mark:2", "studio-mark", "旧写法")])
+        coded, plain = (self.store.get(run_id) for run_id in queued["queued"])
+        self.assertEqual((coded.progress_code, coded.progress_params), ("taskRun.progress.item", {"name": "涼森れむ"}))
+        self.assertEqual((plain.progress_label, plain.progress_code), ("旧写法", ""))
+        self.assertEqual(run_error("unknownFollowup", "no-such-task")["error"], "没有登记 no-such-task 这种后继")
 
     def test_manual_conflict_raises_with_the_blocking_run_id(self):
         first = self.store.start("demo", trigger="scheduled", mutex_key="demo")
@@ -234,6 +282,7 @@ class TaskRunStoreTests(unittest.TestCase):
         self.assertEqual(self.store.recover_interrupted(), [run.id])
         recovered = self.store.get(run.id)
         self.assertEqual(recovered.status, "interrupted")
+        self.assertEqual((recovered.error, recovered.error_code), ("服务重启，这一轮没有跑完", "taskRun.error.interrupted"))
         self.assertIsNotNone(recovered.finished_at)
         # 打断不是失败：任务没有得出坏结果，只是没跑完。
         self.assertNotEqual(recovered.status, "failed")
@@ -367,10 +416,10 @@ class TaskRunStoreTests(unittest.TestCase):
         self.assertEqual(finished.progress_current, 2)
         with self.assertRaises(RuntimeError):
             with self.store.track("demo", trigger="cli") as failing:
-                raise RuntimeError("来源离线")
+                raise RuntimeError("source offline")
         broken = self.store.get(failing.run_id)
         self.assertEqual(broken.status, "failed")
-        self.assertIn("来源离线", broken.error)
+        self.assertIn("source offline", broken.error)
 
     def test_track_hands_back_an_inert_handle_when_the_mutex_is_taken(self):
         self.store.start("demo", trigger="manual", mutex_key="demo")

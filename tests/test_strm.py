@@ -63,7 +63,7 @@ class StrmTextTests(unittest.TestCase):
                 self.assertEqual(medium_of(name), 'video')
                 connection.execute('INSERT INTO asset(id,location,path,name,medium) VALUES(?,?,?,?,?)',
                                    (index, 'local', 'R:\\media\\' + name, name, 'video'))
-        measured = (10, 1280, 720, 'h264', 24, None, '速食', '横屏', '720P', 3)
+        measured = (10, 1280, 720, 'h264', 24, None, 'quick', 'landscape', '720P', 3)
         with patch('peach.media_probe.measure', return_value=measured) as measure:
             policy.save(self.root, True)
             self.assertEqual(probe_unmeasured(db, 'ffprobe', 'local', 'R:\\media'), 1)

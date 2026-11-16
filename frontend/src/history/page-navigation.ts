@@ -153,6 +153,12 @@ function installPageNavigation(): void {
       visits.set(visitKey(next.location), restoring);
     }
     active = next;
+    // 路由根在同一次历史变化里同步提交，没重画的页面可能先于这里报过就绪：不再等它。
+    if (positioned === next.seq) {
+      restoring = undefined;
+      contentReady = true;
+      releaseScrollAnchor(next.seq);
+    }
   });
 }
 
@@ -183,6 +189,21 @@ export function requestPageTop(): void {
   if (positioned !== requestedTop) return;
   requestedTop = -1;
   scrollPage({ top: 0, behavior: routeScrollBehavior() });
+}
+
+/** 这一次导航没有重画页面（详情撤下露出背景页、页内改写地址）：位置保持现状，只放开导航时的锚定。 */
+export function settlePageNavigation(): void {
+  installPageNavigation();
+  const { seq, location } = peachHistory.navigation;
+  if (!page(location.pathname) || positioned === seq) return;
+  positioned = seq;
+  restoring = undefined;
+  contentReady = true;
+  if (requestedTop === seq) {
+    requestedTop = -1;
+    scrollPage({ top: 0, behavior: routeScrollBehavior() });
+  }
+  releaseScrollAnchor(seq);
 }
 
 /** 新页面骨架就位即可开始导航；历史位置等待内容高度恢复，锚点等待目标出现。 */

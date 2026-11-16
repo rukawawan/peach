@@ -199,10 +199,10 @@ describe('一张卡', () => {
     vi.stubGlobal('fetch', fetchMock(200, answer([junk(1)])));
     const { host, update } = await open(props());
     const labels = () => [...cards(host)[0]!.querySelectorAll('[data-junk-action] [data-junk-label]')].map((el) => el.textContent);
-    expect(labels()).toEqual(['打开位置', '不是垃圾', '移入回收站']);
+    expect(labels()).toEqual(['查看位置', '不是垃圾', '移入回收站']);
     await update({ view: 'dismissed' });
     await settle();
-    expect(labels()).toEqual(['打开位置', '重新判断', '移入回收站']);
+    expect(labels()).toEqual(['查看位置', '重新判断', '移入回收站']);
   });
 
   it('处置交给壳：请求期间那颗键忙，失败后恢复成可点', async () => {

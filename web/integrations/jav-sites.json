@@ -361,6 +361,20 @@
       "detail_pattern": "^/(?:(?:av|amateur)/content/?|(?:digital/(?:videoa|videoc)|mono/dvd)/-/detail/=/cid=([A-Za-z0-9_]+)/?)$"
     },
     {
+      "id": "fanza-clip",
+      "label": "FANZA 剪辑",
+      "kind": "发行平台",
+      "domains": [
+        "clip.fanza.jp"
+      ],
+      "mode": "automatic",
+      "identity": "peach",
+      "query_keys": [
+        "id"
+      ],
+      "detail_pattern": "^/moment/?$"
+    },
+    {
       "id": "mgs",
       "label": "MGS",
       "kind": "发行平台",

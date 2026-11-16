@@ -14,9 +14,11 @@ import {
   MEDIA_PROCESSING_KEY, MEDIA_PROCESSING_URL, THUMBNAIL_JOBS_KEY, fetchMediaProcessing, type MediaProcessingPolicy,
 } from '../settings-panel/settings-data';
 import { LIBRARY_PROCESSING_KEY } from '../library-processing/library-processing';
-import { ErrorText, Help, Rows, Section, Stack } from './section';
+import { TaskProgress } from '../components/task-progress';
+import { ErrorText, Rows, Section, Stack } from './section';
 import { useAction } from './use-action';
 import { VideoThumbnailControls } from './service-preferences';
+import { t } from '../../i18n';
 
 export function MediaProcessingSettings({ receipt }: { receipt(message: string): void }) {
   const policy = useQuery({ queryKey: MEDIA_PROCESSING_KEY, queryFn: ({ signal }) => fetchMediaProcessing(signal) });
@@ -24,39 +26,39 @@ export function MediaProcessingSettings({ receipt }: { receipt(message: string):
   const error = action.error || (policy.error ? errorMessage(policy.error) : '');
   const blocked = !policy.data || policy.isFetching || !!action.busy;
   return (
-    <Section guide="preview" title="视频预览">
+    <Section guide="preview" title={t('settings:videoPreviews.title')}>
       <Rows>
-        <SettingsRow label="生成视频预览" description="为本地视频生成九宫格与时间轴预览。">
-          <Switch aria-label="生成视频预览" isSelected={!!policy.data && !policy.data.metadata_only} isDisabled={blocked}
+        <SettingsRow label={t('settings:videoPreviews.generate')} description={t('settings:videoPreviews.generateHelp')}>
+          <Switch aria-label={t('settings:videoPreviews.generate')} isSelected={!!policy.data && !policy.data.metadata_only} isDisabled={blocked}
             onChange={(value) => void action.run('save', (signal) =>
               apiSend<MediaProcessingPolicy>(MEDIA_PROCESSING_URL, { metadata_only: !value }, 'POST', signal), (saved) => {
                 queryClient.setQueryData(MEDIA_PROCESSING_KEY, saved);
                 void queryClient.invalidateQueries({ queryKey: THUMBNAIL_JOBS_KEY });
                 void queryClient.invalidateQueries({ queryKey: LIBRARY_PROCESSING_KEY });
-                receipt(saved.metadata_only ? '已关闭视频预览生成' : '已开启视频预览生成');
+                receipt(saved.metadata_only ? t('settings:videoPreview.turnedOff') : t('settings:videoPreview.turnedOn'));
               })} />
         </SettingsRow>
       </Rows>
       <VideoThumbnailControls disabled={!policy.data || policy.data.metadata_only || !!action.busy} />
       <Rows>
-        <SettingsRow label="抽帧解码方式" description="用于生成封面、九宫格和时间轴。">
+        <SettingsRow label={t('settings:videoPreviews.decoder')} description={t('settings:videoPreviews.decoderHelp')}>
           <div id="previewAccelerationSetting">
-            <Select aria-label="抽帧解码方式" selectedKey={policy.data?.preview_acceleration || 'auto'} isDisabled={blocked}
+            <Select aria-label={t('settings:videoPreviews.decoder')} selectedKey={policy.data?.preview_acceleration || 'auto'} isDisabled={blocked}
               onSelectionChange={(mode) => {
                 if (mode === null) return;
                 void action.run('preview_acceleration', (signal) => apiSend<MediaProcessingPolicy>(MEDIA_PROCESSING_URL,
                   { preview_acceleration: String(mode) }, 'POST', signal), (saved) => {
                   queryClient.setQueryData(MEDIA_PROCESSING_KEY, saved);
-                  receipt('已保存抽帧解码方式');
+                  receipt(t('settings:videoPreview.decodingSaved'));
                 });
               }}>
-              <SelectItem id="auto">自动（硬件优先）</SelectItem>
-              <SelectItem id="software">软件解码</SelectItem>
+              <SelectItem id="auto">{t('settings:videoProcessing.autoHardwareFirst')}</SelectItem>
+              <SelectItem id="software">{t('settings:videoPreview.softwareDecoding')}</SelectItem>
             </Select>
           </div>
         </SettingsRow>
       </Rows>
-      {action.busy ? <Stack divided><Help role="status">正在保存…</Help></Stack> : null}
+      {action.busy ? <Stack divided><TaskProgress embedded kind="gather" label={t('settings:shared.saving')} /></Stack> : null}
       {error ? <Stack divided><ErrorText>{error}</ErrorText></Stack> : null}
     </Section>
   );
@@ -67,27 +69,27 @@ export function PlaybackTranscodeSettings({ receipt }: { receipt(message: string
   const action = useAction();
   const error = action.error || (policy.error ? errorMessage(policy.error) : '');
   return (
-    <Section guide="transcode" title="视频播放">
+    <Section guide="transcode" title={t('settings:transcoding.title')}>
       <Rows>
-        <SettingsRow label="转码方式" description="用于播放时的视频转码。">
+        <SettingsRow label={t('settings:transcoding.mode')} description={t('settings:transcoding.modeHelp')}>
           <div id="playbackAccelerationSetting">
-            <Select aria-label="转码方式" selectedKey={policy.data?.playback_acceleration || 'auto'}
+            <Select aria-label={t('settings:transcoding.mode')} selectedKey={policy.data?.playback_acceleration || 'auto'}
               isDisabled={!policy.data || policy.isFetching || !!action.busy}
               onSelectionChange={(mode) => {
                 if (mode === null) return;
                 void action.run('playback_acceleration', (signal) => apiSend<MediaProcessingPolicy>(MEDIA_PROCESSING_URL,
                   { playback_acceleration: String(mode) }, 'POST', signal), (saved) => {
                   queryClient.setQueryData(MEDIA_PROCESSING_KEY, saved);
-                  receipt('已保存转码方式');
+                  receipt(t('settings:playbackTranscode.saved'));
                 });
               }}>
-              <SelectItem id="auto">自动（硬件优先）</SelectItem>
-              <SelectItem id="software">软件编解码</SelectItem>
+              <SelectItem id="auto">{t('settings:videoProcessing.autoHardwareFirst')}</SelectItem>
+              <SelectItem id="software">{t('settings:playbackTranscode.software')}</SelectItem>
             </Select>
           </div>
         </SettingsRow>
       </Rows>
-      {action.busy ? <Stack divided><Help role="status">正在保存…</Help></Stack> : null}
+      {action.busy ? <Stack divided><TaskProgress embedded kind="gather" label={t('settings:shared.saving')} /></Stack> : null}
       {error ? <Stack divided><ErrorText>{error}</ErrorText></Stack> : null}
     </Section>
   );

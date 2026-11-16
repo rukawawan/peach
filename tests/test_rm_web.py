@@ -4,13 +4,13 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from peach import catalog_rules, jav_poster_crop, web_batch, web_catalog, web_entity, web_playlists, web_search, web_stats
+from peach import catalog_rules, interface_text, jav_poster_crop, web_batch, web_catalog, web_entity, web_playlists, web_search, web_stats
 from peach import web_contract as rm_web
 from peach.previews import entity_image_key, logo_key
 from peach.web_catalog import q_editions, q_items, q_parts
@@ -238,16 +238,16 @@ class WebDataTests(unittest.TestCase):
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             [
                 (1, "local", r"R:\\Media\\one.mp4", "one.mp4", "video", 100,
-                 "Alice", "Studio A", "ABC-001", 100, 1920, 1080, "速食", "横屏", "2K", "2026-08-14"),
+                 "Alice", "Studio A", "ABC-001", 100, 1920, 1080, "quick", "landscape", "2K", "2026-08-14"),
                 (2, "115", r"B:\\two.mp4", "two.mp4", "video", 200,
-                 "Bob", None, None, 200, 1080, 1920, "速食", "竖屏", "1080P", "2026-08-13"),
+                 "Bob", None, None, 200, 1080, 1920, "quick", "portrait", "1080P", "2026-08-13"),
                 (3, "local", r"R:\\Media\\cover.jpg", "cover.jpg", "image", 10,
                  "Alice", None, None, None, None, None, None, None, None, "2026-08-12"),
             ],
         )
         con.executemany(
             "INSERT INTO asset_tag(asset_id,tag,source) VALUES(?,?,?)",
-            [(1, "足交", "name"), (1, "演员:Alice", "performer"),
+            [(1, "足交", "name"), (1, "performer:Alice", "performer"),
              (1, "Canonical Alice", "vision"), (2, "竖屏", "probe")],
         )
         con.executemany(
@@ -626,12 +626,21 @@ class WebDataTests(unittest.TestCase):
         self.assertEqual(strict["items"], [])
         self.assertEqual({item["id"] for item in broad["items"]}, {1, 2})
 
+    def test_old_bookmark_filter_values_still_match(self):
+        """旧书签里的中文画幅、时长档与旧出演者前缀照认，结果与新 id 相同。"""
+        ids = lambda args: {item["id"] for item in rm_web.q_items(self.contract, {**args, "limit": "10"})["items"]}
+        self.assertEqual(ids({"orient": "竖屏"}), ids({"orient": "portrait"}))
+        self.assertEqual(ids({"orient": "portrait"}), {2})
+        self.assertEqual(ids({"len": "速食"}), ids({"len": "quick"}))
+        self.assertEqual(ids({"len": "quick"}), {1, 2})
+        self.assertEqual(ids({"tag": "演员:Alice"}), ids({"tag": "performer:Alice"}))
+
     def test_canonical_creator_beats_same_named_legacy_performer_tag(self):
-        """1065 类数据不能被旧 `演员:` 投影改成艺人。"""
+        """1065 类数据不能被旧 `performer:` 投影改成艺人。"""
         con = sqlite3.connect(self.db_path)
         con.execute(
             "INSERT INTO asset_tag(asset_id,tag,source) "
-            "VALUES(2,'演员:Canonical Creator','performer')"
+            "VALUES(2,'performer:Canonical Creator','performer')"
         )
         con.commit(); con.close()
 
@@ -654,13 +663,27 @@ class WebDataTests(unittest.TestCase):
         self.assertEqual(stats["tag_cov"], 2)
         self.assertIn("审核标签", {row["k"] for row in stats["top_tags"]})
 
+    def test_scraped_and_batch_tags_count_as_content_tags(self):
+        """#596：刮削与自动落库批次写的标签进内容标签排行与覆盖，不再只认旧来源名。"""
+        con = sqlite3.connect(self.db_path)
+        con.execute("DELETE FROM asset_tag")
+        con.executemany(
+            "INSERT INTO asset_tag(asset_id,tag,source) VALUES(?,?,?)",
+            [(1, "刮削标签", "javinizer:mgstage:tag"), (2, "刮削标签", "javinizer:makers:tag"),
+             (2, "批次标签", "auto:metadata-tags@20261101")])
+        con.commit(); con.close()
+        stats = rm_web.q_stats(self.contract)
+        self.assertEqual(stats["tag_cov"], 2)
+        self.assertEqual({row["k"]: row["n"] for row in stats["top_tags"]},
+                         {"刮削标签": 2, "批次标签": 1})
+
     def test_stats_band_videos_by_length_and_quality_in_probe_order(self):
         stats = rm_web.q_stats(self.contract)
         self.assertEqual(stats["by_length"], [
-            {"k": "速食", "n": 2}, {"k": "短", "n": 0}, {"k": "中", "n": 0}, {"k": "长", "n": 0}])
+            {"k": "quick", "n": 2}, {"k": "short", "n": 0}, {"k": "medium", "n": 0}, {"k": "long", "n": 0}])
         self.assertEqual(stats["by_quality"], [
             {"k": "4K", "n": 0}, {"k": "2K", "n": 1}, {"k": "1080P", "n": 1},
-            {"k": "720P", "n": 0}, {"k": "低画质", "n": 0}])
+            {"k": "720P", "n": 0}, {"k": "low", "n": 0, "label_code": "taste.qualityBand.low"}])
 
     def test_stats_play_activity_and_replays_count_each_work_once(self):
         """在线追更那条关联的馆藏视频自己播过，就只按馆藏那一次算；没关联的照常算。"""
@@ -749,9 +772,70 @@ class WebDataTests(unittest.TestCase):
             [("system", "系统盘"), ("local", "资源盘 1"), ("local", "资源盘 2"),
              ("115", "115 网盘"), ("pikpak", "PikPak 网盘")],
         )
+        # 显示名带 code，英文界面按 code 取译文。
+        self.assertEqual(
+            [interface_text.text(f"server:{row['label_code']}", row["label_params"], "en")
+             for row in stats["storage_volumes"]],
+            ["System drive", "Media drive 1", "Media drive 2", "115 cloud drive", "PikPak cloud drive"])
+        # 这几个根都不存在，认不出所在的卷，按根各算一卷。
         self.assertEqual(stats["storage_summary"], {
             "volumes": 5, "online": 5, "measured": 5,
             "free": 100, "used": 400, "total": 500,
+        })
+
+    def _storage_stats_for(self, system, declarations, volume_key=None):
+        """按给定的系统卷与来源根算一次存储卷汇总；每个根都在线、读到同一份 20/100 容量。"""
+        usage = type("Usage", (), {"free": 20, "total": 100})
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(web_stats, "LOCATION_ROOT_DECLARATIONS", declarations))
+            stack.enter_context(mock.patch.object(web_stats, "system_volume", return_value=system))
+            stack.enter_context(mock.patch.object(
+                web_stats, "translate_ledger_path", side_effect=lambda value: Path(value)))
+            stack.enter_context(mock.patch.object(web_stats, "root_online", return_value=True))
+            stack.enter_context(mock.patch("shutil.disk_usage", return_value=usage))
+            if volume_key is not None:
+                stack.enter_context(mock.patch.object(web_stats, "_volume_key", side_effect=volume_key))
+            stats = rm_web.q_stats(self.contract)
+        for row in stats["storage_volumes"]:
+            self.assertEqual(set(row), {"kind", "label", "label_code", "label_params",
+                                        "root", "online", "free", "used", "total"})
+        return stats
+
+    def test_storage_summary_counts_roots_on_one_disk_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = (str(Path(tmp) / "a"), str(Path(tmp) / "b"))
+            for root in roots:
+                Path(root).mkdir()
+            stats = self._storage_stats_for(Path("X:/"), {"local": roots})
+        self.assertEqual([row["label"] for row in stats["storage_volumes"]],
+                         ["系统盘", "资源盘 1", "资源盘 2"])
+        self.assertEqual(stats["storage_summary"], {
+            "volumes": 2, "online": 2, "measured": 2,
+            "free": 40, "used": 160, "total": 200,
+        })
+
+    def test_storage_summary_counts_media_roots_on_the_system_disk_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = (str(Path(tmp) / "a"), str(Path(tmp) / "b"))
+            for root in roots:
+                Path(root).mkdir()
+            stats = self._storage_stats_for(Path(tmp), {"local": roots})
+        self.assertEqual(len(stats["storage_volumes"]), 3)
+        self.assertEqual(stats["storage_summary"], {
+            "volumes": 1, "online": 1, "measured": 1,
+            "free": 20, "used": 80, "total": 100,
+        })
+        self.assertEqual(stats["system_disk"]["total"], 100)
+
+    def test_storage_summary_adds_up_different_disks(self):
+        declarations = {"local": ("R:/media", "R:/more", "S:/media"), "115": ("B:/",)}
+        stats = self._storage_stats_for(
+            Path("X:/"), declarations,
+            volume_key=lambda root: ("device", str(root)[0]))
+        self.assertEqual(len(stats["storage_volumes"]), 5)
+        self.assertEqual(stats["storage_summary"], {
+            "volumes": 4, "online": 4, "measured": 4,
+            "free": 80, "used": 320, "total": 400,
         })
 
     def test_items_support_duration_range(self):
@@ -793,12 +877,12 @@ class WebDataTests(unittest.TestCase):
             self.contract, scope_kind="creator", scope_name="Canonical Creator",
         )
         self.assertEqual({row["k"] for row in creator["locations"]}, {"local", "115"})
-        self.assertEqual({row["k"] for row in creator["orientations"]}, {"横屏", "竖屏"})
+        self.assertEqual({row["k"] for row in creator["orientations"]}, {"landscape", "portrait"})
         self.assertEqual(creator["stats"]["duration"], 2)
 
         item = rm_web.q_facets(self.contract, asset_id=1)
         self.assertEqual(item["locations"], [{"k": "local", "n": 1, "played": 0}])
-        self.assertEqual(item["orientations"], [{"k": "横屏", "n": 1}])
+        self.assertEqual(item["orientations"], [{"k": "landscape", "n": 1}])
         self.assertEqual([row["k"] for row in item["creators"]], ["Canonical Creator"])
         self.assertEqual([row["k"] for row in item["tags"]], ["足交"])
         self.assertEqual(item["stats"]["duration"], 1)
@@ -890,7 +974,7 @@ class WebDataTests(unittest.TestCase):
 
         flagged = rm_web.q_facets(self.contract, state="flagged")
         self.assertEqual({row["k"] for row in flagged["locations"]}, {"115"})
-        self.assertEqual({row["k"] for row in flagged["orientations"]}, {"竖屏"})
+        self.assertEqual({row["k"] for row in flagged["orientations"]}, {"portrait"})
         local = rm_web.q_facets(self.contract, filters={"loc": "local"})
         remote = rm_web.q_facets(self.contract, filters={"loc": "115"})
         self.assertEqual(local['stats']['total'], 1)
@@ -1229,12 +1313,12 @@ class WebDataTests(unittest.TestCase):
         self.assertNotIn("error", first)
         with contract.write_transaction() as connection:
             connection.execute("UPDATE asset SET play_count=3 WHERE id=1")
-        failing = mock.Mock(side_effect=RuntimeError("账本读取失败"))
+        failing = mock.Mock(side_effect=RuntimeError("database is locked"))
         with mock.patch.object(web_stats, "q_taste", failing):
             failed = get()
             self.assertEqual((failed["stale"], failed["error"], failed["computed_at"]),
-                             (True, "账本读取失败", first["computed_at"]))
-            self.assertEqual(get()["error"], "账本读取失败")
+                             (True, "database is locked", first["computed_at"]))
+            self.assertEqual(get()["error"], "database is locked")
             self.assertEqual(failing.call_count, 1, "退避期内同一份输入不再重算")
             later = web_stats.time.monotonic() + web_stats.TASTE_RETRY_AFTER + 1
             with mock.patch.object(web_stats.time, "monotonic", return_value=later):
@@ -1247,10 +1331,10 @@ class WebDataTests(unittest.TestCase):
 
         web_stats._TASTE_SNAPSHOTS.clear()
         web_stats._taste_snapshot_path(contract, "all").unlink()
-        failing = mock.Mock(side_effect=RuntimeError("账本读取失败"))
+        failing = mock.Mock(side_effect=RuntimeError("database is locked"))
         with mock.patch.object(web_stats, "q_taste", failing):
             for _ in range(2):
-                with self.assertRaisesRegex(RuntimeError, "账本读取失败"):
+                with self.assertRaisesRegex(RuntimeError, "database is locked"):
                     get()
         self.assertEqual(failing.call_count, 1)
 
@@ -1813,7 +1897,7 @@ class WebDataTests(unittest.TestCase):
         con.commit(); con.close()
         groups = rm_web._edition_groups(self.contract, ["ABF-234"])
         self.assertEqual(list(groups), ["ABF-234"])
-        self.assertEqual([item["edition"] for item in groups["ABF-234"]], ["有码", "无码破解"])
+        self.assertEqual([item["edition"] for item in groups["ABF-234"]], ["censored", "uncensored-crack"])
         # 正片在前只是要一个稳定的锚点：次序一变，卡片标题就跟着换。
         self.assertEqual(groups["ABF-234"][0]["id"], 9001)
 
@@ -2456,9 +2540,9 @@ class WebDataTests(unittest.TestCase):
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             [
                 (4, "local", r"R:\Media\four.mp4", "four.mp4", "video", 400,
-                 None, "ラグジュTV", "259LUXU-1509", 400, 1280, 720, "速食", "横屏", "720P", "2026-08-11"),
+                 None, "ラグジュTV", "259LUXU-1509", 400, 1280, 720, "quick", "landscape", "720P", "2026-08-11"),
                 (5, "local", r"R:\Media\five.mp4", "five.mp4", "video", 500,
-                 None, None, None, 500, 1920, 1080, "速食", "横屏", "2K", "2026-08-10"),
+                 None, None, None, 500, 1920, 1080, "quick", "landscape", "2K", "2026-08-10"),
             ],
         )
         con.execute("INSERT INTO asset_entity(asset_id,entity_id,role,source,confidence) "
@@ -2663,7 +2747,7 @@ class WebDataTests(unittest.TestCase):
             "INSERT INTO asset_entity(asset_id,entity_id,role,source,confidence)"
             " VALUES(1,20,'performer','test',1.0)")
         con.execute(
-            "INSERT INTO asset_tag(asset_id,tag,source) VALUES(1,'演员:飯岡かなこ','performer')")
+            "INSERT INTO asset_tag(asset_id,tag,source) VALUES(1,'performer:飯岡かなこ','performer')")
         con.commit(); con.close()
 
     def _names_of(self, entity_id=20):
@@ -2674,7 +2758,7 @@ class WebDataTests(unittest.TestCase):
             "SELECT alias,source FROM entity_alias WHERE entity_id=?", (entity_id,))}
         # 只看这两个写法：夹具本来就给 asset 1 挂着另一位女优的扁平标签。
         tags = [row[0] for row in con.execute(
-            "SELECT tag FROM asset_tag WHERE tag IN ('演员:飯岡かなこ','演员:森泽佳奈')"
+            "SELECT tag FROM asset_tag WHERE tag IN ('performer:飯岡かなこ','performer:森泽佳奈')"
             " ORDER BY tag")]
         con.close()
         return canonical, aliases, tags
@@ -2695,7 +2779,7 @@ class WebDataTests(unittest.TestCase):
         self.assertEqual(canonical, "森泽佳奈")
         self.assertEqual(aliases.get("飯岡かなこ"), "user:preferred-name")
         # 扁平投影跟着走，否则卡片上还写着旧名、按旧名也照样查得到。
-        self.assertEqual(tags, ["演员:森泽佳奈"])
+        self.assertEqual(tags, ["performer:森泽佳奈"])
         self.assertEqual(result["flat_rewritten"], 1)
 
     def test_preferred_name_can_be_chosen_back(self):
@@ -2708,7 +2792,7 @@ class WebDataTests(unittest.TestCase):
         canonical, aliases, tags = self._names_of()
         self.assertEqual(canonical, "飯岡かなこ")
         self.assertIn("森泽佳奈", aliases)
-        self.assertEqual(tags, ["演员:飯岡かなこ"])
+        self.assertEqual(tags, ["performer:飯岡かなこ"])
 
     def test_preferred_name_is_a_no_op_when_it_is_already_the_canonical_one(self):
         self._performer_with_two_names()
@@ -3141,13 +3225,13 @@ class JavModeAndCoverTests(unittest.TestCase):
         )
         self.assertEqual(subtitled, {
             "display_code": "CJOD-175", "display_title": "",
-            "edition_badges": ["中字"],
+            "edition_badges": ["chinese-subtitles"],
         })
         self.assertEqual(advertised["display_title"], "")
         self.assertEqual(uncensored["display_title"], "Hinata Mio")
         # 有码片商的番号上，`Uncen` 说的是破解版。
-        self.assertEqual(uncensored["edition_badges"], ["无码破解"])
-        self.assertEqual(cracked["edition_badges"], ["无码破解"])
+        self.assertEqual(uncensored["edition_badges"], ["uncensored-crack"])
+        self.assertEqual(cracked["edition_badges"], ["uncensored-crack"])
 
     def test_uncensored_release_names_are_not_shown_as_titles(self):
         """无码片的文件名由「发行站 + 番号 + 画质/分卷」拼成，一个标题词都没有。
@@ -3204,7 +3288,7 @@ class JavModeAndCoverTests(unittest.TestCase):
             ("122614_001-1pon-whole1_hd.avi", "122614-947"),
         ):
             self.assertEqual(
-                rm_web.jav_display_metadata(name, code)["edition_badges"], ["无码"], name)
+                rm_web.jav_display_metadata(name, code)["edition_badges"], ["uncensored"], name)
         # 有码番号不能因为这条判据凭空拿到徽章。
         for name, code in (("ABW-220.mp4", "ABW-220"), ("MIDE-925-4K.mp4", "MIDE-925")):
             self.assertEqual(
@@ -3218,12 +3302,12 @@ class JavModeAndCoverTests(unittest.TestCase):
         ):
             row = rm_web.jav_display_metadata(name, code)
             self.assertEqual(row["display_title"], "", name)
-            self.assertEqual(row["edition_badges"], ["中字"], name)
+            self.assertEqual(row["edition_badges"], ["chinese-subtitles"], name)
         # `-UN` 和 `-U`／`-UC` 是同一个意思；标题判空后不认它就等于丢掉这条信息。
         # 有码片商的番号上，它说的是破解版。
         self.assertEqual(
             rm_web.jav_display_metadata("ABF-158-UN.mp4", "ABF-158")["edition_badges"],
-            ["无码破解"])
+            ["uncensored-crack"])
         # 相邻字母不能被当成版次标记吞掉。
         self.assertEqual(
             rm_web.jav_display_metadata("ABC-123CHAPTER.mp4", "ABC-123")["edition_badges"], [])
@@ -3232,21 +3316,21 @@ class JavModeAndCoverTests(unittest.TestCase):
         """无码片商的片是无码，明写流出的是流出，有码番号上其余的无码标记都是破解。"""
         badges = catalog_rules.jav_edition_badges
         for name, code, tags, expected in (
-            ("SSIS-698-UC.mp4", "SSIS-698", (), ["无码破解"]),
-            ("www.98T.la@ABW-358-U.mp4", "ABW-358", (), ["无码破解"]),
-            ("300MIUM-123-U.mp4", "300MIUM-123", (), ["无码破解"]),
-            ("ABP-123.mp4", "ABP-123", ("无码",), ["无码破解"]),
+            ("SSIS-698-UC.mp4", "SSIS-698", (), ["uncensored-crack"]),
+            ("www.98T.la@ABW-358-U.mp4", "ABW-358", (), ["uncensored-crack"]),
+            ("300MIUM-123-U.mp4", "300MIUM-123", (), ["uncensored-crack"]),
+            ("ABP-123.mp4", "ABP-123", ("无码",), ["uncensored-crack"]),
             # `-C-U` 整个是破解标记，不另算中字；`-UMR` 同理。
-            ("ABP-123-C-U.mp4", "ABP-123", (), ["无码破解"]),
-            ("ABP-123-UMR.mp4", "ABP-123", (), ["无码破解"]),
-            ("STARS-141 UNCENSORED leaked 演员名.mp4", "STARS-141", (), ["无码流出"]),
-            ("STARS-160_UNCENSORED_Leaked.mp4", "STARS-160", (), ["无码流出"]),
-            ("ABP-123-流出.mp4", "ABP-123", (), ["无码流出"]),
+            ("ABP-123-C-U.mp4", "ABP-123", (), ["uncensored-crack"]),
+            ("ABP-123-UMR.mp4", "ABP-123", (), ["uncensored-crack"]),
+            ("STARS-141 UNCENSORED leaked 演员名.mp4", "STARS-141", (), ["uncensored-leak"]),
+            ("STARS-160_UNCENSORED_Leaked.mp4", "STARS-160", (), ["uncensored-leak"]),
+            ("ABP-123-流出.mp4", "ABP-123", (), ["uncensored-leak"]),
             # 无码片商与 FC2 这类本身可能无码的片，`-U` 不改成破解。
-            ("SMBD-120-U.mp4", "SMBD-120", (), ["无码"]),
-            ("010124-001-carib.mp4", "010124-001", (), ["无码"]),
-            ("FC2-PPV-1234567-U.mp4", "FC2-PPV-1234567", (), ["无码"]),
-            ("FC2-PPV-1234567.mp4", "FC2-PPV-1234567", ("无码",), ["无码"]),
+            ("SMBD-120-U.mp4", "SMBD-120", (), ["uncensored"]),
+            ("010124-001-carib.mp4", "010124-001", (), ["uncensored"]),
+            ("FC2-PPV-1234567-U.mp4", "FC2-PPV-1234567", (), ["uncensored"]),
+            ("FC2-PPV-1234567.mp4", "FC2-PPV-1234567", ("无码",), ["uncensored"]),
         ):
             self.assertEqual(badges(name, code, tags), expected, name)
 
@@ -3254,12 +3338,12 @@ class JavModeAndCoverTests(unittest.TestCase):
         """网盘离线下载的文件名只剩番号，`ch`、「中文字幕」留在种子名或任务名上。"""
         badges = catalog_rules.jav_edition_badges
         self.assertEqual(badges("SONE-804 作品标题.mp4", "SONE-804", (),
-                                ("+++ [FHDC] SONE-804 作品标题", "SONE-804ch")), ["中字"])
-        self.assertEqual(badges("ABP-123.mp4", "ABP-123", (), ("ABP-123 中文字幕",)), ["中字"])
-        self.assertEqual(badges("ABP-123.mp4", "ABP-123", (), ("ABP-123-U",)), ["无码破解"])
+                                ("+++ [FHDC] SONE-804 作品标题", "SONE-804ch")), ["chinese-subtitles"])
+        self.assertEqual(badges("ABP-123.mp4", "ABP-123", (), ("ABP-123 中文字幕",)), ["chinese-subtitles"])
+        self.assertEqual(badges("ABP-123.mp4", "ABP-123", (), ("ABP-123-U",)), ["uncensored-crack"])
         # 磁力名与任务名各给一半证据时取并集，不看先后。
         self.assertEqual(badges("ABP-123.mp4", "ABP-123", (), ("ABP-123-U", "ABP-123 无码破解")),
-                         ["无码破解"])
+                         ["uncensored-crack"])
         # 没有下载任务就没有来源名，结果与只看文件名相同。
         self.assertEqual(badges("ABP-123.mp4", "ABP-123", (), ()), [])
         # 种子名是另一部片的标记，不能借来：番号对不上就不算这部的版次。
@@ -3268,15 +3352,15 @@ class JavModeAndCoverTests(unittest.TestCase):
     def test_filename_wins_when_it_and_the_download_source_disagree(self):
         badges = catalog_rules.jav_edition_badges
         # 文件名只有泛泛的 `-U` 时，种子名里明说的流出压过它；文件名明说了的，种子名改不动。
-        self.assertEqual(badges("ABP-123-U.mp4", "ABP-123", (), ("ABP-123 流出",)), ["无码流出"])
-        self.assertEqual(badges("ABP-123-LTX.mp4", "ABP-123", (), ("ABP-123 流出",)), ["无码破解"])
+        self.assertEqual(badges("ABP-123-U.mp4", "ABP-123", (), ("ABP-123 流出",)), ["uncensored-leak"])
+        self.assertEqual(badges("ABP-123-LTX.mp4", "ABP-123", (), ("ABP-123 流出",)), ["uncensored-crack"])
         self.assertEqual(badges("ABP-123.mp4", "ABP-123", ["AI去码"], ("ABP-123-U",)),
-                         ["无码破解"])
+                         ["uncensored-crack"])
         # 无码片商的番号本身就是文件侧证据，种子名上的「破解」不覆盖它，但中字照样补。
         self.assertEqual(badges("040221-001.mp4", "040221-001", (),
-                                ("040221-001 破解 中文字幕",)), ["中字", "无码"])
+                                ("040221-001 破解 中文字幕",)), ["chinese-subtitles", "uncensored"])
         # 中字只有「有」一个方向：文件名有、种子名没有，不算矛盾。
-        self.assertEqual(badges("ABP-123-C.mp4", "ABP-123", (), ("ABP-123",)), ["中字"])
+        self.assertEqual(badges("ABP-123-C.mp4", "ABP-123", (), ("ABP-123",)), ["chinese-subtitles"])
 
     def test_release_sort_orders_official_dates_descending_and_missing_last(self):
         rows = rm_web.q_items(
@@ -3942,11 +4026,13 @@ class DuplicateDetectionTests(unittest.TestCase):
         只算三卷横屏，队列仍是整部作品。"""
         ids = [self.add("FC2-PPV-3189161", 600 + n, 1_000 * n, name=f"FC2-3189161-{n}.mp4") for n in range(1, 6)]
         lone = [self.add("FC2-PPV-4028828", 1000 + n, 2_000, name=f"FC2-4028828-{n}.mp4") for n in (1, 2)]
-        for asset_id, orient in zip(ids + lone, ["横屏"] * 3 + ["竖屏"] * 2 + ["横屏", "竖屏"]):
+        for asset_id, orient in zip(ids + lone, ["landscape"] * 3 + ["portrait"] * 2 + ["landscape", "portrait"]):
             self.con.execute("UPDATE asset SET ctx_orient=? WHERE id=?", (orient, asset_id))
         self.con.commit()
 
-        portrait = rm_web.q_items(self.contract, {"orient": "竖屏", "limit": "10"})["items"]
+        portrait = rm_web.q_items(self.contract, {"orient": "portrait", "limit": "10"})["items"]
+        # 旧书签里的 `orient=竖屏` 照认，结果相同。
+        self.assertEqual(rm_web.q_items(self.contract, {"orient": "竖屏", "limit": "10"})["items"], portrait)
         groups = {row["id"]: row["part_group"] for row in portrait}
         self.assertEqual(set(groups), {ids[3], ids[4], lone[1]})
         self.assertEqual(groups[ids[3]], {
@@ -4018,6 +4104,16 @@ class DuplicateDetectionTests(unittest.TestCase):
                 parts = rm_web.q_parts(self.contract, {"id": str(listed[0]["id"])})
                 self.assertEqual([row["name"] for row in parts["items"]], names)
                 self.assertEqual([row["part_label"] for row in parts["items"]], labels)
+
+    def test_fc2_main_and_bonus_part_labels_carry_codes_beside_the_zh_cn_text(self):
+        for name in ("fc4592208_sp3.mp4", "fc4592208.mp4"):
+            self.add("FC2-PPV-4592208", 1800, 1_000_000, name=name)
+        listed = rm_web.q_items(self.contract, {"q": "FC2-PPV-4592208", "limit": "30"})["items"]
+        parts = rm_web.q_parts(self.contract, {"id": str(listed[0]["id"])})
+        self.assertEqual([(row["part_label"], row.get("part_label_code"), row.get("part_label_params"))
+                          for row in parts["items"]],
+                         [("本篇", "labels.catalogParts.main", {}),
+                          ("特典 3", "labels.catalogParts.bonus", {"number": 3})])
 
     def test_zero_number_requires_an_explicit_fc2_collection(self):
         for code in ("ABC-123", "FC2-PPV-3189414"):
@@ -4366,6 +4462,12 @@ class PhotoSetTests(unittest.TestCase):
         titles = {item["title"] for item in self.sets()["sets"]}
         self.assertEqual(titles, {"夏日写真", "冬日"}, "`P`、`图片` 这类目录名没有信息量")
 
+    def test_a_set_without_a_directory_name_gets_a_coded_title(self):
+        from peach.web_entity import photo_set_heading
+        self.assertEqual(photo_set_heading(r"A:\创作者\桃子\夏日写真"), {"title": "夏日写真"})
+        self.assertEqual(photo_set_heading("", "directory"),
+                         {"directory": "未命名图集", "directory_code": "labels.photoSet.untitled", "directory_params": {}})
+
     def test_alias_resolves_to_the_same_entity_and_trash_is_excluded(self):
         self.add(r"A:\创作者\桃子\夏日写真\001.jpg")
         self.add(r"A:\创作者\桃子\夏日写真\002.jpg", disposal="trash")
@@ -4519,9 +4621,10 @@ class CatalogVersionTests(unittest.TestCase):
         self.add(2, 'FC2-PPV-1110408-1-4K修复.mp4', 3013, 2160)
         self.add(3, 'FC2-PPV-1110408-2-4K修复.mp4', 200, 2160)
         with closing(sqlite3.connect(self.db)) as connection, connection:
-            connection.executemany('UPDATE asset SET ctx_orient=? WHERE id=?', [('横屏', 1), ('竖屏', 2), ('竖屏', 3)])
+            connection.executemany('UPDATE asset SET ctx_orient=? WHERE id=?', [('landscape', 1), ('portrait', 2), ('portrait', 3)])
         editions = lambda args: {row['id']: row['edition_group'] for row in q_items(self.contract, args)['items']}
-        portrait = editions({'orient': '竖屏'})
+        portrait = editions({'orient': 'portrait'})
+        self.assertEqual(editions({'orient': '竖屏'}), portrait)
         self.assertEqual(set(portrait), {2, 3})
         self.assertEqual((portrait[2]['count'], portrait[2]['item_ids'], portrait[2]['seed_id']), (1, [2, 3], 1))
         self.assertEqual(len(portrait[2]['editions']), 1)
@@ -4604,12 +4707,22 @@ class DownloadSourceEditionTests(unittest.TestCase):
     def test_list_detail_and_edition_group_read_the_torrent_name(self):
         self.bind(1, 1, "+++ [FHDC] SONE-804 作品标题", "SONE-804ch")
         listed = {row["id"]: row for row in q_items(self.contract, {"limit": "20"})["items"]}
-        self.assertEqual(listed[1]["edition_badges"], ["中字"])
+        self.assertEqual(listed[1]["edition_badges"], ["chinese-subtitles"])
         self.assertEqual(listed[2]["edition_badges"], [])
-        self.assertEqual(self.badges(1), ["中字"])
+        self.assertEqual(self.badges(1), ["chinese-subtitles"])
         versions = q_editions(self.contract, {"id": 2})
         self.assertEqual({row["id"]: row["edition_label"] for row in versions["items"]},
                          {1: "中字 · 1080p", 2: "有码 · 1080p"})
+        # 界面按段拼当前语言：版次给 code，规格取自文件名原样给；配色按 `edition` id。
+        self.assertEqual({row["id"]: (row["edition"], row["edition_label_parts"]) for row in versions["items"]}, {
+            1: ("chinese-subtitles", [{"code": "labels.catalogEdition.chinese-subtitles"}, {"text": " · "},
+                                      {"text": "1080p"}]),
+            2: ("censored", [{"code": "labels.catalogEdition.censored"}, {"text": " · "}, {"text": "1080p"}])})
+        group = next(row["edition_group"] for row in q_items(self.contract, {"limit": "20"})["items"]
+                     if row.get("edition_group"))
+        self.assertEqual(group["editions"], ["有码 · 1080p", "中字 · 1080p"])
+        self.assertEqual([parts[0] for parts in group["editions_parts"]],
+                         [{"code": "labels.catalogEdition.censored"}, {"code": "labels.catalogEdition.chinese-subtitles"}])
         with closing(sqlite3.connect(self.db)) as connection:
             # 只是投影：文件名、标签都没被改写。
             self.assertEqual(connection.execute("SELECT name FROM asset WHERE id=1").fetchone()[0],
@@ -4618,9 +4731,9 @@ class DownloadSourceEditionTests(unittest.TestCase):
 
     def test_torrent_name_settles_a_bare_uncensored_marker(self):
         # 文件名只有 `-U`，有码番号上默认是破解；种子名明说流出时听种子名的。
-        self.assertEqual(self.badges(3), ["无码破解"])
+        self.assertEqual(self.badges(3), ["uncensored-crack"])
         self.bind(1, 3, "ABP-123 流出", "ABP-123 流出")
-        self.assertEqual(self.badges(3), ["无码流出"])
+        self.assertEqual(self.badges(3), ["uncensored-leak"])
 
     def test_assets_without_a_download_task_keep_filename_badges(self):
         self.bind(1, None, "SONE-804-C", "SONE-804-C")

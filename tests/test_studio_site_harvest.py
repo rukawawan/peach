@@ -202,7 +202,7 @@ class VerdictTests(unittest.TestCase):
         verdict, note = self.module.site_verdict(
             "BangBus", 200, page(title, "bang bus porn videos. "), title,
             "https://www.bangbus.com/", derived_hosts=frozenset({"bangbus.com"}))
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("不可用", note)
 
     def test_a_maintenance_notice_is_refused_too(self):
@@ -211,7 +211,7 @@ class VerdictTests(unittest.TestCase):
         verdict, _ = self.module.site_verdict(
             "Muku", 200, page(title), title, "https://muku.tv/",
             derived_hosts=frozenset({"muku.tv"}))
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
 
     def test_the_unavailable_check_looks_at_the_title_only(self):
         """反向：这条只判标题，不判正文。
@@ -272,7 +272,7 @@ class VerdictTests(unittest.TestCase):
         """
         title = "moodyz.com - This domain is for sale"
         verdict, note = self.module.site_verdict("MOODYZ", 200, page(title), title)
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         # 拦在标题还是正文都算数，守的是「被拒绝且理由指向域名出售」。
         self.assertRegex(note, "出售|停放")
 
@@ -287,7 +287,7 @@ class VerdictTests(unittest.TestCase):
         verdict, note = self.module.site_verdict(
             "Prestige", 200, page("prestige.com"), "prestige.com",
             "https://www.prestige.com/")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("域名回显", note)
 
     def test_a_real_site_is_not_rejected_by_the_domain_echo_rule(self):
@@ -324,7 +324,7 @@ class VerdictTests(unittest.TestCase):
         body = page(title) + b'<script>fetch("https://router.parklogic.com/")</script>'
         verdict, note = self.module.site_verdict(
             "Cruse Group", 200, body, title, "https://crusegroup.net/")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("parklogic.com", note)
 
     def test_a_parked_title_is_caught_even_when_the_body_keyword_is_far_down(self):
@@ -338,7 +338,7 @@ class VerdictTests(unittest.TestCase):
         body = page("无关内容") + b"x" * 90000 + "domain for sale".encode()
         verdict, note = self.module.site_verdict("kawaii", 200, body, title,
                                                  "https://www.kawaii.com/")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("出售", note)
 
     def test_a_parked_title_with_words_between_is_still_caught(self):
@@ -350,19 +350,19 @@ class VerdictTests(unittest.TestCase):
         title = "Attackers - The Domain Name Attackers.com is Now For Sale."
         verdict, note = self.module.site_verdict("Attackers", 200, page(title), title,
                                                  "https://attackers.com/")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("出售", note)
 
     def test_a_short_page_is_rejected(self):
         """空壳页也是 200。真站首页实测都在 10 KB 以上。"""
         verdict, note = self.module.site_verdict("MOODYZ", 200, b"<title>MOODYZ</title>", "MOODYZ")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("字节", note)
 
     def test_a_page_that_never_names_the_studio_is_not_guessed_into_ok(self):
         title = "無料動画まとめサイト"
         verdict, _ = self.module.site_verdict("MOODYZ", 200, page(title), title)
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
 
     def test_a_body_only_mention_is_weak_not_ok(self):
         """正文提到不等于这是官网——转载站也会提到厂牌名。
@@ -377,7 +377,7 @@ class VerdictTests(unittest.TestCase):
 
     def test_a_non_200_is_rejected_before_reading_the_body(self):
         verdict, note = self.module.site_verdict("MOODYZ", 404, page("MOODYZ"), "MOODYZ")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("404", note)
 
     def test_page_title_survives_nested_tags_and_whitespace(self):
@@ -411,7 +411,7 @@ class AliasVerdictTests(unittest.TestCase):
         """
         verdict, note = self.module.site_verdict(
             "东京热", 200, page(self.title), self.title, "https://www.tokyo-hot.com/")
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("没有厂牌名", note)
 
     def test_a_registered_alias_lets_the_page_declare_itself(self):
@@ -449,7 +449,7 @@ class AliasVerdictTests(unittest.TestCase):
         title = "なにかのサイト"
         verdict, note = self.module.site_verdict(
             "・", 200, page(title), title, "https://example.com/", aliases=("＋＋",))
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
         self.assertIn("没有可比对", note)
 
 
@@ -474,7 +474,7 @@ class ConfirmedSiteTests(unittest.TestCase):
         """
         without, note = self.module.site_verdict(
             "SOD Create", 200, page(self.title), self.title, "https://www.sod.co.jp/")
-        self.assertEqual(without, "未取得")
+        self.assertEqual(without, "missed")
         self.assertIn("没有厂牌名", note)
         verdict, note = self.module.site_verdict(
             "SOD Create", 200, page(self.title), self.title, "https://www.sod.co.jp/",
@@ -495,12 +495,12 @@ class ConfirmedSiteTests(unittest.TestCase):
             verdict, note = self.module.site_verdict(
                 "SOD Create", 200, page(title), title, "https://www.sod.co.jp/",
                 confirmed=reason)
-            self.assertEqual(verdict, "未取得", title)
+            self.assertEqual(verdict, "missed", title)
             self.assertIn(hint, note)
         verdict, _ = self.module.site_verdict(
             "SOD Create", 503, page(self.title), self.title, "https://www.sod.co.jp/",
             confirmed=reason)
-        self.assertEqual(verdict, "未取得")
+        self.assertEqual(verdict, "missed")
 
     def test_a_studio_under_its_japanese_name_verifies_on_its_own_title(self):
         """番号站转写的罗马音在厂牌自己站上不出现；账本记日文原名，页面自述就对得上。
@@ -514,7 +514,7 @@ class ConfirmedSiteTests(unittest.TestCase):
         self.assertNotIn("えむっ娘ラボ", self.module.CONFIRMED_SITES)
         romanized, _ = self.module.site_verdict(
             "M Girls' Lab", 200, page(title), title, url)
-        self.assertEqual(romanized, "未取得")
+        self.assertEqual(romanized, "missed")
         verdict, _ = self.module.site_verdict("えむっ娘ラボ", 200, page(title), title, url)
         self.assertEqual(verdict, "ok")
 
@@ -785,7 +785,7 @@ class RunTrailTests(unittest.TestCase):
         })
         self.assertEqual(run_script(self.module, self.args(seeds)), 0)
         row = self.row()
-        self.assertEqual(row["verdict"], "未取得")
+        self.assertEqual(row["verdict"], "missed")
         self.assertIn("https://prestige.co.jp/ → 取不到：ConnectionError", row["note"])
         self.assertIn("プレステージ", row["note"])
         # 行上的 url／标题／sha256 仍归最后一个真取回字节的候选，方便按 sha256 复现；

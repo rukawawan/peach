@@ -130,6 +130,25 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual((verdict, found), (match.VERDICT_HIT, "Tania Shinaryen"))
 
 
+class VerdictValueTests(unittest.TestCase):
+    def test_verdicts_are_english_ids(self):
+        self.assertEqual((match.VERDICT_HIT, match.VERDICT_REVIEW, match.VERDICT_NONE, match.VERDICT_BLOCKED),
+                         ("matched", "needs-review", "no-profile", "rate-limited"))
+
+    def test_resume_reads_legacy_chinese_verdicts_and_retries_rate_limited_rows(self):
+        import tempfile
+        from peach.review_csv import write_rows
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "babepedia-candidates.csv"
+            write_rows(path, ("creator", "verdict"), [
+                {"creator": "ruth_lee", "verdict": "命中"}, {"creator": "minhie", "verdict": "需人工确认"},
+                {"creator": "luckydog22", "verdict": "确认无档案"}, {"creator": "G3104", "verdict": "未取得:限流"},
+                {"creator": "SexySaffron", "verdict": "rate-limited"}])
+            done = match.load_done(path)
+        self.assertEqual({name: row["verdict"] for name, row in done.items()},
+                         {"ruth_lee": "matched", "minhie": "needs-review", "luckydog22": "no-profile"})
+
+
 class TokenTests(unittest.TestCase):
     def test_short_fragments_do_not_create_false_overlap(self):
         self.assertNotIn("a", match.tokens("pandor_a"))

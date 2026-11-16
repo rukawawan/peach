@@ -32,6 +32,18 @@ import {
   type EntityHeroActions, type EntityHeroData, type EntityHeroHelpers, type EntityHeroProps,
   type HeroCostar, type HeroFollow, type LinkMark, type LinkView,
 } from './entity-hero';
+import { codedText, serverLabels } from '../../core/server-text';
+import { interfaceLanguage, t } from '../../i18n';
+
+/** 译文里数字的占位记号：`{{num}}` 先代入它，再按它切开放进 `<b>`。 */
+const NUM_MARK = '\u0001';
+
+/** 数字加粗的计数：`text` 是用 `{ count, num: NUM_MARK }` 取好的译文，`{{num}}` 的位置换成 `<b>`；
+ *  单复数仍按 `count` 选，英文语序由译文决定。 */
+function BoldCount({ text, count }: { text: string; count: number }) {
+  const [before, after = ''] = text.split(NUM_MARK);
+  return <>{before}<b>{count.toLocaleString(interfaceLanguage)}</b>{after}</>;
+}
 
 /** 同台艺人圆框里那张图：实体图优先，退到代表作头像，按检出的人脸取景。 */
 function costarImg(person: HeroCostar): string {
@@ -59,7 +71,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, feedErro
 
   return (
     <>
-      <section data-entity-card="" aria-label="资料">
+      <section data-entity-card="" aria-label={t('catalog:entityHero.profile')}>
         <div data-entity-profile={facts.length ? 'facts' : ''}>
           <div data-entity-portrait-wrap="">
             <Portrait kind={kind} name={displayName} helpers={helpers} people={people} company={company} />
@@ -83,7 +95,8 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, feedErro
               <div className="flex min-w-0 flex-wrap gap-2 text-caption-1-regular text-text-secondary">
                 {/* 账号名常是一长串无空格的英文，窄屏下得能在任意处折行。 */}
                 {entity.related_identities.map((identity) => {
-                  const text = `${identity.relation === 'same_person' ? '同一人' : '关联账号'}：${entityDisplayName(identity.kind, identity.canonical_name, identity.id)}`;
+                  const name = entityDisplayName(identity.kind, identity.canonical_name, identity.id);
+                  const text = identity.relation === 'same_person' ? t('catalog:entityHero.samePersonIdentity', { name }) : t('catalog:entityHero.linkedAccount', { name });
                   return (
                     <button type="button" key={identity.id} title={text}
                       className="min-w-0 max-w-full text-text-primary underline wrap-anywhere"
@@ -116,7 +129,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, feedErro
           ) : null}
         </div>
         {costars.length ? (
-          <div data-entity-foot="" aria-label="同台艺人">
+          <div data-entity-foot="" aria-label={t('catalog:entityHero.costars')}>
             <div ref={costarRow} data-related-people="">
               {costars.map((person) => (
                 <button key={person.k} type="button" data-related-performer={person.k}
@@ -168,26 +181,26 @@ function AliasLine({ kind, entity, actions }: { kind: string; entity: EntityHero
   const agencyNode = agency ? (agency.linked
     ? <a href={entityPath('agency', agency.name, agency.id)} data-agency={agency.name} onClick={go('agency', agency.name)}>{agency.name}</a>
     : agency.name) : null;
-  const count = <><b>{entity.asset_count.toLocaleString()}</b> 个视频</>;
+  const count = <BoldCount text={t('catalog:entityHero.videoCountBold', { count: entity.asset_count, num: NUM_MARK })} count={entity.asset_count} />;
   if (kind === 'performer' || kind === 'creator') {
     const groups = entity.name_display?.groups[nameLanguage()] ?? entity.name_groups;
     const line = nameLine(groups);
     return (
       <div data-entity-alias="meta">
         <IdentityMeta entity={entity} />
-        <span data-meta-item="" title="视频"><Glyph name="film" /><span>{count}</span></span>
+        <span data-meta-item="" title={t('catalog:shared.videos')}><Glyph name="film" /><span>{count}</span></span>
         {entity.follow?.key ? <FollowMeta follow={entity.follow} actions={actions} /> : null}
-        {agencyNode ? <span data-meta-item="" title="事务所"><Glyph name="briefcase" /><span>{agencyNode}</span></span> : null}
+        {agencyNode ? <span data-meta-item="" title={t('catalog:shared.agencies')}><Glyph name="briefcase" /><span>{agencyNode}</span></span> : null}
         {line ? (
           <div data-meta-item="names">
             <Glyph name="id-card" />
-            <span data-alias-names="" title="别名">{line.names.map((one, at) => <span key={at} lang={textLang(one)}>{one}</span>)}</span>
+            <span data-alias-names="" title={t('catalog:entityHero.aliases')}>{line.names.map((one, at) => <span key={at} lang={textLang(one)}>{one}</span>)}</span>
             {line.rest > 0 ? (
-              <MorePop id="entityAliasPop" hook="alias" rest={line.rest} label={`另外 ${line.rest.toLocaleString()} 个别名`}
-                heading={`${line.total.toLocaleString()} 个别名`}>
+              <MorePop id="entityAliasPop" hook="alias" rest={line.rest} label={t('catalog:entityHero.moreAliases', { count: line.rest })}
+                heading={t('catalog:entityHero.aliasCount', { count: line.total })}>
                 <dl>
                   {(groups?.groups || []).map((group, at) => (
-                    <NameGroup key={at} label={group.label} names={group.names} />
+                    <NameGroup key={at} label={codedText(group, 'label')} names={group.names} />
                   ))}
                 </dl>
               </MorePop>
@@ -200,15 +213,16 @@ function AliasLine({ kind, entity, actions }: { kind: string; entity: EntityHero
   const aliases = entity.display_aliases || [];
   /* 事务所页数的是人，不是片；片商页同理，旗下有几个 label 是它自己的读数（ADR-0051）。 */
   const members = kind === 'agency'
-    ? <> · <b>{(entity.member_count || 0).toLocaleString()}</b> 位艺人</>
-    : (entity.labels || []).length ? <> · <b>{entity.labels!.length.toLocaleString()}</b> 个厂牌</> : null;
+    ? <> · <BoldCount text={t('catalog:entityHero.performerCountBold', { count: entity.member_count || 0, num: NUM_MARK })} count={entity.member_count || 0} /></>
+    : (entity.labels || []).length
+      ? <> · <BoldCount text={t('catalog:entityHero.labelCountBold', { count: entity.labels!.length, num: NUM_MARK })} count={entity.labels!.length} /></> : null;
   const maker = entity.maker;
   return (
     <div data-entity-alias="meta">
       {kind === 'creator' ? <IdentityMeta entity={entity} /> : null}
-      <span data-meta-item="" title="视频"><Glyph name="film" /><span>{count}{members}</span></span>
-      {agencyNode ? <span data-meta-item="" title="事务所"><Glyph name="briefcase" /><span>{agencyNode}</span></span> : null}
-      {maker ? <span data-meta-item="" title="片商"><Glyph name="clapperboard" /><a href={entityPath('studio', maker.name, maker.id)} data-studio-link={maker.name}
+      <span data-meta-item="" title={t('catalog:shared.videos')}><Glyph name="film" /><span>{count}{members}</span></span>
+      {agencyNode ? <span data-meta-item="" title={t('catalog:shared.agencies')}><Glyph name="briefcase" /><span>{agencyNode}</span></span> : null}
+      {maker ? <span data-meta-item="" title={t('catalog:entityHero.studio')}><Glyph name="clapperboard" /><a href={entityPath('studio', maker.name, maker.id)} data-studio-link={maker.name}
         onClick={go('studio', maker.name)}>{maker.name}</a></span> : null}
       {aliases.length ? <CompanyAliases aliases={aliases} /> : null}
     </div>
@@ -222,10 +236,10 @@ function CompanyAliases({ aliases }: { aliases: string[] }) {
   return (
     <div data-meta-item="names" data-company-names="">
       <Glyph name="id-card" />
-      <span data-alias-names="" title="别名">{shown.map((name, at) => <span key={at}>{name}</span>)}</span>
+      <span data-alias-names="" title={t('catalog:entityHero.aliases')}>{shown.map((name, at) => <span key={at}>{name}</span>)}</span>
       {rest ? (
-        <MorePop id="entityAliasPop" hook="alias" rest={rest} label={`另外 ${rest.toLocaleString()} 个别名`}
-          heading={`${aliases.length.toLocaleString()} 个别名`}>
+        <MorePop id="entityAliasPop" hook="alias" rest={rest} label={t('catalog:entityHero.moreAliases', { count: rest })}
+          heading={t('catalog:entityHero.aliasCount', { count: aliases.length })}>
           <dl><NameGroup names={aliases.map((name) => ({ name }))} /></dl>
         </MorePop>
       ) : null}
@@ -238,10 +252,10 @@ function CompanyAliases({ aliases }: { aliases: string[] }) {
 function FollowMeta({ follow, actions }: { follow: HeroFollow; actions: EntityHeroActions }) {
   const from = follow.providers.join(' · ');
   return (
-    <span data-meta-item="" data-entity-follow="" title={from ? `关注 · ${from}` : '关注'}>
+    <span data-meta-item="" data-entity-follow="" title={from ? t('catalog:entityHero.followingFrom', { source: from }) : t('catalog:entityHero.following')}>
       <Glyph name="rss" />
       <a href="?media=online" onClick={(event) => { event.preventDefault(); actions.openFollowAuthor(follow.key) }}>
-        {follow.n.toLocaleString()} 项更新
+        {t('catalog:entityHero.updateCount', { count: follow.n })}
       </a>
     </span>
   );
@@ -267,11 +281,12 @@ function HeldAuthors({ follow, displayName, actions }: {
   return (
     <div data-entity-held="" className="flex flex-col gap-2">
       {follow.held.map((group) => (
-        <Note key={group.key} tone="info" title={`关注里有同名作者 ${group.name}`}
+        <Note key={group.key} tone="info" title={t('catalog:entityHero.sameNameAuthor', { name: group.name })}
           action={<Button size="small" {...busyProps(busy === group.key)}
-            onClick={() => { void confirm(group.key, group.name) }}>是同一个人</Button>}>
-          {[group.providers.join(' · '), `${group.n.toLocaleString()} 项更新`].filter(Boolean).join(' · ')}
-          。和 {displayName} 是同一个人吗？
+            onClick={() => { void confirm(group.key, group.name) }}>{t('catalog:entityHero.samePerson')}</Button>}>
+          {t('catalog:entityHero.samePersonAsk', {
+            details: [group.providers.join(' · '), t('catalog:entityHero.updateCount', { count: group.n })].filter(Boolean).join(' · '), name: displayName,
+          })}
         </Note>
       ))}
     </div>
@@ -283,7 +298,7 @@ function IdentityMeta({ entity }: { entity: EntityHeroData }) {
   if (!entity.identity_labels?.length) return null;
   return (
     <span data-meta-item="classification" data-identity-classification="">
-      <Glyph name="user-round" /><span>{entity.identity_labels.join(' · ')}</span>
+      <Glyph name="user-round" /><span>{serverLabels('identity.category', entity.identity_categories, entity.identity_labels).join(' · ')}</span>
     </span>
   );
 }
@@ -319,8 +334,8 @@ function FactTags({ tags }: { tags: string[] }) {
     <>
       {shown.map((tag) => <span key={tag} data-fact-tag="" title={tag}>{tag}</span>)}
       {rest ? (
-        <MorePop id="entityTagPop" hook="fact" rest={rest} label={`另外 ${rest.toLocaleString()} 个标签`}
-          heading={`${tags.length.toLocaleString()} 个标签`}>
+        <MorePop id="entityTagPop" hook="fact" rest={rest} label={t('catalog:entityHero.moreTags', { count: rest })}
+          heading={t('catalog:peopleIndex.tagCount', { count: tags.length })}>
           <div data-fact-tags="">{tags.map((tag) => <span key={tag} data-fact-tag="" title={tag}>{tag}</span>)}</div>
         </MorePop>
       ) : null}
@@ -358,7 +373,7 @@ function HeroLinkView({ link }: { link: LinkView }) {
       return (
         <span data-link="private" title={link.sources ? link.sources.join('\n') : link.label}>
           <LinkIcon mark={{ globe: true }} />
-          <span data-link-label="">{link.sources ? link.label : `来源 · ${link.label}`}</span>
+          <span data-link-label="">{link.sources ? link.label : t('catalog:entityHero.sourceLink', { site: link.label })}</span>
         </span>
       );
     default:
@@ -399,7 +414,7 @@ function EntryMarks({ entity, actions, helpers }: {
   };
   const toggle = async (on: boolean) => {
     if (!await write(on)) return;
-    helpers.receipt(on ? '已订阅新作' : '已取消订阅新作', { undo: async () => { await write(!on) } });
+    helpers.receipt(on ? t('catalog:entityHero.newReleasesOn') : t('catalog:entityHero.newReleasesOff'), { undo: async () => { await write(!on) } });
     if (on) actions.refreshFeedAfterCheck();
   };
   return (

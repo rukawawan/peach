@@ -49,7 +49,7 @@
 
 - 取证方式同上，另加一条：`https://transitions.dev/transitions/<slug>` 会 301 到同一
   地址带斜杠的那一份，配方的 CSS 与 React 两份全文都在那一页的 HTML 里，不在 JS 包里。
-- 这一批新增一档 token `--motion-pop`（.4s cubic-bezier(.34,1.36,.64,1)），和当时已有五档
+- 2026-09-17 这批配方新增一档 token `--motion-pop`（.4s cubic-bezier(.34,1.36,.64,1)），和当时已有五档
   住在 `board.css` 同一个 `:root`、由同一条 `prefers-reduced-motion` 规则归零。
   它单独成档是因为缓动：`animation` 里只能有一条缓动函数，token 已经带着一条，
   再写第二条整条声明就无效，动画会被整个丢掉。
@@ -92,4 +92,4 @@
   用 `backwards` 不用 `both` 是同一个理由。
 - BoardUI 的
   Input（<https://www.boardui.com/components/input>，2026-09-17）没有清空键，Geist 那几份
-  快照里也没有，所以这一批不新增清空控件，只做已有清空路径上的内容溶解。
+  快照里也没有，所以 2026-09-17 这批不新增清空控件，只做已有清空路径上的内容溶解。

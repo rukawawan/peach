@@ -20,6 +20,7 @@ from peach import artifact_rules, library_processing, upgrade_rules
 from peach.field_owners import auto_owner, owner_of, review_owner
 from peach.genre_taxonomy import map_genres
 from peach.jav_cover_fetch import NotFound
+from peach.metadata import relayed
 from peach.http import HttpResponse
 from peach.library_nfo import read_nfo, sidecars, local_art
 from peach.library_processing import (STALL_AFTER_SECONDS, ProcessingBusy, _candidate_identity, _save,
@@ -29,8 +30,15 @@ from peach.metadata_auto_apply import _apply_metadata_candidate
 from peach.repository import LedgerDatabase
 from peach.review_csv import read_rows
 from peach.settings_file import PeachConfig
-from support.conditions import windows_ledger_roots
+from support.conditions import windows_ledger_roots, without_capacity_reserve
 from support.ledger import fresh_ledger
+
+
+def setUpModule():
+    # 这些用例不测容量闸；不让本机磁盘余量决定它们红不红（见 `without_capacity_reserve`）。
+    reserve = without_capacity_reserve()
+    reserve.start()
+    unittest.addModuleCleanup(reserve.stop)
 
 
 def stub_provider():
@@ -44,13 +52,13 @@ def stub_provider():
 
     def dmm_has_nothing(code, source='r18dev', **_):
         if source in ('dmm', 'javdb'):
-            raise NotFound('HTTP 404')
+            raise NotFound(*relayed('HTTP 404'))
         return DEFAULT
 
     provider.query.side_effect = dmm_has_nothing
-    provider.community.side_effect = NotFound('社区来源都没有这个番号')
-    provider.amane.side_effect = NotFound('amane 桥问的几站都没有这个番号')
-    provider.wiki.side_effect = NotFound('Wiki 搜索范围内未取得精确作品表格行')
+    provider.community.side_effect = NotFound('errors.libraryProcessing.communitySaidNo')
+    provider.amane.side_effect = NotFound('errors.libraryProcessing.amaneSitesSaidNo')
+    provider.wiki.side_effect = NotFound('errors.seesaa.notInSearch')
     return provider
 
 
@@ -379,7 +387,7 @@ class LibraryNfoTests(unittest.TestCase):
         provider = stub_provider()
         provider.query.return_value = {'id': 'ABW-101', 'title': '同一作品', 'maker': '厂牌',
             'release_date': '2026-01-01', 'actresses': [{'japanese_name': '测试演员'}]}
-        provider.cover.side_effect = NotFound('没有封面')
+        provider.cover.side_effect = NotFound('errors.libraryProcessing.noCover')
         result = process_library(config, db, self.root / 'generated', self.root / 'covers', stage='metadata',
             retry_ids=[1, 2], provider_factory=lambda: provider)
         r18 = [call for call in provider.query.call_args_list if call.args[1] == 'r18dev']
@@ -408,14 +416,14 @@ class LibraryNfoTests(unittest.TestCase):
         def tags():
             with database.read_connection() as connection:
                 return {row[0] for row in connection.execute(
-                    "SELECT tag FROM asset_tag WHERE asset_id=1 AND tag NOT LIKE '演员:%'")}
+                    "SELECT tag FROM asset_tag WHERE asset_id=1 AND tag NOT LIKE 'performer:%'")}
 
         def query(code, source='r18dev', **kwargs):
             if source == 'javdb':
                 self.assertIn('巨乳', tags())
                 return {'id': code, 'genres': ['高跟鞋', '絲襪'], 'javdb_rule': 2, 'source_id': 'Ssis057'}
             if source == 'dmm':
-                raise NotFound('没有')
+                raise NotFound('errors.dmm.notFound')
             return {'id': code, 'title': '本地标题', 'maker': 'Prestige', 'release_date': '2023-05-26',
                     'actresses': [{'japanese_name': '涼森れむ'}], 'genres': ['巨乳']}
 
@@ -461,8 +469,8 @@ class LibraryNfoTests(unittest.TestCase):
                 with closing(sqlite3.connect(db)) as connection:
                     seen.extend(connection.execute('SELECT catalog_title FROM asset').fetchone())
                 self.assertTrue((config.directory('sources') / 'library-metadata/ABW-358-avbase.json').is_file())
-                raise DeadlineExceeded('等待另一站超时')
-            raise NotFound('没有')
+                raise DeadlineExceeded('errors.javCoverFetch.deadline')
+            raise NotFound('errors.javdb.notFound')
 
         provider.site = site
         with patch('peach.library_processing._enrich_finished_performers',
@@ -735,7 +743,7 @@ class LibraryNfoTests(unittest.TestCase):
         with closing(sqlite3.connect(db)) as connection:
             expected = {row[0] for row in connection.execute("SELECT id FROM asset WHERE name LIKE 'SSIS%'")}
         with patch.object(metadata_amane, 'ensure',
-                          side_effect=metadata_amane.PreparationError('下载未完成')) as prepare, \
+                          side_effect=metadata_amane.PreparationError('errors.metadataAmane.runtimeUnavailable')) as prepare, \
                 patch('peach.library_processing._RemoteSession.collect', return_value=([], 0)) as collect:
             result = process_library(config, db, generated, covers, stage='metadata')
         self.assertEqual(prepare.call_count, 1)
@@ -744,7 +752,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(set(result['retryable_asset_ids']), expected)
         self.assertEqual(collect.call_count, 1)
         self.assertEqual(collect.call_args.args[1], 'FC2-PPV-1234567')
-        self.assertIn('下载未完成', result['issue_preview'][0]['message'])
+        self.assertIn('amane 运行环境未取得', result['issue_preview'][0]['message'])
         provider = stub_provider()
         provider.query.return_value = {'id': 'SSIS-057', 'title': '作品资料'}
         provider.cover.return_value = False
@@ -1205,7 +1213,7 @@ class LibraryNfoTests(unittest.TestCase):
             aliases = {row[0] for row in connection.execute(
                 'SELECT alias FROM entity_alias WHERE entity_id=?', (entity_id,))}
             tags = {row[0] for row in connection.execute(
-                "SELECT tag FROM asset_tag WHERE tag NOT LIKE '演员:%'")}
+                "SELECT tag FROM asset_tag WHERE tag NOT LIKE 'performer:%'")}
         self.assertEqual(aliases, {'すずもりれむ', 'Remu Suzumori'})
         self.assertEqual(tags, {'主观视角', '苗条'})
         self.assertTrue((self.root / 'generated' / 'avatars'
@@ -1348,7 +1356,8 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(title, 'Local title')
         self.assertEqual(sorted(result['retryable_asset_ids']), sorted([ids['ABW-358.mp4'], ids['SSIS-057.mp4']]))
         self.assertIn('holiday.mp4', ids)
-        self.assertEqual({issue['message'] for issue in result['issue_preview']}, {OFFLINE_MESSAGE})
+        self.assertEqual({issue['message_code'] for issue in result['issue_preview']}, {OFFLINE_MESSAGE['code']})
+        self.assertEqual({issue['message'] for issue in result['issue_preview']}, {'外部资料未取得：连不上外网'})
 
         online = NetworkReachability(check=lambda: True, retry_delay=0)
         self.addCleanup(online.stop)
@@ -1461,7 +1470,7 @@ class LibraryNfoTests(unittest.TestCase):
 
     @windows_ledger_roots
     def test_a_performer_marker_is_not_a_content_tag_the_ledger_already_has(self):
-        """`演员:` 是出演者在 `asset_tag` 上的扁平投影，算成标签就再也采不回 genre。
+        """`performer:` 是出演者在 `asset_tag` 上的扁平投影，算成标签就再也采不回 genre。
         """
         media = self.root / 'media'
         media.mkdir()
@@ -1480,7 +1489,7 @@ class LibraryNfoTests(unittest.TestCase):
             connection.execute("UPDATE asset SET catalog_title=?, studio=?, release_date=? WHERE id=?",
                                ('痴女秘書', 'MOODYZ', '2018-01-01', asset_id))
             connection.execute("INSERT INTO asset_tag(asset_id, tag, confidence, source) VALUES(?,?,?,?)",
-                               (asset_id, '演员:本田岬', 1.0, 'user'))
+                               (asset_id, 'performer:本田岬', 1.0, 'user'))
         candidates.unlink()
         process_library(config, db, self.root / 'generated', self.root / 'covers', provider_factory=factory)
         self.assertIn('tags', {row['field'] for row in read_rows(candidates, missing_ok=True)})
@@ -1539,7 +1548,7 @@ class LibraryNfoTests(unittest.TestCase):
 
         def wiki(source, query, **_):
             if source not in wiki_answers:
-                raise NotFound('Wiki 搜索范围内未取得精确作品表格行')
+                raise NotFound('errors.seesaa.notInSearch')
             return [(source, {'id': query, 'source': source, 'actresses': [{'japanese_name': wiki_answers[source]}]})]
 
         provider.wiki.side_effect = wiki
@@ -1709,7 +1718,7 @@ class LibraryNfoTests(unittest.TestCase):
                   'categories': [{'name': 'Slender'}]}
         def pages(transport, url, **kwargs):
             if 'combined=' in url:
-                raise Unavailable('HTTP 503')
+                raise Unavailable(*relayed('HTTP 503'))
             return json.dumps(detail)
         provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
         provider.transport = Mock()
@@ -1728,7 +1737,7 @@ class LibraryNfoTests(unittest.TestCase):
         def pages(transport, url, **kwargs):
             asked.append((url, kwargs.get('extra_headers') or {}))
             if 'fc2cmadb.com' not in url:
-                raise NotFound('官方那一页已空')
+                raise NotFound(*relayed('HTTP 404'))
             if kwargs.get('extra_headers'):
                 return json.dumps({'props': {'actresses': [{'name': '野々宮すず'}]}}).encode()
             return _mirror_page()
@@ -1749,9 +1758,9 @@ class LibraryNfoTests(unittest.TestCase):
         from peach.library_processing import LibraryMetadataProvider
         def pages(transport, url, **kwargs):
             if 'fc2cmadb.com' not in url:
-                raise NotFound('官方那一页已空')
+                raise NotFound(*relayed('HTTP 404'))
             if kwargs.get('extra_headers'):
-                raise Unavailable('HTTP 429')
+                raise Unavailable(*relayed('HTTP 429'))
             return _mirror_page()
         provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
         provider.transport = Mock()
@@ -1773,7 +1782,7 @@ class LibraryNfoTests(unittest.TestCase):
             asked.append(url)
             if 'javarchive.com' in url:
                 return _archive_pages(url)
-            raise NotFound('官方那一页已空')
+            raise NotFound(*relayed('HTTP 404'))
         provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
         provider.transport = Mock()
         return provider, pages
@@ -1801,7 +1810,7 @@ class LibraryNfoTests(unittest.TestCase):
             if 'fc2cmadb.com' in url:
                 if not mirror:
                     asked.append(url)
-                    raise NotFound('镜像站上没有这一部')
+                    raise NotFound(*relayed('HTTP 404'))
                 if kwargs.get('extra_headers'):
                     return json.dumps({'props': {'actresses': [{'name': '梨奈'}]}}).encode()
                 asked.append(url)
@@ -1840,7 +1849,7 @@ class LibraryNfoTests(unittest.TestCase):
                 return _mirror_page(video=3232110)
             if 'fc2ppv-db.com' in url:
                 return database.encode()
-            raise NotFound('别处都没有')
+            raise NotFound(*relayed('HTTP 404'))
 
         provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
         provider.transport = Mock()
@@ -1936,7 +1945,7 @@ class LibraryNfoTests(unittest.TestCase):
         from peach.library_processing import LibraryMetadataProvider
         provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
         provider.transport = Mock()
-        avbase = Mock(side_effect=NotFound('AVBase 没有这个番号'))
+        avbase = Mock(side_effect=NotFound('errors.avbase.notFound'))
         javdb = Mock(return_value={'id': 'ORETD-615'})
         asks = {'avbase': avbase, 'javdb': javdb}
         provider.site = lambda source, code, deadline=None: asks[source](provider.transport, code, deadline=deadline)
@@ -1948,10 +1957,10 @@ class LibraryNfoTests(unittest.TestCase):
                 provider.community('ORETD-616')
             with self.assertRaisesRegex(Unavailable, 'javdb：'):
                 provider.community('ORETD-616')
-            javdb.side_effect = Unavailable('javdb 要求登录')
+            javdb.side_effect = Unavailable('errors.javdb.loginRequired')
             with self.assertRaisesRegex(Unavailable, '^javdb 要求登录$'):
                 provider.community('ORETD-617')
-            javdb.side_effect = NotFound('javdb 没有这个番号')
+            javdb.side_effect = NotFound('errors.javdb.notFound')
             with self.assertRaises(NotFound):
                 provider.community('ORETD-618')
         self.assertEqual(javdb.call_count, 4)
@@ -1977,24 +1986,24 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual((evidence['width'], evidence['verified_by']), (1200, ['javdb', 'mgstage']))
 
         with patch('peach.jav_cover_fetch.best_cover', return_value=small), \
-                patch('peach.community_catalog.verified_cover', side_effect=Unavailable('javdb、mgstage 给的封面不是同一张图，无法互相印证')):
+                patch('peach.community_catalog.verified_cover', side_effect=Unavailable('errors.communityCatalog.mismatch', {'origins': 'javdb、mgstage'})):
             self.assertTrue(provider.cover('ORETD-616', covers))
         self.assertEqual((covers / 'ORETD-616.jpg').read_bytes(), b'small')
 
         lone = (Candidate('img.javbus.com', 'https://img.javbus.com/covers/y.jpg'), (800, 538), b'lone', ())
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=NotFound('所有渠道都没有候选')), \
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=NotFound('errors.javCoverFetch.noCandidates')), \
                 patch('peach.community_catalog.verified_cover', return_value=lone):
             self.assertTrue(provider.cover('IPX-060', covers))
         evidence = json.loads((covers / 'IPX-060.scraping.json').read_text(encoding='utf-8'))
         self.assertEqual(((covers / 'IPX-060.jpg').read_bytes(), evidence['verified_by']), (b'lone', []),
                          '只有一个图源的封面照样装上，verified_by 为空即未经印证')
 
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('官方封面只有缩略图或占位图')), \
-                patch('peach.community_catalog.verified_cover', side_effect=Unavailable('社区来源的封面下载失败')), \
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('errors.javCoverFetch.officialTooSmall')), \
+                patch('peach.community_catalog.verified_cover', side_effect=Unavailable('errors.communityCatalog.downloadFailed')), \
                 self.assertRaisesRegex(Unavailable, '^官方封面只有缩略图或占位图；社区来源的封面下载失败$'):
             provider.cover('ORETD-617', covers)
-        provider.community.side_effect = NotFound('社区来源都没有这个番号')
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=NotFound('所有渠道都没有候选')), \
+        provider.community.side_effect = NotFound('errors.libraryProcessing.communitySaidNo')
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=NotFound('errors.javCoverFetch.noCandidates')), \
                 self.assertRaises(NotFound):
             provider.cover('ORETD-618', covers)
 
@@ -2005,7 +2014,7 @@ class LibraryNfoTests(unittest.TestCase):
         provider.transport = Mock(return_value=Mock(status=404, body=b''))
         candidate = jav_cover_fetch.candidate_for('https://official.example/missing.jpg')
         provider._official_candidates = Mock(return_value=(candidate,))
-        provider.community = Mock(side_effect=NotFound('社区来源都没有这个番号'))
+        provider.community = Mock(side_effect=NotFound('errors.libraryProcessing.communitySaidNo'))
         covers = self.root / 'covers'
         covers.mkdir()
         target = covers / 'SSIS-057.jpg'
@@ -2056,7 +2065,7 @@ class LibraryNfoTests(unittest.TestCase):
         # 同一张缩略图转存到别处常差一行像素：面积大一点不算更清楚。
         same = (Candidate('storage.contents.fc2.com', 'https://storage.contents.fc2.com/3.jpg'),
                 (276, 155), b'same')
-        provider.community = Mock(side_effect=NotFound('社区来源都没有这个番号'))
+        provider.community = Mock(side_effect=NotFound('errors.libraryProcessing.communitySaidNo'))
         with patch('peach.jav_cover_fetch.best_cover', return_value=same), \
                 self.assertRaises(CoverKept):
             provider.cover('FC2-PPV-3', covers)
@@ -2066,7 +2075,7 @@ class LibraryNfoTests(unittest.TestCase):
         from peach.jav_cover_fetch import Unavailable
         mirror = (Candidate('img.javstore.net', 'https://img.javstore.net/3.jpg'), (276, 155), b'mirror')
         provider.community = Mock(return_value=[])
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('FC2：来源正在冷却')), \
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('errors.javCoverFetch.coolingDown')), \
                 patch('peach.community_catalog.verified_cover', return_value=(*mirror, ())), \
                 self.assertRaises(Unavailable) as raised:
             provider.cover('FC2-PPV-3', covers)
@@ -2074,7 +2083,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual((covers / 'FC2-PPV-3.jpg').read_bytes(), before)
 
         # 官方图全回 404（卖家删了图）是确定答复：镜像那张不比本机宽，就是保留，一周不再问。
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=NotFound('官方封面地址都没有取到图片')), \
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=NotFound('errors.javCoverFetch.officialNoImage')), \
                 patch('peach.community_catalog.verified_cover', return_value=(*mirror, ())), \
                 self.assertRaises(CoverKept):
             provider.cover('FC2-PPV-3', covers)
@@ -2141,8 +2150,8 @@ class LibraryNfoTests(unittest.TestCase):
         db = fresh_ledger(self.root)
         config = PeachConfig(self.root, self.root / 'config.toml', present=True, locations={'local': (str(media),)})
         provider = Mock()
-        provider.amane.side_effect = NotFound('片商官网没有这个番号')
-        provider.query.side_effect = NotFound('HTTP 404')
+        provider.amane.side_effect = NotFound('errors.libraryProcessing.amaneSitesSaidNo')
+        provider.query.side_effect = NotFound(*relayed('HTTP 404'))
         provider.community.return_value = [
             ('avbase', {'id': 'ORETD-615', 'title': 'たまき', 'release_date': '2024-01-05',
                         'source_url': 'https://www.avbase.net/works/orenoshirouto:ORETD-615'}),
@@ -2369,14 +2378,14 @@ class LibraryNfoTests(unittest.TestCase):
         config = PeachConfig(self.root, self.root / 'config.toml', present=True,
                              locations={'local': (str(media),)})
         provider = stub_provider()
-        provider.query.side_effect = NotFound('HTTP 404')
-        provider.community.side_effect = SourcePaused('来源正在冷却，请稍后重试；已有图片保留')
-        provider.cover.side_effect = SourcePaused('本趟采集次数已用完，再跑一次接着采')
+        provider.query.side_effect = NotFound(*relayed('HTTP 404'))
+        provider.community.side_effect = SourcePaused('errors.scrapingAccess.coolingDown')
+        provider.cover.side_effect = SourcePaused('errors.scrapingAccess.requestBudgetSpent')
         state = process_library(config, db, self.root / 'generated', self.root / 'covers',
                                 provider_factory=Mock(return_value=provider))
         self.assertEqual([row['message'] for row in state['issue_preview']],
                          ['外部资料本趟没轮到：来源正在冷却，请稍后重试；已有图片保留',
-                          '封面本趟没轮到：本趟采集次数已用完，再跑一次接着采'])
+                          '封面本趟没轮到：本趟采集次数已用完，再跑一次接着采；已有图片保留'])
         self.assertEqual({row['severity'] for row in state['issue_preview']}, {'paused'})
         self.assertEqual((state['issue_count'], state['paused_count']), (2, 2))
         self.assertEqual(state['error'], '2 项都卡在来源限流上，等一会儿再跑一次。')
@@ -2384,12 +2393,30 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(state['paused_asset_ids'], [1], '升级补全据此把这部片延后而不是判失败')
 
     def test_the_two_kinds_are_counted_apart_in_the_line_that_sums_them_up(self):
-        from peach.library_processing import issue_summary
-        self.assertEqual(issue_summary(0), '')
-        self.assertEqual(issue_summary(3), '3 项需要处理，可重试未完成的部分。')
-        self.assertEqual(issue_summary(3, 1),
+        from peach.library_processing import issue_summary, phrase_text
+        self.assertIsNone(issue_summary(0))
+        self.assertEqual(phrase_text(issue_summary(3)), '3 项需要处理，可重试未完成的部分。')
+        self.assertEqual(phrase_text(issue_summary(3, 1)),
                          '3 项需要处理，其中 1 项是来源限流，等一会儿再跑；其余可重试未完成的部分。')
-        self.assertEqual(issue_summary(3, 3), '3 项都卡在来源限流上，等一会儿再跑一次。')
+        self.assertEqual(phrase_text(issue_summary(3, 3)), '3 项都卡在来源限流上，等一会儿再跑一次。')
+
+    def test_several_reasons_stay_coded_so_an_english_interface_reads_english(self):
+        """几处原因连成一句时每处仍是自己的 code，分隔符在资源里：英文界面不露中文。"""
+        import re
+        from peach import interface_text
+        from peach.library_processing import _unreached, describe_failure, phrase, source_name
+        from peach.scraping_access import SourcePaused
+        problems = [(phrase('errors.libraryProcessing.sourceProblem',
+                            {'source': source_name('local_nfo'), 'problem': describe_failure(
+                                SourcePaused('errors.scrapingAccess.requestBudgetSpent'))}), True),
+                    (describe_failure(RuntimeError('boom')), True)]
+        error = _unreached(problems)
+        self.assertIsInstance(error, SourcePaused)
+        self.assertEqual(str(error), '本地 NFO：本趟采集次数已用完，再跑一次接着采；已有图片保留；处理出错（RuntimeError）')
+        english = interface_text.text(f'server:{error.code}', error.params, 'en')
+        self.assertIn('Local NFO', english)
+        self.assertIn('Processing error (RuntimeError)', english)
+        self.assertIsNone(re.search(r'[㐀-鿿]', english), english)
 
     @windows_ledger_roots
     def test_a_source_that_said_no_is_not_asked_again_for_a_week(self):
@@ -2406,9 +2433,9 @@ class LibraryNfoTests(unittest.TestCase):
         db = fresh_ledger(self.root)
         config = PeachConfig(self.root, self.root / 'config.toml', present=True, locations={'local': (str(media),)})
         provider = stub_provider()
-        provider.query.side_effect = NotFound('HTTP 404')
-        provider.community.side_effect = NotFound('社区来源都没有这个番号')
-        provider.cover.side_effect = Unavailable('HTTP 503')
+        provider.query.side_effect = NotFound(*relayed('HTTP 404'))
+        provider.community.side_effect = NotFound('errors.libraryProcessing.communitySaidNo')
+        provider.cover.side_effect = Unavailable(*relayed('HTTP 503'))
         run = lambda **extra: process_library(config, db, self.root / 'generated', self.root / 'covers',
                                               provider_factory=Mock(return_value=provider), **extra)
         first = run()
@@ -2423,7 +2450,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(provider.amane.call_args.kwargs['route'], ('mgstage',))
         self.assertEqual(list(recorded['misses']['r18dev']), ['STP-26232'])
 
-        provider.cover.side_effect = NotFound('所有渠道都没有候选')
+        provider.cover.side_effect = NotFound('errors.javCoverFetch.noCandidates')
         second = run()
         self.assertEqual((provider.query.call_count, provider.community.call_count), (1, 1), '资料 7 天内不再问')
         self.assertEqual(provider.cover.call_count, 2, '封面上次是来源故障，这次照问')
@@ -2618,7 +2645,7 @@ class LibraryNfoTests(unittest.TestCase):
         from peach.scraping_access import SourcePaused
         config = PeachConfig(self.root, self.root / 'config.toml', present=True)
         provider = Mock()
-        provider.query.side_effect = SourcePaused('来源拒绝访问，暂停向它请求一段时间')
+        provider.query.side_effect = SourcePaused('errors.scrapingAccess.refused')
         session = _RemoteSession(config, Mock(return_value=provider),
                                  _MissCache(misses_path(config)), retrying=False)
         issue = Mock()
@@ -2721,7 +2748,7 @@ class LibraryNfoTests(unittest.TestCase):
 
             provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
             provider.transport = transport
-            provider.community = Mock(side_effect=NotFound('社区来源都没有这个番号'))
+            provider.community = Mock(side_effect=NotFound('errors.libraryProcessing.communitySaidNo'))
             covers = self.root / label
             self.assertTrue(provider.cover('IPX-060', covers, snapshots=snapshots))
             with Image.open(covers / 'IPX-060.jpg') as installed:
@@ -2801,8 +2828,9 @@ class LibraryNfoTests(unittest.TestCase):
         from peach.sources.base import FailureReason, SourceFailure
         provider = LibraryMetadataProvider.__new__(LibraryMetadataProvider)
         provider.transport = Mock()
-        answers = {'avbase': SourcePaused('来源正在冷却，请稍后重试'), 'javbus': NotFound('没有'),
-                   'javdb': SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, 'javdb 撞上了验证页')}
+        answers = {'avbase': SourcePaused('errors.scrapingAccess.coolingDown'), 'javbus': NotFound('errors.javbus.notFound'),
+                   'javdb': SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, 'errors.base.cloudflareUpdateCookie',
+                                          {'label': 'javdb'})}
 
         def site(source, code, **_):
             raise answers[source]
@@ -2811,16 +2839,17 @@ class LibraryNfoTests(unittest.TestCase):
         route = ('avbase', 'javbus', 'javdb')
         with self.assertRaises(SourcePaused):
             provider.community('ORETD-701', route=route)
-        answers['javbus'] = Unavailable('HTTP 503')
+        answers['javbus'] = Unavailable(*relayed('HTTP 503'))
         with self.assertRaises(Unavailable):
             provider.community('ORETD-702', route=route)
 
         provider._official_candidates = Mock(return_value=())
-        provider.community = Mock(side_effect=SourcePaused('javdb：来源正在冷却'))
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=SourcePaused('本趟采集次数已用完')), \
-                self.assertRaisesRegex(SourcePaused, '^本趟采集次数已用完；javdb：来源正在冷却$'):
+        # 社区那一档把各家原因连成一句转述（`_unreached`）。
+        provider.community = Mock(side_effect=SourcePaused(*relayed('javdb：来源正在冷却')))
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=SourcePaused('errors.scrapingAccess.requestBudgetSpent')), \
+                self.assertRaisesRegex(SourcePaused, '^本趟采集次数已用完，再跑一次接着采；已有图片保留；javdb：来源正在冷却$'):
             provider.cover('ORETD-703', self.root / 'covers')
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('HTTP 503')), \
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable(*relayed('HTTP 503'))), \
                 self.assertRaises(Unavailable):
             provider.cover('ORETD-704', self.root / 'covers')
 
@@ -2838,15 +2867,16 @@ class LibraryNfoTests(unittest.TestCase):
 
         def answer(code, source='r18dev', **_):
             if source == 'dmm':
-                raise NotFound('HTTP 404')
-            raise SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, '撞上了验证页')
+                raise NotFound(*relayed('HTTP 404'))
+            raise SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, 'errors.scrapingAccess.challengeTimedOut')
 
         provider.query.side_effect = answer
         provider.cover.return_value = False
         state = process_library(config, db, self.root / 'generated', self.root / 'covers',
                                 provider_factory=Mock(return_value=provider))
         self.assertEqual([(row['message'], row['severity']) for row in state['issue_preview']],
-                         [('外部资料本趟没轮到：r18.dev：撞上了验证页', 'paused')])
+                         [('外部资料本趟没轮到：r18.dev：来源的人机验证没有在限时内通过，暂停向它请求一段时间；'
+                           '浏览器窗口再弹出时点一下验证即可；已有图片保留', 'paused')])
         self.assertEqual(state['paused_count'], 1)
 
     def test_waiting_for_someone_to_click_a_verification_is_not_charged_to_the_title(self):
@@ -2863,7 +2893,7 @@ class LibraryNfoTests(unittest.TestCase):
             def records(self, code, *, session):
                 seen['fc2ppvdb'] = session.deadline
                 clock[0] += 45 + 120
-                raise SourceFailure(FailureReason.NOT_FOUND, '没有')
+                raise SourceFailure(FailureReason.NOT_FOUND, 'errors.base.itemNotListed', {'label': 'FC2PPV-DB'})
 
         class Next:
             def records(self, code, *, session):
@@ -2997,7 +3027,7 @@ class LibraryNfoTests(unittest.TestCase):
         for site in ('avbase', 'javbus'):
             misses.record(site, 'DASS-468')
         provider = stub_provider()
-        provider.query.side_effect = NotFound('HTTP 404')
+        provider.query.side_effect = NotFound(*relayed('HTTP 404'))
         provider.cover.return_value = False
         process_library(config, db, self.root / 'generated', self.root / 'covers',
                         provider_factory=Mock(return_value=provider))
@@ -3392,7 +3422,7 @@ class LibraryWatchdogTests(unittest.TestCase):
         config = self._config(media)
         provider = self._provider()
         # ABW-101 在 r18.dev 那一问就用尽预算；ABW-102 的 r18.dev 只答厂牌，接着问 DMM 兜底。
-        provider.query.side_effect = [DeadlineExceeded('预算'), provider.query.return_value, NotFound('HTTP 404')]
+        provider.query.side_effect = [DeadlineExceeded('errors.javCoverFetch.deadline'), provider.query.return_value, NotFound(*relayed('HTTP 404'))]
         result = process_library(config, db, self.root / 'generated', self.root / 'covers',
                                  provider_factory=lambda: provider)
         with closing(sqlite3.connect(db)) as connection:
@@ -4155,7 +4185,7 @@ class LibraryPreviewCompletionTests(unittest.TestCase):
             seen.append(row['id'])
             progress()
             if row['id'] == 5:
-                raise InterruptedError('模拟服务退出')
+                raise InterruptedError('simulated service exit')
             return True
         with patch.object(library_processing, '_generate_preview', side_effect=capture):
             with self.assertRaises(InterruptedError):

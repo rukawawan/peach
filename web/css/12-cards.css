@@ -291,8 +291,6 @@ body[data-density="dense"] .card:not(.feednewcard) .meta .size{flex:none;white-s
 .feedcoverreason{font-size:var(--fs-xs);line-height:1.45;color:var(--muted);display:-webkit-box;-webkit-box-orient:vertical;
   -webkit-line-clamp:3;overflow:hidden;overflow-wrap:anywhere}
 .feedcoverstate button{pointer-events:auto;margin-top:4px}
-/* 正在取那一枚不定进度圆环摆在状态字上面，不带横幅里那份右侧间距。 */
-.feedcoverstate>[role="progressbar"]{margin:0}
 .feednewopen:focus-visible{outline:2px solid var(--tungsten);outline-offset:2px}
 /* 三颗动作键沿用 `.hovertools` 的磨砂圆底，只换尺寸和落点。`.hovertools` 默认
    `pointer-events:none`——那是为了让指针落到底下的预览上，而这三颗是这张卡唯一能按的

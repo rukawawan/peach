@@ -16,6 +16,7 @@ from peach import jav_poster_crop as crop
 from peach.cover_artwork import FACE_ALGORITHM_VERSION, metadata_snapshots, face_record as detect_face
 from peach.community_catalog import origin_of
 from peach.fsutil import atomic_write_text
+from peach.interface_text import dev as t
 from peach.library_processing import _official_evidence
 
 
@@ -89,11 +90,11 @@ def inspect(path, metadata, *, detector=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_cover_artwork.description"))
     parser.add_argument('--data-root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
-    parser.add_argument('--apply', action='store_true', help='备份并更新可重建的取景边车')
-    parser.add_argument('--refresh-faces', action='store_true', help='按当前人脸算法重算过期缓存')
+    parser.add_argument('--apply', action='store_true', help=t('audit_cover_artwork.applyHelp'))
+    parser.add_argument('--refresh-faces', action='store_true', help=t('audit_cover_artwork.refreshFacesHelp'))
     args = parser.parse_args()
     args.report.mkdir(parents=True, exist_ok=True)
     rows, errors = [], []

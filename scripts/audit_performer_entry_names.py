@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from peach.interface_text import dev as t  # noqa: E402
 from peach import entry_links  # noqa: E402
 from peach.config import DATABASE_PATH, DATA_ROOT, STATE_DIR  # noqa: E402
 from peach.review_csv import write_rows  # noqa: E402
@@ -24,6 +25,13 @@ from localize_performer_names import RELEASE_SOURCES  # noqa: E402
 FIELDS = ("entity_id", "current_name", "assets", "jav_directory", "previous_name",
           "entry_name", "previous_url", "url", "name_changed", "cn_status", "cn_aliases",
           "aliases", "directory_status", "link_evidence")
+#: `directory_status` 列：不适用（不是 JAV 名录里的人）、名录没取到、名录无唯一匹配、已匹配。
+NOT_APPLICABLE, MISSED, NEEDS_REVIEW, MATCHED = "not-applicable", "missed", "needs-review", "matched"
+#: `cn_status` 列：非发行艺人不判中译、假名规范名有汉字别名待复核、假名规范名中文来源未取得、
+#: 拉丁规范名要区分艺名与转写、无假名规范名通用中译覆盖未验证。
+NOT_RELEASE, KANA_WITH_HAN_ALIASES = "not-release-performer", "kana-name-han-aliases-pending"
+KANA_WITHOUT_SOURCE, LATIN_NAME, NO_KANA_UNVERIFIED = ("kana-name-no-chinese-source", "latin-name",
+                                                       "no-kana-name-unverified")
 KANA = re.compile(r"[\u3040-\u30ff]")
 HAN = re.compile(r"[\u3400-\u9fff]")
 LATIN = re.compile(r"[A-Za-z]")
@@ -40,13 +48,13 @@ def _name_localization(raw: str):
 def _directory_evidence(jav: bool, directory, selected: str, name: str) -> tuple[str, str]:
     """名录匹配与目标页面请求是两个独立的证据状态。"""
     if not jav:
-        return "不适用", "不适用"
+        return NOT_APPLICABLE, t("audit_performer_entry_names.notApplicable")
     path = directory.path(selected, name) if directory else None
     if path is None:
-        return "未取得", "未取得：未取得名录条目，目标未逐页请求"
+        return MISSED, t("audit_performer_entry_names.directoryMissed")
     if not path:
-        return "需复核", "未取得：名录无唯一匹配"
-    return "已匹配", "已取得：名录 href，目标未逐页请求"
+        return NEEDS_REVIEW, t("audit_performer_entry_names.directoryNotUnique")
+    return MATCHED, t("audit_performer_entry_names.directoryMatched")
 
 
 def collect(connection: sqlite3.Connection, directory=None) -> list[dict]:
@@ -76,11 +84,11 @@ def collect(connection: sqlite3.Connection, directory=None) -> list[dict]:
                           if HAN.search(str(row["alias"])) and not KANA.search(str(row["alias"]))
                           and not LATIN.search(str(row["alias"]))})
         release = bool(RELEASE_SOURCES.intersection(sources[entity_id])) or jav
-        status = ("非发行艺人，不判中译" if not release else
-                  "假名规范名，有汉字别名待复核" if KANA.search(name) and chinese else
-                  "假名规范名，中文来源未取得" if KANA.search(name) else
-                  "拉丁规范名，需区分艺名与转写" if LATIN.search(name) else
-                  "无假名规范名，通用中译覆盖未验证")
+        status = (NOT_RELEASE if not release else
+                  KANA_WITH_HAN_ALIASES if KANA.search(name) and chinese else
+                  KANA_WITHOUT_SOURCE if KANA.search(name) else
+                  LATIN_NAME if LATIN.search(name) else
+                  NO_KANA_UNVERIFIED)
         out.append({"entity_id": entity_id, "current_name": name,
                     "assets": len(assets[entity_id]), "jav_directory": int(jav),
                     "previous_name": previous if jav else "", "entry_name": selected if jav else "",
@@ -96,7 +104,7 @@ def collect(connection: sqlite3.Connection, directory=None) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_performer_entry_names.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--out", type=Path, default=DATA_ROOT / "review" / "performer-entry-name-audit.csv")
     parser.add_argument("--missav-directory", type=Path, default=STATE_DIR / entry_links.DIRECTORY_FILENAME)

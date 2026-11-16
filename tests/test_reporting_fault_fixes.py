@@ -173,15 +173,18 @@ class FaultFixTests(unittest.TestCase):
             self.assertEqual(event['tags']['media_failure'], 'decoder_unavailable')
             self.assertNotIn('private_input', json.dumps(event))
 
-    def test_expected_media_inputs_and_cancellation_stay_local(self):
+    def test_bad_media_input_is_counted_and_cancellation_stays_local(self):
         from peach.transcodes import TranscodeCancelled
-        for error in (TranscodeUnavailable('synthetic', diagnostics={'stderr': 'Invalid data found', 'returncode': 1}),
-                      TranscodeCancelled('synthetic')):
-            with self.subTest(error=type(error).__name__), mock.patch.object(remote_reporting, 'send') as send:
-                remote_reporting.capture('logging', error, logger='peach.routes_media', level='ERROR')
-            send.assert_not_called()
+        with mock.patch.object(remote_reporting, 'send') as send:
+            remote_reporting.capture('logging', TranscodeCancelled('synthetic'), logger='peach.routes_media', level='ERROR')
+        send.assert_not_called()
+        error = TranscodeUnavailable('synthetic', diagnostics={'stderr': 'Invalid data found', 'returncode': 1})
+        with mock.patch.object(remote_reporting, 'send') as send:
+            remote_reporting.capture('logging', error, logger='peach.routes_media', level='ERROR')
+        self.assertEqual(send.call_args.kwargs, {'count_only': True})
+        self.assertEqual(send.call_args.args[1]['tags']['condition'], 'invalid_media')
 
-    def test_transcode_input_failure_is_local_after_real_pipeline_frames(self):
+    def test_transcode_input_failure_is_counted_after_real_pipeline_frames(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             source = root / 'synthetic.avi'
@@ -199,4 +202,5 @@ class FaultFixTests(unittest.TestCase):
                         remote_reporting.capture('logging', error, logger='peach.routes_media', level='ERROR')
                     else:
                         self.fail('坏输入必须保留转码失败状态')
-                send.assert_not_called()
+                self.assertEqual(send.call_args.kwargs, {'count_only': True})
+                self.assertEqual(send.call_args.args[1]['tags']['condition'], 'invalid_media')

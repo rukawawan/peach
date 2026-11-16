@@ -21,6 +21,7 @@ import { ShellActionsContext } from '../router/router';
 import { FolderRuleDialog } from './folder-rule-dialog';
 import { useFolderStickyOffset } from './use-folder-sticky-offset';
 import { folderHref, folderQuery, PURPOSES, type FolderPage, type FolderScope, type MediaFolder } from './catalog-folders';
+import { t } from '../../i18n';
 
 export function FolderBrowseToggle() {
   return useInRouterContext() ? <FolderBrowseControl /> : null;
@@ -32,7 +33,7 @@ function FolderBrowseControl() {
   if (!isCatalogPath(address.pathname) && !/^\/(performers|creators|studios|series|agencies|tags)\/[^/]+$/.test(address.pathname)) return null;
   const params = new URLSearchParams(address.search);
   const active = params.get('browse') === 'folders' || !!params.get('folder');
-  return <IconButton size="small" data-folder-mode-toggle="" aria-label="文件夹模式" title="文件夹模式" aria-pressed={active}
+  return <IconButton size="small" data-folder-mode-toggle="" aria-label={t('catalog:catalogFolders.folderMode')} title={t('catalog:catalogFolders.folderMode')} aria-pressed={active}
     icon={RiFolder3Line}
     onClick={() => actions?.navigate(folderHref(address,
       active ? { browse: null, folder: null, folder_recursive: null } : { browse: 'folders' }))} />;
@@ -92,29 +93,29 @@ export function CatalogFolders({ treeTarget, headerTarget, enabled = true }: {
     {createPortal(navigation, treeHost)}
     {createPortal(<div className="catalog-folder-heading">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="folder-drawer-trigger"><IconButton aria-label="打开文件夹目录" icon={RiSideBarLine} size="small"
+        <span className="folder-drawer-trigger"><IconButton aria-label={t('catalog:catalogFolders.openTree')} icon={RiSideBarLine} size="small"
           onClick={() => setDrawer(true)} /></span>
-        <Breadcrumb aria-label="文件夹路径">
-          <BreadcrumbItem current={!key} onClick={() => go('')} icon={RiFolder3Line}>全部文件夹</BreadcrumbItem>
+        <Breadcrumb aria-label={t('catalog:catalogFolders.path')}>
+          <BreadcrumbItem current={!key} onClick={() => go('')} icon={RiFolder3Line}>{t('catalog:catalogFolders.allFolders')}</BreadcrumbItem>
           {data?.ancestors.map((node, index) => <BreadcrumbItem key={node.id} current={index === data.ancestors.length - 1}
             onClick={() => go(node.id)}><span className="folder-crumb-name" data-middle-truncate="">{node.name}</span></BreadcrumbItem>)}
         </Breadcrumb>
-        {data?.selected ? <IconButton aria-label="设置目录用途" icon={RiFolderSettingsLine} size="small"
+        {data?.selected ? <IconButton aria-label={t('catalog:catalogFolders.setPurpose')} icon={RiFolderSettingsLine} size="small"
           onClick={() => setEditing(true)} /> : null}
       </div>
-      {query.error && !drawer ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => { void query.refetch() }}>立即重试</Button>}>{errorMessage(query.error)}</Note> : null}
-      {data?.conflicts?.length ? <Note tone="warning" action={<Button variant="secondary" size="small" onClick={() => setEditing(true)}>查看归属冲突</Button>}>{data.conflicts.length} 项保留现有归属</Note> : null}
+      {query.error && !drawer ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => { void query.refetch() }}>{t('catalog:shared.retryNow')}</Button>}>{errorMessage(query.error)}</Note> : null}
+      {data?.conflicts?.length ? <Note tone="warning" action={<Button variant="secondary" size="small" onClick={() => setEditing(true)}>{t('catalog:catalogFolders.viewConflicts')}</Button>}>{t('catalog:catalogFolders.conflictsKept', { count: data.conflicts.length })}</Note> : null}
       {data?.selected ? <div className="folder-scope-row">
         <Checkbox size="sm" isSelected={params.get('folder_recursive') !== '0'}
-          onChange={on => actions.navigate(folderHref(address, { folder_recursive: on ? null : '0' }))}>包含子文件夹</Checkbox>
-        <span className="text-caption-1-regular text-text-tertiary">{data.rule ? `${PURPOSES[data.rule.purpose]}${data.rule.name ? ` · ${data.rule.name}` : ''}` : '个人分类'}</span>
+          onChange={on => actions.navigate(folderHref(address, { folder_recursive: on ? null : '0' }))}>{t('catalog:catalogFolders.includeSubfolders')}</Checkbox>
+        <span className="text-caption-1-regular text-text-tertiary">{data.rule ? `${PURPOSES[data.rule.purpose]}${data.rule.name ? ` · ${data.rule.name}` : ''}` : t('catalog:folderRule.purposeCategory')}</span>
       </div> : null}
-      {query.isPending ? <div data-skeleton="" aria-busy="true" aria-label="正在读取文件夹" className="folder-children">{Array.from({ length: 6 }, (_, i) => <span key={i} className="skeleton-sheen h-8 w-28 rounded-lg" />)}</div> : null}
+      {query.isPending ? <div data-skeleton="" aria-busy="true" aria-label={t('catalog:catalogFolders.loading')} className="folder-children">{Array.from({ length: 6 }, (_, i) => <span key={i} className="skeleton-sheen h-8 w-28 rounded-lg" />)}</div> : null}
       {data?.children.length ? <FolderChildren key={key} nodes={data.children} go={go} /> : null}
     </div>, headerHost)}
-    <ModalFrame isOpen={drawer} onOpenChange={setDrawer} width="form" label="文件夹目录">
+    <ModalFrame isOpen={drawer} onOpenChange={setDrawer} width="form" label={t('catalog:catalogFolders.tree')}>
       <div className="flex items-center justify-between border-b border-separator-border p-4">
-        <h2 className="text-title-2-medium">文件夹</h2><SettingsDialogClose label="关闭文件夹目录" onPress={() => setDrawer(false)} />
+        <h2 className="text-title-2-medium">{t('catalog:catalogFolders.treeTitle')}</h2><SettingsDialogClose label={t('catalog:catalogFolders.closeTree')} onPress={() => setDrawer(false)} />
       </div>
       <div className="peach-react relative p-4">{drawer ? navigation : null}</div>
     </ModalFrame>
@@ -128,11 +129,11 @@ function FolderChildren({ nodes, go }: { nodes: MediaFolder[]; go(id: string): v
   const id = useId();
   const visible = expanded ? nodes : nodes.slice(0, 12);
   return <div className="flex min-w-0 flex-col items-start gap-2">
-    <div id={id} className="folder-children" aria-label="子文件夹">{visible.map(node =>
+    <div id={id} className="folder-children" aria-label={t('catalog:catalogFolders.subfolders')}>{visible.map(node =>
       <Button key={node.id} variant="secondary" size="small" leadingIcon={RiFolder3Line}
         onClick={() => go(node.id)}><span className="truncate">{node.name}</span></Button>)}</div>
     {nodes.length > 12 ? <Button variant="ghost" size="small" aria-expanded={expanded} aria-controls={id}
-      onClick={() => setExpanded(value => !value)}>{expanded ? '收起文件夹' : `展开全部 ${nodes.length} 个文件夹`}</Button> : null}
+      onClick={() => setExpanded(value => !value)}>{expanded ? t('catalog:catalogFolders.collapse') : t('catalog:catalogFolders.expandAll', { count: nodes.length })}</Button> : null}
   </div>;
 }
 
@@ -156,29 +157,29 @@ function FolderTree({ scope, selected, current, go, reportedError }: {
   const render = (node: MediaFolder) => {
     const loaded = childMap.get(node.id);
     return <TreeViewItem key={node.id} id={node.id} label={node.name} icon={RiFolder3Line} expandedIcon={RiFolderOpenLine}
-      iconClassName="size-(--icon-inline)" trailingContent={node.parent ? undefined : node.location === 'local' ? '本地' : node.location}>
+      iconClassName="size-(--icon-inline)" trailingContent={node.parent ? undefined : node.location === 'local' ? t('catalog:shared.localLabel') : node.location}>
       {node.has_children ? loaded ? loaded.map(render)
-        : <TreeViewItem id={`${node.id}:loading`} label="正在读取文件夹" isDisabled /> : null}
+        : <TreeViewItem id={`${node.id}:loading`} label={t('catalog:catalogFolders.loading')} isDisabled /> : null}
     </TreeViewItem>;
   };
   const choose = (selection: Selection) => {
     if (selection !== 'all') { const id = selection.values().next().value; if (id && !String(id).endsWith(':loading')) go(String(id)); }
   };
   const failed = [roots.error, ...branches.map(branch => branch.error)].find(error => error && error !== reportedError);
-  return <section aria-label="文件夹导航" className="catalog-folder-navigation flex min-h-0 min-w-0 flex-col gap-3">
-    <Input aria-label="查找文件夹" placeholder="查找文件夹" leadingIcon={RiSearchLine} value={search}
+  return <section aria-label={t('catalog:catalogFolders.navigation')} className="catalog-folder-navigation flex min-h-0 min-w-0 flex-col gap-3">
+    <Input aria-label={t('catalog:catalogFolders.search')} placeholder={t('catalog:catalogFolders.search')} leadingIcon={RiSearchLine} value={search}
       onChange={setSearch} size="small" />
-    {failed ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => { void roots.refetch(); branches.forEach(branch => { if (branch.error) void branch.refetch() }) }}>立即重试</Button>}>{errorMessage(failed)}</Note> : null}
+    {failed ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => { void roots.refetch(); branches.forEach(branch => { if (branch.error) void branch.refetch() }) }}>{t('catalog:shared.retryNow')}</Button>}>{errorMessage(failed)}</Note> : null}
     <div className="folder-tree-frame relative flex min-h-0 flex-col overflow-hidden rounded-3xl"><div ref={scroll} className="folder-tree-scroller">
-      {roots.error ? null : roots.isPending ? <div data-skeleton="" aria-busy="true" aria-label="正在读取目录树" className="flex flex-col gap-2">{Array.from({ length: 8 }, (_, i) => <div key={i} className="flex h-8 items-center gap-2 px-3"><span className="skeleton-sheen size-4" /><span className="skeleton-sheen h-4 flex-1" /></div>)}</div>
-        : deferredSearch ? <div className="flex flex-col gap-1">{searchQuery.isPending ? <div data-skeleton="" aria-busy="true" className="h-8 skeleton-sheen" aria-label="正在查找文件夹" />
+      {roots.error ? null : roots.isPending ? <div data-skeleton="" aria-busy="true" aria-label={t('catalog:catalogFolders.loadingTree')} className="flex flex-col gap-2">{Array.from({ length: 8 }, (_, i) => <div key={i} className="flex h-8 items-center gap-2 px-3"><span className="skeleton-sheen size-4" /><span className="skeleton-sheen h-4 flex-1" /></div>)}</div>
+        : deferredSearch ? <div className="flex flex-col gap-1">{searchQuery.isPending ? <div data-skeleton="" aria-busy="true" className="h-8 skeleton-sheen" aria-label={t('catalog:catalogFolders.searching')} />
           : searchQuery.error ? <Note tone="error">{errorMessage(searchQuery.error)}</Note>
           : searchQuery.data?.matches.length ? searchQuery.data.matches.map(node => <Button key={node.id} variant="secondary" size="small" leadingIcon={RiFolder3Line}
-            onClick={() => { setSearch(''); go(node.id) }}>{node.name}</Button>) : <EmptyState size="compact" icon={RiSearchLine} title="没有匹配的文件夹"
-              actions={<Button size="small" onClick={() => setSearch('')}>清除搜索</Button>}>换个目录名称试试。</EmptyState>}</div>
-        : !roots.data?.roots.length ? <EmptyState size="compact" icon={RiFolder3Line} title="尚未添加媒体目录"
-          actions={<ButtonLink size="small" href="/settings/library">添加媒体</ButtonLink>}>在媒体库设置中添加目录并扫描。</EmptyState>
-        : <TreeView aria-label="媒体目录" size="sm" expandedKeys={expanded} onExpandedChange={setExpanded}
+            onClick={() => { setSearch(''); go(node.id) }}>{node.name}</Button>) : <EmptyState size="compact" icon={RiSearchLine} title={t('catalog:catalogFolders.noMatches')}
+              actions={<Button size="small" onClick={() => setSearch('')}>{t('catalog:shared.clearSearch')}</Button>}>{t('catalog:catalogFolders.tryAnotherName')}</EmptyState>}</div>
+        : !roots.data?.roots.length ? <EmptyState size="compact" icon={RiFolder3Line} title={t('catalog:catalogFolders.noDirectories')}
+          actions={<ButtonLink size="small" href="/settings/library">{t('catalog:shared.addMedia')}</ButtonLink>}>{t('catalog:catalogFolders.addInSettings')}</EmptyState>
+        : <TreeView aria-label={t('catalog:catalogFolders.mediaDirectories')} size="sm" expandedKeys={expanded} onExpandedChange={setExpanded}
           selectedKeys={new Set(selected ? [selected] : [])} onSelectionChange={choose}
           >
           {roots.data?.roots.map(render)}

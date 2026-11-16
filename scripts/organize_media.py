@@ -24,36 +24,46 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from peach import junk, organize
+from peach import interface_text, junk, organize
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.media_sources import SCANNABLE_LOCATIONS
 from peach.organize_templates import PLACEHOLDERS, TemplateError
 from peach.platform import location_roots
 from peach.scripting import add_ledger_write_args, open_for_write, verify_after_write
 
 
+def _server_text(code: str) -> str:
+    """产品资源里的一句（占位符名、跳过原因），按本机语言取。"""
+    return interface_text.text(f"server:{code}", None, interface_text.local_language())
+
+
 def build_parser() -> argparse.ArgumentParser:
+    placeholders = [
+        f"{{{key}}}={_server_text(f'labels.organizeTemplates.placeholder.{key}')}" for key in PLACEHOLDERS]
     parser = argparse.ArgumentParser(
-        description="按模板整理文件名与目录；默认只出计划",
-        epilog="占位符：" + "、".join(f"{{{key}}}={label}" for key, label in PLACEHOLDERS.items()))
+        description=t("organize_media.description"),
+        epilog=t("organize_media.placeholders", items=placeholders))
     add_ledger_write_args(parser, db_default=DATABASE_PATH)
     parser.add_argument("--location", choices=SCANNABLE_LOCATIONS, default="local")
-    parser.add_argument("--file-template", default="", help="文件名模板，不含扩展名")
+    parser.add_argument("--file-template", default="", help=t("organize_media.fileTemplateHelp"))
     parser.add_argument("--dir-template", default="",
-                        help="目录模板，相对来源根；留空表示原地改名")
+                        help=t("organize_media.dirTemplateHelp"))
     parser.add_argument("--generated-root", type=Path, default=GENERATED_DIR,
-                        help="计划 CSV 与批次日志的落点")
+                        help=t("organize_media.generatedRootHelp"))
     parser.add_argument("--rollback-last", action="store_true",
-                        help="把最近一批整理原样退回去")
+                        help=t("organize_media.rollbackLastHelp"))
     return parser
 
 
 def _report_plan(plan: dict) -> None:
     counts = plan["counts"]
-    print(f"扫描 {counts['total']} 条：会改 {counts['change']}，"
-          f"已经就是目标名字 {counts['unchanged']}，跳过 {counts['skip']}")
+    print(t("organize_media.planSummary", total=counts["total"], change=counts["change"],
+            unchanged=counts["unchanged"], skip=counts["skip"]))
+    codes = plan.get("reason_codes", {})
     for reason, count in sorted(plan["reasons"].items(), key=lambda item: -item[1]):
-        print(f"  {reason}：{count} 条")
+        label = _server_text(codes[reason]) if reason in codes else reason
+        print(t("organize_media.reasonCount", reason=label, count=count))
 
 
 def run(args: argparse.Namespace) -> int:
@@ -63,21 +73,21 @@ def run(args: argparse.Namespace) -> int:
         if args.rollback_last:
             latest = organize.latest_batch(args.generated_root)
             if latest is None:
-                print("没有可以回滚的批次")
+                print(t("organize_media.noBatch"))
                 return 0
-            print(f"上一批：{latest}")
+            print(t("organize_media.lastBatch", batch=latest))
             if not args.apply:
-                print("未加 --apply，什么都没退回。")
+                print(t("organize_media.rollbackDryRun"))
                 return 0
             result = organize.rollback_batch(connection, latest)
-            print(f"退回 {result['restored']} 条，失败 {result['failed']}")
+            print(t("organize_media.rolledBack", restored=result["restored"], failed=result["failed"]))
             for failure in result["failures"]:
-                print(f"  {failure['path']}：{failure['reason']}")
+                print(t("organize_media.failure", path=failure["path"], reason=failure["reason"]))
         else:
             if args.apply:
                 checked = junk.isolate(args.db, roots=[(args.location, root)
                     for root in location_roots().get(args.location, ())])
-                print(f"垃圾检查：隔离 {checked['isolated']} 个，待复核 {checked['review']} 个")
+                print(t("organize_media.junkCheck", isolated=checked["isolated"], review=checked["review"]))
             plan = organize.build_plan(
                 connection, location=args.location,
                 file_template=args.file_template, dir_template=args.dir_template)
@@ -86,20 +96,20 @@ def run(args: argparse.Namespace) -> int:
             _report_plan(plan)
             print(f"→ {path}")
             if not args.apply:
-                print("未加 --apply，只出计划未动文件。")
+                print(t("organize_media.planDryRun"))
                 return 0
             result = organize.apply_plan(connection, plan["rows"],
                                          generated_root=args.generated_root)
-            print(f"整理 {result['moved']} 条，失败 {result['failed']}")
+            print(t("organize_media.organized", moved=result["moved"], failed=result["failed"]))
             for failure in result["failures"]:
-                print(f"  {failure['path']}：{failure['reason']}")
-            print(f"批次日志：{result['log_path']}")
+                print(t("organize_media.failure", path=failure["path"], reason=failure["reason"]))
+            print(t("organize_media.batchLog", path=result["log_path"]))
         integrity, _ = verify_after_write(connection)
         introduced = {tuple(row) for row in connection.execute('PRAGMA foreign_key_check')} - baseline
         if integrity != "ok" or introduced:
-            print(f"写入后 ledger 校验失败：integrity={integrity} new_foreign_keys={len(introduced)}")
+            print(t("organize_media.verifyFailed", integrity=integrity, introduced=len(introduced)))
             return 2
-        print(f"已核对 ledger，存量外键异常 {len(baseline)} 条")
+        print(t("organize_media.verified", count=len(baseline)))
         return 0
     finally:
         connection.close()

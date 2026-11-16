@@ -1,6 +1,7 @@
 /* 卡片网格的等待与失败：壳铺的骨架怎么退场，取数失败留下什么。馆藏卡片网格与垃圾文件队列共用。 */
 import { useEffect, useLayoutEffect, useRef, useState, type AnimationEvent, type MouseEvent } from 'react';
 import { fitSkeleton, noteHtml } from '@peach/legacy/ui';
+import { t } from '../../i18n';
 
 /** 续页哨兵提前多远开始取下一段：一屏高（隐式根的百分比按视口算）。目录接一页是一次 150–250ms
  *  的请求加几百毫秒的渲染，只提前几百像素时，连续往下滚每一页都要在底部干等。 */
@@ -45,6 +46,6 @@ export function RetryNote({ message, onRetry }: { message: string; onRetry: () =
   };
   return (
     <div data-media-error="" onClick={click}
-      dangerouslySetInnerHTML={{ __html: noteHtml(message, { variant: 'error', actionLabel: '立即重试' }) }} />
+      dangerouslySetInnerHTML={{ __html: noteHtml(message, { variant: 'error', actionLabel: t('shell:shared.retryNow') }) }} />
   );
 }

@@ -21,6 +21,7 @@ from peach import organize
 from peach.catalog_rules import is_jav_code, is_korean_mib_code, normalise_code_key, promo_free_key, western_release_identity, release_code_from_filename, same_release_code, strip_promo_markers
 from peach.classification import is_structural_creator
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.entity_classification import category_predicates
 from peach.jobs import PidFileLock
 from peach.media_sources import SCANNABLE_LOCATIONS
@@ -85,7 +86,7 @@ def update_paths(db, op):
             changed = db.execute('UPDATE '+table+' SET path=? WHERE id=? AND path=?',
                                  (rewrite(row['path'], op['source'], op['target']), row['id'], row['path'])).rowcount
             if changed != 1:
-                raise ValueError('账本路径更新失败：'+table)
+                raise ValueError(t('organize_library_dirs.pathUpdateFailed', table=table))
 
 def operation(kind, source, target, rows, reason):
     key = hashlib.sha256((kind + '\0' + source + '\0' + target).encode()).hexdigest()[:20]
@@ -225,7 +226,7 @@ def catalog_nodes(all_rows, roots, creators, categories, unverified, skipped):
     for row in all_rows:
         location, index, _ = resolve_root(row['path'], roots)
         if location != row['location'] or index < 0:
-            skipped.append(dict(source=row['path'], reason='不在来源根内'))
+            skipped.append(dict(source=row['path'], reason=t('organize_library_dirs.outsideRoot')))
             continue
         root = roots[location][index]
         owner = label(row, creators, categories, unverified)
@@ -241,7 +242,7 @@ def catalog_nodes(all_rows, roots, creators, categories, unverified, skipped):
             if owner:
                 node['labels'].add(owner)
             if parent.parent == parent:
-                raise ValueError('目录不在声明来源根内')
+                raise ValueError(t('organize_library_dirs.directoryOutsideRoot'))
             parent = parent.parent
     return nodes
 
@@ -330,10 +331,10 @@ def directory_target(source, node, owner, rows_by_id, skipped, existing=None):
     if target.casefold() == source.casefold():
         return None
     if beneath(target, source) or beneath(source, target):
-        skipped.append(dict(source=source, reason='目标与来源相互包含'))
+        skipped.append(dict(source=source, reason=t('organize_library_dirs.targetSourceNested')))
         return None
     if any(len(rewrite(r['path'], source, target).encode('utf-16-le')) // 2 > MAX_PATH for r in node['rows']):
-        skipped.append(dict(source=source, reason='路径过长'))
+        skipped.append(dict(source=source, reason=t('organize_library_dirs.pathTooLong')))
         return None
     return target
 
@@ -351,7 +352,7 @@ def directory_operations(nodes, rows_by_id, creators, skipped, existing=None):
             continue
         selected.add(source.casefold())
         operations.append(operation('rename', source, target, sorted(node['rows'], key=lambda r:r['id']),
-                                    '账本规范归属：' + '/'.join(owner[1:])))
+                                    t('organize_library_dirs.ledgerCredit', owner='/'.join(owner[1:]))))
     return operations
 
 def file_operations(db, all_rows, rows_by_path, covered, existing=None):
@@ -377,7 +378,7 @@ def file_operations(db, all_rows, rows_by_path, covered, existing=None):
                 aids.add(extra['id'])
         rows.sort(key=lambda r: r['id'])
         operations.append(operation('files', source, target, rows,
-                                    '混合目录内按已知归属分组：' + '/'.join(owner[1:])))
+                                    t('organize_library_dirs.mixedGroup', owner='/'.join(owner[1:]))))
         covered.update(r['id'] for r in rows)
     return operations
 
@@ -392,17 +393,17 @@ def pending_paths(all_rows, mounts, covered, existing=None):
         if row['disposal'] is None and row['id'] not in covered:
             owner, root = row.get('_owner'), row.get('_root')
             if root and not mounts[root]:
-                reason = '来源离线，保留原位置'
+                reason = t('organize_library_dirs.pendingOffline')
             elif row.get('_code_conflict'):
-                reason = '数据库番号与文件名编号不一致，待确认'
+                reason = t('organize_library_dirs.pendingCodeConflict')
             elif owner and beneath(row['path'], canonical_directory(root, owner, existing)):
-                reason = '已在规范分类目录'
+                reason = t('organize_library_dirs.pendingInPlace')
             elif row['medium'] == 'other':
-                reason = '附带文件缺少明确作品目录，保留原位置'
+                reason = t('organize_library_dirs.pendingSidecar')
             elif owner:
-                reason = '归属明确，但目录混合、命名不足或路径过长，保留原位置'
+                reason = t('organize_library_dirs.pendingMixed')
             else:
-                reason = '归属未确认，保留原位置'
+                reason = t('organize_library_dirs.pendingUnknown')
             skipped.append(dict(source=row['path'], reason=reason))
     return skipped
 
@@ -412,7 +413,7 @@ def attach_plan_guards(db, operations, stage, all_rows):
         regions = {row['id']:row['region'] for row in all_rows}
         ids = [row['id'] for op in operations for row in op['rows']]
         if len(ids) != len(set(ids)):
-            raise ValueError('目录计划重复覆盖资产，请复核字幕或整包归属')
+            raise ValueError(t('organize_library_dirs.overlappingPlan'))
     for op in operations:
         op['subtitles'] = subtitles(db, op['source'])
         if op['kind'] == 'files':
@@ -428,7 +429,7 @@ def flatten_operations(db, stem):
         row['verified'] = flatten.verify(row, translate_ledger_path)
         if row['verified'] == 'ok':
             operations.append(operation(row['kind'],row['ledger_dir'],row['target_dir'],
-                                        snapshots(db,row['ledger_dir']),'冗余目录层或广告标记'))
+                                        snapshots(db,row['ledger_dir']),t('organize_library_dirs.redundantLayer')))
         else:
             skipped.append(dict(source=row['ledger_dir'],reason=row['verified']))
     write_rows(OUT/f'{stem}-plan.csv',flatten.PLAN_FIELDS,rows)
@@ -446,7 +447,7 @@ def build_plan(stage, batch=None):
     stem = stage + ('-' + batch if batch else '')
     receipt = OUT/f'{stem}-receipt.json'
     if receipt.exists() and json.loads(receipt.read_text(encoding='utf-8')).get('entries'):
-        raise ValueError('已有执行回执，请使用新的批次编号')
+        raise ValueError(t('organize_library_dirs.receiptExists'))
     roots = location_roots()
     all_rows = []
     with closing(open_readonly(DATABASE_PATH)) as db:
@@ -478,19 +479,19 @@ def build_plan(stage, batch=None):
 def expand(source, target, *, deadline, count=None):
     count = [0] if count is None else count
     if time.monotonic() > deadline:
-        raise TimeoutError('目录预检超时')
+        raise TimeoutError(t('organize_library_dirs.precheckTimeout'))
     if source.is_symlink() or target.is_symlink():
-        raise ValueError('拒绝符号链接')
+        raise ValueError(t('organize_library_dirs.symlinkRefused'))
     if not source.exists():
-        raise FileNotFoundError('源目录不存在')
+        raise FileNotFoundError(t('organize_library_dirs.sourceMissing'))
     if not target.exists():
         return [(str(source), str(target))], []
     if not source.is_dir() or not target.is_dir():
-        raise FileExistsError('目标同名文件已存在')
+        raise FileExistsError(t('organize_library_dirs.targetFileExists'))
     entries = list(source.iterdir())
     count[0] += len(entries)
     if count[0] > 100000:
-        raise ValueError('目录项超过本批预算')
+        raise ValueError(t('organize_library_dirs.entryBudgetExceeded'))
     pairs, empty = [], [str(source)]
     for entry in entries:
         child_pairs, child_empty = expand(entry, target / entry.name, deadline=deadline, count=count)
@@ -521,7 +522,7 @@ def restore(pairs):
             except OSError as error:
                 failures.append(dict(source=source, target=target, error=str(error)))
         else:
-            failures.append(dict(source=source, target=target, error='恢复路径状态冲突'))
+            failures.append(dict(source=source, target=target, error=t('organize_library_dirs.restoreConflict')))
     return failures
 
 def staging_name(source):
@@ -533,7 +534,7 @@ def collapse_moves(source, target):
     parent = translate_ledger_path(target)
     temporary = parent.with_name(staging_name(source))
     if temporary.exists() or temporary.is_symlink():
-        raise FileExistsError('临时目录已存在')
+        raise FileExistsError(t('organize_library_dirs.stagingExists'))
     child = temporary / translate_ledger_path(source).name
     state = dict(parent=str(parent), temporary=str(temporary), child=str(child), original=source)
     return [(str(parent), str(temporary)), (str(child), str(parent))], state
@@ -561,7 +562,7 @@ def restore_entry(entry):
             if translate_ledger_path(state['original']).is_dir():
                 return []
             if not parent.is_dir():
-                raise RuntimeError('恢复所需目录未取得')
+                raise RuntimeError(t('organize_library_dirs.restoreDirectoryMissing'))
             temporary.mkdir()
         if child.exists() and not parent.exists():
             organize._rename(str(temporary), str(parent))
@@ -569,7 +570,7 @@ def restore_entry(entry):
             organize._rename(str(parent), str(child))
             organize._rename(str(temporary), str(parent))
         else:
-            raise RuntimeError('恢复路径状态冲突')
+            raise RuntimeError(t('organize_library_dirs.restoreConflict'))
         return []
     except Exception as error:
         return [dict(error=str(error), **state)]
@@ -590,7 +591,7 @@ def recover(db, payload, receipt, path):
     for entry in receipt['entries']:
         if entry['status'] not in {'intent', 'filesystem'}:
             if entry['status'] == 'rollback_failed':
-                raise RuntimeError('上一批存在未恢复的文件')
+                raise RuntimeError(t('organize_library_dirs.previousUnrestored'))
             continue
         op = operations[entry['key']]
         expected = [dict(r, path=rewrite(r['path'], op['source'], op['target'])) for r in op['rows']]
@@ -605,7 +606,7 @@ def recover(db, payload, receipt, path):
                        [new for old, new in entry['moves'][1:]] if entry.get('shared_stage') else
                        [new for old, new in entry['moves']])
             if any(not translate_ledger_path(new).exists() for new in targets):
-                raise RuntimeError('已提交批次的目标文件未取得')
+                raise RuntimeError(t('organize_library_dirs.committedTargetMissing'))
             entry['status'] = 'committed'
             cleanup_collapse(entry)
         elif current == op['rows'] and current_subs == op['subtitles']:
@@ -613,9 +614,9 @@ def recover(db, payload, receipt, path):
             entry['status'] = 'rollback_failed' if failures else 'restored'
             if failures:
                 save(path, receipt)
-                raise RuntimeError('中断批次的文件恢复失败')
+                raise RuntimeError(t('organize_library_dirs.interruptedRestoreFailed'))
         else:
-            raise RuntimeError('中断批次的账本已经发生其他变化')
+            raise RuntimeError(t('organize_library_dirs.interruptedLedgerChanged'))
         save(path, receipt)
 
 class OfflineSource(ValueError):
@@ -627,22 +628,22 @@ def operation_paths(op, roots):
     old_location, old_index, _ = resolve_root(source + '\\_', roots)
     new_location, new_index, _ = resolve_root(target + '\\_', roots)
     if old_location != new_location or old_index != new_index or old_index < 0:
-        raise ValueError('来源根不一致')
+        raise ValueError(t('organize_library_dirs.rootMismatch'))
     root = roots[old_location][old_index]
     if not beneath(source, root) or not beneath(target, root) or not root_online(translate_ledger_path(root)):
-        raise OfflineSource('来源未挂载或操作越出根目录')
+        raise OfflineSource(t('organize_library_dirs.sourceOffline'))
     if op['kind'] != 'files' and (beneath(target, source) or (beneath(source, target) and op['kind'] != 'collapse')):
-        raise ValueError('来源与目标相互包含')
+        raise ValueError(t('organize_library_dirs.sourceTargetNested'))
     local_source, local_target = translate_ledger_path(source), translate_ledger_path(target)
     if not local_source.is_dir():
-        raise ValueError('源路径不是目录或未挂载')
+        raise ValueError(t('organize_library_dirs.sourceNotDirectory'))
     if local_source.is_symlink() or local_target.is_symlink():
-        raise ValueError('拒绝符号链接目录')
+        raise ValueError(t('organize_library_dirs.symlinkDirectoryRefused'))
     if op['kind'] == 'collapse':
         if PureWindowsPath(source).parent != PureWindowsPath(target):
-            raise ValueError('合并目标不是直接父目录')
+            raise ValueError(t('organize_library_dirs.collapseNotParent'))
         if flatten.directory_key(PureWindowsPath(source).name) != flatten.directory_key(PureWindowsPath(target).name):
-            raise ValueError('目录名不冗余')
+            raise ValueError(t('organize_library_dirs.notRedundant'))
         exclusive_parent = sorted(p.name for p in local_target.iterdir()) == [local_source.name]
     return local_source, local_target, root, exclusive_parent
 
@@ -650,14 +651,14 @@ def verify_frozen_operation(db, op, stage):
     source = op['source']
     row_ids = [r['id'] for r in op['rows']] if op['kind'] == 'files' else None
     if snapshots(db, source, row_ids) != op['rows']:
-        raise ValueError('冻结计划已失效：路径或元数据发生变化')
+        raise ValueError(t('organize_library_dirs.staleRows'))
     current_subtitles = subtitles(db, source)
     if row_ids is not None:
         current_subtitles = [r for r in current_subtitles if r['asset_id'] in row_ids]
     if current_subtitles != op['subtitles']:
-        raise ValueError('冻结计划已失效：字幕路径发生变化')
+        raise ValueError(t('organize_library_dirs.staleSubtitles'))
     if stage == 'rehome' and entity_guard(db, source, row_ids) != op['entities']:
-        raise ValueError('冻结计划已失效：创作者身份发生变化')
+        raise ValueError(t('organize_library_dirs.staleIdentity'))
 
 def sidecar_owner(name, videos):
     """带片名的附属文件属于哪部视频：取最长的、后面紧跟分隔符的片名前缀。"""
@@ -705,7 +706,7 @@ def file_group_moves(op, registered=frozenset()):
     for old, new in physical_pairs:
         old, new = translate_ledger_path(old), translate_ledger_path(new)
         if old.is_symlink() or new.is_symlink() or not old.is_file() or new.exists():
-            raise ValueError('分组文件未取得、符号链接或目标冲突')
+            raise ValueError(t('organize_library_dirs.groupFileProblem'))
     moving = {PureWindowsPath(old).name for old, _ in physical_pairs}
     physical_pairs += sidecar_moves(op, moving, registered)
     empty = [source]
@@ -714,12 +715,12 @@ def file_group_moves(op, registered=frozenset()):
 def shared_collapse_moves(local_source, local_target, root, source):
     temporary = local_source.with_name(staging_name(source))
     if temporary.exists() or temporary.is_symlink() or not beneath(str(temporary), root):
-        raise ValueError('暂存目录冲突或越出根目录')
+        raise ValueError(t('organize_library_dirs.stagingConflict'))
     entries = list(local_source.iterdir())
     for entry in entries:
         if entry.is_symlink() or (entry.name.casefold() != local_source.name.casefold()
                                  and (local_target / entry.name).exists()):
-            raise ValueError('目标条目冲突或符号链接')
+            raise ValueError(t('organize_library_dirs.targetEntryConflict'))
     shared_stage = dict(original=source, temporary=str(temporary))
     physical_pairs = [(str(local_source), str(temporary))] + [
         (str(temporary / p.name), str(local_target / p.name)) for p in entries]
@@ -734,7 +735,7 @@ def prepare_moves(op, local_source, local_target, root, exclusive_parent, deadli
     elif op['kind'] == 'collapse' and exclusive_parent:
         pairs, collapse = collapse_moves(source,target)
         if not beneath(pairs[0][1],root):
-            raise ValueError('临时目录越出根目录')
+            raise ValueError(t('organize_library_dirs.stagingOutsideRoot'))
         empty = []
     elif op['kind'] == 'collapse' and any(p.name.casefold()==local_source.name.casefold() for p in local_source.iterdir()):
         pairs, empty, shared_stage = shared_collapse_moves(local_source,local_target,root,source)
@@ -746,7 +747,7 @@ def move_files(journal, receipt, receipt_path):
     for index,(old,new) in enumerate(journal['moves']):
         organize._rename(old,new)
         if not translate_ledger_path(new).exists():
-            raise ValueError('移动后目标未取得')
+            raise ValueError(t('organize_library_dirs.movedTargetMissing'))
         if journal['shared_stage'] and index==0:
             journal['shared_started'] = True
             save(receipt_path,receipt)
@@ -759,7 +760,7 @@ def commit_paths(db, op):
         for row in rows:
             present = db.execute(f'SELECT path FROM {table} WHERE id=?',(row['id'],)).fetchone()
             if not present or present[0]!=rewrite(row['path'],op['source'],op['target']):
-                raise ValueError('目标账本路径核对失败')
+                raise ValueError(t('organize_library_dirs.targetPathCheckFailed'))
     db.commit()
 
 def cleanup_empty_paths(paths):
@@ -786,11 +787,11 @@ def provider_moves(pairs, root, allow_intermediate=True):
         source, target = PureWindowsPath(old), PureWindowsPath(new)
         if source.parent != target.parent and source.name != target.name:
             if not allow_intermediate:
-                raise ValueError('目录折叠的改名中间路径需单独复核')
+                raise ValueError(t('organize_library_dirs.intermediateNeedsReview'))
             intermediate = str(source.with_name(target.name))
             local = translate_ledger_path(intermediate)
             if not beneath(intermediate, root) or intermediate.casefold() in planned or local.exists() or local.is_symlink():
-                raise FileExistsError('同父改名的中间路径冲突或越界')
+                raise FileExistsError(t('organize_library_dirs.intermediateConflict'))
             planned.add(intermediate.casefold())
             result.extend(((old, intermediate), (intermediate, new)))
         else:
@@ -843,7 +844,7 @@ def execute_operation(db, payload, op, stage, receipt, receipt_path, deadline, r
         raise
     except Exception as error:
         if committed:
-            raise RuntimeError('账本已提交，回执保存失败；保留文件位置供续跑核对') from error
+            raise RuntimeError(t('organize_library_dirs.receiptSaveFailed')) from error
         db.rollback()
         try:
             failures = restore_entry(journal) if journal is not None else []
@@ -855,7 +856,7 @@ def execute_operation(db, payload, op, stage, receipt, receipt_path, deadline, r
         receipt['failures'].append(dict(key=op['key'],source=op['source'],error=str(error),rollback_failures=failures))
         save(receipt_path,receipt)
         if failures:
-            raise RuntimeError('文件恢复未完成，停止本批') from error
+            raise RuntimeError(t('organize_library_dirs.restoreIncomplete')) from error
         return error
     return None
 
@@ -875,23 +876,22 @@ def verify_result(db, assets, subtitle_count, baseline):
                   integrity=db.execute('PRAGMA integrity_check').fetchone()[0],existing_foreign_keys=len(baseline),
                   new_foreign_keys=list({tuple(r) for r in db.execute('PRAGMA foreign_key_check')}-baseline))
     if result['asset_before']!=result['asset_after'] or result['subtitles_before']!=result['subtitles_after'] or result['integrity']!='ok' or result['new_foreign_keys']:
-        raise RuntimeError('目录执行后的账本计数或完整性核验失败')
+        raise RuntimeError(t('organize_library_dirs.verifyFailed'))
     return result
 
 def run_apply(stage, backup, limit, seconds, location=None, retry_failed=False, skip_collapses=False, batch=None, pikpak_webdav=False):
     if backup is None:
-        raise ValueError('--apply 必须同时给 --backup')
+        raise ValueError(t('organize_library_dirs.applyNeedsBackup'))
     stem = stage + ('-' + batch if batch else '')
     payload = json.loads((OUT/f'{stem}-manifest.json').read_text(encoding='utf-8'))
     if payload.get('format')!=1 or payload.get('stage')!=stage:
-        raise ValueError('计划格式不受支持，请使用新的批次编号冻结计划')
+        raise ValueError(t('organize_library_dirs.unsupportedPlan'))
     receipt_path = OUT/f'{stem}-receipt.json'
     receipt = json.loads(receipt_path.read_text(encoding='utf-8')) if receipt_path.exists() else dict(entries=[],failures=[])
     blocked = sorted({owner for _,owner in pending_operations(payload,receipt,retry_failed,skip_collapses,location)
                       if organize.unverified_location(owner)})
     if blocked:
-        raise ValueError('冻结批次含 ' + '、'.join(blocked) + ' 来源的操作，挂载改名无法核验云端结果；'
-                         'PikPak 须用 --location pikpak --pikpak-webdav 经官方通道执行，其他来源用 --location 限定')
+        raise ValueError(t('organize_library_dirs.applyUnverified', locations='、'.join(blocked)))
     lock = PidFileLock(OUT/'directory-job.lock')
     lock.acquire()
     db = None
@@ -987,7 +987,7 @@ def rollback_entry(db, entry, op, root, receipt, receipt_path):
         entry['status'] = 'rollback_failed'
         receipt['rollbacks'].append(dict(key=entry['key'], source=op['target'], status='rollback_failed', failures=failures))
         save(receipt_path, receipt)
-        raise RuntimeError('撤回时文件未能全部搬回，停止本批；回执里这一条标为 rollback_failed')
+        raise RuntimeError(t('organize_library_dirs.revertFilesFailed'))
     back = reverse_operation(op)
     try:
         commit_paths(db, back)
@@ -996,7 +996,7 @@ def rollback_entry(db, entry, op, root, receipt, receipt_path):
         entry['status'] = 'rollback_failed'
         receipt['rollbacks'].append(dict(key=entry['key'], source=op['target'], status='rollback_failed', error=str(error)))
         save(receipt_path, receipt)
-        raise RuntimeError('文件已搬回，账本路径写入失败，停止本批') from error
+        raise RuntimeError(t('organize_library_dirs.revertPathsFailed')) from error
     entry['status'] = 'rolled_back'
     prune_empty_parents(op['target'], root)
     return dict(key=entry['key'], source=op['target'], target=op['source'], status='rolled_back', assets=len(op['rows']))
@@ -1016,11 +1016,10 @@ def run_rollback(stage, batch=None, backup=None, location=None, apply=False):
                               operations=plan), ensure_ascii=False, indent=1))
         return plan
     if backup is None:
-        raise ValueError('--apply 必须同时给 --backup')
+        raise ValueError(t('organize_library_dirs.applyNeedsBackup'))
     blocked = sorted({owner for *_, owner, _ in candidates if organize.unverified_location(owner)})
     if blocked:
-        raise ValueError('撤回含 ' + '、'.join(blocked) + ' 来源的操作，挂载改名无法核验云端结果；'
-                         'PikPak 须用 --location pikpak --pikpak-webdav 经官方通道撤回')
+        raise ValueError(t('organize_library_dirs.revertUnverified', locations='、'.join(blocked)))
     lock = PidFileLock(OUT/'directory-job.lock')
     lock.acquire()
     db = None
@@ -1058,7 +1057,7 @@ def pikpak_channel(stage, batch):
     rows = [row for op in payload['operations'] for row in op['rows']
             if any(beneath(row['path'], root) for root in roots)]
     if not rows:
-        raise ValueError('冻结批次没有已声明的 PikPak 资源')
+        raise ValueError(t('organize_library_dirs.noPikpakRows'))
     return pikpak_renames(rows[0]['path'], payload['roots'])
 
 def self_check():
@@ -1109,7 +1108,7 @@ def self_check():
         except FileExistsError:
             pass
         else:
-            raise AssertionError('同名文件必须拒绝')
+            raise AssertionError(t('organize_library_dirs.selfCheckSameName'))
         assert (target / 'film.mp4').read_bytes() == b'existing'
         assert beneath('B:\\日本\\片商\\ABC-123', 'B:\\')
         assert not beneath('B:\\MediaOther\\a', 'B:\\Media')
@@ -1127,7 +1126,7 @@ def self_check():
         assert db.execute('SELECT path FROM asset').fetchone()[0] == 'B:\\old\\film.mp4'
         assert db.execute('SELECT path FROM asset_subtitle').fetchone()[0] == 'B:\\old\\film.srt'
         db.close()
-    print('临时目录实证通过：封面、字幕、恢复、重名拒绝和路径边界。')
+    print(t('organize_library_dirs.selfCheckPassed'))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -1141,15 +1140,15 @@ if __name__ == '__main__':
     parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--skip-collapses', action='store_true')
     parser.add_argument('--pikpak-webdav', action='store_true',
-                        help='PikPak 批次经 CloudDrive 官方改名与移动执行，并以官方完整目录核验；PikPak 操作必须带它')
+                        help=t('organize_library_dirs.pikpakWebdavHelp'))
     parser.add_argument('--batch', type=lambda value: value if re.fullmatch(r'[a-zA-Z0-9_-]+', value)
-                        else parser.error('批次编号只能包含字母、数字、下划线与连字号'))
+                        else parser.error(t('organize_library_dirs.batchIdInvalid')))
     parser.add_argument('--rollback', action='store_true',
-                        help='按回执逆序撤回这一批已提交的操作；不带 --apply 只列计划')
+                        help=t('organize_library_dirs.rollbackHelp'))
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.pikpak_webdav and args.apply and (args.location != 'pikpak' or not args.batch):
-        parser.error('--pikpak-webdav 需要 --location pikpak 和明确冻结批次 --batch')
+        parser.error(t('organize_library_dirs.pikpakWebdavNeeds'))
     if args.self_check:
         self_check()
     elif args.rollback and not args.apply:

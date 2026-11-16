@@ -11,6 +11,7 @@ import { preferencesState } from './preferences.js';
 import { applyTheme } from './../appearance/theme';
 import { wireGlowButton } from './../appearance/glow';
 import { loadGlowPicker } from '../react/application-residents';
+import { t } from '../i18n';
 export const chromeState = {  };
 
 
@@ -38,8 +39,8 @@ effects.own(()=>{
 /* Board 外壳：媒体库选择、侧栏底部、玻璃折射。 */
 document.documentElement.classList.toggle('board-high-contrast',localStorage.getItem('peach.high-contrast')==='true');
 const boardBrand=document.querySelector('#brandHome');
-boardBrand.setAttribute('aria-label','选择媒体库');
-const libraryPicker=document.createElement('div');libraryPicker.className='board-library-menu';libraryPicker.id='boardLibraryMenu';libraryPicker.hidden=true;libraryPicker.setAttribute('popover','manual');libraryPicker.setAttribute('role','dialog');libraryPicker.setAttribute('aria-label','媒体库');
+boardBrand.setAttribute('aria-label',t('shell:libraryPicker.choose'));
+const libraryPicker=document.createElement('div');libraryPicker.className='board-library-menu';libraryPicker.id='boardLibraryMenu';libraryPicker.hidden=true;libraryPicker.setAttribute('popover','manual');libraryPicker.setAttribute('role','dialog');libraryPicker.setAttribute('aria-label',t('shell:shared.library'));
 document.body.append(libraryPicker);
 effects.own(()=>libraryPicker.remove());
 boardBrand.setAttribute('aria-haspopup','dialog');boardBrand.setAttribute('aria-controls',libraryPicker.id);
@@ -76,7 +77,7 @@ effects.listen(libraryPicker, 'keydown', event=>{if(event.key==='Escape'){event.
 api('/api/libraries',{signal:effects.signal}).then(data=>{
   if(!effects.isActive)return;
   publishLibraries(data.libraries);
-  const choices=[['','全部媒体库','database'],...data.libraries.map(row=>[row.id,row.name,row.icon||'database'])];
+  const choices=[['',t('shell:libraryPicker.allLibraries'),'database'],...data.libraries.map(row=>[row.id,row.name,row.icon||'database'])];
   const selected=sessionStorage.getItem('peach.library')||'';
   if(!choices.some(row=>row[0]===selected)){
     const matching=data.libraries.filter(row=>row.name===selected);
@@ -85,15 +86,15 @@ api('/api/libraries',{signal:effects.signal}).then(data=>{
     sessionStorage.removeItem('peach.library-label');location.reload();return;
   }
   const current=sessionStorage.getItem('peach.library')||'';
-  const currentName=choices.find(row=>row[0]===current)?.[1]||'全部媒体库';
+  const currentName=choices.find(row=>row[0]===current)?.[1]||t('shell:libraryPicker.allLibraries');
   sessionStorage.setItem('peach.library-label',currentName);
   boardBrand.querySelector('h1').textContent=currentName;
   const libraryMark=glyph=>MEDIA_SOURCE_ICONS[glyph]?.startsWith('data:')?`<img src="${MEDIA_SOURCE_ICONS[glyph]}" alt="">`:icon(MEDIA_SOURCE_ICONS[glyph]||glyph);
   const mark=document.createElement('span');mark.className='mark';mark.setAttribute('aria-hidden','true');
   mark.innerHTML=libraryMark(choices.find(row=>row[0]===current)?.[2]||'database');boardBrand.querySelector('.mark').replaceWith(mark);
-  libraryPicker.innerHTML=`<p>媒体库</p><div class="board-library-rows">${choices.map(([id,name,glyph])=>`<button type="button" data-library="${esc(id)}" aria-pressed="${id===current}"><span class="board-library-avatar">${libraryMark(glyph)}</span><span>${esc(name)}</span></button>`).join('')}</div><footer><button type="button" class="geist-button primary" data-library-manage>管理媒体库</button></footer>`;
-  libraryPicker.querySelectorAll('[data-library]').forEach(button=>effects.handler(button, 'onclick', ()=>{sessionStorage.setItem('peach.library',button.dataset.library);sessionStorage.setItem('peach.library-label',choices.find(row=>row[0]===button.dataset.library)?.[1]||'全部媒体库');location.assign('/')}));
-  effects.handler(libraryPicker.querySelector('[data-library-manage]'), 'onclick', ()=>{libraryFloating.setOpen(false);openDrawer(false);openConfigurationSection('媒体库与入库')});
+  libraryPicker.innerHTML=`<p>${t('shell:shared.library')}</p><div class="board-library-rows">${choices.map(([id,name,glyph])=>`<button type="button" data-library="${esc(id)}" aria-pressed="${id===current}"><span class="board-library-avatar">${libraryMark(glyph)}</span><span>${esc(name)}</span></button>`).join('')}</div><footer><button type="button" class="geist-button primary" data-library-manage>${t('manage:syncMenu.manageLibraries')}</button></footer>`;
+  libraryPicker.querySelectorAll('[data-library]').forEach(button=>effects.handler(button, 'onclick', ()=>{sessionStorage.setItem('peach.library',button.dataset.library);sessionStorage.setItem('peach.library-label',choices.find(row=>row[0]===button.dataset.library)?.[1]||t('shell:libraryPicker.allLibraries'));location.assign('/')}));
+  effects.handler(libraryPicker.querySelector('[data-library-manage]'), 'onclick', ()=>{libraryFloating.setOpen(false);openDrawer(false);openConfigurationSection('library')});
   /* 委托在这一列上，不挂在每个按钮身上：菜单每次取回媒体库都整块重画。
      `pointerover`／`pointerout` 而不是 enter／leave，后两个不冒泡，委托接不到。 */
   const libraryRows=libraryPicker.querySelector('.board-library-rows');
@@ -122,13 +123,13 @@ const boardToggle=document.querySelector('#filterBtn'),toggleHome=document.creat
 effects.own(()=>toggleHome.remove());
 const boardFoot=document.createElement('div');boardFoot.className='board-sidebar-foot';
 effects.own(()=>boardFoot.remove());
-boardFoot.innerHTML=`<div class="board-theme-toggle" role="group" aria-label="明暗主题"><span class="board-theme-thumb" aria-hidden="true"></span><button type="button" data-board-theme="light" aria-label="浅色主题">${icon('sun')}</button><button type="button" data-board-theme="dark" aria-label="深色主题">${icon('moon')}</button></div>`;
+boardFoot.innerHTML=`<div class="board-theme-toggle" role="group" aria-label="${t('shell:themeToggle.group')}"><span class="board-theme-thumb" aria-hidden="true"></span><button type="button" data-board-theme="light" aria-label="${t('shell:themeToggle.light')}">${icon('sun')}</button><button type="button" data-board-theme="dark" aria-label="${t('shell:themeToggle.dark')}">${icon('moon')}</button></div>`;
 /* 光晕配色钮和设置钮归一组，明暗键单独一组。展开时从左到右、收起时从上到下
    均按明暗、配色、设置排列，键盘焦点也沿用同一顺序。
    字形直接引 `#ri-palette-line`，不走 `icon()`：那一枚是 Remix 的实心路径，`icon()` 拼的是
    `#i-` 前缀的线条件。它和设置分区「界面」那一枚是同一个意思——这枚钮的弹层底部「详细
    设置」开的正是那一页，两处说的都是外观，同一个意思本来就只该有一枚字形。 */
-boardFoot.insertAdjacentHTML('beforeend',`<div class="board-foot-actions"><button type="button" class="board-glow-toggle" id="boardGlowBtn" aria-label="光晕配色" aria-haspopup="dialog" aria-expanded="false" aria-controls="boardGlowMenu"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ri-palette-line"/></svg><span class="board-glow-mark" aria-hidden="true"><span class="board-glow-mark-glow"></span><span class="board-glow-mark-accent"></span></span></button></div>`);
+boardFoot.insertAdjacentHTML('beforeend',`<div class="board-foot-actions"><button type="button" class="board-glow-toggle" id="boardGlowBtn" aria-label="${t('settings:sidebarGlow.palette')}" aria-haspopup="dialog" aria-expanded="false" aria-controls="boardGlowMenu"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ri-palette-line"/></svg><span class="board-glow-mark" aria-hidden="true"><span class="board-glow-mark-glow"></span><span class="board-glow-mark-accent"></span></span></button></div>`);
 boardFoot.querySelector('.board-foot-actions').append(document.querySelector('#settingsBtn'));
 document.querySelector('#drawer').append(boardFoot);
 boardFoot.querySelectorAll('[data-board-theme]').forEach(button=>effects.handler(button, 'onclick', ()=>{if(button.getAttribute('aria-pressed')==='true')return;transitionTheme(button,()=>{preferencesState.appSettings.theme=button.dataset.boardTheme;preferencesState.saveSettings();applyTheme()})}));
@@ -140,7 +141,7 @@ applyTheme();
 const glowPicker=document.createElement('div');
 glowPicker.className='popmenu board-glow-menu';glowPicker.id='boardGlowMenu';glowPicker.hidden=true;
 glowPicker.setAttribute('popover','manual');glowPicker.setAttribute('role','dialog');
-glowPicker.setAttribute('aria-label','配色');
+glowPicker.setAttribute('aria-label',t('shell:glowPicker.title'));
 document.body.append(glowPicker);
 effects.own(()=>glowPicker.remove());
 const glowButton=boardFoot.querySelector('#boardGlowBtn');
@@ -150,7 +151,8 @@ effects.own(wireGlowButton(glowButton));
 void loadGlowPicker({root:glowPicker,store:preferencesState.settingsStore,openDetails:()=>{
   if(!effects.isActive)return;
   glowFloating.setOpen(false);openDrawer(false);
-  void openSettings('外观与导航').then(panel=>{if(effects.isActive)panel.reveal('#homeGlowControls')});
+  // 设置面板按标题选页签，传它自己那份标题；地址那一步按标题或 id 都认。
+  void openSettings('appearance').then(panel=>{if(effects.isActive)panel.reveal('#homeGlowControls')});
 }}).catch(error=>{if(effects.isActive&&error?.name!=='AbortError')console.error(error)});
 /* 品牌（媒体库选择）与开合键是壳里浮层的锚点，挪进侧栏标题行那个空槽：骨架画好时一次，路由树画上
    侧栏、换掉骨架时（`attached`）再一次。手机上抽屉收着时开合键回到顶栏原位，抽屉整块不可聚焦。 */
@@ -158,7 +160,7 @@ function placeBrand(){
   if(!effects.isActive)return;
   const head=document.querySelector('#drawerScroll > [data-sidebar-head]'),drawer=document.querySelector('#drawer');
   if(!head)return;
-  boardBrand.setAttribute('aria-label','选择媒体库');
+  boardBrand.setAttribute('aria-label',t('shell:libraryPicker.choose'));
   if(boardBrand.parentElement!==head)head.prepend(boardBrand);
   const expanded=drawer.classList.contains('open'),desktop=!narrowShell();
   if(desktop||expanded){if(boardToggle.parentElement!==head)head.append(boardToggle)}else if(boardToggle.parentElement!==toggleHome.parentElement)toggleHome.after(boardToggle);

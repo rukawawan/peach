@@ -15,6 +15,7 @@ from smoke_desktop import assert_av1_decoder
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach.ffmpeg import FFmpegResolver
+from peach.interface_text import dev as t
 from peach.mp4recover import untrunc_path
 from peach.tunnel import resolve_binary
 from peach.hardware_transcode import HardwareTranscoder
@@ -29,7 +30,7 @@ def verified_tools(executable: Path, root: Path, architecture: str):
     resolver = FFmpegResolver(root / "tools/ffmpeg")
     ffmpeg, ffprobe = resolver.ffmpeg(), resolver.ffprobe()
     repair, tunnel = untrunc_path(root / "tools"), resolve_binary()
-    assert ffmpeg and ffprobe and repair and tunnel, "未找到包内工具"
+    assert ffmpeg and ffprobe and repair and tunnel, t("smoke_macos_media.toolsMissing")
     assert ffmpeg.source == ffprobe.source == "peach-bundled"
     for path in (ffmpeg.path, ffprobe.path, repair, tunnel):
         assert path.is_relative_to(executable.parent.parent), path
@@ -128,7 +129,7 @@ def smoke(app: Path, architecture: str) -> dict:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("smoke_macos_media.description"))
     parser.add_argument("app", type=Path)
     parser.add_argument("--arch", choices=("arm64", "x86_64"), required=True)
     args = parser.parse_args()

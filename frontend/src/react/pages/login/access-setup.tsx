@@ -16,6 +16,8 @@ import { busyProps } from '../../settings/busy-props';
 import { Help } from '../../settings/section';
 import { AuthCard, CardGroup } from '../auth-card';
 import type { PageData } from '../page-data';
+import { bodyFieldErrors, serverText } from '../../../core/server-text';
+import { t } from '../../../i18n';
 
 export const FIRST_ACCESS_URL = '/api/configuration/access/first';
 
@@ -50,39 +52,40 @@ export function AccessSetup({ data, navigate = go }: { data: PageData; navigate?
         navigate(answer?.url || '/');
         return;
       }
-      if (answer?.errors && Object.keys(answer.errors).length) setErrors(answer.errors);
-      else setFailure(answer?.error || '没能保存访问设置，请重试');
+      const fields = bodyFieldErrors<Errors>(answer);
+      if (fields && Object.keys(fields).length) setErrors(fields);
+      else setFailure(serverText(answer) || t('shell:accessSetup.saveFailed'));
     } catch {
-      setFailure('连接不到 Peach，请确认它仍在运行后重试');
+      setFailure(t('shell:accessSetup.unreachable'));
     }
     setBusy(false);
   };
 
   return (
-    <AuthCard title="访问设置" lede="这台 Peach 还没有访问设置，先决定打开时要不要登录。">
+    <AuthCard title={t('shell:accessSetup.title')} lede={t('shell:accessSetup.lede')}>
       <form aria-labelledby="auth-card-title" className="flex flex-col gap-6" onSubmit={onSubmit} noValidate>
         <CardGroup first>
           <div className="flex items-start justify-between gap-4">
             <div className="flex min-w-0 flex-col gap-0.5">
-              <Label id="access-setup-title" elementType="span">访问密码</Label>
-              <p id="access-setup-description" className="text-body-2-regular text-text-secondary">开启后，访问 Peach 需要先登录。</p>
+              <Label id="access-setup-title" elementType="span">{t('shell:shared.accessPassword')}</Label>
+              <p id="access-setup-description" className="text-body-2-regular text-text-secondary">{t('shell:accessSetup.passwordHelp')}</p>
             </div>
             <Switch aria-labelledby="access-setup-title" aria-describedby="access-setup-description"
               isSelected={passwordOn} onChange={(on) => { setPasswordOn(on); setErrors({}); }} />
           </div>
-          <Help>局域网访问推荐设置密码。未设置时，同一网络中能连接 Peach 的设备可直接进入。</Help>
+          <Help>{t('shell:accessSetup.lanPasswordHint')}</Help>
           {passwordOn
-            ? <PasswordPair label="访问密码" password={password} confirmation={confirmation}
+            ? <PasswordPair label={t('shell:shared.accessPassword')} password={password} confirmation={confirmation}
                 onPassword={(value) => { setPassword(value); setErrors({}); }}
                 onConfirmation={(value) => { setConfirmation(value); setErrors({}); }}
                 passwordError={errors.password ? <span role="alert">{errors.password}</span> : undefined}
-                passwordHint="请输入 8–256 个字符。"
+                passwordHint={t('shell:accessSetup.passwordLength')}
                 confirmationError={errors.confirmation ? <span role="alert">{errors.confirmation}</span> : undefined} />
             : null}
         </CardGroup>
         {failure ? <Note tone="error">{failure}</Note> : null}
         <Button type="submit" className="w-full" {...busyProps(busy)}>
-          {passwordOn ? '设置密码并进入' : '免登录进入'}
+          {passwordOn ? t('shell:accessSetup.setPasswordAndEnter') : t('shell:accessSetup.enterWithoutPassword')}
         </Button>
       </form>
     </AuthCard>

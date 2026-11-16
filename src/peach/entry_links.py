@@ -62,6 +62,7 @@ from filelock import FileLock
 
 from .fsutil import atomic_write_text
 from .kanji import JP_KANJI_TO_SIMPLIFIED, fold_glyphs
+from .user_messages import UserValueError
 
 #: 入口设置落在 Peach 数据目录的 state 目录下。它是本机显示偏好，不是账本真相。
 FILENAME = "entry-links.json"
@@ -184,7 +185,7 @@ def _tidy_host(written: object) -> str:
 
 
 def _host_problem(site: EntrySite, host: str) -> str:
-    """域名不能用时的那一句原因；能用时是空串。
+    """域名不能用时那条报错的 code；能用时是空串。
 
     空串本身可用——它就是「没换过，走默认域名」。要回到默认值，清空这个框就行；逼人去
     手抄一遍默认域名的话，抄错了还得他自己认。
@@ -192,9 +193,9 @@ def _host_problem(site: EntrySite, host: str) -> str:
     if not host:
         return ""
     if len(host) > _HOST_LIMIT:
-        return f"{site.title} 的地址请控制在 {_HOST_LIMIT} 个字符以内"
+        return "errors.entryLinks.hostTooLong"
     if not _HOST_SHAPE.fullmatch(host):
-        return f"{site.title} 这里只写域名本身，像 {site.host}"
+        return "errors.entryLinks.hostShape"
     return ""
 
 
@@ -202,20 +203,20 @@ def save(root: Path, body: dict) -> dict:
     """写回可换的那几站的域名。任一项不合规就整批不写。"""
     rows = body.get("sites")
     if not isinstance(rows, dict):
-        raise ValueError("请提交每个站点的地址")
+        raise UserValueError("errors.entryLinks.sitesRequired")
     result = defaults()
     for site in SITES:
         if not site.mirrored:
             continue
         row = rows.get(site.key)
         if not isinstance(row, dict):
-            raise ValueError(f"缺少 {site.title} 的设置")
+            raise UserValueError("errors.entryLinks.siteMissing", {"site": site.title})
         if not isinstance(row.get("host"), str):
-            raise ValueError(f"{site.title} 的地址必须是文字")
+            raise UserValueError("errors.entryLinks.hostNotText", {"site": site.title})
         host = _tidy_host(row["host"])
         problem = _host_problem(site, host)
         if problem:
-            raise ValueError(problem)
+            raise UserValueError(problem, {"site": site.title, "limit": _HOST_LIMIT, "example": site.host})
         result[site.key]["host"] = host
     path = Path(root) / FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)

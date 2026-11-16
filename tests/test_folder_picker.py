@@ -14,6 +14,16 @@ from unittest import mock
 from peach import folder_picker
 
 
+class HeadlessPickerTests(unittest.TestCase):
+    def test_headless_service_never_launches_a_native_dialog(self):
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'PEACH_HEADLESS_MANAGED': '1'}), \
+                patch('peach.folder_picker.command') as command:
+            with self.assertRaises(folder_picker.PickerUnsupported):
+                folder_picker.pick_folder(platform='darwin')
+            command.assert_not_called()
+
+
 class FakeRun:
     def __init__(self, stdout: bytes = b"", returncode: int = 0, stderr: bytes = b""):
         self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
@@ -45,7 +55,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("dialog.Show(IntPtr.Zero)", script, "不挂所有者窗口：透明置顶的 Form 会把对话框一起藏起来")
         self.assertIn("SetWindowPos(window, new IntPtr(-1)", script, "后台服务进程没有前台权，对话框要自己置顶")
         self.assertNotIn("System.Windows.Forms", script)
-        self.assertIn(f"Pick('{folder_picker.PROMPT}', $env:PEACH_PICK_INITIAL)", script)
+        self.assertIn(f"Pick('{folder_picker.prompt()}', $env:PEACH_PICK_INITIAL)", script)
         self.assertEqual(env, {"PEACH_PICK_INITIAL": r"D:\Media"})
 
     def test_windows_powershell_is_found_under_the_system_root_not_through_path(self):

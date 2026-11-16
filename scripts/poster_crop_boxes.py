@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import jav_poster_crop  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.config import COVER_DIR  # noqa: E402
 
 #: 每处理这么多张报一次进度。封面目录是千张量级，一张一行会把日志淹掉。
@@ -67,12 +68,12 @@ def pending(covers: list[Path], redo: bool) -> list[tuple[Path, tuple[int, int]]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="给封面算正封取景框")
+    parser = argparse.ArgumentParser(description=t("poster_crop_boxes.description"))
     parser.add_argument("--covers", type=Path, default=COVER_DIR)
     parser.add_argument("--redo", action="store_true",
-                        help="无条件重算，不看边车是否还作数")
+                        help=t("poster_crop_boxes.redoHelp"))
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--apply", action="store_true", help="真的写边车")
+    parser.add_argument("--apply", action="store_true", help=t("poster_crop_boxes.applyHelp"))
     return parser
 
 
@@ -81,8 +82,8 @@ def run(args: argparse.Namespace) -> int:
     todo = pending(covers, args.redo)
     if args.limit:
         todo = todo[:args.limit]
-    print(f"封面 {len(covers)} 张，待处理 {len(todo)} 张"
-          f"（{'写入边车' if args.apply else '只看不写'}）", flush=True)
+    print(t("poster_crop_boxes.writingStart" if args.apply else "poster_crop_boxes.previewStart",
+            covers=len(covers), todo=len(todo)), flush=True)
 
     methods = (jav_poster_crop.FOLD, jav_poster_crop.RATIO, jav_poster_crop.CENTER,
                jav_poster_crop.NONE)
@@ -92,7 +93,7 @@ def run(args: argparse.Namespace) -> int:
         width, height = size
         if not width or not height:
             counts["unreadable"] += 1
-            print(f"[{index}/{len(todo)}] 读图失败 {path.name}", flush=True)
+            print(t("poster_crop_boxes.unreadable", index=index, total=len(todo), name=path.name), flush=True)
             continue
         try:
             face = json.loads(path.with_suffix('.face.json').read_text(encoding='utf-8'))
@@ -114,19 +115,18 @@ def run(args: argparse.Namespace) -> int:
             jav_poster_crop.write_sidecar(path, record)
         if index % PROGRESS_EVERY == 0:
             print(f"[{index}/{len(todo)}] "
-                  + "，".join(f"{key} {value}" for key, value in counts.items()),
+                  + t("common.commaSeparator").join(f"{key} {value}" for key, value in counts.items()),
                   flush=True)
 
-    print("\n折痕 {fold}，右半居中 {ratio}，居中正封 {center}，不裁 {none}，"
-          "读图失败 {unreadable}".format(
-              fold=counts[jav_poster_crop.FOLD], ratio=counts[jav_poster_crop.RATIO],
-              center=counts[jav_poster_crop.CENTER], none=counts[jav_poster_crop.NONE],
-              unreadable=counts["unreadable"]))
+    print("\n" + t("poster_crop_boxes.summary",
+                    fold=counts[jav_poster_crop.FOLD], ratio=counts[jav_poster_crop.RATIO],
+                    center=counts[jav_poster_crop.CENTER], none=counts[jav_poster_crop.NONE],
+                    unreadable=counts["unreadable"]))
     for method in methods:
         for line in samples.get(method, []):
             print(f"  {method}: {line}")
     if not args.apply:
-        print("只看不写。加 --apply 才写边车；原图任何一档都不改。")
+        print(t("poster_crop_boxes.previewOnly"))
     return 0
 
 

@@ -21,16 +21,13 @@ export {closeAnchoredMenu, dialSliderHtml, iconSwitchHtml, wireAnchoredMenu, wir
 export {configurationSkeletonHtml, revealSkeleton, SKELETON_REVEAL_DELAY, skeletonHtml} from '../../src/ui-kit';
 // 微光的视口照看与底板动画的撤销用正式实现。
 export {cancelGlide, gateSweep, releaseSweep} from '../../src/ui-kit';
-// 封面格「抓取中」的不定进度圆环用正式模板。
-export {gaugeHtml} from '../../src/ui-kit';
+// 后台推进的语义动画与那一行状态用正式模板（封面格「抓取中」、列表续页）。
+export {activityMotionHtml, activityStatusHtml} from '../../src/ui-kit';
 /* 测试环境没有布局，骨架补齐量不出东西，这里什么都不做。 */
 export const fitSkeleton = (_root: Element | null): void => {};
-export const loadingDotsHtml = (label: string): string => `<span>${label}</span>`;
 export {LOAD_MORE_STATUS} from '../../src/ui-kit';
 export const spinnerHtml = (label: string): string => `<span role="status" aria-label="${label}"></span>`;
 export const checkboxHtml = (attrs = ''): string => `<span class="ui-pcheck"><input type="checkbox" ${attrs}></span>`;
-export const progressHtml = (label: string, value: number, max = 100): string =>
-  `<progress role="progressbar" aria-label="${label}" value="${value}" max="${max}" aria-valuenow="${value}" aria-valuemax="${max}"></progress>`;
 export const confirmModal = async (_options: unknown) => ({confirmed:false});
 /* 菜单开合：测试环境不放动画，退场当场藏起。 */
 export const presentMenu = (menu: HTMLElement): void => { menu.hidden = false };

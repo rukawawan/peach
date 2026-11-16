@@ -13,8 +13,12 @@ import sqlite3
 import subprocess
 import urllib.parse
 import urllib.request
+import sys
 import zipfile
 
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 from smoke_desktop import (artifact_processes, assert_requires_login, complete_first_run,
                            smoke_directory, smoke_environment, stop_tray, wait_for, wait_health)
 
@@ -52,7 +56,7 @@ def download(opener, root: Path, version: str, kind: str) -> Path:
             output.write(chunk)
     with target.open("rb") as source:
         digest = "sha256:" + hashlib.file_digest(source, "sha256").hexdigest()
-    assert digest == asset["digest"], f"制品 SHA-256 不符：{name}"
+    assert digest == asset["digest"], t("smoke_overlay_upgrade.digestMismatch", name=name)
     print(json.dumps({"phase": "download", "asset": name, "digest": digest}), flush=True)
     return target
 
@@ -71,7 +75,7 @@ def verify(opener, base: str, data: Path, media: Path, original: dict, password:
     if commit:
         assert health["build_commit"] == commit, health
     for relative, content in original.items():
-        assert (data / relative).read_bytes() == content, f"文件未保留：{relative}"
+        assert (data / relative).read_bytes() == content, t("smoke_overlay_upgrade.fileLost", path=relative)
     with closing(sqlite3.connect(data / "database/ledger.db")) as connection:
         assert connection.execute("SELECT value FROM overlay_upgrade_fixture").fetchall() == [("retained",)]
     assert (media / "retained.txt").read_text(encoding="utf-8") == "保留媒体目录"
@@ -91,7 +95,7 @@ def uninstall_and_verify(application: Path, data: Path, media: Path, original: d
     """卸载覆盖后的程序，核对程序登记清除且用户数据仍可读取。"""
     subprocess.run([str(application / "unins000.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
         env=environment, timeout=120, check=True)
-    wait_for(lambda: not application.exists(), "卸载程序目录", timeout=120)
+    wait_for(lambda: not application.exists(), t("smoke_overlay_upgrade.waitUninstall"), timeout=120)
     assert installation() is None and not menu_path().exists()
     for relative, content in original.items():
         assert (data / relative).read_bytes() == content
@@ -102,7 +106,7 @@ def uninstall_and_verify(application: Path, data: Path, media: Path, original: d
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("smoke_overlay_upgrade.description"))
     parser.add_argument("--from-version", required=True)
     parser.add_argument("--to-version", required=True)
     parser.add_argument("--to-commit", required=True)
@@ -114,10 +118,10 @@ def main() -> int:
     if not args.apply:
         print(json.dumps({"from": args.from_version, "to": args.to_version, "kind": args.kind, "apply": False}))
         return 0
-    assert os.name == "nt", "覆盖升级验收需要 Windows"
+    assert os.name == "nt", t("smoke_overlay_upgrade.windowsOnly")
     if args.kind == "installer":
-        assert os.environ.get("GITHUB_ACTIONS") == "true", "安装包验收只允许在干净的 Actions runner 上运行"
-        assert installation() is None and not menu_path().exists(), "已有 Peach 安装登记或快捷方式，停止验收"
+        assert os.environ.get("GITHUB_ACTIONS") == "true", t("smoke_overlay_upgrade.cleanRunnerOnly")
+        assert installation() is None and not menu_path().exists(), t("smoke_overlay_upgrade.existingInstall")
     cookies = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(cookies))
     with smoke_directory(args.evidence_dir.resolve()) as root:
@@ -169,7 +173,7 @@ def main() -> int:
                     # 让安装器停止正在运行的旧版，并通过登记记住的目录原位安装。
                     install(new, application, installer_environment, root / "install-new.log", reuse=True)
                     launcher.wait(timeout=15)
-                    wait_for(lambda: not artifact_processes(executable), "安装器停止旧版全部进程", timeout=20)
+                    wait_for(lambda: not artifact_processes(executable), t("smoke_overlay_upgrade.waitOldProcesses"), timeout=20)
                     registered = installation()
                     assert registered["DisplayVersion"] == args.to_version, registered
                     assert Path(registered["Inno Setup: App Path"]).resolve() == application, registered

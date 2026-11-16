@@ -18,15 +18,20 @@ import { SEGMENT, SEGMENTED_TRACK, SegmentedRadioGroup as RadioGroup } from '../
 import { CONFIGURATION_KEY, fetchConfiguration } from './configuration';
 import { ExternalLink, ErrorText, Footer, Help, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
+import { bodyFieldErrors, codedText } from '../../core/server-text';
+import { pollUntil } from '../../polling';
+import { t } from '../../i18n';
 
-/** 连接握手在服务端进行，页面按固定间隔重问，直到拿到入口或失败原因。 */
+/** 连接握手在服务端进行，页面按固定间隔重问，直到拿到入口或失败原因；读失败退避，页面不可见时暂停。 */
 const POLL_INTERVAL = 2000;
+/** 握手最多等这么久，过了由用户重新打开。 */
+const POLL_LIMIT_MS = 5 * 60_000;
 
-const MODES: [TunnelState['mode'], string][] = [['quick', '临时链接'], ['named', '命名隧道']];
+const MODES: [TunnelState['mode'], string][] = [['quick', t('settings:cloudflareTunnel.quick')], ['named', t('settings:cloudflareTunnel.named')]];
 
 const HELP: Record<TunnelState['mode'], string> = {
-  quick: '临时预览用，地址随机，重启后会变。启动前要先设置访问密码。',
-  named: '使用你在 Cloudflare 绑定的固定域名。启动前要先设置访问密码。',
+  quick: t('settings:remoteAccess.quickHelp'),
+  named: t('settings:remoteAccess.namedHelp'),
 };
 
 type FieldErrors = Partial<Record<'hostname' | 'mode', string>>;
@@ -49,21 +54,19 @@ export function TunnelSettings({ revision: initialRevision, initial, receipt }: 
   useEffect(() => {
     if (state.state !== 'starting') return undefined;
     const controller = new AbortController();
-    const timer = window.setInterval(() => {
-      void fetchConfiguration(controller.signal)
-        .then((next: ConfigurationData) => {
-          if (controller.signal.aborted || !next.tunnel) return;
-          // 取回来的是整份配置，换进整页那一个键：屏幕上只有一份真相。
-          queryClient.setQueryData(CONFIGURATION_KEY, next);
-          setState(next.tunnel);
-          setRevision(next.revision);
-        })
-        .catch(() => undefined);
-    }, POLL_INTERVAL);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-    };
+    void pollUntil<ConfigurationData>({
+      signal: controller.signal, everyMs: POLL_INTERVAL, limitMs: POLL_LIMIT_MS,
+      read: (signal) => fetchConfiguration(signal),
+      apply: (next) => {
+        if (!next.tunnel) return;
+        // 取回来的是整份配置，换进整页那一个键：屏幕上只有一份真相。
+        queryClient.setQueryData(CONFIGURATION_KEY, next);
+        setState(next.tunnel);
+        setRevision(next.revision);
+      },
+      done: (next) => !!next.tunnel && next.tunnel.state !== 'starting',
+    });
+    return () => controller.abort();
   }, [state.state]);
 
   /** 开关和保存走同一个端点：形态与开关状态一次提交，服务端据此构造启动计划。 */
@@ -81,28 +84,27 @@ export function TunnelSettings({ revision: initialRevision, initial, receipt }: 
       setToken('');
       done(next);
     }, (cause) => {
-      const payload = cause instanceof ApiError
-        ? cause.body as { errors?: FieldErrors; detail?: { errors?: FieldErrors } } : null;
-      const errors = payload?.errors || payload?.detail?.errors;
+      const payload = cause instanceof ApiError ? cause.body as { detail?: unknown } : null;
+      const errors = bodyFieldErrors<FieldErrors>(payload) || bodyFieldErrors<FieldErrors>(payload?.detail);
       if (errors) setFields(errors); else action.setError(errorMessage(cause));
     });
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    send('save', active, () => receipt('已保存配置'));
+    send('save', active, () => receipt(t('settings:shared.settingsSaved')));
   };
 
   const toggle = () => send('toggle', !active, (next) => receipt(
-    next.enabled ? '公网入口已启动' : '公网入口已停止',
+    next.enabled ? t('settings:cloudflareTunnel.started') : t('settings:cloudflareTunnel.stopped'),
   ));
 
   return (
-    <Section id="tunnel" guide="tunnel" title="Cloudflare 公网入口" onSubmit={submit} aside={<StatusLabel tone={state.error ? 'error' : active ? 'progress' : 'neutral'}>
-      {state.error ? '连接失败' : state.state === 'running' ? '运行中' : state.state === 'starting' ? '连接中' : '已停止'}</StatusLabel>}>
+    <Section id="tunnel" guide="tunnel" title={t('settings:remoteAccess.title')} onSubmit={submit} aside={<StatusLabel tone={state.error ? 'error' : active ? 'progress' : 'neutral'}>
+      {state.error ? t('settings:cloudflareTunnel.connectionFailed') : state.state === 'running' ? t('settings:shared.running') : state.state === 'starting' ? t('settings:cloudflareTunnel.connectingStatus') : t('settings:shared.stopped')}</StatusLabel>}>
       <Stack>
         {state.named_available
-          ? <RadioGroup aria-label="公网入口的形态（二选一）" value={mode} isDisabled={active}
+          ? <RadioGroup aria-label={t('settings:cloudflareTunnel.modeLabel')} value={mode} isDisabled={active}
               onChange={(next) => setMode(next as TunnelState['mode'])} className={SEGMENTED_TRACK}>
               {MODES.map(([value, label]) => (
                 <Radio key={value} value={value} className={SEGMENT}>{label}</Radio>
@@ -111,32 +113,32 @@ export function TunnelSettings({ revision: initialRevision, initial, receipt }: 
           : null}
         <Help>{HELP[named ? 'named' : 'quick']}</Help>
         {named ? <>
-          <Input id="tunnel-hostname" label="公开主机名" autoComplete="off" maxLength={253}
+          <Input id="tunnel-hostname" label={t('settings:remoteAccess.hostname')} autoComplete="off" maxLength={253}
             value={hostname} onChange={setHostname} isDisabled={active} validationBehavior="aria"
             isInvalid={Boolean(fields.hostname)}
-            hint={fields.hostname || 'Cloudflare Zero Trust 里指向这台电脑的主机名。'} />
-          <Input id="tunnel-token" type="password" label="隧道令牌" autoComplete="off" maxLength={2048}
+            hint={fields.hostname || t('settings:remoteAccess.hostnameHelp')} />
+          <Input id="tunnel-token" type="password" label={t('settings:remoteAccess.tunnelToken')} autoComplete="off" maxLength={2048}
             value={token} onChange={setToken} isDisabled={active} validationBehavior="aria"
             hint={state.token_set
-              ? '已保存，留空不改。'
-              : '在 Cloudflare Zero Trust 的隧道详情页复制。'} />
+              ? t('settings:cloudflareTunnel.tokenSaved')
+              : t('settings:cloudflareTunnel.tokenHint')} />
         </> : null}
         {!state.available
-          ? <Note tone="warning" title="找不到 cloudflared">安装官方 cloudflared，或用设置文件的 tunnel.binary 与 PEACH_CLOUDFLARED 指定路径。</Note>
+          ? <Note tone="warning" title={t('settings:cloudflareTunnel.binaryMissing')}>{t('settings:cloudflareTunnel.binaryMissingHelp')}</Note>
           : null}
         {state.state === 'running' && state.url
-          ? <Note tone="info" title="公网地址"><ExternalLink href={state.url}>{state.url}</ExternalLink></Note>
+          ? <Note tone="info" title={t('settings:cloudflareTunnel.publicUrl')}><ExternalLink href={state.url}>{state.url}</ExternalLink></Note>
           : null}
-        {state.state === 'starting' ? <Note tone="info" title="正在连接">正在等待 cloudflared 连上 Cloudflare 边缘。</Note> : null}
-        {state.error ? <ErrorText>{state.error}</ErrorText> : null}
+        {state.state === 'starting' ? <Note tone="info" title={t('settings:cloudflareTunnel.connectingTitle')}>{t('settings:cloudflareTunnel.connectingHelp')}</Note> : null}
+        {state.error ? <ErrorText>{codedText(state, 'error')}</ErrorText> : null}
         {action.error ? <ErrorText>{action.error}</ErrorText> : null}
       </Stack>
       <Footer>
         <Button variant={state.named_available ? 'secondary' : 'primary'} onClick={toggle} {...busyProps(action.busy === 'toggle')}>
-          {active ? '停止公网入口' : '启动公网入口'}
+          {active ? t('settings:cloudflareTunnel.stop') : t('settings:remoteAccess.start')}
         </Button>
         {state.named_available
-          ? <Button type="submit" {...busyProps(action.busy === 'save')}>保存配置</Button>
+          ? <Button type="submit" {...busyProps(action.busy === 'save')}>{t('settings:shared.saveSettings')}</Button>
           : null}
       </Footer>
     </Section>

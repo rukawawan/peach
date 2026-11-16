@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+from . import interface_text
 from .fsutil import atomic_write_text, replace_with_retry
 
 
@@ -50,8 +51,14 @@ class PendingWindowsUpdate:
 
 @dataclass(frozen=True)
 class WindowsUpdatePreparation:
+    """`message` 进托盘通知，按本机语言渲染（`tray.sourceSync.*`）。"""
+
     state: str
     message: str
+
+    @classmethod
+    def of(cls, state: str, code: str) -> "WindowsUpdatePreparation":
+        return cls(state, interface_text.text(f"server:{code}", None, interface_text.local_language()))
 
 
 #: PyInstaller 单文件包解压目录的固定前缀，位于 `%TEMP%`。
@@ -86,7 +93,7 @@ def sweep_onefile_extractions(
                 continue
             shutil.rmtree(entry)
         except OSError as exc:
-            log.warning("单文件包解压残留未能删除 %s: %s", entry, exc)
+            log.warning("Failed to delete one-file bundle extraction leftovers %s: %s", entry, exc)
             continue
         removed.append(entry)
     return tuple(removed)
@@ -107,11 +114,11 @@ def swap_tray_binary(
     才会按 `KEEP_BACKUPS` 收口；换个名字就会在 `dist/Peach/` 里越堆越多。
     """
     if not staged.is_file():
-        raise FileNotFoundError(f"暂存包不存在：{staged}")
+        raise FileNotFoundError(f"staged package not found: {staged}")
     if target.name.lower() != "peach.exe" or not target.is_file():
-        raise ValueError(f"生产入口不存在或不是 Peach.exe：{target}")
+        raise ValueError(f"production entry point is missing or is not Peach.exe: {target}")
     if os.path.normcase(os.path.abspath(staged)) == os.path.normcase(os.path.abspath(target)):
-        raise ValueError("暂存包与生产入口是同一个文件")
+        raise ValueError("staged package and production entry point are the same file")
 
     backup = target.with_name(f"Peach.pre-source-sync-{now().strftime('%Y%m%d-%H%M%S')}.exe")
     shutil.copy2(target, backup)
@@ -189,7 +196,7 @@ class WindowsUpdateInstaller:
             try:
                 stale.unlink()
             except OSError as exc:
-                log.warning("旧托盘备份未能删除 %s: %s", stale, exc)
+                log.warning("Failed to delete old tray backup %s: %s", stale, exc)
                 continue
             removed.append(stale)
 
@@ -204,7 +211,7 @@ class WindowsUpdateInstaller:
                 try:
                     shutil.rmtree(entry)
                 except OSError as exc:
-                    log.warning("暂存构建未能删除 %s: %s", entry, exc)
+                    log.warning("Failed to delete staged build %s: %s", entry, exc)
                     continue
                 removed.append(entry)
         return tuple(removed)
@@ -282,9 +289,7 @@ class WindowsUpdateInstaller:
     ) -> WindowsUpdatePreparation:
         shell = self._powershell_executable()
         if shell is None:
-            return WindowsUpdatePreparation(
-                "failed", "代码已快进，但找不到 PowerShell，未运行测试或重启服务。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.noPowerShell")
 
         test_script = self.root / "scripts" / "test.ps1"
         for attempt in range(3):
@@ -297,37 +302,24 @@ class WindowsUpdateInstaller:
             if test_exit != 4:
                 break
         if test_exit == 4:
-            return WindowsUpdatePreparation(
-                "failed", "测试期间代码或依赖持续变化，三次验证均未取得有效记录；请稍后重试。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.inputsKeptChanging")
         if test_exit != 0:
-            return WindowsUpdatePreparation(
-                "failed", "代码已快进，但完整测试失败；服务与托盘均未重启，请查看日志。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.testsFailed")
 
         if not windows_tray_rebuild_required(changed_paths):
-            return WindowsUpdatePreparation("services", "代码与完整测试已通过。")
+            return WindowsUpdatePreparation.of("services", "tray.sourceSync.testsPassed")
 
         if not self._frozen:
-            return WindowsUpdatePreparation(
-                "services-manual-tray",
-                "代码与完整测试已通过；当前不是打包托盘，托盘进程需手动重开。",
-            )
+            return WindowsUpdatePreparation.of("services-manual-tray", "tray.sourceSync.manualTray")
 
         if not self.current_executable.is_file():
-            return WindowsUpdatePreparation(
-                "failed", "代码与测试已通过，但找不到当前托盘 EXE，未执行替换。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.trayExeMissing")
 
         staged = self.build_staged_tray(commit, shell=shell)
         if staged is None:
-            return WindowsUpdatePreparation(
-                "failed", "代码与测试已通过，但新托盘构建失败；旧托盘和服务保持运行。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.buildFailed")
         if not self.packaged_migrations_pass(staged):
-            return WindowsUpdatePreparation(
-                "failed", "新托盘未通过打包迁移资源检查；旧托盘和服务保持运行。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.packagedMigrationsFailed")
 
         backup = self.current_executable.with_name(
             f"Peach.pre-source-sync-{datetime.now().strftime('%Y%m%d-%H%M%S')}.exe"
@@ -336,9 +328,7 @@ class WindowsUpdateInstaller:
         helper_python = self.root / ".venv" / "Scripts" / "pythonw.exe"
         helper_script = self.root / "scripts" / "replace_windows_tray.py"
         if not helper_python.is_file() or not helper_script.is_file():
-            return WindowsUpdatePreparation(
-                "failed", "新托盘已构建，但替换助手不完整；旧托盘和服务保持运行。",
-            )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.helperIncomplete")
 
         creationflags = 0
         if os.name == "nt":
@@ -359,9 +349,5 @@ class WindowsUpdateInstaller:
                 shell=False, creationflags=creationflags,
             )
         except OSError:
-            return WindowsUpdatePreparation(
-                "failed", "新托盘已构建，但替换助手启动失败；旧托盘和服务保持运行。",
-            )
-        return WindowsUpdatePreparation(
-            "replace", "代码、完整测试和新托盘检查均已通过；正在安全替换并重启。",
-        )
+            return WindowsUpdatePreparation.of("failed", "tray.sourceSync.helperFailed")
+        return WindowsUpdatePreparation.of("replace", "tray.sourceSync.replacing")

@@ -29,6 +29,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.appid import MACOS_BUNDLE_ID, MACOS_LAUNCH_AGENT_LABEL
 from peach.config import PROJECT_ROOT
+from peach.interface_text import dev as t
 
 
 BUNDLE_ID = MACOS_BUNDLE_ID
@@ -92,18 +93,18 @@ def build_frontend_bundles() -> None:
     """
     npm = shutil.which("npm")
     if npm is None:
-        raise SystemExit("找不到 npm：前端产物（frontend/）出包前必须重建，请先装 Node 24+")
+        raise SystemExit(t("build_macos_app.npmMissing"))
     frontend = PROJECT_ROOT / "frontend"
     subprocess.run([npm, "--prefix", str(frontend), "ci"], check=True)
     subprocess.run([npm, "--prefix", str(frontend), "run", "build"], check=True)
     for name in ("peach-app.js", "peach-app.css", "peach-pages.js", "peach-pages.css"):
         bundle = PROJECT_ROOT / "web" / "dist" / name
         if not bundle.is_file():
-            raise SystemExit(f"构建之后仍然没有 {bundle}")
+            raise SystemExit(t("build_macos_app.bundleMissing", path=bundle))
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="生成 macOS 菜单栏项的 .app 外壳")
+    parser = argparse.ArgumentParser(description=t("build_macos_app.description"))
     parser.add_argument("--destination", type=Path, default=PROJECT_ROOT / "dist" / "macos-source.noindex")
     parser.add_argument("--tray", type=Path, default=PROJECT_ROOT / ".venv" / "bin" / "peach-tray")
     return parser
@@ -111,12 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> int:
     if not args.tray.is_file():
-        raise SystemExit(f"找不到 peach-tray：{args.tray}（先 pip install -e .）")
+        raise SystemExit(t("build_macos_app.trayMissing", path=args.tray))
     build_frontend_bundles()
     args.destination.mkdir(parents=True, exist_ok=True)
     app = build(args.destination, args.tray)
-    print(f"已生成 {app}")
-    print("  双击它只是踢一脚 LaunchAgent；先注册：")
+    print(t("build_macos_app.built", path=app))
+    print(t("build_macos_app.registerFirst"))
     print("    python scripts/install_macos_agent.py install")
     return 0
 

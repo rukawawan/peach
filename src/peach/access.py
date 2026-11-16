@@ -21,6 +21,7 @@ from filelock import FileLock
 from itsdangerous import BadData, URLSafeSerializer
 
 from .fsutil import atomic_write_text
+from .user_messages import UserValueError
 
 COOKIE = "peach_session"
 SESSIONS = "browser-sessions.json"
@@ -49,9 +50,9 @@ def load(path: Path | None) -> dict:
 
 def validate_password(password: str, confirmation: str) -> None:
     if password != confirmation:
-        raise ValueError("两次输入的密码不一致")
+        raise UserValueError("errors.access.passwordMismatch")
     if password and not 8 <= len(password) <= 256:
-        raise ValueError("访问密码需为 8–256 个字符")
+        raise UserValueError("errors.access.passwordLength")
 
 
 def _digest(password: str, salt: str) -> str:
@@ -113,7 +114,7 @@ def issue(policy: dict, days: int, sessions: Sessions | None = None, *,
           device: str = "", network: str = "", remote: bool = False) -> tuple[str, int | None]:
     """签发令牌并登记这台设备；记录写不进去时抛 OSError，不发一个校验不过的令牌。"""
     if type(days) is not int or not 0 <= days <= 365:
-        raise ValueError("请选择有效的保持登录时间")
+        raise UserValueError("errors.access.invalidRememberDays")
     seconds = days * 86400 if days else 43200
     expires = int(time.time()) + seconds
     # 随机 `id` 让同一秒、同一时长的两次登录也各得一个令牌，记录里才是两行。
@@ -158,12 +159,21 @@ _BROWSERS = (("EdgiOS/", "Edge"), ("EdgA/", "Edge"), ("Edg/", "Edge"), ("OPR/", 
              ("CriOS/", "Chrome"), ("Chrome/", "Chrome"), ("Safari/", "Safari"))
 
 
+#: 安卓平板的系统词。会话文件里旧会话记的是中文原值，列出时换成它（会话到期后自然消失）。
+ANDROID_TABLET, _LEGACY_ANDROID_TABLET = "Android tablet", "Android 平板"
+
+
+def _current_device(device: str) -> str:
+    system = device.rpartition(" · ")[2]
+    return device[:len(device) - len(system)] + ANDROID_TABLET if system == _LEGACY_ANDROID_TABLET else device
+
+
 def device_name(user_agent: str) -> str:
     """User-Agent 只取浏览器与系统两个词，原文不落盘；认不出时留空，由页面写「未识别」。"""
     browser = next((name for mark, name in _BROWSERS if mark in user_agent), "")
     system = next((name for mark, name in _SYSTEMS if mark in user_agent), "")
     if system == "Android" and "Mobile" not in user_agent:
-        system = "Android 平板"  # Android 平板的 User-Agent 不带 Mobile；页面据此换平板图标
+        system = ANDROID_TABLET  # 安卓平板的 User-Agent 不带 Mobile；页面据此换平板图标并按界面语言写名字
     return " · ".join(part for part in (browser, system) if part)
 
 
@@ -297,7 +307,7 @@ class Sessions:
         if data["revision"] != revision:
             return []
         now = time.time()
-        rows = [{"id": row["id"], "device": row["device"], "network": row["network"], "remote": row["remote"],
+        rows = [{"id": row["id"], "device": _current_device(row["device"]), "network": row["network"], "remote": row["remote"],
                  "created_at": row["created_at"], "last_seen": row["last_seen"], "expires": row["expires"],
                  "legacy": row["legacy"], "current": key == current}
                 for key, row in data["sessions"].items() if row["expires"] > now]

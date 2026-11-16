@@ -30,7 +30,7 @@ def _part(name, read):
     try:
         return read()
     except Exception:  # noqa: BLE001 - 一组取不到只缺那一组，原因记日志
-        LOGGER.exception("搜索推荐的「%s」一组未取得", name)
+        LOGGER.exception("Search suggestions group \"%s\" unavailable", name)
         return None
 
 
@@ -77,21 +77,21 @@ def _shuffled(pool: dict) -> dict:
 
 def _bundle(contract, library: str) -> dict:
     items_args = {"sort": "rand", "limit": str(POOL), **({"library": library} if library else {})}
-    items = _part("作品推荐", lambda: q_items(contract, items_args))
-    jav = _part("JAV 推荐", lambda: web_jav_discovery.q_jav_discoveries(
+    items = _part("items", lambda: q_items(contract, items_args))
+    jav = _part("jav", lambda: web_jav_discovery.q_jav_discoveries(
         contract, {"scope": "library", "limit": str(POOL)}))
-    follow = _part("关注作品", lambda: web_follow.q_follow(
+    follow = _part("follow", lambda: web_follow.q_follow(
         contract, {"limit": str(POOL), "sort": "rand", "seed": str(random.getrandbits(31))}))
     if follow:
         follow = {key: value for key, value in follow.items() if key not in FOLLOW_UNUSED}
-    feeds = _part("订阅新作", lambda: web_feeds.q_feed_discoveries(contract, {"limit": str(POOL)}))
-    authors = _part("关注作者", lambda: web_follow.q_follow_authors(contract, {"limit": str(AUTHOR_POOL)}))
+    feeds = _part("feeds", lambda: web_feeds.q_feed_discoveries(contract, {"limit": str(POOL)}))
+    authors = _part("authors", lambda: web_follow.q_follow_authors(contract, {"limit": str(AUTHOR_POOL)}))
     ids = []
     for row in (jav or {}).get("items") or []:
         for ref in row.get("performer_refs") or []:
             if ref.get("id") and ref["id"] not in ids:
                 ids.append(ref["id"])
-    latest = _part("最新作", lambda: web_entity.q_entity_latest(
+    latest = _part("latest", lambda: web_entity.q_entity_latest(
         contract, {"ids": ",".join(str(value) for value in ids)}))
     return {"items": items, "jav": jav, "follow": follow, "feeds": feeds, "authors": authors,
             "latest": (latest or {}).get("items") or {},

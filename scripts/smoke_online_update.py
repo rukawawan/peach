@@ -13,8 +13,12 @@ import sqlite3
 import subprocess
 import urllib.parse
 import urllib.request
+import sys
 import zipfile
 
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 from smoke_desktop import (artifact_processes, complete_first_run, smoke_directory,
                            smoke_environment, stop_tray, wait_for, wait_health)
 
@@ -52,7 +56,7 @@ def exercise_update(opener, base: str, data: Path, log_path: Path, version: str,
         assert state["state"] != "error", state
         return state if state["state"] == "ready" else None
 
-    wait_for(prepared, "下载、SHA-256 校验与解压", timeout=300)
+    wait_for(prepared, t("smoke_online_update.waitPrepared"), timeout=300)
     manifest = data / "state/standalone-update.json"
     transaction = json.loads(manifest.read_text(encoding="utf-8"))
     if rollback:
@@ -66,7 +70,8 @@ def exercise_update(opener, base: str, data: Path, log_path: Path, version: str,
         assert state["state"] != "error", state
         return state if state["state"] == "complete" else None
 
-    state = wait_for(installed, "回滚到旧版" if rollback else "重启安装新版", timeout=240)
+    state = wait_for(installed, t("smoke_online_update.waitRollback" if rollback else "smoke_online_update.waitInstall"),
+                     timeout=240)
     health = wait_health(opener, base, None, log_path)
     assert health["configured"] and health["version"] == version, health
     if rollback:
@@ -80,24 +85,24 @@ def exercise_update(opener, base: str, data: Path, log_path: Path, version: str,
     with opener.open(base + "/api/items", timeout=10) as response:
         assert response.status == 200
     helper = Path(transaction["helper"]) / "Peach.exe"
-    wait_for(lambda: not artifact_processes(helper), "更新助手退出", timeout=20)
+    wait_for(lambda: not artifact_processes(helper), t("smoke_online_update.waitHelperExit"), timeout=20)
     print(json.dumps({"ok": True, "phase": "rollback" if rollback else "installed",
         "version": health["version"], "build_commit": health.get("build_commit"), "state": state["state"]}), flush=True)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("smoke_online_update.description"))
     parser.add_argument("--from-version", required=True)
     parser.add_argument("--to-version", required=True)
     parser.add_argument("--exercise-rollback", action="store_true")
-    parser.add_argument("--apply", action="store_true", help="运行临时实例并安装更新；缺省只输出验收计划")
+    parser.add_argument("--apply", action="store_true", help=t("smoke_online_update.helpApply"))
     parser.add_argument("--evidence-dir", type=Path, default=Path("smoke-evidence"))
     args = parser.parse_args()
     if not args.apply:
         print(json.dumps({"from_version": args.from_version, "to_version": args.to_version,
                           "rollback": args.exercise_rollback, "apply": False}))
         return 0
-    assert os.name == "nt", "在线更新制品验收需要 Windows"
+    assert os.name == "nt", t("smoke_online_update.windowsOnly")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     with smoke_directory(args.evidence_dir.resolve()) as root:

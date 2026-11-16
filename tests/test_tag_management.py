@@ -150,7 +150,7 @@ class TagManagementTests(unittest.TestCase):
         self.c.execute('CREATE TABLE tag_reference(entity_id REFERENCES entity(id))')
         self.c.execute('CREATE TRIGGER bad_tag_reference AFTER UPDATE OF canonical_name ON entity BEGIN INSERT INTO tag_reference VALUES(-1); END')
         self.c.commit()
-        with self.assertRaisesRegex(ValueError, '外键检查'):
+        with self.assertRaisesRegex(ValueError, 'foreign key check'):
             self.execute('rename', [entity_id], name='我的眼镜')
         self.c.rollback()
         self.assertEqual(self.c.execute('SELECT canonical_name FROM entity WHERE id=?', (entity_id,)).fetchone()[0], '眼镜')

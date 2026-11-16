@@ -64,7 +64,7 @@ it('列出设备：本机排第一并标「本机」，其余写最近活动与�
 });
 
 it('每行有终端图标，认得出的浏览器与系统各在名字前配标志', async () => {
-  const tablet = row({ id: 'eeeeeeeeeeeeeeee', device: 'Chrome · Android 平板' });
+  const tablet = row({ id: 'eeeeeeeeeeeeeeee', device: 'Chrome · Android tablet' });
   const linux = row({ id: 'ffffffffffffffff', device: 'Firefox · Linux' });
   serve(listing([desk, phone, tablet, laptop, linux]));
   const host = await render();

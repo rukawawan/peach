@@ -33,6 +33,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .config import TOOLS_DIR
+from .user_messages import UserFacingError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,8 @@ ZOO_MEDIA = f"https://media.githubusercontent.com/media/opencv/opencv_zoo/{ZOO_C
 #: opencv_zoo 的 YuNet 定版模型。
 MODEL_URL = ZOO_MEDIA + "face_detection_yunet/face_detection_yunet_2023mar.onnx"
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+#: 回报给 `observer` 的模型标识；任务中心按它认是哪一个模型。
+MODEL_LABEL = "face-detection"
 MODEL_PATH = TOOLS_DIR / "yunet" / "face_detection_yunet_2023mar.onnx"
 
 #: 随包模型目录的环境变量。Docker 镜像经它指到镜像里那份；桌面包不设，读程序目录。
@@ -79,8 +82,17 @@ SCORE_MARGIN = 0.1
 MIN_DETECT_SIDE = 320
 
 
-class FaceModelUnavailable(RuntimeError):
+class FaceModelUnavailable(UserFacingError, RuntimeError):
     """模型取不到。调用方据此决定是跳过还是整轮停下，不要静默当成「没有脸」。"""
+
+
+#: `fetch_model` 按模型种类报错：缺文件、下载失败、校验不符三句各一个 code。
+_FETCH_CODES = {
+    "face": ("errors.faceDetect.faceModelMissing", "errors.faceDetect.faceModelFetchFailed",
+             "errors.faceDetect.faceModelChecksum"),
+    "match": ("errors.faceDetect.matchModelMissing", "errors.faceDetect.matchModelFetchFailed",
+              "errors.faceDetect.matchModelChecksum"),
+}
 
 
 @dataclass(frozen=True)
@@ -172,7 +184,7 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
         return bundled
     target = Path(path) if path is not None else MODEL_PATH
     return fetch_model(target, MODEL_URL, MODEL_SHA256,
-                       allow_download=allow_download, label="人脸模型")
+                       allow_download=allow_download, label=MODEL_LABEL)
 
 
 def bundled_dir() -> Path | None:
@@ -216,7 +228,7 @@ def bundled_model(name: str, sha256: str) -> Path | None:
         return None
     _verified[path] = (key, actual == sha256)
     if actual != sha256:
-        LOGGER.warning("随包的人脸模型校验不符，退回数据目录或联网取：%s（期望 %s，实际 %s）",
+        LOGGER.warning("Bundled face model checksum mismatch, falling back to the data directory or a download: %s (expected %s, got %s)",
                        path, sha256, actual)
         return None
     return path
@@ -238,31 +250,33 @@ def _observe(label: str, error: Exception | None) -> None:
 
 
 def fetch_model(target: Path, url: str, sha256: str, *, allow_download: bool,
-                label: str, timeout: float = 60) -> Path:
+                label: str, timeout: float = 60, kind: str = "face") -> Path:
     """按固定地址与 sha256 取一个 opencv_zoo 模型，检出与比对两个模型共用这一条。
 
     本地那份哈希对得上就直接用；对不上先删掉，再按 `allow_download` 决定取不取。
     取不到、校验不符一律抛 `FaceModelUnavailable`，由调用方决定跳过还是停下。
+    `label` 是报给 `observer` 的模型名，`kind`（`face` 或 `match`）决定报错用哪组 code。
     """
     global downloads
+    missing, fetch_failed, mismatch = _FETCH_CODES[kind]
     target = Path(target)
     if target.is_file() and _digest(target) == sha256:
         return target
     if target.is_file():
         target.unlink()
     if not allow_download:
-        raise FaceModelUnavailable(f"缺少{label}：{target}")
+        raise FaceModelUnavailable(missing, {"path": str(target)})
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".part")
     try:
         payload = read_url(url, timeout=timeout)
     except (OSError, httpx.HTTPError) as error:
-        failure = FaceModelUnavailable(f"取{label}失败：{error}")
+        failure = FaceModelUnavailable(fetch_failed, {"error": str(error)})
         _observe(label, failure)
         raise failure from error
     digest = hashlib.sha256(payload).hexdigest()
     if digest != sha256:
-        failure = FaceModelUnavailable(f"{label}校验不符：期望 {sha256}，实际 {digest}")
+        failure = FaceModelUnavailable(mismatch, {"expected": sha256, "actual": digest})
         _observe(label, failure)
         raise failure
     temporary.write_bytes(payload)
@@ -289,8 +303,7 @@ class FaceDetector:
         self.model_path = ensure_model(model, allow_download=allow_download)
         create = getattr(cv2, "FaceDetectorYN_create", None)
         if create is None:                       # pragma: no cover - 依赖版本兜底
-            raise FaceModelUnavailable(
-                "当前 OpenCV 没有 FaceDetectorYN；需要 4.5.4 以上")
+            raise FaceModelUnavailable("errors.faceDetect.detectorUnsupported")
         # 模型那道门只管「算不算一次读数」，留不留这张脸由 `detect` 按中位数判。
         # Python 读取支持中文路径；原生文件接口不参与模型路径解码。
         model_bytes = numpy.frombuffer(self.model_path.read_bytes(), dtype=numpy.uint8)

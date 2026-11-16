@@ -32,7 +32,7 @@ def _integer(value, maximum=MAX_BYTES):
 
 def _day(value):
     if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
-        raise ValueError('容量历史日期无效')
+        raise ValueError("invalid capacity history date")
     return date.fromisoformat(value)
 
 
@@ -63,7 +63,7 @@ def _read(config):
     path = _path(config)
     try:
         if path.stat().st_size > MAX_FILE_BYTES:
-            raise ValueError('容量历史超过本机记录上限')
+            raise ValueError("capacity history exceeds the local size limit")
         value = json.loads(path.read_text(encoding='utf-8'))
     except FileNotFoundError:
         return None
@@ -75,7 +75,7 @@ def _validate_state(value):
     if (not isinstance(value, dict) or set(value) != {'schema', 'activity_started', 'days'}
             or type(value['schema']) is not int or value['schema'] != SCHEMA
             or not isinstance(value['days'], dict) or len(value['days']) > RETENTION_DAYS):
-        raise ValueError('容量历史格式无效')
+        raise ValueError("invalid capacity history format")
     started = _day(value['activity_started']) if value['activity_started'] is not None else None
     growth = {key: 0 for key in METRICS}
     cleaned = 0
@@ -84,15 +84,15 @@ def _validate_state(value):
         if (not isinstance(row, dict) or set(row) != {'active', 'data', 'cache', 'cleaned_bytes'}
                 or type(row['active']) is not bool or (row['active'] and (started is None or day < started))
                 or (row['cleaned_bytes'] is not None and not _integer(row['cleaned_bytes']))):
-            raise ValueError('容量历史日记录无效')
+            raise ValueError("invalid capacity history day record")
         cleaned += row['cleaned_bytes'] or 0
         for key in METRICS:
             if row[key] is not None:
                 if not _valid_metric(row[key], local=True):
-                    raise ValueError('容量历史测量无效')
+                    raise ValueError("invalid capacity history measurement")
                 growth[key] += row[key]['positive_growth_bytes']
     if not _integer(cleaned) or not all(_integer(amount) for amount in growth.values()):
-        raise ValueError('容量历史累计值超出范围')
+        raise ValueError("capacity history totals out of range")
 
 
 def sample_due(config) -> bool:
@@ -117,7 +117,7 @@ def _update(config, change):
         _validate_state(value)
         encoded = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
         if len(encoded.encode('utf-8')) > MAX_FILE_BYTES:
-            raise ValueError('容量历史超过本机记录上限')
+            raise ValueError("capacity history exceeds the local size limit")
         atomic_write_text(path, encoded)
     return True
 
@@ -126,7 +126,7 @@ def record_sample(config, data_bytes: int | None, cache_bytes: int | None, clean
     """接收已有容量测量和本次实际清理字节，不触发扫描或上报。"""
     if (any(amount is not None and not _integer(amount) for amount in (data_bytes, cache_bytes))
             or not _integer(cleaned_bytes)):
-        raise ValueError('容量样本必须是范围内的非负整数或未取得值')
+        raise ValueError("capacity sample must be a non-negative integer in range or None")
     if data_bytes is None and cache_bytes is None and cleaned_bytes == 0:
         return False
     def change(_value, row):
@@ -165,7 +165,7 @@ def record_playback(contract):
         try:
             record_activity(config)
         except (OSError, ValueError) as error:
-            LOGGER.warning('播放活跃日记录未取得（%s）', type(error).__name__)
+            LOGGER.warning('Playback activity days unavailable (%s)', type(error).__name__)
 
 
 def _metric(rows, key):
@@ -206,7 +206,7 @@ def project(config) -> dict:
     result = {'state': state, 'activity_basis': 'playback',
               'windows': {f'{days}d': _window(value, _today(), days) for days in (7, 30)}}
     if not valid_projection(result):
-        raise ValueError('容量研究投影超出字段或数值范围')
+        raise ValueError("capacity research projection has unexpected fields or values")
     return result
 
 

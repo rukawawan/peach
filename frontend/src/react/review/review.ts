@@ -13,6 +13,8 @@ import { clampPage, pageCount } from '../../pagination';
 import { selectRange } from '../../selection';
 import { queryClient } from '../query';
 import { localTime } from '../time';
+import { t } from '../../i18n';
+import { codedText, partsLabel, serverLabel, type TextPart } from '../../core/server-text';
 
 export const REVIEW_URL = '/api/review';
 export const REVIEW_DECISION_URL = '/api/review/decision';
@@ -23,15 +25,15 @@ export const REVIEW_KEY = ['review'] as const;
 
 /** 复核分类与它们在界面上的名字。次序就是页签次序。 */
 export const REVIEW_LABELS = {
-  metadata_fields: '元数据字段',
-  creator_tags: '创作者标签',
-  code_creators: '番号目录存疑',
-  western_identity: '西方身份回配',
-  performer_avatars: '女优头像',
-  studio_logos: '厂牌 Logo',
-  fc2_markings: 'FC2 评论标记',
-  fc2_similarity: 'FC2 跨号相似',
-  video_endcards: '片尾/出处证据',
+  metadata_fields: t('manage:reviewQueue.metadataFields'),
+  creator_tags: t('manage:reviewQueue.creatorTags'),
+  code_creators: t('manage:reviewQueue.codeCreators'),
+  western_identity: t('manage:reviewQueue.westernIdentity'),
+  performer_avatars: t('manage:taskSummary.actressAvatars'),
+  studio_logos: t('manage:reviewQueue.studioLogos'),
+  fc2_markings: t('manage:reviewQueue.fc2Markings'),
+  fc2_similarity: t('manage:reviewQueue.fc2Similarity'),
+  video_endcards: t('manage:reviewQueue.videoEndcards'),
 } as const;
 
 export type ReviewCategory = keyof typeof REVIEW_LABELS;
@@ -53,7 +55,11 @@ export const ENTITY_REVIEW_KINDS: Partial<Record<ReviewCategory, string>> = {
 /** 默认每页 20 张；接口读取整条队列，页面按所选数量挂载候选表单。 */
 export const REVIEW_PAGE_SIZE = 20;
 
-export interface CatalogEvidence { display_value?: string; warnings?: string[] }
+/** 来源顺带交回的一项旁证：`display_value`、`warnings` 是 zh-CN 原句，旁边的 code 与参数给当前语言。 */
+export interface CatalogEvidence {
+  display_value?: string; display_value_code?: string; display_value_params?: Record<string, unknown>;
+  warnings?: string[]; warning_codes?: (string | null)[]; warning_params?: (Record<string, unknown> | null)[];
+}
 
 /** 一个来源给出的候选值。选中它就是把 `display_value` 写进数据库。 */
 export interface ReviewCandidate {
@@ -64,6 +70,8 @@ export interface ReviewCandidate {
   provider_id?: string;
   display_value?: string;
   warnings?: string[];
+  warning_codes?: (string | null)[];
+  warning_params?: (Record<string, unknown> | null)[];
   /** 同一来源顺带交回来的其它字段，只作判断依据。 */
   catalog_evidence?: Record<string, CatalogEvidence>;
   /** 静态词表还没收录的 genre。 */
@@ -104,6 +112,8 @@ export interface ReviewRow {
   /** 竖线分隔的候选标签。 */
   tags?: string;
   reason?: string;
+  /** 服务端拼的证据句（`reason`）按段的 code；`text` 是来源原文。 */
+  reason_parts?: TextPart[];
   evidence?: string;
   note?: string;
   decision_note?: string;
@@ -136,16 +146,18 @@ export interface ReviewMirror {
   origin?: string | null;
   fetched_at?: string | null;
   error?: string | null;
+  error_code?: string | null;
+  error_params?: Record<string, unknown> | null;
   read_only?: boolean;
 }
 
 export const REVIEW_QUEUES = ['pending', 'later', 'ignored'] as const;
 export type ReviewQueue = typeof REVIEW_QUEUES[number];
 export const REVIEW_QUEUE_LABELS: Record<ReviewQueue, string> = {
-  pending: '待处理', later: '稍后处理', ignored: '已忽略',
+  pending: t('manage:reviewQueue.pending'), later: t('manage:reviewQueue.later'), ignored: t('manage:reviewQueue.ignored'),
 };
 export const REVIEW_DECISION_LABELS: Record<string, string> = {
-  approved: '已通过', rejected: '已忽略', skipped: '稍后处理',
+  approved: t('manage:reviewQueue.approved'), rejected: t('manage:reviewQueue.ignored'), skipped: t('manage:reviewQueue.decisionLater'),
 };
 export const reviewQueueOf = (value: unknown): ReviewQueue =>
   value === 'later' || value === 'ignored' ? value : 'pending';
@@ -179,12 +191,12 @@ export interface ReviewGroup { key: string; title: string; rows: ReviewRow[] }
 /** 这一批队列能按什么分组。按来源、按字段两档要队列里真有那一项才出现。 */
 export function reviewGroupingOptions(rows: ReviewRow[], metadata: boolean): [ReviewGrouping, string][] {
   const options: [ReviewGrouping, string][] = [
-    ['candidates', metadata ? '按来源数量' : '不分组'],
+    ['candidates', metadata ? t('manage:reviewQueue.bySourceCount') : t('manage:reviewQueue.noGrouping')],
   ];
   if (rows.some((row) => row.source || row.candidates?.some((candidate) => candidate.source))) {
-    options.push(['source', '按来源']);
+    options.push(['source', t('manage:reviewQueue.bySource')]);
   }
-  if (rows.some((row) => row.field)) options.push(['field', '按字段']);
+  if (rows.some((row) => row.field)) options.push(['field', t('manage:reviewQueue.byField')]);
   return options;
 }
 
@@ -196,15 +208,15 @@ export function groupReviewRows(rows: ReviewRow[], by: ReviewGrouping): ReviewGr
     let title: string;
     if (by === 'field') {
       key = row.field || '__unspecified_field';
-      title = row.field_label || row.field || '未标注字段';
+      title = fieldName(row) || t('manage:reviewQueue.unspecifiedField');
     } else if (by === 'source') {
       const sources = [...new Set((row.candidates?.map((candidate) => candidate.source || '')
         || [row.source || '']).filter(Boolean))].sort();
       key = JSON.stringify(sources);
-      title = sources.join(' / ') || '未标注来源';
+      title = sources.join(' / ') || t('manage:reviewQueue.unspecifiedSource');
     } else {
       key = row.candidates ? (row.candidates.length === 1 ? 'single' : 'multiple') : 'pending';
-      title = key === 'single' ? '单一来源' : key === 'multiple' ? '需选择来源' : '资料';
+      title = key === 'single' ? t('manage:reviewQueue.singleSource') : key === 'multiple' ? t('manage:reviewQueue.chooseSource') : t('manage:scanFetch.slowWhatMetadata');
     }
     if (!groups.has(key)) groups.set(key, { key, title, rows: [] });
     groups.get(key)!.rows.push(row);
@@ -265,8 +277,23 @@ export function rowSubject(category: ReviewCategory, row: ReviewRow): string {
   return String(row.creator || row.studio || row.current_name || row.name || row.item_key);
 }
 
+/** 候选表 `field` 列的字段 id 到显示名的 code（`server.json`，与自动写入页同一份）。 */
+const FIELD_NAME_CODES: Readonly<Record<string, string>> = {
+  title: 'labels.webAutoLandings.fieldTitle', original_title: 'labels.webAutoLandings.fieldOriginalTitle',
+  performers: 'labels.webAutoLandings.fieldPerformers', studio: 'labels.webAutoLandings.fieldStudio',
+  series: 'labels.webAutoLandings.fieldSeries', release_date: 'labels.webAutoLandings.fieldReleaseDate',
+  tags: 'labels.webAutoLandings.fieldTags',
+};
+
+/** 字段名按当前语言取；候选表里登记之外的字段照原样显示脚本写的 `field_label`。 */
+export function fieldName(row: ReviewRow): string {
+  const field = row.field || '';
+  const original = String(row.field_label || field).trim();
+  return Object.hasOwn(FIELD_NAME_CODES, field) ? serverLabel(FIELD_NAME_CODES[field]!, original) : original;
+}
+
 export const rowFieldName = (category: ReviewCategory, row: ReviewRow): string =>
-  (category === 'metadata_fields' ? String(row.field_label || row.field || '').trim() : '');
+  (category === 'metadata_fields' ? fieldName(row) : '');
 
 export function rowTitle(category: ReviewCategory, row: ReviewRow): string {
   const subject = rowSubject(category, row);
@@ -274,8 +301,9 @@ export function rowTitle(category: ReviewCategory, row: ReviewRow): string {
   return field ? `${subject} · ${field}` : subject;
 }
 
+/** 证据句逐段取译文（`partsLabel`）：缺一段译文就整句用服务端原文。 */
 export const rowEvidence = (row: ReviewRow): string =>
-  row.reason || row.evidence || row.note || row.decision_note || '';
+  partsLabel(row.reason_parts, row.reason || '') || row.evidence || row.note || row.decision_note || '';
 
 export const rowTags = (row: ReviewRow): string[] =>
   String(row.tags || '').split('|').filter(Boolean);
@@ -322,7 +350,7 @@ export function decisionPayload(
 }
 
 export const decisionReceipt = (status: DecisionStatus): string => ({
-  approved: '已通过资料', rejected: '已忽略资料', skipped: '已移至稍后处理', restore: '已恢复待处理',
+  approved: t('manage:reviewQueue.receiptApproved'), rejected: t('manage:reviewQueue.receiptIgnored'), skipped: t('manage:reviewQueue.receiptLater'), restore: t('manage:reviewQueue.receiptPending'),
 })[status];
 
 /* ── 取数与写操作 ── */
@@ -331,7 +359,7 @@ export async function fetchReview(signal?: AbortSignal): Promise<ReviewData> {
   const data = await apiGet<ReviewData>(REVIEW_URL, signal);
   for (const key of ['later', 'ignored'] as const) {
     if (!data.queues?.[key]?.sections || !data.queues[key].counts) {
-      throw new Error(`${REVIEW_QUEUE_LABELS[key]}状态未取得，请刷新或更新写入端`);
+      throw new Error(t(key === 'later' ? 'manage:reviewQueue.laterStatusNotFound' : 'manage:reviewQueue.ignoredStatusNotFound'));
     }
   }
   return data;
@@ -418,7 +446,7 @@ export const reloadReview = (): Promise<void> =>
 export function mirrorText(
   mirror: ReviewMirror | null | undefined, readOnlyMessage: string,
 ): string {
-  if (mirror?.state === 'live') return '正在显示写入端的实时复核队列';
-  if (mirror?.state === 'cached') return `写入端暂时不可达，显示 ${localTime(mirror.fetched_at)} 的缓存`;
-  return mirror?.error || readOnlyMessage;
+  if (mirror?.state === 'live') return t('manage:reviewQueue.mirrorLive');
+  if (mirror?.state === 'cached') return t('manage:reviewQueue.mirrorCached', { time: localTime(mirror.fetched_at) });
+  return (mirror?.error ? codedText(mirror, 'error') : '') || readOnlyMessage;
 }

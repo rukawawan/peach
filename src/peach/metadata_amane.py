@@ -31,12 +31,15 @@ from typing import Callable, Mapping, Sequence
 
 from filelock import FileLock, Timeout
 
-from .metadata import MetadataProviderError, identifies_code, validate_provider_code
+from . import interface_text
+from .coded_text import Said, coded
+from .metadata import MetadataProviderError, identifies_code, relay_args, relayed, validate_provider_code
 from .sources.base import (COOLDOWN_ACTIONS, REASON_KINDS, FailureReason, SiteConfig, SiteRecord,
                            SourceFailure)
 from .user_agent import USER_AGENT
 from .settings_file import PROJECT_ROOT
 from .task_control import run as run_task_process
+from .user_messages import message_fields
 
 AMANE_REPOSITORY = "https://github.com/sqzw-x/amane"
 AMANE_LICENSE = "GPL-3.0"
@@ -57,7 +60,7 @@ DEFAULT_TIMEOUT = 60
 COMMUNITY_SITES = (("fc2club", "FC2Club"), ("freejavbt", "FreeJavBT"), ("airav", "AIRAV"), ("avsox", "AVSOX"))
 #: `makers` 是 amane 的 `official`：按系列前缀路由到二十九家片商官网（S1、MOODYZ、IDEA POCKET……），
 #: 前缀不在它的表里就不发请求。另外三家片商各有自己的解析器；MGStage 是 MGS 素人系的发行渠道。
-OFFICIAL_SITES = (("makers", "片商官网"), ("prestige", "Prestige"), ("faleno", "FALENO"),
+OFFICIAL_SITES = (("makers", Said("labels.scrapingAccess.makers")), ("prestige", "Prestige"), ("faleno", "FALENO"),
                   ("dahlia", "DAHLIA"), ("mgstage", "MGStage"))
 SITE_CONFIGS: dict[str, SiteConfig] = {
     name: SiteConfig(name=name, label=label, provider="amane-" + name, base_url="", domains=(), stage=stage)
@@ -97,15 +100,15 @@ AMANE_REASONS: dict[str, FailureReason] = {
     "age_verification": FailureReason.AUTH_REQUIRED,
     "login_required": FailureReason.AUTH_REQUIRED,
 }
-#: `auth` 一档的措辞，按上游 reason 写。
+#: `auth` 一档的措辞（code），按上游 reason 写。
 AUTH_MESSAGES: dict[str, str] = {
-    "age_verification": "站方要求年龄验证",
-    "login_required": "站点要求登录，凭据缺失或已失效",
-    "geo_restricted": "站方按地区拒绝了这个出口",
-    "cloudflare_challenge": "撞上 Cloudflare 挑战页",
-    "cloudflare_blocked": "被 Cloudflare 拦下",
-    "ip_banned": "出口 IP 已被站方封禁",
-    "http_error": "站方拒绝了这个出口",
+    "age_verification": "labels.metadataAmane.auth.ageVerification",
+    "login_required": "labels.metadataAmane.auth.loginRequired",
+    "geo_restricted": "labels.metadataAmane.auth.geoRestricted",
+    "cloudflare_challenge": "labels.metadataAmane.auth.cloudflareChallenge",
+    "cloudflare_blocked": "labels.metadataAmane.auth.cloudflareBlocked",
+    "ip_banned": "labels.metadataAmane.auth.ipBanned",
+    "http_error": "labels.metadataAmane.auth.httpError",
 }
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -131,7 +134,7 @@ def pinned_revision(root: Path = BRIDGE_ROOT) -> str:
         matched = re.fullmatch(r"amane\s*@\s*git\+\S+@([0-9a-f]{40})", requirement.strip())
         if matched:
             return matched.group(1)
-    raise ValueError("amane 桥的清单没有钉住 amane 的 revision")
+    raise ValueError("amane bridge manifest doesn't pin an amane revision")
 
 
 def locked_version(root: Path = BRIDGE_ROOT) -> str:
@@ -214,9 +217,6 @@ def _requires_packaged_runtime() -> bool:
     return bool(getattr(sys, "frozen", False)) or os.environ.get("PEACH_DISTRIBUTION") == "docker"
 
 
-PACKAGED_RUNTIME_PROBLEM = "安装包中的采集工具缺失或版本不匹配，请重新安装 Peach"
-
-
 def find_uv() -> Path | None:
     """建 venv 用的 uv。托盘进程的 PATH 未必带 WinGet 的 Links 目录，所以多看一眼那里。"""
     explicit = os.environ.get("PEACH_UV", "").strip()
@@ -253,22 +253,39 @@ def rebuild_command(tools_root: Path, *, uv: Path, root: Path = BRIDGE_ROOT,
     return command, env
 
 
+def _bundle_problem(root: Path) -> tuple[str, dict] | None:
+    """桥的清单与脚本读不全时的原因（code 与参数）；齐全返回 `None`。"""
+    missing = [path for path in (root / "pyproject.toml", root / "bridge.py") if not path.is_file()]
+    if missing:
+        return "errors.metadataAmane.bundleFileMissing", {"path": str(missing[0])}
+    try:
+        pinned_revision(root)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return "errors.metadataAmane.manifestUnreadable", {"error": str(exc)}
+    if _requires_packaged_runtime() and not packaged_runtime(root=root):
+        return "errors.metadataAmane.packagedRuntimeProblem", {}
+    return None
+
+
 def bundle_problem(root: Path = BRIDGE_ROOT) -> str:
     """桥的清单与脚本读不全时给人看的原因；齐全返回空串。
 
     打包产物漏带 `tools/amane-bridge` 时三个文件都不在，设置页那张卡和重建都靠这句话说明，
     不把 `FileNotFoundError` 抛成读接口的 500。
     """
-    missing = [path for path in (root / "pyproject.toml", root / "bridge.py") if not path.is_file()]
-    if missing:
-        return f"安装包里缺少 amane 桥的文件：{missing[0]}；重新安装 Peach 后可用"
-    try:
-        pinned_revision(root)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return f"amane 桥的清单读不出来：{exc}"
-    if _requires_packaged_runtime() and not packaged_runtime(root=root):
-        return PACKAGED_RUNTIME_PROBLEM
-    return ""
+    problem = _bundle_problem(root)
+    return interface_text.text(f"server:{problem[0]}", problem[1]) if problem else ""
+
+
+def _said(key: str, code: str, params: dict | None = None) -> dict:
+    """回执里的一句：`<key>` 是 zh-CN 原句，`<key>_code`、`<key>_params` 给界面取当前语言。"""
+    values = dict(params or {})
+    return {key: interface_text.text(f"server:{code}", values), f"{key}_code": code, f"{key}_params": values}
+
+
+def _failed(code: str, params: dict | None = None) -> dict:
+    """重建没成的回执：`error` 是 zh-CN 原句，`message_code` 与 `message_params` 给页面与 `prepare`。"""
+    return {"ok": False, **message_fields(code, params, key="error")}
 
 
 def rebuild(tools_root: Path, *, runner: Runner = run_task_process, timeout: int = 900,
@@ -276,23 +293,23 @@ def rebuild(tools_root: Path, *, runner: Runner = run_task_process, timeout: int
             force: bool = True) -> dict:
     """重建桥 venv，返回给设置页的回执。首次要下载约 98 MB，之后只校验。"""
     from .task_resources import unobserved_network
-    unobserved_network('独立采集工具的网络传输未提供逐任务计量')
+    unobserved_network(Said('labels.metadataAmane.trafficUnmetered'))
     if packaged_runtime(root=root):
-        return {"ok": True, "result": "采集工具已随 Peach 安装，无需另行准备",
+        return {"ok": True, **_said("result", "labels.metadataAmane.bundled"),
                 **describe(tools_root, root=root)}
     home = bridge_home(tools_root)
     try:
         home.mkdir(parents=True, exist_ok=True)
         with FileLock(str(home / "install.lock"), timeout=timeout):
             if not force and _ready(tools_root, root=root):
-                return {"ok": True, "result": "amane 运行环境已就绪", **describe(tools_root, root=root)}
+                return {"ok": True, **_said("result", "labels.metadataAmane.ready"), **describe(tools_root, root=root)}
             return _rebuild(tools_root, runner=runner, timeout=timeout, root=root,
                             proxy_options=proxy_options)
     except Timeout:
-        return {"ok": False, "error": "amane 运行环境正在准备，请稍后重试"}
+        return _failed("errors.metadataAmane.preparing")
     except OSError as error:
         from .error_reporting import redact
-        return {"ok": False, "error": f"amane 安装目录无法读写：{redact(str(error))}"}
+        return _failed("errors.metadataAmane.installDirUnwritable", {"error": redact(str(error))})
 
 
 def _uv_failure(output: str, limit: int = 800) -> str:
@@ -312,14 +329,14 @@ def _uv_failure(output: str, limit: int = 800) -> str:
 
 def _rebuild(tools_root, *, runner, timeout, root, proxy_options):
     from .error_reporting import redact
-    if problem := bundle_problem(root):
-        return {"ok": False, "error": problem}
+    if problem := _bundle_problem(root):
+        return _failed(*problem)
     if packaged_runtime(root=root):
-        return {"ok": True, "result": "采集工具已随 Peach 安装，无需另行准备",
+        return {"ok": True, **_said("result", "labels.metadataAmane.bundled"),
                 **describe(tools_root, root=root)}
     uv = find_uv()
     if uv is None:
-        return {"ok": False, "error": "未找到 uv，请先安装 uv 再重建 amane 桥"}
+        return _failed("errors.metadataAmane.uvMissing")
     command, env = rebuild_command(tools_root, uv=uv, root=root, proxy_options=proxy_options)
     bridge_home(tools_root).mkdir(parents=True, exist_ok=True)
     (bridge_home(tools_root) / "installed.json").unlink(missing_ok=True)
@@ -328,14 +345,14 @@ def _rebuild(tools_root, *, runner, timeout, root, proxy_options):
                            errors="replace", timeout=timeout, check=False, shell=False, env=env,
                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"重建 amane 桥超过 {timeout} 秒未完成"}
+        return _failed("errors.metadataAmane.rebuildTimeout", {"timeout": timeout})
     except OSError as exc:
-        return {"ok": False, "error": f"无法启动 uv：{redact(str(exc))}"}
+        return _failed("errors.metadataAmane.uvStartFailed", {"error": redact(str(exc))})
     if completed.returncode:
         detail = _uv_failure(completed.stderr or completed.stdout or "")
-        return {"ok": False, "error": f"uv sync 失败（exit {completed.returncode}）：{redact(detail)}"}
+        return _failed("errors.metadataAmane.uvSyncFailed", {"exitCode": completed.returncode, "detail": redact(detail)})
     if not bridge_python(tools_root).is_file() or installed_version(tools_root) != locked_version(root):
-        return {"ok": False, "error": "amane 安装未完成：运行环境中没有可用的包元数据"}
+        return _failed("errors.metadataAmane.installIncomplete")
     try:
         checked = runner([str(bridge_python(tools_root)), "-X", "utf8", str(root / "bridge.py"), "--self-check"],
                          capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -345,14 +362,14 @@ def _rebuild(tools_root, *, runner, timeout, root, proxy_options):
         if (checked.returncode or check.get("ok") is not True
                 or check.get("amane", {}).get("version") != locked_version(root)
                 or not set(SITES).issubset(check.get("sites", []))):
-            return {"ok": False, "error": "amane 运行环境自检失败，请在来源和凭证中重新安装"}
+            return _failed("errors.metadataAmane.selfCheckFailed")
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, AttributeError):
-        return {"ok": False, "error": "amane 运行环境自检未完成，请在来源和凭证中重试"}
+        return _failed("errors.metadataAmane.selfCheckUnfinished")
     from .fsutil import atomic_write_text
     atomic_write_text(bridge_home(tools_root) / "installed.json", json.dumps({
         "revision": pinned_revision(root), "version": installed_version(tools_root),
         "lock_sha256": lock_fingerprint(root)}))
-    return {"ok": True, "result": f"amane 桥已按 {pinned_revision(root)[:12]} 重建",
+    return {"ok": True, **_said("result", "labels.metadataAmane.rebuilt", {"revision": pinned_revision(root)[:12]}),
             **describe(tools_root, root=root)}
 
 
@@ -368,10 +385,12 @@ def ensure(tools_root: Path, *, runner: Runner = run_task_process,
         try:
             proxy_options = peach_proxy.client_options(secrets_root)
         except ValueError as error:
-            raise PreparationError(str(error)) from error
+            raise PreparationError(*relay_args(error)) from error
     result = rebuild(tools_root, runner=runner, proxy_options=proxy_options, force=False)
     if not result.get("ok"):
-        raise PreparationError(result.get("error") or "amane 运行环境未取得")
+        if result.get("message_code"):
+            raise PreparationError(result["message_code"], result.get("message_params"))
+        raise PreparationError("errors.metadataAmane.runtimeUnavailable")
 
 
 def describe(tools_root: Path, *, root: Path = BRIDGE_ROOT) -> dict:
@@ -392,7 +411,7 @@ def describe(tools_root: Path, *, root: Path = BRIDGE_ROOT) -> dict:
         "installed": installed(tools_root, root=root),
         "installed_version": installed_version(tools_root),
         "python": str(python),
-        "sites": [{"source": name, "label": label} for name, label in SITES.items()],
+        "sites": [{"source": name, **coded("label", label)} for name, label in SITES.items()],
     }
 
 
@@ -420,6 +439,10 @@ def installed_version(tools_root: Path) -> str:
     return ""
 
 
+#: 上游版本问不到时的那一句（`latest_upstream_tag` 回的是按 zh-CN 渲染、带着这个 code 的 `Said`）。
+UPSTREAM_UNFETCHED = "labels.metadataAmane.latestUnfetched"
+
+
 def latest_upstream_tag(client_options: Mapping[str, object], *, timeout: float = 10.0) -> str:
     """上游最新 release 的 tag，只读 GitHub API；取不到一律回「未取得」，不猜。"""
     import httpx
@@ -430,11 +453,11 @@ def latest_upstream_tag(client_options: Mapping[str, object], *, timeout: float 
             response = client.get(f"https://api.github.com/repos/{AMANE_REPOSITORY.rsplit('/', 2)[-2]}/"
                                   f"{AMANE_REPOSITORY.rsplit('/', 1)[-1]}/releases/latest")
             if response.status_code != 200:
-                return "未取得"
+                return Said(UPSTREAM_UNFETCHED)
             tag = response.json().get("tag_name")
-            return str(tag) if tag else "未取得"
+            return str(tag) if tag else Said(UPSTREAM_UNFETCHED)
     except Exception:  # noqa: BLE001 - 网络、代理、限额都是同一个答案
-        return "未取得"
+        return Said(UPSTREAM_UNFETCHED)
 
 
 def proxy_argument(proxy_options: Mapping[str, object]) -> tuple[list[str], dict]:
@@ -474,13 +497,12 @@ class AmaneBridge:
             return cls(packaged[0], script=None if packaged[1] == "executable" else BRIDGE_SCRIPT,
                        timeout=timeout, runner=runner)
         if _requires_packaged_runtime():
-            raise MetadataProviderError(PACKAGED_RUNTIME_PROBLEM)
+            raise MetadataProviderError("errors.metadataAmane.packagedRuntimeProblem")
         python = bridge_python(tools_root)
         if not _ready(tools_root):
-            raise BridgeMissing(
-                f"amane 桥未安装：在「来源和凭证」页重建，或放到 {python}")
+            raise BridgeMissing("errors.metadataAmane.bridgeMissing", {"python": str(python)})
         if not BRIDGE_SCRIPT.is_file():
-            raise MetadataProviderError(f"amane 桥脚本缺失：{BRIDGE_SCRIPT}")
+            raise MetadataProviderError("errors.metadataAmane.bridgeScriptMissing", {"path": str(BRIDGE_SCRIPT)})
         return cls(python, BRIDGE_SCRIPT, timeout, runner)
 
     def query(self, code: str, sites: Sequence[str], *, language: str = "jp",
@@ -489,14 +511,14 @@ class AmaneBridge:
               timeout: float | None = None) -> dict:
         """问几站，返回桥的整份报告（`sites` 键下每站一条记录）。"""
         from .processing_traffic import unobserved
-        unobserved('外部采集器流量未观测')
+        unobserved(Said('labels.metadataAmane.trafficUnobserved'))
         number = validate_provider_code(code)
         names = [str(site).strip() for site in sites]
         unknown = [site for site in names if site not in SITES]
         if not names or unknown:
-            raise ValueError("未开放的 amane 站点：" + "、".join(unknown or ["（空）"]))
+            raise ValueError("amane sites not enabled: " + ", ".join(unknown or ["(empty)"]))
         if set(direct_sites) - set(names):
-            raise ValueError("直连站点必须属于本次查询来源")
+            raise ValueError("direct sites must be among the queried sites")
         from .processing_control import low_mode, checkpoint
         if low_mode() and len(names) > 1:
             return self._serial_query(code, names, language=language, proxy_options=proxy_options,
@@ -522,17 +544,18 @@ class AmaneBridge:
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         except UnicodeDecodeError as exc:
             # 不猜编码、不删除字节；保留可在诊断日志中定位的阶段和指纹，不记录正文或代理凭据。
-            message = (f"amane 桥编码错误（bridge_stdio_decode，{number}，{','.join(names)}，"
-                       f"runtime={'executable' if self.script is None else 'python'}，expected=utf-8，"
-                       f"bytes={len(exc.object)}，offset={exc.start}:{exc.end}，"
-                       f"sha256={hashlib.sha256(exc.object).hexdigest()}）")
-            logging.getLogger(__name__).warning('%s', message)
-            raise MetadataProviderError(message, kind="unavailable", detail="bridge_stdio_decode") from exc
+            error = MetadataProviderError("errors.metadataAmane.stdioDecode", {
+                "code": number, "sites": ','.join(names),
+                "runtime": 'executable' if self.script is None else 'python',
+                "bytes": len(exc.object), "start": exc.start, "end": exc.end,
+                "sha256": hashlib.sha256(exc.object).hexdigest()}, kind="unavailable", detail="bridge_stdio_decode")
+            logging.getLogger(__name__).warning('%s', error.message)
+            raise error from exc
         except subprocess.TimeoutExpired as exc:
-            raise MetadataProviderError("amane 桥查询超时", kind="unavailable",
+            raise MetadataProviderError("errors.metadataAmane.bridgeTimeout", kind="unavailable",
                                         retryable=True, temporary=True) from exc
         except OSError as exc:
-            raise MetadataProviderError(f"无法启动 amane 桥：{exc}") from exc
+            raise MetadataProviderError("errors.metadataAmane.bridgeStartFailed", {"error": str(exc)}) from exc
         return _bridge_report(completed, runtime='executable' if self.script is None else 'python')
 
     def _serial_query(self, code, sites, *, language, proxy_options, direct_sites, timeout):
@@ -544,7 +567,8 @@ class AmaneBridge:
             checkpoint('network')
             remaining = deadline - time.monotonic() if deadline is not None else None
             if remaining is not None and remaining <= 1:
-                raise MetadataProviderError('amane 桥查询超时', kind='unavailable', retryable=True, temporary=True)
+                raise MetadataProviderError('errors.metadataAmane.bridgeTimeout', kind='unavailable',
+                                            retryable=True, temporary=True)
             report = self.query(code, [site], language=language, proxy_options=proxy_options,
                                 direct_sites=[site] if site in direct_sites else [], timeout=remaining)
             records.update(report.get('sites') or {})
@@ -558,10 +582,13 @@ def _bridge_report(completed, *, runtime: str) -> dict:
         report = json.loads(line)
     except (TypeError, json.JSONDecodeError) as exc:
         detail = (completed.stderr or completed.stdout or "empty output").strip()[-800:]
-        raise MetadataProviderError(f"amane 桥返回了非 JSON 输出：{detail}") from exc
+        raise MetadataProviderError("errors.metadataAmane.bridgeNotJson", {"detail": detail}) from exc
     if not isinstance(report, dict) or "sites" not in report:
         message = report.get("error") if isinstance(report, dict) else ""
-        raise MetadataProviderError(str(message or f"amane 桥查询失败（exit {completed.returncode}）"))
+        if message:
+            # 桥自己报的错（上游 amane 或桥脚本的原文），没有译文，原样转述。
+            raise MetadataProviderError(*relayed(message))
+        raise MetadataProviderError("errors.metadataAmane.bridgeFailed", {"exitCode": completed.returncode})
     transport = report.get('transport')
     transport = transport if isinstance(transport, dict) else {}
     amane = report.get('amane')
@@ -585,24 +612,34 @@ def failure_error(site: str, record: Mapping[str, object]) -> MetadataProviderEr
     return site_failure(site, record).provider_error(SITES.get(site, site))
 
 
+def _label_param(site: str):
+    """站名当报错参数：`片商官网` 那样有译文的写成嵌套的一句，界面按当前语言渲染；其余是站方原名。"""
+    label = SITES.get(site, site)
+    return label.phrase if isinstance(label, Said) else label
+
+
 def site_failure(site: str, record: Mapping[str, object]) -> SourceFailure:
     """桥记录里一站的失败 → 契约的 `SourceFailure`。分档、冷却与可否重试都由契约那张表定。"""
     reason = str(record.get("reason") or "unexpected")
     status = diagnostic_status(record.get("http_status"))
-    label = SITES.get(site, site)
+    label = _label_param(site)
     translated = contract_reason(reason, status)
     kind = REASON_KINDS[translated]
+    params: dict[str, object] = {"label": label, "reason": reason, "status": status}
     if kind == "auth":
-        message = AUTH_MESSAGES.get(reason, "站方拒绝了这个出口") + f"（{reason}" + (
-            f"，HTTP {status}" if status else "") + "）"
+        params["message"] = {"code": AUTH_MESSAGES.get(reason, AUTH_MESSAGES["http_error"])}
+        code = "errors.metadataAmane.refusedWithStatus" if status else "errors.metadataAmane.refused"
     elif kind == "not_found":
-        message = f"{label} 上没有这个番号（{reason}）"
+        code = "errors.metadataAmane.notFound"
     else:
         text = str(record.get("detail") or "").strip()
-        message = f"{label} 未取得资料（{reason}" + (f"，HTTP {status}" if status else "") + "）"
         if text and reason in {"unexpected", "parse_error"}:
-            message += f"：{text[:160]}"
-    return SourceFailure(translated, message, status_code=status, detail=reason)
+            params["detail"] = text[:160]
+            code = ("errors.metadataAmane.unavailableWithStatusDetail" if status
+                    else "errors.metadataAmane.unavailableDetail")
+        else:
+            code = "errors.metadataAmane.unavailableWithStatus" if status else "errors.metadataAmane.unavailable"
+    return SourceFailure(translated, code, params, status_code=status, detail=reason)
 
 
 def diagnostic_status(value: object) -> int:
@@ -707,7 +744,8 @@ def split_report(code: str, report: Mapping[str, object]) -> tuple[list[tuple[st
                 found.append((site, payload))
                 continue
             failures[site] = MetadataProviderError(
-                f"{SITES.get(site, site)} 返回的商品不是 {code}：content_id={payload['content_id']!r}",
+                "errors.metadataAmane.productMismatch",
+                {"label": _label_param(site), "code": code, "contentId": repr(payload['content_id'])},
                 kind="not_found", detail="not_found")
             continue
         failures[site] = failure_error(site, record)

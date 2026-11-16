@@ -26,8 +26,8 @@ from .migrations import sqlite_backup
 
 from .user_agent import USER_AGENT as USER_AGENT
 
-#: `--apply` 缺 `--backup` 时的唯一拒绝话术。
-BACKUP_REQUIRED = "--apply 必须同时给 --backup"
+#: `--apply` 缺 `--backup` 时的唯一拒绝话术（开发工具输出，英文）。
+BACKUP_REQUIRED = "--apply requires --backup"
 
 
 def readonly_uri(db_path: Path | str) -> str:
@@ -53,11 +53,11 @@ def add_ledger_write_args(parser: argparse.ArgumentParser, *,
     参数名只有这一套，不收 `--database`、`--backup-dir` 这类同义写法：名字不同
     的同义参数会让「上次那条命令」在另一个脚本上直接报错，而报错信息只说缺参数。
     """
-    parser.add_argument("--db", type=Path, default=db_default, help="账本路径")
+    parser.add_argument("--db", type=Path, default=db_default, help="database path")
     parser.add_argument("--apply", action="store_true",
-                        help="真正写 ledger；默认只做 dry-run")
+                        help="write to the ledger; dry-run by default")
     parser.add_argument("--backup", type=Path,
-                        help=f"{BACKUP_REQUIRED}：写库前的 SQLite 备份路径")
+                        help=f"{BACKUP_REQUIRED}: SQLite backup path written before the ledger changes")
     return parser
 
 

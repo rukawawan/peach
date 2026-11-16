@@ -7,6 +7,7 @@
  * 只管一个绑定，不引 tinykeys、hotkeys-js 这类库：它们能替掉的只有匹配那几行，录制与按平台
  * 显示仍要自己写；全局监听又在遗留的 `application/search.js` 里，React 专用的录制钩子接不上。
  * 取舍记在 `docs/REUSE.md`「快捷键」。 */
+import { t } from './i18n';
 
 export interface Shortcut { code: string; ctrl: boolean; alt: boolean; shift: boolean; meta: boolean }
 
@@ -38,9 +39,9 @@ export function serializeShortcut(shortcut: Shortcut): string {
 /** 不能用的绑定说明原因；能用返回空串。 */
 function problemWith(shortcut: Shortcut): string {
   if (!shortcut.ctrl && !shortcut.alt && !shortcut.shift && !shortcut.meta) {
-    return '至少要带一个修饰键，单独的字母会和播放器快捷键冲突';
+    return t('shell:keyboardShortcut.needsModifier');
   }
-  if ((shortcut.ctrl || shortcut.meta) && BROWSER_RESERVED.has(shortcut.code)) return '这个组合被浏览器占用，页面收不到';
+  if ((shortcut.ctrl || shortcut.meta) && BROWSER_RESERVED.has(shortcut.code)) return t('shell:keyboardShortcut.reservedByBrowser');
   return '';
 }
 
@@ -53,7 +54,7 @@ export type Recorded = { state: 'waiting' } | { state: 'invalid'; problem: strin
 /** 录制时的一次按键：只按了修饰键还在等，主键不支持或组合不能用给出原因。 */
 export function recordShortcut(event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): Recorded {
   if (isModifierCode(event.code)) return { state: 'waiting' };
-  if (!MAIN_KEY.test(event.code)) return { state: 'invalid', problem: '只支持字母、数字和 F1–F12 作主键' };
+  if (!MAIN_KEY.test(event.code)) return { state: 'invalid', problem: t('shell:keyboardShortcut.unsupportedKey') };
   const shortcut = { code: event.code, ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, meta: event.metaKey };
   const problem = problemWith(shortcut);
   return problem ? { state: 'invalid', problem } : { state: 'done', shortcut };

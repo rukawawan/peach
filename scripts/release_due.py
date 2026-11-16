@@ -38,6 +38,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from peach.config import PROJECT_ROOT, STATE_DIR
+from peach.interface_text import dev as t
 
 from . import changelog
 
@@ -48,8 +49,6 @@ MAIN_BRANCH = "master"
 #: 的记忆，跟进度产物一样每次现写，进了 Git 只会让工作区永远是 modified。
 LATCH = STATE_DIR / "release-due.json"
 
-ADVICE = ("起草：`python scripts/release_tag.py --bump auto --apply`，"
-          "措辞定了再 `--ship --apply`。这次不发就不用管，master 前进后会再问一次。")
 
 
 def git(root: Path, *args: str) -> str | None:
@@ -103,7 +102,8 @@ def verdict(root: Path, latch: Path) -> dict:
     reasons = changelog.due(root)
     if not reasons["due"]:
         return quiet
-    return {"say": "该发下一版了：" + "；".join(reasons["why"]) + "。" + ADVICE,
+    return {"say": t("release_due.due", reasons=t("common.clauseSeparator").join(reasons["why"]))
+            + t("release_due.advice"),
             "sha": head}
 
 
@@ -118,9 +118,9 @@ def payload() -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+        description=t("release_due.description"), formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--hook-event", action="store_true",
-                        help="从 stdin 收 Claude 或 Codex 的 hook JSON，按钩子约定回话")
+                        help=t("release_due.helpHookEvent"))
     parser.add_argument("--repo", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--latch", type=Path, default=LATCH)
     args = parser.parse_args(argv)
@@ -141,7 +141,7 @@ def main(argv=None) -> int:
             print(answer["say"])
         return 0
     except Exception as exc:  # noqa: BLE001 —— 钩子里出的错要看得见，但不该挡住收尾
-        print(f"发版时机检查失败：{exc}", file=sys.stderr)
+        print(t("release_due.failed", error=exc), file=sys.stderr)
         return 1
 
 

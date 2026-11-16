@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from .catalog_rules import normalise_code_key, release_code_from_text
 from .record_rehome import code_key as asset_code_key
+from .user_messages import UserValueError
 
 #: 入库自动对账写下的归属串。
 AUTO_SOURCE = "auto:want-acquired"
@@ -83,7 +84,10 @@ def parse_code(text: str | None) -> tuple[str, str]:
     code = release_code_from_text(str(text or "").strip())
     key = normalise_code_key(code) if code else ""
     if not key:
-        raise ValueError(f"认不出番号：{str(text or '').strip() or '（空）'}")
+        shown = str(text or '').strip()
+        if not shown:
+            raise UserValueError("errors.wants.codeEmpty")
+        raise UserValueError("errors.wants.codeUnrecognized", {"text": shown})
     return code, key
 
 
@@ -164,7 +168,7 @@ def add_code(connection, text: str, *, origin: str = "code", now: str | None = N
         raise ValueError(f"unknown want origin: {origin}")
     code, key = parse_code(text)
     if in_library(connection, key):
-        raise ValueError(f"{code} 已经在库里")
+        raise UserValueError("errors.wants.alreadyInLibrary", {"code": code})
     moment = now or stamp()
     shell = _shell(connection, key)
     if shell is not None:
@@ -206,7 +210,7 @@ def add_feed(connection, discovery_id: int, *, now: str | None = None) -> dict:
     found = connection.execute(
         "SELECT code FROM feed_discovery WHERE id=?", (int(discovery_id),)).fetchone()
     if found is None:
-        raise ValueError("找不到这条新作")
+        raise UserValueError("errors.wants.feedItemMissing")
     return add_code(connection, found[0], origin="feed", now=now)
 
 
@@ -215,7 +219,7 @@ def add_follow(connection, item_id: int, *, now: str | None = None) -> dict:
     found = _rows(connection, "SELECT id,title,url,published_at,status FROM follow_item WHERE id=?",
                   (int(item_id),))
     if not found:
-        raise ValueError("找不到这条关注条目")
+        raise UserValueError("errors.wants.followItemMissing")
     item = found[0]
     if item["status"] == "ignored":
         connection.execute("UPDATE follow_item SET status='seen' WHERE id=?", (item["id"],))
@@ -336,7 +340,7 @@ def record_search(connection, want_id: int, outcome: str, *, note: str = "",
         raise ValueError(f"unknown search outcome: {outcome}")
     row = get(connection, want_id)
     if row is None:
-        raise ValueError("找不到这条想要")
+        raise UserValueError("errors.wants.wantMissing")
     day = today or date.today()
     if row["state"] == ACQUIRED:
         return ACQUIRED

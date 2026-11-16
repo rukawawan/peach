@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
+from . import interface_text
 from .fsutil import atomic_write_text
 
 
@@ -50,6 +51,15 @@ OUTPUT_TAIL = 600
 RESUMABLE_TRIGGERS = ("scheduled",)
 
 Run = Callable[..., subprocess.CompletedProcess]
+
+
+def _text(code: str, params: Mapping[str, object] | None = None, language: str | None = None) -> str:
+    """准备结果给人看的一句：进托盘通知与重启脚本的报告，按本机语言渲染（`tray.prepare.*`）。"""
+    return interface_text.text(f"server:{code}", dict(params or {}), language or interface_text.local_language())
+
+
+def _joined(items: Iterable[str]) -> str:
+    return _text("tray.listSeparator").join(items)
 
 
 @dataclass(frozen=True)
@@ -73,7 +83,7 @@ class Step:
 def _tail(completed: subprocess.CompletedProcess) -> str:
     parts = [str(part).strip() for part in (completed.stdout, completed.stderr) if part]
     text = "\n".join(part for part in parts if part)
-    return text[-OUTPUT_TAIL:] if text else f"退出码 {completed.returncode}，没有输出"
+    return text[-OUTPUT_TAIL:] if text else _text("tray.prepare.noOutput", {"code": completed.returncode})
 
 
 def _quiet() -> dict:
@@ -111,14 +121,14 @@ class Dependencies:
 
     def _skip(self) -> tuple[str | None, Path | None]:
         if self._frozen:
-            return "打包进程不加载项目 venv，依赖由重启脚本核对", None
+            return _text("tray.prepare.frozen"), None
         if not (self.root / "uv.lock").is_file():
-            return f"没有 uv.lock：{self.root}", None
+            return _text("tray.prepare.noLock", {"path": self.root}), None
         if not (self.root / ".venv" / "pyvenv.cfg").is_file():
-            return f"没有项目 venv：{self.root / '.venv'}", None
+            return _text("tray.prepare.noVenv", {"path": self.root / ".venv"}), None
         uv = find_uv(which=self._which, environ=self._environ)
         if uv is None:
-            return "未取得 uv：PATH 与 winget 安装目录里都没有", None
+            return _text("tray.prepare.noUv"), None
         return None, uv
 
     def _uv(self, uv: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -139,17 +149,17 @@ class Dependencies:
         try:
             completed = self._uv(uv, "--check")
         except OSError as exc:
-            return Step("dependencies", "failed", f"uv 没能运行：{exc}")
+            return Step("dependencies", "failed", _text("tray.prepare.uvFailed", {"error": exc}))
         if completed.returncode == 0:
-            return Step("dependencies", "current", "项目 venv 与 uv.lock 一致")
+            return Step("dependencies", "current", _text("tray.prepare.dependenciesCurrent"))
         output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
         if "outdated" not in output:
-            return Step("dependencies", "failed", f"核对依赖失败：{_tail(completed)}")
+            return Step("dependencies", "failed", _text("tray.prepare.checkFailed", {"output": _tail(completed)}))
         wanted = [line.strip()[2:] for line in output.splitlines()
                   if line.strip().startswith("+ ")]
-        listed = "、".join(wanted[:6]) + ("等" if len(wanted) > 6 else "")
-        return Step("dependencies", "stale",
-                    f"项目 venv 与 uv.lock 不一致，要装 {len(wanted)} 个包" + (f"：{listed}" if listed else ""))
+        code = ("tray.prepare.staleMore" if len(wanted) > 6 else "tray.prepare.staleListed" if wanted
+                else "tray.prepare.stale")
+        return Step("dependencies", "stale", _text(code, {"count": len(wanted), "packages": _joined(wanted[:6])}))
 
     def sync(self) -> Step:
         checked = self.check()
@@ -160,40 +170,46 @@ class Dependencies:
         try:
             completed = self._uv(uv)
         except OSError as exc:
-            return Step("dependencies", "failed", f"uv 没能运行：{exc}")
+            return Step("dependencies", "failed", _text("tray.prepare.uvFailed", {"error": exc}))
         if completed.returncode != 0:
-            return Step("dependencies", "failed", f"uv sync 失败：{_tail(completed)}")
-        return Step("dependencies", "synced",
-                    f"已按 uv.lock 同步依赖（{checked.message}，用时 {self._clock() - started:.1f} 秒）")
+            return Step("dependencies", "failed", _text("tray.prepare.syncFailed", {"output": _tail(completed)}))
+        return Step("dependencies", "synced", _text("tray.prepare.synced", {
+            "check": checked.message, "seconds": f"{self._clock() - started:.1f}"}))
 
 
 def ledger_writer(*, replication_enabled: bool, db: Path, shared_db: Path,
-                  state_dir: Path) -> tuple[bool, str]:
-    """本机是不是账本写入端。只读：不像 `sync.device_id` 那样在缺文件时写一个新标识。"""
+                  state_dir: Path, language: str | None = interface_text.SOURCE_LANGUAGE) -> tuple[bool, str | dict]:
+    """本机是不是账本写入端。只读：不像 `sync.device_id` 那样在缺文件时写一个新标识。
+
+    原因按 `language` 渲染：默认是源语言；托盘传本机语言。`language=None` 时原因是嵌套参数
+    `{"code", "params"}`，报错把它嵌进自己的一句，按界面语言一起渲染。"""
+    def reason(code: str, **params) -> str | dict:
+        key = f"labels.runtimePrepare.writer.{code}"
+        return {"code": key, "params": params} if language is None else _text(key, params, language)
     if not replication_enabled:
-        return True, "replication.enabled = false，按独立写者"
+        return True, reason("standalone")
     path = Path(state_dir) / "device-id"
     try:
         device = path.read_text(encoding="utf-8").strip()
     except OSError:
         device = ""
     if not device:
-        return False, "本机没有 device-id，判不出是不是写入端"
+        return False, reason("noDeviceId")
     from .sync import writer_device
     owner = writer_device(Path(db), Path(shared_db))
     if owner is None:
-        return False, "没有可验证的写入端"
+        return False, reason("noWriter")
     if owner != device:
-        return False, f"写入端是 {owner}，本机是只读端"
-    return True, "本机是写入端"
+        return False, reason("otherWriter", owner=owner)
+    return True, reason("thisDevice")
 
 
-def configured_ledger_writer(config) -> tuple[bool, str]:
-    """按当前配置定位本机与共享账本，并只读核对写入角色。"""
+def configured_ledger_writer(config, *, language: str | None = interface_text.SOURCE_LANGUAGE) -> tuple[bool, str | dict]:
+    """按当前配置定位本机与共享账本，并只读核对写入角色；`language` 同 `ledger_writer`。"""
     database = config.directory('database') / 'ledger.db'
     shared = config.shared_root / 'database' / 'ledger.db'
     return ledger_writer(replication_enabled=bool(config.replication.enabled), db=database,
-                         shared_db=shared, state_dir=config.directory('state'))
+                         shared_db=shared, state_dir=config.directory('state'), language=language)
 
 
 class Migrations:
@@ -219,36 +235,37 @@ class Migrations:
 
     def apply(self) -> Step:
         if not self.db.is_file():
-            return Step("migrations", "skipped", f"数据库不存在：{self.db}")
+            return Step("migrations", "skipped", _text("tray.prepare.databaseMissing", {"path": self.db}))
         writer, why = self._writer()
         if not writer:
-            return Step("migrations", "skipped", f"不迁移：{why}")
+            return Step("migrations", "skipped", _text("tray.prepare.notMigrating", {"reason": why}))
         try:
             executable = self._peach()
             status = self._migrate(executable, "status")
         except OSError as exc:
-            return Step("migrations", "failed", f"迁移没能启动：{exc}")
+            return Step("migrations", "failed", _text("tray.prepare.migrateStartFailed", {"error": exc}))
         if status.returncode != 0:
-            return Step("migrations", "failed", f"migrate status 失败：{_tail(status)}")
+            return Step("migrations", "failed", _text("tray.prepare.statusFailed", {"output": _tail(status)}))
         # `_migrate` 打的是 `migrations: <总数>, pending: <待迁移数>`。
         found = re.search(r"pending:\s*(\d+)", status.stdout or "")
         if found is None:
-            return Step("migrations", "failed", f"migrate status 没有报待迁移数：{_tail(status)}")
+            return Step("migrations", "failed", _text("tray.prepare.statusNoPending", {"output": _tail(status)}))
         if int(found.group(1)) == 0:
-            return Step("migrations", "current", "数据库结构已是最新")
+            return Step("migrations", "current", _text("tray.prepare.migrationsCurrent"))
         try:
             upgrade = self._migrate(executable, "upgrade", "--yes")
         except OSError as exc:
-            return Step("migrations", "failed", f"迁移没能启动：{exc}")
+            return Step("migrations", "failed", _text("tray.prepare.migrateStartFailed", {"error": exc}))
         if upgrade.returncode != 0:
-            return Step("migrations", "failed",
-                        f"执行 {found.group(1)} 个待迁移时失败，数据库目录里有迁移前备份："
-                        f"{_tail(upgrade)}")
+            return Step("migrations", "failed", _text("tray.prepare.upgradeFailed", {
+                "count": found.group(1), "output": _tail(upgrade)}))
         applied = re.search(r"^applied:\s*(.+)$", upgrade.stdout or "", re.MULTILINE)
         backup = re.search(r"^backup:\s*(.+)$", upgrade.stdout or "", re.MULTILINE)
-        return Step("migrations", "applied",
-                    f"已执行迁移 {applied.group(1).strip() if applied else found.group(1) + ' 个'}"
-                    f"，迁移前备份 {backup.group(1).strip() if backup else '未取得'}")
+        params = {"backup": backup.group(1).strip() if backup else _text("tray.prepare.notObtained")}
+        if applied:
+            return Step("migrations", "applied", _text("tray.prepare.appliedVersions",
+                                                       {**params, "versions": applied.group(1).strip()}))
+        return Step("migrations", "applied", _text("tray.prepare.appliedCount", {**params, "count": found.group(1)}))
 
 
 def record(state_dir: Path, steps: Iterable[Step], *, pid: int | None = None) -> dict:
@@ -305,9 +322,8 @@ class TaskGate:
 
     def refusal(self) -> str:
         if self.error is not None:
-            return f"拒绝重启：读不了任务表（{self.error}）；确认没有任务在跑后加 --force"
-        listed = "、".join(run.describe() for run in self.blocking)
-        return f"拒绝重启：这些任务重启后续跑不了：{listed}；等它们结束，或加 --force"
+            return _text("tray.prepare.tasksUnreadable", {"error": self.error})
+        return _text("tray.prepare.tasksBlocking", {"tasks": _joined(run.describe() for run in self.blocking)})
 
     def as_dict(self) -> dict:
         return {
@@ -323,7 +339,7 @@ def task_gate(db: Path, *, host: str, alive: Callable[[int], bool]) -> TaskGate:
     """只读查 `task_run`，把本机的活跃行分类。"""
     db = Path(db)
     if not db.is_file():
-        return TaskGate(note=f"数据库不存在：{db}")
+        return TaskGate(note=_text("tray.prepare.databaseMissing", {"path": db}))
     try:
         with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True,
                                      timeout=2)) as connection:
@@ -334,7 +350,7 @@ def task_gate(db: Path, *, host: str, alive: Callable[[int], bool]) -> TaskGate:
                 (host,)).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc) or "no such column" in str(exc):
-            return TaskGate(note=f"数据库里还没有可判的任务表：{exc}")
+            return TaskGate(note=_text("tray.prepare.noTaskTable", {"error": exc}))
         return TaskGate(error=str(exc))
     except sqlite3.Error as exc:
         return TaskGate(error=str(exc))
@@ -377,9 +393,8 @@ class RestartPreparation:
             return None
         holding = self.holders(tray_pid)
         if holding:
-            listed = "、".join(str(pid) for pid in holding)
-            return (f"拒绝重启：{self.checked.message}，但这些进程还在用项目 venv："
-                    f"PID {listed}；先停掉它们再重启")
+            return _text("tray.prepare.venvInUse", {"reason": self.checked.message,
+                                                     "pids": _joined(str(pid) for pid in holding)})
         return None
 
     def while_stopped(self) -> tuple[bool, str | None]:

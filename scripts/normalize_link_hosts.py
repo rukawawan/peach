@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 # 别名表和改写规则与采集器共用（采集到 twitter.com 也要收成 x.com），定义在 peach.social_links。
+from peach.interface_text import dev as t   # noqa: E402
 from peach.social_links import HOST_ALIASES, canonical_url   # noqa: E402
 
 
@@ -52,7 +53,7 @@ def plan(connection: sqlite3.Connection) -> list[dict]:
                 "entity": row["canonical_name"], "label": row["label"],
                 "url": row["url"], "new_url": new_url}
         if keeper is not None:
-            item.update(action="drop", reason=f"同实体已有 #{keeper} 指向 {new_url}")
+            item.update(action="drop", reason=t("normalize_link_hosts.dropReason", keeper=keeper, url=new_url))
         else:
             item.update(action="rewrite", reason="")
             # 本轮改写会占掉这个地址，后面同实体的旧写法必须看得见这一点。
@@ -78,17 +79,17 @@ def apply_plan(connection: sqlite3.Connection, planned: list[dict]) -> tuple[int
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("normalize_link_hosts.description"))
     parser.add_argument("--database", type=Path, required=True)
-    parser.add_argument("--apply", action="store_true", help="真正写入；必须同时给 --backup")
-    parser.add_argument("--backup", type=Path, help="写入前的 SQLite 备份落点")
+    parser.add_argument("--apply", action="store_true", help=t("normalize_link_hosts.helpApply"))
+    parser.add_argument("--backup", type=Path, help=t("normalize_link_hosts.helpBackup"))
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.apply and not args.backup:
-        print("[stop] --apply 是真实账本写入，必须同时给 --backup")
+        print(t("normalize_link_hosts.backupRequired"))
         return 2
 
     connection = sqlite3.connect(args.database)
@@ -103,9 +104,10 @@ def main(argv: list[str] | None = None) -> int:
                   f"{item['new_url'][:40]:<40} {item['reason']}")
         rewrites = [i for i in planned if i["action"] == "rewrite"]
         drops = [i for i in planned if i["action"] == "drop"]
-        print({"库内链接": before, "将改写": len(rewrites), "将删除（同实体已有新写法）": len(drops)})
+        print({t("normalize_link_hosts.linksInDatabase"): before, t("normalize_link_hosts.toRewrite"): len(rewrites),
+               t("normalize_link_hosts.toDrop"): len(drops)})
         if not args.apply:
-            print("dry-run；确认无误后加 --apply --backup <路径>")
+            print(t("normalize_link_hosts.dryRun"))
             return 0
 
         args.backup.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         with destination:
             connection.backup(destination)
         destination.close()
-        print(f"已备份：{args.backup}")
+        print(t("normalize_link_hosts.backedUp", path=args.backup))
 
         with connection:
             rewritten, dropped = apply_plan(connection, planned)
@@ -123,12 +125,13 @@ def main(argv: list[str] | None = None) -> int:
             % ",".join("?" * len(HOST_ALIASES)), tuple(HOST_ALIASES)).fetchone()[0]
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         orphans = len(connection.execute("PRAGMA foreign_key_check").fetchall())
-        print({"改写": rewritten, "删除": dropped, "写入后 entity_link": after,
-               "差值": before - after, "残留旧主机": left,
+        print({t("normalize_link_hosts.rewritten"): rewritten, t("normalize_link_hosts.dropped"): dropped,
+               t("normalize_link_hosts.linksAfter"): after, t("normalize_link_hosts.difference"): before - after,
+               t("normalize_link_hosts.oldHostsLeft"): left,
                "integrity_check": integrity, "foreign_key_check": orphans})
         if (before - after != dropped or rewritten != len(rewrites) or left
                 or integrity != "ok" or orphans):
-            print("[warn] 前后差值、残留、完整性或外键与预期不符，请人工核对")
+            print(t("normalize_link_hosts.unexpected"))
             return 1
     finally:
         connection.close()

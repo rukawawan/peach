@@ -23,7 +23,7 @@ _LINE = re.compile(r"([0-9a-f]{64}) [ *](?:\./)?([A-Za-z0-9_.-]+)")
 def _key_bytes(text: str) -> bytes:
     raw = base64.b64decode(text, validate=True)
     if len(raw) != 32:
-        raise ValueError("Ed25519 密钥必须是 32 字节")
+        raise ValueError("Ed25519 keys must be 32 bytes")
     return raw
 
 
@@ -48,10 +48,10 @@ def parse(sums: bytes) -> dict[str, str]:
     for line in sums.decode("utf-8").splitlines():
         match = _LINE.fullmatch(line)
         if match is None or match[2] in digests:
-            raise ValueError("发布摘要格式无效")
+            raise ValueError("invalid release checksum format")
         digests[match[2]] = match[1]
     if not digests:
-        raise ValueError("发布摘要为空")
+        raise ValueError("release checksums are empty")
     return digests
 
 
@@ -61,7 +61,7 @@ def verify(sums: bytes, signature: bytes, keys: tuple[str, ...] | None = None) -
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     trusted = PUBLIC_KEYS if keys is None else keys
     if len(sums) > MAX_BYTES or len(signature) > MAX_BYTES:
-        raise ValueError("发布签名文件过大")
+        raise ValueError("release signature file is too large")
     for line in signature.decode("ascii", "replace").splitlines():
         fields = line.split()
         # 不认得的行（受信任集合之外的公钥、以后的新格式）跳过，轮换期新旧签名可以并列。
@@ -73,4 +73,4 @@ def verify(sums: bytes, signature: bytes, keys: tuple[str, ...] | None = None) -
         except (InvalidSignature, ValueError):
             continue
         return parse(sums)
-    raise ValueError("发布签名校验未通过")
+    raise ValueError("release signature verification failed")

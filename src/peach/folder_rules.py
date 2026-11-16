@@ -8,27 +8,39 @@ from pathlib import PureWindowsPath
 
 from .entities import (_creator_attribution_rejected, canonicalize_entity_name,
                        normalize_entity_name, resolve_entity, resolve_entity_id, upsert_asset_entity)
+from .catalog_vocabulary import PERFORMER_TAG_PREFIX
+from .content_words import SELLER_FOLDER_EVIDENCE
 from .entity_classification import write_claim
 from .field_owners import owner_of, write_owned_fields
 from .media_folders import path_predicate, within
 from .profiles import DEFAULT_PROFILE_ID
+from . import interface_text
+from .user_messages import UserFacingError, UserValueError
 
 KEY = 'folderRules'
 KINDS = {'category': '', 'creator': 'creator', 'performer': 'performer', 'seller': 'creator', 'studio': 'studio'}
 
 
-class FolderRuleConflict(ValueError):
-    """目录范围或规则版本与预览不一致。"""
+class FolderRuleConflict(UserFacingError, ValueError):
+    """目录范围或规则版本与预览不一致。读接口按类型回 409，写接口照旧按 `ValueError` 回 400。"""
+
+
+#: 预览里不能套用这条规则的原因，显示名在 `labels.folderRules.conflict.<id>`。
+CONFLICT_REASON = 'labels.folderRules.conflict.'
+
+
+def _reason(name: str) -> str:
+    return interface_text.text(f'server:{CONFLICT_REASON}{name}')
 
 
 def load(connection) -> tuple[dict, dict]:
     row = connection.execute('SELECT settings_json FROM profile WHERE id=?', (DEFAULT_PROFILE_ID,)).fetchone()
     settings = json.loads(row[0] or '{}') if row else {}
     if not isinstance(settings, dict):
-        raise ValueError('用户设置格式不正确')
+        raise UserValueError('errors.folderRules.settingsInvalid')
     data = settings.get(KEY, {'revision': 0, 'rules': []})
     if not isinstance(data, dict) or not isinstance(data.get('rules'), list) or type(data.get('revision')) is not int:
-        raise ValueError('目录规则格式不正确')
+        raise UserValueError('errors.folderRules.rulesInvalid')
     for rule in data['rules']:
         if rule.get('entity_id'):
             target = resolve_entity_id(connection, rule['entity_id'])
@@ -51,18 +63,18 @@ def effective(rules, location: str, path: str):
 def validate(connection, node, body):
     purpose = body.get('purpose', 'category')
     if purpose not in KINDS:
-        raise ValueError('请选择目录用途')
+        raise UserValueError('errors.folderRules.choosePurpose')
     if not isinstance(body.get('recursive'), bool) or not isinstance(body.get('future'), bool):
-        raise ValueError('目录范围与新文件设置须明确选择')
+        raise UserValueError('errors.folderRules.scopeRequired')
     name = body.get('name', '')
     if not isinstance(name, str) or len(name) > 200:
-        raise ValueError('关联名称最多 200 个字符')
+        raise UserValueError('errors.folderRules.nameTooLong')
     kind = KINDS[purpose]
     canonical = canonicalize_entity_name(kind, name) if kind else ''
     entity_id = None
     if kind:
         if not canonical:
-            raise ValueError('请输入关联名称')
+            raise UserValueError('errors.folderRules.nameRequired')
         entity = resolve_entity(connection, kind, canonical)
         if entity is None:
             possible = connection.execute(
@@ -70,7 +82,7 @@ def validate(connection, node, body):
                 'WHERE e.kind=? AND (e.normalized_name=? OR al.normalized_alias=?)',
                 (kind, normalize_entity_name(canonical), normalize_entity_name(canonical))).fetchall()
             if possible:
-                raise ValueError('名称存在多个身份或不同写法，请使用资料页的规范名称')
+                raise UserValueError('errors.folderRules.nameAmbiguous')
         else:
             entity_id, canonical = entity['id'], entity['canonical_name']
     return {'id': node['id'], 'location': node['location'], 'path': node['path'], 'purpose': purpose,
@@ -97,13 +109,13 @@ def _conflict(connection, asset, rule, relations):
     field = kind if kind in {'creator', 'studio'} else ''
     own = source(rule)
     if field and asset[field] and asset[field] != rule['name'] and owner_of(asset['field_owners'], field) != own:
-        return '已有不同的归属'
+        return 'differentOwner'
     if field and owner_of(asset['field_owners'], field).startswith(('user:', 'review:')) and owner_of(asset['field_owners'], field) != source(rule):
-        return '已有逐件确认'
+        return 'perItemConfirmed'
     if any(row['kind'] == kind and row['canonical_name'] != rule['name'] and row['source'] != own for row in relations):
-        return '已有不同的身份关系'
+        return 'differentIdentity'
     if kind == 'creator' and _creator_attribution_rejected(connection, [rule['name']], asset['id'], asset['path']):
-        return '已有归属否定'
+        return 'ownerRejected'
     return ''
 
 
@@ -114,8 +126,8 @@ def plan(connection, rule, data):
     for asset in _asset_rows(connection, rule):
         chosen = effective(rules, asset['location'], asset['path'])
         relations = _relations(connection, asset['id'])
-        reason = '由子目录规则管理' if chosen and chosen['id'] != rule['id'] else _conflict(connection, asset, rule, relations)
-        rows.append({**asset, 'reason': reason, 'relations': relations})
+        reason = 'childRule' if chosen and chosen['id'] != rule['id'] else _conflict(connection, asset, rule, relations)
+        rows.append({**asset, 'reason': _reason(reason) if reason else '', 'reason_code': reason, 'relations': relations})
     old = next((item for item in data['rules'] if item['id'] == rule['id']), None)
     changing = old and any(old.get(key) != rule[key] for key in ('purpose', 'name', 'entity_id', 'recursive'))
     previous = [dict(row) for row in connection.execute(
@@ -125,7 +137,8 @@ def plan(connection, rule, data):
     signature = sha256(json.dumps([rule, data['revision'], rows, previous], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return {'plan_version': signature, 'total': len(rows), 'withdrawn': len({row['id'] for row in previous}),
             'applicable': sum(not row['reason'] for row in rows),
-            'conflicts': [{'id': row['id'], 'name': row['name'], 'reason': row['reason']} for row in rows if row['reason']],
+            'conflicts': [{'id': row['id'], 'name': row['name'], 'reason': row['reason'],
+                           'reason_code': CONFLICT_REASON + row['reason_code']} for row in rows if row['reason']],
             'sample': [{'id': row['id'], 'name': row['name']} for row in rows[:6]], 'rows': rows}
 
 
@@ -147,10 +160,10 @@ def _link(connection, asset, rule):
         write_owned_fields(connection, [asset['id']], {field: rule['name']}, own, require_empty=True)
     if kind == 'performer':
         connection.execute('INSERT OR IGNORE INTO asset_tag(asset_id,tag,confidence,source) VALUES(?,?,1,?)',
-                           (asset['id'], '演员:' + rule['name'], own))
+                           (asset['id'], PERFORMER_TAG_PREFIX + rule['name'], own))
     if rule['purpose'] == 'seller':
         write_claim(connection, entity_id=entity_id, facet='account_role', value='seller', source=own,
-                    evidence='用户确认目录用途：' + rule['path'], status='approved', confidence=1)
+                    evidence=SELLER_FOLDER_EVIDENCE + rule['path'], status='approved', confidence=1)
     return True
 
 
@@ -188,7 +201,7 @@ def withdraw(connection, rule):
 
 def save(connection, settings, data, rule, preview, expected):
     if preview['plan_version'] != expected:
-        raise FolderRuleConflict('目录内容或归属已变化，请重新预览')
+        raise FolderRuleConflict('errors.folderRules.planChanged')
     old = next((row for row in data['rules'] if row['id'] == rule['id']), None)
     if old and any(old.get(key) != rule[key] for key in ('purpose', 'name', 'entity_id', 'recursive')):
         withdraw(connection, old)
@@ -204,7 +217,7 @@ def _store(connection, settings):
     changed = connection.execute('UPDATE profile SET settings_json=? WHERE id=?',
                                  (json.dumps(settings, ensure_ascii=False), DEFAULT_PROFILE_ID)).rowcount
     if not changed:
-        raise ValueError('当前用户设置不存在')
+        raise UserValueError('errors.folderRules.settingsMissing')
 
 
 def remove(connection, settings, data, key):

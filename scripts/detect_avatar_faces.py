@@ -29,13 +29,14 @@ if str(SRC_DIR) not in sys.path:
 from peach.avatar_face import face_record, sidecar_path, write_sidecar
 from peach.config import GENERATED_DIR
 from peach.face_detect import FaceDetector, FaceModelUnavailable
+from peach.interface_text import dev as t
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="给实体图算人脸位置，供圆头像取景")
+    parser = argparse.ArgumentParser(description=t("detect_avatar_faces.description"))
     parser.add_argument("--avatars", type=Path, default=GENERATED_DIR / "avatars",
-                        help="实体图目录（默认 generated/avatars）")
-    parser.add_argument("--redo", action="store_true", help="重算已有的 sidecar")
+                        help=t("detect_avatar_faces.avatarsHelp"))
+    parser.add_argument("--redo", action="store_true", help=t("detect_avatar_faces.redoHelp"))
     parser.add_argument("--limit", type=int, default=0)
     return parser
 
@@ -50,22 +51,22 @@ def run(args: argparse.Namespace) -> int:
     todo = [p for p in images if args.redo or not sidecar_path(p).is_file()]
     if args.limit:
         todo = todo[:args.limit]
-    print(f"实体图 {len(images)} 张，待处理 {len(todo)} 张")
+    print(t("detect_avatar_faces.start", images=len(images), todo=len(todo)))
 
     stats = {"focus": 0, "face": 0, "none": 0, "unreadable": 0}
     for index, path in enumerate(todo, 1):
         result = face_record(path, detector)
         if result is None:
             stats["unreadable"] += 1
-            print(f"[{index}/{len(todo)}] 读图失败 {path.name}", flush=True)
+            print(t("detect_avatar_faces.unreadable", index=index, total=len(todo), name=path.name), flush=True)
             continue
         stats["face" if result["face"] else "none"] += 1
         if result.get("focus"):
             stats["focus"] += 1
         write_sidecar(path, result)
-    print(f"\n检出 {stats['face']}（其中可取景 {stats['focus']}），"
-          f"未检出 {stats['none']}，读图失败 {stats['unreadable']}")
-    print("未检出的维持几何居中，不影响显示。")
+    print("\n" + t("detect_avatar_faces.summary", face=stats["face"], focus=stats["focus"],
+                    none=stats["none"], unreadable=stats["unreadable"]))
+    print(t("detect_avatar_faces.noneNote"))
     return 0
 
 

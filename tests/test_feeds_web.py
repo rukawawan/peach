@@ -22,6 +22,7 @@ from peach import feed_followup, feeds, web_entity, web_feeds, web_settings, web
 from peach import web_jav_browser_performer as performer  # noqa: E402
 from peach.http import HttpResponse  # noqa: E402
 from peach.web_contract import WebContract  # noqa: E402
+from peach.task_outcomes import part  # noqa: E402
 from peach.web_router import dispatch_api_get, dispatch_api_post  # noqa: E402
 from support.ledger import fresh_ledger  # noqa: E402
 
@@ -135,6 +136,7 @@ class FeedWebFixture(unittest.TestCase):
         self.contract.avatar_root = self.contract.candidate_root / "avatars"
         self.cover_misses: set[str] = set()
         self.cover_unreachable: set[str] = set()
+        self.cover_broken: set[str] = set()
         self.cover_urls: dict[str, str | None] = {}
         self._fetch_cover = feed_followup.fetch_cover
         feed_followup.fetch_cover = self._fake_cover
@@ -150,10 +152,13 @@ class FeedWebFixture(unittest.TestCase):
     def _fake_cover(self, contract, code, cover_url=None):
         self.cover_urls[code] = cover_url
         if code in self.cover_misses:
-            raise RuntimeError("官方渠道没有这个番号的封面")
+            from peach.jav_cover_fetch import NO_CANDIDATES_CODE, NotFound
+            raise NotFound(NO_CANDIDATES_CODE)
+        if code in self.cover_broken:
+            raise RuntimeError("cover pipeline crashed")
         if code in self.cover_unreachable:
-            from peach.jav_cover_fetch import HOSTS_UNREACHABLE, CoverConnectError
-            raise CoverConnectError(HOSTS_UNREACHABLE)
+            from peach.jav_cover_fetch import HOSTS_UNREACHABLE_CODE, CoverConnectError
+            raise CoverConnectError(HOSTS_UNREACHABLE_CODE)
         from PIL import Image
         image = Image.new("RGB", (800, 538), (40, 40, 40))
         image.paste((200, 120, 150), (420, 0, 800, 538))
@@ -473,7 +478,7 @@ class FeedWebTest(FeedWebFixture):
                                " VALUES('NOAH-101',1,'',NULL,'2026-09-22',?)", (feeds.stamp(),))
             connection.execute("INSERT INTO feed_discovery(code,source_id,title,link,release_date,discovered_at)"
                                " VALUES('ABP-123',1,'',NULL,'2026-09-22',?)", (feeds.stamp(),))
-        expected = {"HMN-071": ("missing", "上次没取到：封面处理未完成"),
+        expected = {"HMN-071": ("missing", "上次没取到：所有渠道都没有候选"),
                     "NOAH-101": ("missing", "韩国 MIB 不适用 JAV 封面来源"),
                     "ABP-123": ("queued", "等下一轮订阅检查分批取图")}
         with patch("peach.jav_discovery_metadata.DiscoveryMetadata.ensure", return_value=None):
@@ -484,7 +489,7 @@ class FeedWebTest(FeedWebFixture):
 
     def test_unreleased_works_wait_off_the_list_while_the_official_cover_is_a_placeholder(self):
         """未发售、官方只回「准备中」占位图的先不列，后台照旧重取；已发售的旧作与没取过图的照常列出。"""
-        from peach.jav_cover_fetch import NotFound, OFFICIAL_PLACEHOLDER_ONLY
+        from peach.jav_cover_fetch import NotFound, OFFICIAL_PLACEHOLDER_ONLY_CODE
         future = (datetime.now() + timedelta(days=30)).date().isoformat()
         rows = {"VRKM-971": future, "HIGM-183": "2024-03-09", "VRKM-972": future}
         with self.contract.database.write_transaction() as connection:
@@ -492,7 +497,7 @@ class FeedWebTest(FeedWebFixture):
                 connection.execute("INSERT INTO feed_discovery(code,source_id,title,link,release_date,discovered_at)"
                                    " VALUES(?,NULL,'',NULL,?,?)", (code, released, feeds.stamp()))
         for code in ("VRKM-971", "HIGM-183"):
-            feed_followup.record_cover_attempt(self.contract, code, ok=False, error=NotFound(OFFICIAL_PLACEHOLDER_ONLY))
+            feed_followup.record_cover_attempt(self.contract, code, ok=False, error=NotFound(OFFICIAL_PLACEHOLDER_ONLY_CODE))
         with patch("peach.jav_discovery_metadata.DiscoveryMetadata.ensure", return_value=None):
             for path in ("/api/feeds/discoveries", "/api/jav/releases"):
                 codes = {item["code"] for item in dispatch_api_get(self.contract, path, {})["items"]}
@@ -507,6 +512,10 @@ class FeedWebTest(FeedWebFixture):
         row = dispatch_api_get(self.contract, "/api/feeds", {})["sources"][0]
         self.assertEqual(row["last_error"], "来源回了 HTTP 503")
         self.assertIsNotNone(row["next_fetch_at"])
+        # 原因连同 code 落在源那一行上，英文界面照 code 显示（迁移 0056）。
+        from peach import interface_text
+        self.assertEqual(interface_text.text(f"server:{row['last_error_code']}", row["last_error_params"], "en"),
+                         "The source returned HTTP 503.")
 
     def _sources_named(self, *names):
         """再加几个演员页源，各回一份同样的样本页。返回全部源 id，第一个是 `_add` 那个。"""
@@ -531,7 +540,7 @@ class FeedWebTest(FeedWebFixture):
         def refused(request, timeout, max_bytes):
             served.requests.append(request)
             scraping_access.pause_source(self.contract.follow_secrets_root, "javdb", refused=True)
-            raise scraping_access.SourcePaused("来源拒绝访问，暂停向它请求一段时间")
+            raise scraping_access.SourcePaused("errors.scrapingAccess.refused")
 
         self.transport = refused
         result = self._check()
@@ -901,7 +910,11 @@ class FeedWebTest(FeedWebFixture):
         self.cover_misses.add("HMN-071")
         missed = dispatch_api_post(self.contract, "/api/jav/cover", {"code": "hmn-071"})
         self.assertEqual((missed["code"], missed["has_cover"], missed["message"]),
-                         ("HMN-071", False, "封面处理未完成"))
+                         ("HMN-071", False, "所有渠道都没有候选"))
+        # 取图链以外的故障不把原文给用户看，只说没处理完。
+        self.cover_broken.add("IPX-001")
+        broken = dispatch_api_post(self.contract, "/api/jav/cover", {"code": "IPX-001"})
+        self.assertEqual((broken["has_cover"], broken["message"]), (False, "封面处理未完成"))
         got = dispatch_api_post(self.contract, "/api/jav/cover", {"code": "SSIS-950"})
         self.assertEqual((got["has_cover"], got["message"]), (True, ""))
         self.assertTrue(got["cover_version"])
@@ -913,10 +926,10 @@ class FeedWebTest(FeedWebFixture):
         self._check()
         with self.contract.database.write_transaction() as connection:
             connection.execute("UPDATE feed_discovery SET link='https://javdb.com/v/Source01' WHERE code='SSIS-950'")
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('官方封面未取得')), \
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('errors.javCoverFetch.catalogUnfinished')), \
                 patch('peach.javdb_public.PUBLIC_API.image') as source_image, \
                 patch('peach.javdb_public.PUBLIC_API.remember_movie_identity') as identity:
-            with self.assertRaisesRegex(Unavailable, '官方封面未取得'):
+            with self.assertRaisesRegex(Unavailable, '官方目录查询未完成'):
                 self._fetch_cover(self.contract, 'SSIS-950')
         identity.assert_not_called()
         source_image.assert_not_called()
@@ -928,7 +941,7 @@ class FeedWebTest(FeedWebFixture):
         evidence = self.contract.cover_root / 'DEAS-082.scraping.json'
         evidence.parent.mkdir(parents=True, exist_ok=True)
         evidence.write_text(json.dumps({'code': 'DEAS-082', 'source_url': recorded}), encoding='utf-8')
-        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('官方封面未取得')) as best:
+        with patch('peach.jav_cover_fetch.best_cover', side_effect=Unavailable('errors.javCoverFetch.catalogUnfinished')) as best:
             for cover_url in (None, given):
                 with self.assertRaises(Unavailable):
                     self._fetch_cover(self.contract, 'DEAS-082', cover_url)
@@ -1003,7 +1016,7 @@ class FeedWebTest(FeedWebFixture):
         class Silent:
             def community(self, code, *, deadline=None, route=None):
                 seen["remaining"] = float(deadline) - time.monotonic()
-                raise DeadlineExceeded("动作预算已用尽")
+                raise DeadlineExceeded("errors.javCoverFetch.deadline")
 
         with self.assertRaisesRegex(DeadlineExceeded, "秒内没有答复"):
             self._collect(Silent(), "SSIS-950")
@@ -1165,7 +1178,7 @@ class FeedWebTest(FeedWebFixture):
         self.assertIn(key, [item["key"] for item in self._check(automatic=True)["followups"]])
         with self.contract.database.read_connection() as connection:
             current = avatar_followup.fingerprint(connection, entity_id, providers_root)
-        Attempts(attempts_root(self.contract.candidate_root)).record(key, current, "图库 6 张认不准")
+        Attempts(attempts_root(self.contract.candidate_root)).record(key, current, [part("galleryUnsure", count=6)])
         self._stock_window_passes()
         self.assertNotIn(key, [item["key"] for item in self._check(automatic=True)["followups"]])
         index_path.write_text(json.dumps({"Content": {"1-S1": {"二の宮すずか.jpg": "二の宮すずか.jpg"}}}), encoding="utf-8")

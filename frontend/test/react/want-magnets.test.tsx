@@ -13,7 +13,7 @@ notifyManager.setScheduler((notify) => notify());
 afterEach(() => { queryClient.clear(); localStorage.clear() });
 const candidate: MagnetCandidate = {
   id: 'magnet:abc', protocol: 'magnet', info_hash: 'abc', uri: 'magnet:?xt=urn:btih:abc',
-  name: 'DEMO-001 HD', size: '4 GB', files: '2 個文件', date: '2026-10-01', attributes: ['字幕', '高清'],
+  name: 'DEMO-001 HD', size: '4 GB', files: '2 個文件', date: '2026-10-01', attributes: ['字幕', 'chinese-subtitles', 'high-definition'],
   source: 'JavDB', source_url: 'https://javdb.com/v/demo', origins: ['https://javdb.com/v/demo'],
 };
 async function open(items = [candidate], readOnly = false, ok = true) {
@@ -36,8 +36,8 @@ async function open(items = [candidate], readOnly = false, ok = true) {
 it('自动查询，展示来源、大小、日期与属性，直接添加到选定的云下载目录', async () => {
   const { host, fetcher, toast } = await open();
   expect(fetcher.mock.calls[0]?.[0]).toBe('/api/wants/magnets?id=1');
-  for (const text of ['4 GB', '2 个文件', '2026-10-01', '字幕', 'JavDB']) expect(host.textContent).toContain(text);
-  expect(host.querySelector('[data-resource-facts]')?.textContent).not.toContain('高清');
+  for (const text of ['4 GB', '2 个文件', '2026-10-01', '字幕', '中字', 'JavDB']) expect(host.textContent).toContain(text);
+  expect(host.querySelector('[data-resource-facts]')?.textContent).not.toContain('high-definition');
   expect([...host.querySelectorAll('[data-resource-actions] button, [data-resource-actions] a')].map(node => node.textContent)).toEqual(['链接来源', '复制链接', '添加下载']);
   await click(buttonNamed('添加下载', host));
   await settle();
@@ -146,7 +146,7 @@ it('资源缓存只接受可展示的字段和完整查询结果', () => {
   const saved = Date.now();
   const result = { state: 'ready', items: [candidate], error: '', checked_at: null };
   const { protocol: _protocol, attributes: _attributes, ...incomplete } = candidate;
-  localStorage.setItem('peach.want-resources.v2', JSON.stringify([
+  localStorage.setItem('peach.want-resources.v3', JSON.stringify([
     { code: 'DEMO-001', saved, result: { ...result, items: [{ ...incomplete, size: 1024 }] } },
     { code: 'DEMO-002', saved, result: { ...result, items: [], warnings: ['来源未取得'] } },
     { code: 'DEMO-003', saved, result },
@@ -158,7 +158,7 @@ it('资源缓存只接受可展示的字段和完整查询结果', () => {
 
 it('资源查询不复用其他规则版本的持久缓存', () => {
   const result = { state: 'ready' as const, items: [candidate], error: '', checked_at: null };
-  localStorage.setItem('peach.want-resources.v1', JSON.stringify([{ code: 'DEMO-001', saved: Date.now(), result }]));
+  localStorage.setItem('peach.want-resources.v2', JSON.stringify([{ code: 'DEMO-001', saved: Date.now(), result }]));
   expect(cachedResources('DEMO-001', null)).toBeUndefined();
   rememberResources('DEMO-001', result);
   expect(cachedResources('DEMO-001', null)?.result.items).toEqual([candidate]);

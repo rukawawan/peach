@@ -25,6 +25,7 @@ import {
   EMPTY_SLOTS, ROW_AHEAD, ROW_BATCH, ROW_FIRST, rememberedTiers, rememberTiers, type CatalogFilterProps,
   type CatalogTag, type TierKind, type TierPerformer, type TierStudio,
 } from './catalog-filter';
+import { t } from '../../i18n';
 
 export function CatalogFilterPage(props: CatalogFilterProps) {
   const loading = !props.tiers;
@@ -85,14 +86,14 @@ function Glass(props: CatalogFilterProps) {
   useLayoutEffect(() => { popBadges(tagRow.current, 'tagbar') }, [tags]);
 
   return (
-    <FilterGlassRows label="筛选与排序" topLabel="视图与标签"
+    <FilterGlassRows label={t('catalog:catalogFilter.filterAndSort')} topLabel={t('catalog:catalogFilter.viewsAndTags')}
       attrs={{ 'data-filter-frame': '', 'data-catalog-frame': '', ...(singleRow ? { 'data-single-row': '' } : {}) }}
       className="mx-4" topClassName="gap-1.5 overflow-visible" bottomClassName={props.trash ? 'hidden' : 'min-h-12'}
       bottomRef={bottomRow} busy={props.count === null || props.refreshing}
       panes={<span ref={pane} data-view-glide="" aria-hidden="true" />}
       top={
         <div ref={scroll} data-catalog-scroll="">
-          <div ref={viewRow} role="group" aria-label="视图" data-catalog-views="" onPointerLeave={glide.leave}>
+          <div ref={viewRow} role="group" aria-label={t('catalog:catalogFilter.views')} data-catalog-views="" onPointerLeave={glide.leave}>
             {props.views.map((view) => (
               <a key={view.k} href={view.href} data-catalog-view={view.k} data-entity-press=""
                 aria-pressed={props.state === view.k} onPointerEnter={glide.hover}
@@ -233,7 +234,7 @@ function Head({ count, refreshing, layout, sorts, actions }: CatalogFilterProps)
 
 /** 读数加载时只替换文字，筛选框和操作控件保持原位。 */
 function Readout({ count }: { count: CatalogFilterProps['count'] }) {
-  const text = count ? `${count.total.toLocaleString()} 个符合 · 显示 ${count.shown.toLocaleString()}`
+  const text = count ? t('catalog:catalogFilter.readout', { count: count.total, shown: count.shown })
     : count === false ? '' : undefined;
   return <span data-catalog-readout="" data-count-readout="" role="status">
     <AsyncText text={text} busy={count === null} placeholder={<span data-skeleton="count" aria-hidden

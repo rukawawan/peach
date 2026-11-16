@@ -6,6 +6,8 @@ from collections import Counter, defaultdict
 from functools import lru_cache
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .taste_words import ADULT_TITLE
+
 #: 一条浏览记录要经 `host`、`account_key`、`identity_key`、`mixed_adult` 与
 #: `_url_candidates` 几道判据，每道都要解析同一条网址；逐条处理时只有最近几条会被
 #: 再问到，小容量就够，几十万条历史也不会把整份网址留在内存里。
@@ -43,7 +45,6 @@ MIXED_DOMAINS = {"x.com", "twitter.com", "instagram.com", "youtube.com", "youtu.
                  "pixiv.net", "patreon.com", "fanbox.cc", "fantia.jp", "dlsite.com", "dmm.com",
                  "deviantart.com", "subscribestar.com", "subscribestar.adult", "gumroad.com", "ko-fi.com"}
 ACCOUNT_DOMAINS = MIXED_DOMAINS - {"dmm.com", "dlsite.com"} | {"onlyfans.com", "fansly.com", "manyvids.com", "loyalfans.com"}
-ADULT_TITLE = re.compile(r"\b(?:nsfw|r[- ]?18|onlyfans|fansly|pornstar|porn|hentai|jav|javdb|javbus|fanza|rule34|erotica|adult creator)\b|18\+|成人向|成人創作者|成人创作者|AV女優", re.I)
 ACCOUNT_RESERVED = {"home", "i", "intent", "search", "explore", "settings", "login", "accounts",
                     "share", "watch", "feed", "results", "shorts", "reel", "reels", "p", "notifications",
                     "artworks", "novel", "posts", "post", "about", "help", "signup", "stories", "hashtag", "messages"}

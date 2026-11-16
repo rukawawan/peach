@@ -20,20 +20,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import ledger_backups  # noqa: E402
 from peach.config import DATABASE_PATH, GENERATED_DIR  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--db", type=Path, default=DATABASE_PATH, help="当前账本路径")
+    parser = argparse.ArgumentParser(description=t("prune_ledger_backups.description", pattern="ledger.pre-*.db"))
+    parser.add_argument("--db", type=Path, default=DATABASE_PATH, help=t("prune_ledger_backups.helpDb"))
     parser.add_argument("--organize", type=Path, nargs="?", const=GENERATED_DIR, default=None,
                         metavar="GENERATED",
-                        help="改清整理备份；可给 generated 目录，缺省取当前配置")
+                        help=t("prune_ledger_backups.helpOrganize"))
     parser.add_argument("--keep", type=int, default=None,
-                        help="无论多旧都保留的最近份数")
+                        help=t("prune_ledger_backups.helpKeep"))
     parser.add_argument("--min-age-hours", type=float, default=None,
-                        help="不满这个小时数的备份一律保留")
-    parser.add_argument("--apply", action="store_true", help="真的删除；缺省只打印计划")
-    parser.add_argument("--json", action="store_true", help="机器可读输出")
+                        help=t("prune_ledger_backups.helpMinAge"))
+    parser.add_argument("--apply", action="store_true", help=t("prune_ledger_backups.helpApply"))
+    parser.add_argument("--json", action="store_true", help=t("prune_ledger_backups.helpJson"))
     args = parser.parse_args(argv)
 
     if args.organize is not None:
@@ -60,17 +61,20 @@ def main(argv: list[str] | None = None) -> int:
             "removable_bytes": decided.removable_bytes,
         }, ensure_ascii=False, indent=2))
     else:
-        verb = "已删除" if args.apply and not decided.refused else "将删除"
+        verb = t("prune_ledger_backups.deleted") if args.apply and not decided.refused else t("prune_ledger_backups.willDelete")
         for path in decided.keep:
-            print(f"保留  {path.name}")
+            print(t("prune_ledger_backups.keepRow", name=path.name))
         for path in decided.remove:
             print(f"{verb}  {path.name}")
         for path in decided.orphans:
-            print(f"{verb}  {path.name}（主文件已不在）")
-        print(f"{verb} {len(decided.remove)} 份加 {len(decided.orphans)} 个无主副文件，"
-              f"约 {decided.removable_bytes / 1_048_576:.0f} MB")
+            print(t("prune_ledger_backups.orphanRow", verb=verb, name=path.name))
+        print(t("prune_ledger_backups.summary", verb=verb, count=len(decided.remove), orphans=len(decided.orphans),
+                size=f"{decided.removable_bytes / 1_048_576:.0f}"))
         if decided.refused:
-            print(f"拒绝清退：{decided.refused}")
+            from peach import interface_text
+            # 拒绝原因是一句带 code 的话，按 zh-CN 渲染后打印（脚本输出的语言另起一批再改）。
+            code, params = decided.refused["code"], decided.refused.get("params")
+            print(t("prune_ledger_backups.refused", reason=interface_text.text(f'server:{code}', params)))
     return 2 if decided.refused else 0
 
 

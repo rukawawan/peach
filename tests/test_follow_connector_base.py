@@ -123,7 +123,7 @@ class SharedSendContractTests(unittest.TestCase):
 
     class _Blocked(_BaseConnector):
         provider = "blocked"
-        blocked_reason = "站点有机器人验证"
+        blocked_reason = "errors.performerAliasFollowup.refused"
 
     def test_both_verbs_refuse_a_blocked_site(self):
         connector = self._Blocked(transport=_transport())

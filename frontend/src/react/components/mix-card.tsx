@@ -14,6 +14,7 @@ import { firstGrapheme } from '@peach/legacy/core';
 import { ArtSlot } from './art-slot';
 import { spriteGlyph } from './sprite-glyph';
 import { useStackFlip } from './use-stack-flip';
+import { t } from '../../i18n';
 
 export { MIX_FLIP_FACES, MIX_FLIP_LEAD_MS, MIX_FLIP_MS } from './use-stack-flip';
 
@@ -96,8 +97,8 @@ function Avatars({ faces, fallback, onOpenEntity }: {
   return (
     <div data-mix-avatars="">
       {faces.slice(0, 5).map((face) => (
-        <button key={`${face.kind}:${face.id}`} type="button" title={`打开资料页：${face.name}`}
-          aria-label={`打开资料页：${face.name}`} onClick={() => onOpenEntity(face.kind, face.name)}
+        <button key={`${face.kind}:${face.id}`} type="button" title={t('shell:mixCard.openProfile', { name: face.name })}
+          aria-label={t('shell:mixCard.openProfile', { name: face.name })} onClick={() => onOpenEntity(face.kind, face.name)}
           className={`${RING} cursor-pointer outline-none`}
           dangerouslySetInnerHTML={{ __html: avatarInner(face.name, face, representativeOf(face.name), face.kind) }} />
       ))}
@@ -133,7 +134,7 @@ export function MixCard({
             ? <ArtSlot artwork={artwork} identity={artworkIdentity} relayout={relayoutArt} />
             : poster
               ? <Poster key={poster} src={poster} />
-              : <span className="text-caption-1-regular tracking-caps text-text-secondary uppercase">无预览</span>}
+              : <span className="text-caption-1-regular tracking-caps text-text-secondary uppercase">{t('shell:artworkGap.noPreview')}</span>}
           <div data-mix-faces="" hidden={!flip.faces.length}>
             {flip.faces.map((src, index) => (
               <div key={src} data-mix-face={index === flip.current ? 'on' : index === flip.leaving ? 'off' : ''}>
@@ -148,7 +149,7 @@ export function MixCard({
           <span data-mix-badge=""
             className="absolute right-2.25 bottom-2.25 z-6 flex min-h-7 items-center gap-1.5 rounded-2lg px-2.25 py-1 text-caption-1-semibold text-text-white">
             <PLAY aria-hidden className="size-(--icon-inline)" />
-            {badge ?? `${count.toLocaleString()} 个视频`}
+            {badge ?? t('shell:mixCard.videoCount', { count: count })}
           </span>
         </div>
       </div>

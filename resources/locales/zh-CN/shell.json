@@ -1,0 +1,828 @@
+{
+  "accessSetup": {
+    "enterWithoutPassword": "免登录进入",
+    "lanPasswordHint": "局域网访问建议设置密码，否则同一网络中的设备可直接进入。",
+    "lede": "选择打开 Peach 时是否需要登录。",
+    "passwordHelp": "开启后，访问 Peach 需要先登录。",
+    "passwordLength": "请输入 8–256 个字符。",
+    "saveFailed": "没能保存访问设置，请重试",
+    "setPasswordAndEnter": "设置密码并进入",
+    "title": "访问设置",
+    "unreachable": "连接不到 Peach，请确认它仍在运行后重试"
+  },
+  "artworkGap": {
+    "coverFileMissing": "封面文件缺失",
+    "coverNotFound": "封面未取得",
+    "coverPending": "还没取到官方封面",
+    "fetchCover": "抓取封面",
+    "fetching": "抓取中",
+    "ffmpegMissing": "没找到 FFmpeg",
+    "fillInIncomplete": "补全未完成",
+    "fillInPreviews": "补全预览",
+    "fillingIn": "补全中",
+    "frameFilesMissing": "预览帧文件缺失",
+    "framesPending": "还没抽帧",
+    "framesUpdating": "预览帧正在更新",
+    "isoSkipped": "ISO 不抽帧",
+    "loadInterrupted": "图片加载中断",
+    "meteredSkipped": "流量保护 · 同步时不抽帧",
+    "noCover": "无封面",
+    "noOfficialCover": "没有找到可用的官方封面",
+    "noPreview": "无预览",
+    "onlineSkipped": "在线来源不抽帧",
+    "previewFailed": "生成预览图失败",
+    "previewNotFound": "预览未取得",
+    "previewsBusy": "当前处理任务结束后可补全",
+    "previewsOff": "请先在媒体库设置中开启视频预览生成",
+    "probeFailed": "探查失败，没能抽帧",
+    "serverStatus": "服务返回 {{status}}",
+    "serviceUnreachable": "连不上 Peach 服务",
+    "siteNoImage": "来源站点没有返回图片",
+    "strmSkipped": "STRM 不抽帧"
+  },
+  "batchCatalog": {
+    "addToWatchLater": "加入稍后看",
+    "confirmBody": "将处理选中的 {{count, number}} 项。",
+    "confirmDelete": "将处理选中的 {{count, number}} 项。文件和馆藏记录会永久删除，无法恢复。",
+    "confirmDispose": "将处理选中的 {{count, number}} 项。馆藏记录可在回收站还原。",
+    "deleteSelected": "永久删除所选项目",
+    "doneDelete": "已彻底删除 {{count, number}} 项",
+    "doneDispose": "已移入回收站 {{count, number}} 项",
+    "doneLater": "已加入稍后看 {{count, number}} 项",
+    "doneLike": "已喜欢 {{count, number}} 项",
+    "doneRestore": "已还原 {{count, number}} 项",
+    "doneSeen": "已标为看过 {{count, number}} 项",
+    "likeSelected": "喜欢所选项目",
+    "markWatched": "标记为已看",
+    "restoreSelected": "还原所选项目"
+  },
+  "batchFollow": {
+    "confirmBody": "将处理选中的 {{count, number}} 项关注作品。",
+    "doneIgnored": "已忽略 {{count, number}} 项",
+    "doneSave": "已保存到数据库 {{count, number}} 项",
+    "doneSeen": "已标为已看 {{count, number}} 项",
+    "ignoreSelected": "忽略所选作品",
+    "saveSelected": "保存所选作品"
+  },
+  "batchJunk": {
+    "confirmBody": "将处理选中的 {{count, number}} 个文件。",
+    "dismissed": "已标记为不是垃圾",
+    "doneDispose": "已批量移入回收站：{{count, number}} 项",
+    "doneNotJunk": "已批量标为不是垃圾：{{count, number}} 项",
+    "doneRecheck": "已批量重新判断：{{count, number}} 项",
+    "markNotJunk": "标记为非垃圾",
+    "recheckFiles": "重新检查文件",
+    "reconsidered": "已重新加入垃圾判断"
+  },
+  "batchRegion": {
+    "cleared": "已撤回 {{count, number}} 项的产地判定",
+    "hint": "选中的 {{count, number}} 项归为同一产地，之后刮削和自动推断不再改写。",
+    "pickFirst": "先选一个产地",
+    "set": "已判为{{region}}：{{count, number}} 项",
+    "title": "判定产地"
+  },
+  "boardTabs": {
+    "defaultLabel": "页面视图"
+  },
+  "cardLayout": {
+    "home": "首页卡片版式",
+    "jav": "JAV 卡片版式"
+  },
+  "catalogFilter": {
+    "credit": "归属",
+    "uncreditedChip": "{{label}} 未归属",
+    "unknownYear": "未知年份",
+    "yearChip": "发行年份 {{years}}"
+  },
+  "catalogView": {
+    "flagged": "已标记",
+    "junkFiles": "垃圾文件",
+    "unwatched": "没看过",
+    "watchLater": "稍后看"
+  },
+  "chrome": {
+    "densityToggle": "切换卡片密度",
+    "exitSearch": "退出搜索",
+    "immersiveTitle": "沉浸模式 · 随机连播",
+    "navigationTitle": "导航与筛选",
+    "openPreferences": "打开设置",
+    "openTutorial": "打开新手教程",
+    "openWall": "进入播放墙",
+    "searchLabel": "搜索作品、女优、厂牌或标签",
+    "selectMode": "多选模式",
+    "selectTitle": "多选（Ctrl 单项，Shift 连续）",
+    "skipToContent": "跳到正文"
+  },
+  "clientUpdate": {
+    "available": "有可用更新。",
+    "later": "稍后",
+    "migrating": "正在更新本地数据库。",
+    "migratingApply": "正在更新本地数据库 · 正在应用迁移",
+    "migratingBackup": "正在更新本地数据库 · 备份 {{percent}}%",
+    "refreshPage": "刷新页面",
+    "refreshReady": "Peach 已更新，刷新页面即可使用。",
+    "restartReady": "更新已准备好，可重启安装。",
+    "updating": "正在更新 Peach {{version}} · {{step}} {{percent}}%",
+    "updatingUnversioned": "正在更新 Peach · {{step}} {{percent}}%",
+    "updatingStep": "正在更新 Peach {{version}} · {{step}}",
+    "updatingStepUnversioned": "正在更新 Peach · {{step}}",
+    "viewProgress": "查看进度",
+    "viewUpdate": "查看更新"
+  },
+  "codeBlock": {
+    "copyAll": "复制完整内容",
+    "copyCode": "复制代码",
+    "copyFailed": "复制失败，请选中文本复制。"
+  },
+  "confirmModal": {
+    "actionFailed": "操作未完成",
+    "selectedItems": "所选记录"
+  },
+  "connectionStatus": {
+    "notChecked": "未检测",
+    "offline": "离线"
+  },
+  "coverQueue": {
+    "prioritizeAll": "全部优先处理",
+    "progress": "正在取封面 · {{done}} / {{count, number}} 部。离开本页后，没取的仍在后台排队。",
+    "waiting": "{{scope}} {{count, number}} 部新作的封面还在排队，可以现在一起取。"
+  },
+  "dataTable": {
+    "bulkActions": "{{label}}批量操作",
+    "clearSelection": "取消选择",
+    "empty": "没有记录",
+    "recordUnit": "条记录",
+    "selectAll": "全选{{label}}",
+    "selectColumn": "选择",
+    "selectRow": "选择 {{name}}",
+    "selectedCount": "已选 {{count, number}} {{unit}}",
+    "spacerColumn": "行空白区域",
+    "toolbar": "{{label}}工具栏"
+  },
+  "detailTags": {
+    "hideTag": "从此内容隐藏该标签",
+    "moreCount": "还有 {{count, number}} 个",
+    "optionsLoadFailed": "无法读取标签候选",
+    "removeTagNamed": "删除标签 {{tag}}",
+    "renameTag": "修改标签名称",
+    "renameTagNamed": "修改标签 {{tag}}",
+    "tagChanged": "标签已变化，请重新打开详情"
+  },
+  "documentTitle": {
+    "fallback": "Peach · 蜜桃"
+  },
+  "downloadChannels": {
+    "notConfigured": "尚未配置下载渠道。",
+    "settingsLink": "下载渠道设置"
+  },
+  "duration": {
+    "days": "{{count, number}} 天",
+    "daysHours": "{{days}} 天 {{count, number}} 小时"
+  },
+  "entityAlias": {
+    "add": "添加别名",
+    "added": "已添加别名 {{alias}}",
+    "addedByYou": "自己添过的",
+    "exists": "{{alias}} 已经是这份档案中的名字",
+    "fieldLabel": "别名",
+    "hint": "别名能帮图库找到更多图片，也可以设为显示名称。",
+    "placeholder": "另一种写法，或另一个艺名",
+    "removeAction": "撤销别名",
+    "removeNamed": "撤销别名 {{alias}}",
+    "removed": "已撤销别名 {{alias}}"
+  },
+  "entityMissing": {
+    "agency": "找不到这个事务所",
+    "backToList": "返回{{title}}列表",
+    "hint": "名字可能拼错了，或者已经合并到别的名字下；回列表里重新找。",
+    "item": "找不到这个条目",
+    "performer": "找不到这个艺人",
+    "seller": "找不到这个卖家",
+    "series": "找不到这个系列",
+    "studio": "找不到这个厂牌",
+    "tag": "找不到这个标签"
+  },
+  "entitySort": {
+    "ariaLabel": "按{{label}}{{direction}}排序"
+  },
+  "errorPage": {
+    "conflict": "现在不能这样做",
+    "forbidden": "这里不能打开",
+    "generic": "出了点问题",
+    "goHome": "返回首页",
+    "notFound": "四〇四"
+  },
+  "errorReport": {
+    "appUnmounted": "应用已卸载",
+    "browserSnapshot": "浏览器环境快照",
+    "cleanupIncomplete": "应用资源清理未全部完成",
+    "hostMissing": "主界面宿主缺失",
+    "mediaPlaybackFailed": "媒体播放失败（{{code}}）",
+    "unhandledRejection": "Promise 未处理的异常"
+  },
+  "expandableRanking": {
+    "collapse": "收起排名",
+    "expand": "展开更多排名"
+  },
+  "feedNew": {
+    "configureConnection": "配置连接方式",
+    "dmmUnreachable": "{{count, number}} 部新作的封面连不上 DMM 图片主机。把 DMM / FANZA 的连接方式设成 Peach 代理，下一轮会自动重取。",
+    "ignore": "不想看",
+    "ignoreNamed": "不想看 {{name}}",
+    "markRead": "标为已看过",
+    "markReadNamed": "标为已看过 {{name}}",
+    "metadataPending": "资料还没取到",
+    "openDetails": "打开 {{name}} 的作品详情",
+    "sectionLabel": "未入库的新作",
+    "untitled": "未命名新作",
+    "viewAll": "查看全部新作",
+    "wantNamed": "想要 {{name}}"
+  },
+  "fileSize": {
+    "unknown": "大小未知"
+  },
+  "firstAccess": {
+    "denied": "从运行 Peach 的电脑或同一局域网打开 Peach 完成设置，或在启动容器时设置 PEACH_ACCESS_PASSWORD。"
+  },
+  "followRange": {
+    "anyTime": "不限时间",
+    "last30Days": "最近 30 天",
+    "last7Days": "最近 7 天",
+    "last90Days": "最近 90 天"
+  },
+  "followSort": {
+    "duration": "时长",
+    "popular": "热度",
+    "updated": "更新时间"
+  },
+  "followTable": {
+    "lastChecked": "上次检查",
+    "site": "站点",
+    "source": "来源",
+    "status": "状态"
+  },
+  "format": {
+    "clauseSeparator": "，",
+    "labelPrefix": "{{label}}：",
+    "labelValue": "{{label}}：{{value}}",
+    "listSeparator": "、",
+    "period": "。",
+    "quoted": "「{{text}}」",
+    "semicolonSeparator": "；",
+    "sentenceGap": "",
+    "withNote": "{{text}}（{{note}}）"
+  },
+  "glowPicker": {
+    "title": "配色"
+  },
+  "ingestToast": {
+    "burst": "{{count, number}} 部作品已入库",
+    "downloadDone": "「{{name}}」已入库并整理完成",
+    "fallbackName": "一部作品",
+    "newFile": "新文件已入库：「{{name}}」"
+  },
+  "keyboardShortcut": {
+    "needsModifier": "至少要带一个修饰键，单独的字母会和播放器快捷键冲突",
+    "reservedByBrowser": "这个组合被浏览器占用，页面收不到",
+    "unsupportedKey": "只支持字母、数字和 F1–F12 作主键"
+  },
+  "libraryPicker": {
+    "allLibraries": "全部媒体库",
+    "choose": "选择媒体库"
+  },
+  "loadingSkeleton": {
+    "content": "正在读取内容",
+    "index": "正在读取索引"
+  },
+  "login": {
+    "accessToken": "访问口令",
+    "signIn": "登录",
+    "staySignedIn": "保持登录",
+    "tokenHintDocker": "在宿主机执行 {{command}} 查看。",
+    "tokenHintLocal": "在运行 Peach 的环境中执行 {{command}} 查看。",
+    "wrongPassword": "访问密码不正确",
+    "wrongToken": "访问口令不正确"
+  },
+  "managedPage": {
+    "readOnly": "本机当前只能浏览"
+  },
+  "mediaCard": {
+    "checkingCause": "正在查原因",
+    "disposalDuplicate": "重复",
+    "disposalJunk": "垃圾",
+    "disposalManual": "手动",
+    "disposalMissing": "文件缺失",
+    "disposalReason": "归入原因：{{reason}}",
+    "disposalUnknown": "原因未记录",
+    "editionCount": "{{count, number}} 个版本",
+    "flagLiked": "喜欢",
+    "flaggedBy": "已标记：{{reasons}}",
+    "hasOCount": "有高潮记录",
+    "movingToTrash": "正在移入回收站",
+    "openActressNamed": "打开女优页：{{name}}",
+    "openActressPage": "打开女优页",
+    "openDetails": "打开详情",
+    "openDetailsNamed": "打开 {{name}}详情",
+    "openEditionsNamed": "打开 {{name}}版本",
+    "openPartsNamed": "打开 {{name}}分卷",
+    "openPerformerNamed": "打开艺人页：{{name}}",
+    "openPerformerPage": "打开艺人页",
+    "openPreview": "打开预览",
+    "openProfile": "打开资料页",
+    "operationFailed": "操作失败，请重试",
+    "partCount": "{{count, number}} 卷",
+    "performerTotal": "等 {{count, number}} 人",
+    "resourceArchive": "压缩包",
+    "resourceAudio": "音频",
+    "resourceImage": "图片",
+    "resourceOther": "其它文件",
+    "restoring": "正在还原",
+    "seekBack": "后退 {{count, number}} 秒",
+    "seekForward": "前进 {{count, number}} 秒",
+    "untitledResource": "未命名资源",
+    "untitledVideo": "未命名视频",
+    "urlShortcut": "网址快捷方式",
+    "watchProgress": "观看进度"
+  },
+  "mediaCarousel": {
+    "imageCount": "{{count, number}} 张图片",
+    "mediaCount": "{{count, number}} 项媒体",
+    "next": "下一张",
+    "nextImage": "下一张图片",
+    "nextItem": "下一项媒体",
+    "position": "第 {{index}} 张",
+    "positionOfTotal": "第 {{index}} 张，共 {{total}} 张",
+    "previous": "上一张",
+    "previousImage": "上一张图片",
+    "previousItem": "上一项媒体",
+    "switchToNamed": "切换到{{name}}",
+    "switchToPosition": "切换到第 {{index}} 张",
+    "thumbnails": "媒体缩略图"
+  },
+  "mixCard": {
+    "openProfile": "打开资料页：{{name}}",
+    "videoCount": "{{count, number}} 个视频"
+  },
+  "navigationOrder": {
+    "group": "导航分组",
+    "librarySyncFailed": "媒体库顺序同步失败。{{error}}",
+    "manageMenu": "管理顶部菜单",
+    "menuLabel": "{{group}}排序设置",
+    "moveDown": "下移 {{name}}",
+    "moveUp": "上移 {{name}}",
+    "resetDone": "已恢复本组默认顺序",
+    "resetGroup": "恢复本组默认顺序",
+    "syncFailed": "顺序已保存到本机，同步失败。{{error}}"
+  },
+  "networkBanner": {
+    "checkProxy": "检查 Peach 代理",
+    "offline": "Peach 连不上外网，资料采集、关注更新和在线来源暂不可用；本地媒体照常使用。"
+  },
+  "objectOrder": {
+    "save": "保存顺序"
+  },
+  "orientation": {
+    "landscape": "横屏",
+    "portrait": "竖屏"
+  },
+  "pathLine": {
+    "reveal": "查看文件位置"
+  },
+  "pendingWork": {
+    "running": "正在补全：{{tasks}}",
+    "waiting": "等待补全：{{tasks}}"
+  },
+  "playlistDialog": {
+    "addHint": "勾选要加入的列表，或者填个名称新建一份。",
+    "addTitle": "加入播放列表",
+    "added": "已加入 {{count, number}} 个播放列表",
+    "emptyHint": "还没有播放列表，填个名称就能新建一份。",
+    "existingLists": "已有播放列表",
+    "nameLabel": "名称",
+    "nameRequired": "播放列表名称不能为空",
+    "saveAsTitle": "保存为播放列表",
+    "saveMixHint": "这个 Mix 的 {{count, number}} 个视频会存成一份可以继续播放的列表。",
+    "saved": "已保存为播放列表"
+  },
+  "rating": {
+    "clearCurrent": "取消评分（当前 {{count, number}} 星）",
+    "clearHint": "再点一次取消评分",
+    "rateStars": "评为 {{count, number}} 星",
+    "saving": "正在保存评分",
+    "stars": "{{count, number}} 星",
+    "unrated": "未评分"
+  },
+  "ratingAction": {
+    "cleared": "已取消评分",
+    "label": "评分",
+    "rated": "已评 {{count, number}} 星"
+  },
+  "receipt": {
+    "actionFailed": "{{action}}失败：{{message}}",
+    "genericAction": "操作",
+    "tryAgain": "请重试",
+    "undoFailed": "撤销失败：{{message}}",
+    "undone": "已撤销"
+  },
+  "recommendationReason": {
+    "sharedTags": "共同标签：{{tags}}",
+    "title": "推荐理由",
+    "viewReason": "查看推荐理由：{{reason}}"
+  },
+  "region": {
+    "china": "国产",
+    "clear": "撤回判定",
+    "japan": "日本",
+    "korea": "韩国",
+    "other": "其他",
+    "western": "欧美"
+  },
+  "releaseNotice": {
+    "automatic": "更新后自动进行",
+    "changelog": "完整更新日志",
+    "close": "关闭更新说明",
+    "dialogLabel": "版本更新说明",
+    "dismiss": "知道了",
+    "goToSettings": "去设置",
+    "itemCount": "{{count, number}} 个",
+    "missed": "还错过了 {{versions}}",
+    "recentVersions": "最近几版",
+    "saveFailed": "未能记录，请稍后再试",
+    "viewItem": "查看{{title}}"
+  },
+  "requestError": {
+    "badGateway": "Peach 服务没有取回结果，请稍后重试；持续失败时查看 Peach 运行日志。",
+    "badRequest": "提交内容有误，请检查输入后重试。",
+    "clientTimeout": "等待服务响应超时，请检查连接后重试。",
+    "conflict": "当前状态不允许此操作，请刷新后重试。",
+    "fallback": "操作未完成，请重试；持续失败时查看 Peach 运行日志。",
+    "forbidden": "当前设备没有执行此操作的权限，请在运行 Peach 的设备上操作。",
+    "gatewayTimeout": "等待服务响应超时，请稍后重试。",
+    "notFound": "请求的内容已不存在，请刷新列表。",
+    "rateLimited": "请求过于频繁，请稍后重试。",
+    "serverError": "Peach 服务处理失败，请重试；持续失败时查看 Peach 运行日志。",
+    "sessionExpired": "登录已失效，请刷新页面重新登录。",
+    "timeout": "请求超时，请稍后重试。",
+    "tooLarge": "提交内容过大，请减少数量后重试。",
+    "unavailable": "Peach 服务暂时不可用，请稍后重试。",
+    "unreachable": "无法连接到 Peach 服务，请确认网络连接正常、Peach 正在运行。"
+  },
+  "routeTitle": {
+    "agencies": "事务所",
+    "duplicates": "重复文件",
+    "following": "关注",
+    "hdUpgrades": "高清版",
+    "immersive": "沉浸模式",
+    "javVideo": "JAV 作品",
+    "libraryTools": "数据管理",
+    "mediaDetails": "媒体记录",
+    "performers": "艺人",
+    "playlists": "播放列表",
+    "preferences": "设置",
+    "profileFallback": "资料",
+    "repair": "修复与迁移",
+    "review": "人工复核",
+    "sellers": "卖家",
+    "settings": "Peach 配置",
+    "sources": "来源和凭证",
+    "stats": "统计",
+    "subscriptions": "关注管理",
+    "tags": "标签",
+    "tasks": "任务中心",
+    "taste": "口味",
+    "videoWall": "播放墙"
+  },
+  "router": {
+    "chunkNotLoaded": "页面代码还没装载",
+    "unknownRoute": "路由树里没有这一页：{{path}}"
+  },
+  "scroller": {
+    "defaultLabel": "可滚动内容"
+  },
+  "searchTitle": {
+    "results": "搜索结果：「{{query}}」"
+  },
+  "selectionPopover": {
+    "empty": "暂无可选项"
+  },
+  "setupDone": {
+    "addMediaLater": "可在「媒体库与入库」添加媒体目录并开始扫描。",
+    "documentTitle": "Peach · 设置完成",
+    "enter": "进入 Peach",
+    "eyebrow": "设置完成",
+    "importHistory": "导入浏览器历史记录",
+    "installInSettings": "可在配置页「应用与维护」里安装。",
+    "ready": "你的 Peach 已准备就绪。",
+    "restored": "已连接已有数据目录。",
+    "runtime": "运行信息",
+    "scanLater": "稍后在配置页开始扫描媒体库。",
+    "scanQueued": "首次扫描已排队，在后台进行，期间可照常使用 Peach。",
+    "title": "可以开始使用了"
+  },
+  "setupErrors": {
+    "pickFolderFailed": "没能打开文件夹对话框",
+    "questionsFailed": "没能读取设置题目",
+    "requestFailed": "请求失败，请重试",
+    "restoreFailed": "没能使用此数据目录",
+    "submitFailed": "没能完成设置"
+  },
+  "setupForm": {
+    "accessLede": "选择访问范围，也可以为馆藏设置密码。",
+    "accessLedeDocker": "为馆藏设置访问密码，并选择资料采集的连接方式。",
+    "accessScope": "访问范围",
+    "accessTitle": "在哪里使用 Peach？",
+    "accessTitleDocker": "访问与网络",
+    "addDirectoryTo": "给 {{name}} 添加文件夹",
+    "addFolder": "添加文件夹",
+    "addLater": "稍后添加",
+    "addLibrariesLater": "稍后添加媒体库",
+    "addLibrariesLaterHint": "完成设置后，可在「媒体库与入库」添加自己的媒体目录。",
+    "addLibrary": "添加媒体库",
+    "address": "访问地址：{{address}}",
+    "advanced": "高级设置",
+    "confirmLede": "确认这些选择，剩下的交给 Peach。",
+    "confirmTitle": "准备好开始了",
+    "connectionMode": "连接方式",
+    "continue": "继续",
+    "dataDirectory": "数据目录",
+    "dataSaverHint": "开启流量保护的目录不会自动读取视频或生成预览，播放时才读取。",
+    "defaultLibraryName": "我的媒体库",
+    "diagnostics": "诊断反馈",
+    "directoryCount": "{{count, number}} 个文件夹",
+    "directoryLibrary": "目录所属媒体库 {{index}}",
+    "eyebrow": "首次设置",
+    "finish": "完成设置",
+    "firstScan": "首次扫描",
+    "firstScanSkipped": "添加媒体目录后，再选择处理方式并开始扫描。",
+    "libraryCount": "{{count, number}} 个媒体库",
+    "libraryDirectoriesNamed": "{{name}} 的文件夹",
+    "libraryIconNamed": "{{name}} 图标",
+    "libraryName": "媒体库名称",
+    "libraryNameNamed": "{{name}} 名称",
+    "libraryNumbered": "媒体库 {{number}}",
+    "localOnlyHint": "只有运行 Peach 的电脑能访问；设了密码仍需登录。",
+    "loopbackProxyBody": "回环地址指向容器自身；宿主机代理需使用容器可访问的宿主机地址。",
+    "loopbackProxyTitle": "请填写容器可访问的代理地址",
+    "mediaDirectories": "媒体目录",
+    "mediaLede": "连接已有文件夹，或先进入界面看看。",
+    "mediaTitle": "你的媒体，放在哪里？",
+    "moveToLibrary": "移到媒体库",
+    "notFilled": "尚未填写",
+    "peachProxy": "Peach 代理",
+    "pickDataDirectory": "选择数据目录",
+    "presetPassword": "已按 PEACH_ACCESS_PASSWORD 设置访问密码，可在配置页「网络与访问」修改。",
+    "progress": "首次设置，第 {{step}} 步，共 4 步",
+    "proxyHelp": "用于资料采集、封面和工具下载，可在配置页修改。",
+    "proxySelectionBody": "已有来源的代理地址不同，请选择公共连接方式。",
+    "proxySelectionTitle": "需要选择连接方式",
+    "readPolicyRequired": "请选择媒体读取策略",
+    "reportingHint": "馆藏与口味明细上传默认关闭，可在「应用与维护」查看并选择。",
+    "reportingOn": "已开启，可在上方调整",
+    "reportingTitle": "版本统计与错误诊断",
+    "scanAfterFinish": "完成设置后开始",
+    "scanAfterSetup": "完成设置后扫描媒体目录",
+    "scanFoldersAfterSetup": "完成设置后扫描 {{count, number}} 个文件夹",
+    "scanLaterHint": "先保存处理方式，稍后在「媒体库与入库」开始扫描。",
+    "scanManually": "稍后手动开始",
+    "scanNowHint": "扫描会在后台开始，期间可以进入 Peach。",
+    "scopeCompose": "按 Compose 端口映射",
+    "scopeLan": "同一局域网的设备",
+    "scopeLocal": "只有这台电脑",
+    "scopePasswordOff": "未设置访问密码",
+    "scopePasswordOn": "使用访问密码",
+    "scopePresetPassword": "已按 PEACH_ACCESS_PASSWORD 设置访问密码",
+    "start": "开始设置",
+    "summaryTitle": "确认设置",
+    "useExistingData": "使用已有数据",
+    "welcomeFind": "更快找到想看的",
+    "welcomeFindBody": "用搜索、标签和收藏浏览馆藏。",
+    "welcomeLede": "花一点时间，让 Peach 更适合你。",
+    "welcomeLibraries": "连接你的媒体库",
+    "welcomeLibrariesBody": "本地文件夹与已挂载的网盘，都可以整理。",
+    "welcomePlay": "按你的习惯播放",
+    "welcomePlayBody": "播放与外观偏好，可以随时在设置里调整。",
+    "welcomeTitle": "欢迎使用 Peach"
+  },
+  "setupPage": {
+    "loading": "正在读取设置",
+    "openOnServer": "请在运行 Peach 的这台电脑上打开设置。"
+  },
+  "setupProcessing": {
+    "auto": "自动补全",
+    "custom": "自定义：{{stages}}",
+    "customLocalOnly": "自定义：只读取本地 NFO 和图片",
+    "localOnly": "仅使用本地资料"
+  },
+  "setupRestore": {
+    "backToSetup": "返回首次设置",
+    "connecting": "正在连接数据目录…",
+    "dataDirectory": "已有数据目录",
+    "dataDirectoryHint": "选择包含 config.toml 和 database 文件夹的数据目录。",
+    "eyebrow": "连接已有数据",
+    "lede": "连接 Peach 数据目录，继续使用原来的配置与馆藏。",
+    "useDirectory": "使用此目录"
+  },
+  "setupScene": {
+    "accessBody": "电脑与手机，连接同一套 Peach。",
+    "accessTitle": "从书桌，到手边。",
+    "confirmBody": "确认后保存，扫描按你的选择开始。",
+    "confirmTitle": "全都准备好了。",
+    "doneBody": "进入 Peach，开始探索你的收藏。",
+    "doneTitle": "馆藏，准备开启。",
+    "libraryBadge": "你的媒体库",
+    "mediaBody": "按媒体库归类，文件保留在原来的位置。",
+    "mediaTitle": "让文件成为馆藏。",
+    "restoreBody": "沿用原来的配置与记录，接着使用。",
+    "restoreTitle": "从熟悉的地方继续。",
+    "welcomeBody": "把喜欢的内容，整理成自己的收藏。",
+    "welcomeTitle": "你的私人媒体空间。"
+  },
+  "shared": {
+    "accessPassword": "访问密码",
+    "all": "全部",
+    "back": "返回",
+    "cancel": "取消",
+    "close": "关闭",
+    "collapse": "收起",
+    "completed": "已完成",
+    "copied": "已复制",
+    "creators": "创作者",
+    "home": "首页",
+    "library": "媒体库",
+    "moveToTrash": "移入回收站",
+    "notFound": "未取得",
+    "off": "已关闭",
+    "open": "打开",
+    "processing": "正在处理",
+    "restore": "还原",
+    "retry": "重试",
+    "retryNow": "立即重试",
+    "save": "保存",
+    "series": "系列",
+    "sort": "排序",
+    "studios": "厂牌",
+    "trash": "回收站",
+    "undo": "撤销",
+    "untitledLibrary": "未命名媒体库",
+    "view": "查看"
+  },
+  "sidebar": {
+    "collapse": "收起侧栏",
+    "expand": "展开侧栏"
+  },
+  "skeleton": {
+    "loadingCollection": "正在读取馆藏",
+    "loadingFollowing": "正在读取关注内容",
+    "loadingJunkFiles": "正在读取垃圾文件",
+    "loadingRecommendations": "正在读取推荐",
+    "loadingSettings": "正在读取配置",
+    "loadingVideos": "正在读取作品"
+  },
+  "sourceLink": {
+    "blog": "博客",
+    "officialSite": "官方网站"
+  },
+  "sourcePicture": {
+    "coverAlt": "{{code}} 封面",
+    "imageNotFound": "图片未取得",
+    "loadingImage": "正在读取图片",
+    "loadingPreview": "正在读取预览",
+    "previewAlt": "{{code}} 预览 {{index}}"
+  },
+  "sourceTools": {
+    "allPresent": "目录内 {{count, number}} 项都还在，无需改动",
+    "checkAction": "核对目录",
+    "checkedSummary": "{{summary}}（核对 {{count, number}} 项）",
+    "checkedSummaryUnreadable": "{{summary}}（核对 {{count, number}} 项，{{unreadable, number}} 项未能读取）",
+    "checking": "正在核对目录…",
+    "fileMissing": "找不到源文件；点右侧的扫描按钮重新检查目录。",
+    "libraryOffline": "媒体库无法访问，暂时无法核对文件；恢复连接后重试",
+    "noChanges": "目录核对完成，无需改动",
+    "notMapped": "运行 Peach 的设备上没有挂载这个来源",
+    "reattached": "{{count, number}} 项的记录已接到库里的另一个版本",
+    "resultSeparator": "，",
+    "revealFailed": "打开文件管理器失败，请重试",
+    "revealed": "已在文件管理器中显示",
+    "trashed": "已把 {{count, number}} 项移入回收站",
+    "unreadable": "目录有 {{count, number}} 项暂时无法读取，本次未改动",
+    "unsupportedPlatform": "当前服务端系统不支持直接定位文件",
+    "vanished": "{{count, number}} 项带个人记录，已标为已消失"
+  },
+  "spinner": {
+    "loading": "加载中",
+    "loadingMore": "载入中"
+  },
+  "storageLabel": {
+    "metered": "{{label}} · 计费",
+    "online": "在线",
+    "localLabel": "本地"
+  },
+  "storageOffline": {
+    "drive115": "无法读取 115 媒体目录，请检查目录权限及网盘挂载工具是否正常运行。",
+    "hint": "媒体目录无法访问，请检查目录、读取权限和网盘挂载状态",
+    "other": "无法读取这个来源的媒体目录，请检查目录权限及挂载状态。",
+    "pikpak": "无法读取 PikPak 媒体目录，请检查目录权限及网盘挂载工具是否正常运行。",
+    "localLabel": "无法读取媒体目录，请检查目录是否存在及读取权限。"
+  },
+  "tableColumns": {
+    "columns": "显示列",
+    "defaultLabel": "表格",
+    "reset": "恢复默认显示",
+    "resetWidths": "重置列宽",
+    "resize": "调整{{column}}列宽",
+    "settings": "{{table}}列设置",
+    "showAll": "显示全部列",
+    "visibleColumns": "{{table}}显示列"
+  },
+  "tablePagination": {
+    "followingDefault": "关注列表分页",
+    "label": "{{table}}分页",
+    "next": "下一页",
+    "page": "第 {{page}} 页",
+    "pageSize": "每页显示数量",
+    "pageUnit": "条",
+    "perPage": "每页 {{count, number}} {{unit}}",
+    "previous": "上一页"
+  },
+  "tableSort": {
+    "defaultOrder": "默认顺序",
+    "label": "{{table}}排序",
+    "toAscending": "{{table}}改为升序",
+    "toDescending": "{{table}}改为降序"
+  },
+  "tagPicker": {
+    "addTag": "添加标签",
+    "allTags": "全部标签",
+    "createNamed": "新建“{{tag}}”",
+    "loading": "正在读取标签",
+    "recent": "最近使用",
+    "results": "搜索结果",
+    "searchPlaceholder": "搜索或输入新标签"
+  },
+  "themeToggle": {
+    "dark": "深色主题",
+    "group": "明暗主题",
+    "light": "浅色主题"
+  },
+  "toaster": {
+    "backgroundTasks": "后台任务",
+    "closeTaskToast": "关闭任务提示",
+    "closeToast": "关闭提示",
+    "notifications": "通知"
+  },
+  "trash": {
+    "blockedItem": "{{path}}（{{reason}}）",
+    "empty": "清空回收站",
+    "emptyConfirm": "回收站里的文件和馆藏记录将永久删除，无法恢复。",
+    "emptyHint": "删掉的内容会先放在这里，清空后才真正删除。",
+    "emptyTitle": "回收站是空的",
+    "movedToTrash": "已移入回收站",
+    "partlyPurged": "已永久删除 {{purged, number}} 项；{{count, number}} 项未能删除，仍在回收站：",
+    "purged": "已永久删除 {{count, number}} 项",
+    "restored": "已还原"
+  },
+  "uiSounds": {
+    "unknownSound": "没有「{{name}}」这种界面音效"
+  },
+  "upNext": {
+    "backToFollowing": "返回关注",
+    "browseCollection": "浏览馆藏",
+    "emptyHint": "可以回到列表挑选其他作品。",
+    "emptyTitle": "暂无接着看的内容",
+    "title": "接着看"
+  },
+  "watchLater": {
+    "added": "已加入稍后看",
+    "removed": "已移出稍后看",
+    "updateAction": "更新稍后看"
+  },
+  "serverPath": {
+    "dataTitle": "数据目录",
+    "dataField": "服务端数据目录",
+    "dataContainer": "容器数据位置由宿主机的数据卷挂载决定，请在 NAS 容器管理器中配置。",
+    "dataManual": "请填写运行 Peach 的服务器上的数据目录；保存时会检查目录是否可用。",
+    "useFolder": "使用此目录",
+    "close": "关闭",
+    "cancel": "取消",
+    "readFailed": "目录读取失败，请重试",
+    "pickTitle": "选择服务端目录",
+    "pickHelp": "这里显示 NAS 或容器内的路径，输入后按回车读取。新挂载目录也可以直接填在媒体目录输入框中。",
+    "pathField": "服务端目录路径",
+    "roots": "挂载目录",
+    "parent": "上一级",
+    "reading": "正在读取目录",
+    "noSubfoldersYet": "本批条目中没有子目录，可以继续读取。",
+    "noSubfolders": "这个目录下没有可选择的子目录。",
+    "readMore": "继续读取",
+    "noRoots": "尚未配置媒体挂载目录，请先手动填写容器内的路径。",
+    "choose": "选择此目录",
+    "locationTitle": "查看文件位置",
+    "locationContainer": "在 NAS 文件管理器中打开挂载给 Peach 的共享文件夹，再按目录内位置查找。容器路径与 NAS 共享路径可能不同。",
+    "locationServer": "文件位于运行 Peach 的服务器上，可以复制路径后在服务器中查找。",
+    "containerPath": "容器内路径",
+    "serverPath": "服务端路径",
+    "locationField": "服务端文件位置",
+    "mediaRoot": "媒体目录",
+    "relativePath": "目录内位置"
+  }
+}

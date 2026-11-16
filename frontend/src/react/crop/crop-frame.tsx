@@ -16,6 +16,7 @@ import {
   boxPercent, clampBox, handleOutside, isUsableSize, moveBox, resizeFromCorner, scaleBox, toNatural,
   type CropBox, type CropSize,
 } from '../../crop-geometry';
+import { t } from '../../i18n';
 
 export interface CropFrameProps {
   src: string;
@@ -154,7 +155,7 @@ export function CropFrame({ src, aspect, box, size, onBox, onSize, label }: Crop
         </>
       )}
       {failed
-        ? <p className="p-4 text-body-2-regular text-text-secondary">这张图读不出来，换一张再框。</p>
+        ? <p className="p-4 text-body-2-regular text-text-secondary">{t('catalog:coverCrop.unreadableImage')}</p>
         : null}
     </div>
   );

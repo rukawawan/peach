@@ -22,6 +22,7 @@ import {
 } from '../follow-feed/follow-feed';
 import { useFollowWrite } from '../follow-feed/follow-feed-page';
 import type { PhotoLayout, PhotoSize } from './entity-body';
+import { t } from '../../i18n';
 
 export interface EntityOnlineProps {
   view: FollowView;
@@ -93,10 +94,10 @@ function Empty({ searched, clear, actions, sources }: {
   searched: boolean; clear(): void; actions: FollowFeedActions; sources: number[];
 }) {
   return <div data-follow-empty="" className="contents"><EmptyState
-    icon={spriteGlyph(searched ? 'search-x' : 'rss')} title={searched ? '当前筛选下没有更新' : '还没有抓到更新'}
-    actions={searched ? <Button size="small" onClick={clear}>清除筛选</Button>
+    icon={spriteGlyph(searched ? 'search-x' : 'rss')} title={searched ? t('catalog:entityOnlineEmpty.noMatches') : t('catalog:entityOnlineEmpty.noUpdates')}
+    actions={searched ? <Button size="small" onClick={clear}>{t('catalog:shared.clearFilters')}</Button>
       : sources.length ? <FollowCheckButton sources={sources} report={actions.checkReport} />
-      : <ButtonLink size="small" href="/subscriptions?tab=add">添加关注</ButtonLink>}>
-    {searched ? '切换媒体类型、状态、来源或标签后再试。' : '检查来源更新后，这位创作者的新内容会出现在这里。'}
+      : <ButtonLink size="small" href="/subscriptions?tab=add">{t('catalog:entityOnlineEmpty.addFollow')}</ButtonLink>}>
+    {searched ? t('catalog:entityOnlineEmpty.noMatchesHint') : t('catalog:entityOnlineEmpty.noUpdatesHint')}
   </EmptyState></div>;
 }

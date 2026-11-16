@@ -10,6 +10,7 @@ if str(PROJECT_ROOT / 'src') not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 
 from peach.config import GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.review_csv import write_rows
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write
 from peach.tag_management import apply_plan, preview
@@ -19,7 +20,7 @@ FIELDS = ('source_id', 'source_name', 'target_id', 'target_name', 'resources')
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description='整理登记同义词与字符差异造成的重复标签')
+    parser = argparse.ArgumentParser(description=t('repair_duplicate_tags.description'))
     add_ledger_write_args(parser)
     parser.add_argument('--review-csv', type=Path, default=GENERATED_DIR / 'duplicate-tags.csv')
     return parser
@@ -39,18 +40,19 @@ def run(args):
             rows.extend({'source_id': value, 'source_name': by_id[value]['k'], 'target_id': target['entity_id'],
                          'target_name': target['k'], 'resources': by_id[value]['n']} for value in group if value != target['entity_id'])
         write_rows(args.review_csv, FIELDS, rows)
-        print(f'重复标签 {len(plan["groups"])} 组，涉及 {plan["assets"]} 个资源；复核 CSV：{args.review_csv}')
+        print(t('repair_duplicate_tags.planned', groups=len(plan["groups"]), assets=plan["assets"], csv=args.review_csv))
         if args.apply:
             before = counts_of(connection, {'asset_tag': 'SELECT count(*) FROM asset_tag'})
             apply_plan(connection, {**command, 'token': plan['token']})
             integrity, violations = verify_after_write(connection)
             if integrity != 'ok' or violations:
-                raise ValueError(f'账本检查失败：{integrity}，外键违规 {violations}')
+                raise ValueError(t('repair_duplicate_tags.checkFailed', integrity=integrity, violations=violations))
             connection.commit()
             after = counts_of(connection, {'asset_tag': 'SELECT count(*) FROM asset_tag'})
-            print(f'已整理；实体 {before["entity"]} → {after["entity"]}，标签标注 {before["asset_tag"]} → {after["asset_tag"]}；integrity_check={integrity}，外键违规 {violations}')
+            print(t('repair_duplicate_tags.applied', entitiesBefore=before["entity"], entitiesAfter=after["entity"],
+                    tagsBefore=before["asset_tag"], tagsAfter=after["asset_tag"], integrity=integrity, violations=violations))
         else:
-            print('仅生成复核产物，未写 ledger。')
+            print(t('repair_duplicate_tags.reviewOnly'))
     except BaseException:
         connection.rollback()
         raise

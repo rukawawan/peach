@@ -20,15 +20,36 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import uuid4
 
-from . import auto_landing_revert
+from . import auto_landing_revert, interface_text
 from .catalog_rules import normalise_code_key
 from .library_processing import LABELS
 from .metadata_auto_apply import VERIFIED_REPLACE_RULE, VERIFIED_UNION_RULE
 from .migrations import sqlite_backup
+from .user_messages import UserValueError
 from .web_state import WebContract
 
-#: 网页能撤的规则与它们写给人看的名字。
-RULES = {VERIFIED_REPLACE_RULE: "官方来源一致，覆盖原值", VERIFIED_UNION_RULE: "补上来源多给的标签"}
+#: 网页能撤的规则与它们写给人看的名字（`server.json` 里的 code）。
+RULES = {VERIFIED_REPLACE_RULE: "labels.webAutoLandings.ruleVerifiedReplace",
+         VERIFIED_UNION_RULE: "labels.webAutoLandings.ruleVerifiedUnion"}
+#: 列表里「写了哪一格」的名字。不在表里的字段照 `library_processing.LABELS` 的原文或字段名显示。
+FIELD_CODES = {
+    "title": "labels.webAutoLandings.fieldTitle", "original_title": "labels.webAutoLandings.fieldOriginalTitle",
+    "performers": "labels.webAutoLandings.fieldPerformers", "studio": "labels.webAutoLandings.fieldStudio",
+    "series": "labels.webAutoLandings.fieldSeries", "release_date": "labels.webAutoLandings.fieldReleaseDate",
+    "tags": "labels.webAutoLandings.fieldTags",
+}
+#: 并集规则那一行补的是标签，不分是哪一格。
+UNION_FIELD_CODE = "labels.webAutoLandings.fieldUnionTags"
+
+
+def _label(code: str) -> str:
+    return interface_text.text(f"server:{code}")
+
+
+def _field(field: str) -> dict:
+    """一行的 `field`（zh-CN 原文）与 `field_code`；没登记的字段 code 为空，界面照原文显示。"""
+    code = FIELD_CODES.get(field, "")
+    return {"field": _label(code) if code else LABELS.get(field, field), "field_code": code}
 #: 撤回前那份账本备份的用途名，「账本备份」列表里显示 `ledger_backups.PURPOSE_LABELS` 的写法。
 BACKUP_PURPOSE = "auto-landing-revert"
 
@@ -131,9 +152,10 @@ def _write_row(rule: str, item_key: str, note: dict, ids: list[int], work: dict 
     batches = _batches_of(note)
     union = rule == VERIFIED_UNION_RULE
     return {
-        "item_key": item_key, "rule": rule, "label": RULES[rule], "batch": batches[-1] if batches else "",
+        "item_key": item_key, "rule": rule, "label": _label(RULES[rule]), "label_code": RULES[rule],
+        "batch": batches[-1] if batches else "",
         "at": max((batch_time(batch) or 0 for batch in batches), default=0) or None,
-        "field": "标签" if union else LABELS.get(field, field),
+        **({"field": _label(UNION_FIELD_CODE), "field_code": UNION_FIELD_CODE} if union else _field(field)),
         "value": str(note.get("value") or ""),
         "previous": list(dict.fromkeys(str(before.get("value") or "") for before in note.get("previous") or [])),
         "tags": list(note.get("added_tags") or []) if union else [],
@@ -160,11 +182,11 @@ def list_writes(contract: WebContract, connection) -> list[dict]:
 def _plans(contract: WebContract, connection, keys: list[str]) -> list[dict]:
     """勾选那几行决定的撤回计划，每条规则一份。"""
     if not keys:
-        raise ValueError("请选择要撤回的资料")
+        raise UserValueError("api.autoLandings.selectionRequired")
     rules = {item_key: rule for rule, item_key, _note in _decisions(connection)}
     unknown = [key for key in keys if key not in rules]
     if unknown:
-        raise ValueError(f"这条自动写入已不在，请刷新后重试：{unknown[0]}")
+        raise UserValueError("api.autoLandings.writeGone", {"item": unknown[0]})
     plans = []
     for rule in RULES:
         chosen = {key for key in keys if rules[key] == rule}
@@ -187,10 +209,10 @@ def _summary(contract: WebContract, connection, plans: list[dict]) -> dict:
     for planned in plans:
         for entry in planned["verified"]:
             field = entry["item_key"].rpartition(":")[2]
-            label = LABELS.get(field, field)
-            restores += [{"asset_id": int(before["asset_id"]), "field": label, "current": entry["value"],
+            label = _field(field)
+            restores += [{"asset_id": int(before["asset_id"]), **label, "current": entry["value"],
                           "previous": before.get("value") or ""} for before in entry.get("restores") or []]
-            changed += [{"asset_id": int(asset_id), "field": label, "written": entry["value"]}
+            changed += [{"asset_id": int(asset_id), **label, "written": entry["value"]}
                         for asset_id in entry.get("changed") or []]
             tags += [{"asset_id": tag["asset_id"], "tag": tag["tag"], "batch": tag["batch"]}
                      for tag in entry.get("tags") or []]
@@ -229,7 +251,7 @@ def w_auto_landing_revert(contract: WebContract, body):
         connection.execute("BEGIN IMMEDIATE")
         plans = _plans(contract, connection, keys)
         if _token(plans) != str((body or {}).get("token") or ""):
-            raise ValueError("这几条自动写入已有变化，请重新预览")
+            raise UserValueError("api.autoLandings.writesChanged")
         summary = _summary(contract, connection, plans)
         # 与标签管理同一个做法：写锁里只复制一份，完整性检查与清退留给账本备份那一轮，
         # 不让任务中心的心跳在这里多等几十秒。
@@ -239,7 +261,7 @@ def w_auto_landing_revert(contract: WebContract, body):
         results = [auto_landing_revert.apply(connection, planned) for planned in plans]
     contract.cache_bust()
     return {"ok": True, "items": keys,
-            "restored": sum(result["还原核查覆盖"] for result in results),
-            "removed_tags": sum(result["删除核查并集标签"] for result in results),
-            "decisions": sum(result["删除核查决定"] for result in results),
+            "restored": sum(result["restored_verified"] for result in results),
+            "removed_tags": sum(result["deleted_verified_tags"] for result in results),
+            "decisions": sum(result["deleted_verified_decisions"] for result in results),
             "changed": summary["changed"], "backup": backup.name}

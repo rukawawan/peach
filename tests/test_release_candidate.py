@@ -287,13 +287,24 @@ class GitHubCandidateTests(unittest.TestCase):
                 github.select("owner/repo", "a" * 40)
 
     def test_loaded_docker_image_must_match_the_recorded_image_id(self):
-        image = {"Id": "sha256:" + "b" * 64, "Config": {"Labels": {
+        image = {"Id": "sha256:" + "b" * 64, "Architecture": "arm64", "Config": {"Labels": {
             "org.opencontainers.image.version": "1.2.3", "org.opencontainers.image.revision": "a" * 40}}}
+        inspected = []
+        def inspect(command, **_kw):
+            inspected.append(command[-1])
+            return json.dumps(image)
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"GITHUB_SHA": "a" * 40}), \
-                mock.patch.object(github.subprocess, "check_output", side_effect=lambda *_a, **_kw: json.dumps(image)):
+                mock.patch.object(github.subprocess, "check_output", side_effect=inspect):
             receipt = Path(directory) / "image.json"
-            github.image_receipt(receipt, "1.2.3", verify=False)
-            github.image_receipt(receipt, "1.2.3", verify=True)
+            github.image_receipt(receipt, "1.2.3", "arm64", verify=False)
+            github.image_receipt(receipt, "1.2.3", "arm64", verify=True)
+            self.assertEqual(set(inspected), {"longmeidao/peach:candidate-arm64"}, "每个架构核对自己的候选标签")
+            with self.assertRaisesRegex(ValueError, "架构"):
+                github.image_receipt(receipt, "1.2.3", "amd64", verify=True)
             image["Id"] = "sha256:" + "c" * 64
             with self.assertRaises(ValueError):
-                github.image_receipt(receipt, "1.2.3", verify=True)
+                github.image_receipt(receipt, "1.2.3", "arm64", verify=True)
+
+    def test_docker_promotion_requires_an_accepted_candidate_for_every_architecture(self):
+        self.assertTrue({"docker-candidate-amd64", "docker-candidate-arm64"} <= github.REQUIRED_ARTIFACTS)
+        self.assertTrue({"Linux amd64 镜像构建与验收", "Linux arm64 镜像构建与验收"} <= github.REQUIRED_JOBS)

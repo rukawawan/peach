@@ -39,15 +39,16 @@ from fastapi.responses import (
     Response,
 )
 
-from . import distribution, onboarding, settings_file
+from . import distribution, interface_text, onboarding, settings_file
 from .config import PROJECT_ROOT
 from .diagnostic_browser import BUNDLE_CHUNK_NAME
 from .entities import resolve_entity, resolve_entity_id
 from .media_libraries import LIBRARY_ICONS
-from .routes_auth import (FIRST_ACCESS_DENIED, origin_allowed, query_auth_redirect, require_asset_auth,
+from .routes_auth import (FIRST_ACCESS_DENIED_CODE, origin_allowed, query_auth_redirect, require_asset_auth,
                           require_page_auth, set_auth_cookie)
+from .user_messages import UserValueError, error_detail, message_fields
 from .web_local_access import local_client
-from .web_entry import page_shell, runtime_fact_entries
+from .web_entry import field_errors, page_shell, runtime_fact_entries
 from .web_state import FAVICON
 
 router = APIRouter()
@@ -64,58 +65,69 @@ _LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
 _SETUP_SYMBOLS = re.compile(r'<symbol id="i-(?:' + '|'.join(sorted({"folder-search", *LIBRARY_ICONS}))
                            + r')"[^>]*>.*?</symbol>')
 
-#: 键 -> 页面上的题目与一句说明。顺序、默认值与校验仍然来自 `onboarding.questions()`，
-#: 这里只决定同一道题在浏览器里怎么称呼：命令行那份题面要把可选值写进去，页面用控件表达。
+#: 键 -> 页面上的题目与一句说明的 code（`pages.setup.question.<名字>.label`／`.help`）。顺序、默认值与校验仍然
+#: 来自 `onboarding.questions()`，这里只决定同一道题在浏览器里怎么称呼：命令行那份题面要把可选值写进去，页面用控件表达。
 _SETUP_COPY = {
-    "data_root": ("数据目录", "Peach 数据库、封面、预览图和缓存都放在这里，馆藏较大时会占用数十 GB。"
-                              "系统盘空间紧张时，请选择其他磁盘上的文件夹；之后也可在设置页迁移。"),
-    "media_dir": ("媒体目录", "选择存放视频和图片的现有文件夹，也可以使用外置硬盘。"),
-    "host": ("谁可以访问", ""),
-    "port": ("端口", "浏览器地址里冒号后面的数字，一般不用改。"),
-    "mdns_name": ("局域网访问地址", "选了「同一局域网的设备」之后，其他设备在浏览器里输入这个地址就能打开 Peach。"),
+    "data_root": ("dataRoot", True),
+    "media_dir": ("mediaDir", True),
+    "host": ("host", False),
+    "port": ("port", True),
+    "mdns_name": ("mdnsName", True),
 }
 #: 「谁可以访问」在页面上的顺序：局域网在左边，也是默认选项——Peach 的本意就是给
 #: 同一局域网里的设备看。命令行问答按 `HOST_OPTIONS` 的编号顺序念，两边取值一致。
 _HOST_ORDER = ("2", "1")
 
 
-def setup_shell() -> str:
+def setup_shell(language: str = interface_text.SOURCE_LANGUAGE) -> str:
     """首次运行页的 HTML 模板：题目、表单与完成态都由 `/dist/peach-pages.js` 按 `/api/setup/questions` 画出来。
 
-    字形从 `web/index.html` 的雪碧图里按名字摘。
+    字形从 `web/index.html` 的雪碧图里按名字摘。标题与 `<html lang>` 按请求的语言。
     """
     index = (PROJECT_ROOT / "web/index.html").read_text(encoding="utf-8")
-    return page_shell("Peach · 首次运行", "setup", symbols="".join(_SETUP_SYMBOLS.findall(index)))
+    return page_shell(interface_text.text("server:pages.setup.title", None, language), "setup",
+                      symbols="".join(_SETUP_SYMBOLS.findall(index)), language=language)
 
 
-def error_page(status: int, message: str) -> str:
+def error_page(status: int, message: str, *, language: str = interface_text.SOURCE_LANGUAGE) -> str:
     """浏览器导航撞上 HTTP 错误时给人看的那一页，不是一行 JSON。
 
-    标题、说明的显隐与「返回首页」归页面包，这里只给状态码和已换成中文的说明。
+    标题、说明的显隐与「返回首页」归页面包，这里只给状态码和按 `language` 渲染好的说明。
     """
-    return page_shell("Peach", "error", {"status": str(status), "detail": message})
+    return page_shell("Peach", "error", {"status": str(status), "detail": message}, language=language)
 
 
-def _copy_for(key: str, fallback: str) -> tuple[str, str]:
-    return _SETUP_COPY.get(key, (fallback, ""))
+def _setup_text(code: str, params: dict | None = None) -> dict[str, object]:
+    """首启页上一句随平台变化的文字：`text` 是 zh-CN 原句（老页面包读它），`code` 与 `params` 给页面按当前语言渲染。"""
+    return {"text": interface_text.text(f"server:{code}", params), "code": code, "params": dict(params or {})}
 
 
 #: 非 Windows 表单说明实际目录的填写位置。
-_POSIX_MEDIA_NOTE = "填写这台设备实际读取媒体的文件夹；Docker 部署填写容器内目录，例如 /media。"
+_POSIX_MEDIA_NOTE = "pages.setup.posixMediaNote"
 
 
 #: 有一行媒体来源选了云盘时，媒体库底下出现的那句提示和它的帮助链接。
-_CLOUD_HELP = "请先将 CloudDrive2 或 OpenList 中的网盘挂载为本机文件夹；Windows 读取 NAS 共享时，请先映射为盘符，再选择对应文件夹。本机安装提示仅适用于在本机运行 CloudDrive。文件操作需要挂载工具和网盘账号授予写入权限；光鸭云盘的上传、建文件夹、改名和移动需要 CloudDrive2 v1.1.0 或更高版本，删除和复制暂不支持。"
+_CLOUD_HELP = "pages.setup.cloudHelp"
 _CLOUD_HELP_URL = "https://www.clouddrive2.com/help.html"
-_CLOUD_HELP_LABEL = "挂载帮助"
+_CLOUD_HELP_LABEL = "pages.setup.cloudHelpLink"
 
 
-def missing_mount_dependencies(*, windows: bool) -> list[dict[str, str]]:
-    """云盘挂载缺的软件：每项一句「未检测到」和它的下载入口，由 `/api/setup/questions` 交给首启页。"""
+def missing_mount_dependencies(*, windows: bool) -> list[dict[str, object]]:
+    """云盘挂载缺的软件：每项一句「未检测到」和它的下载入口，由 `/api/setup/questions` 交给首启页。
+
+    `message`、`download_label` 是 zh-CN 原句，旁边的 `<键>_code`、`<键>_params` 给页面按当前语言渲染。"""
     from .media_configuration import mount_dependencies
-    return [{"name": row["name"], "message": f"未检测到 {row['name']}。",
-             "download_url": row["download_url"], "download_label": f"下载 {row['name']}"}
-            for row in mount_dependencies(system='win32' if windows else 'darwin') if not row['available']]
+    rows = []
+    for row in mount_dependencies(system='win32' if windows else 'darwin'):
+        if row['available']:
+            continue
+        message = _setup_text("pages.setup.mountMissing", {"name": row["name"]})
+        label = _setup_text("labels.downloadNamed", {"name": row["name"]})
+        rows.append({"name": row["name"], "message": message["text"], "message_code": message["code"],
+                     "message_params": message["params"], "download_url": row["download_url"],
+                     "download_label": label["text"], "download_label_code": label["code"],
+                     "download_label_params": label["params"]})
+    return rows
 
 
 def _media_dir_values(values: Mapping[str, object], default: str) -> list[str]:
@@ -126,10 +138,12 @@ def _media_dir_values(values: Mapping[str, object], default: str) -> list[str]:
     return [str(raw) if raw else default]
 
 
-def _question_view(question) -> dict[str, str]:
-    """一道题在页面上的题面、说明、控件种类和输入框前后缀，由 `/api/setup/questions` 交给首启页。"""
-    title, help_text = _copy_for(question.key, question.prompt)
-    view = {"label": title, "help": help_text, "input": "text", "prefix": "", "suffix": ""}
+def _question_view(question) -> dict[str, object]:
+    """一道题在页面上的题面、说明的 code、控件种类和输入框前后缀，由 `/api/setup/questions` 交给首启页。"""
+    name, has_help = _SETUP_COPY[question.key]
+    view: dict[str, object] = {"label": f"pages.setup.question.{name}.label",
+                               "help": f"pages.setup.question.{name}.help" if has_help else "",
+                               "input": "text", "prefix": "", "suffix": ""}
     if question.key == "media_dir":
         view["input"] = "folders"
     elif question.key == "data_root":
@@ -141,8 +155,7 @@ def _question_view(question) -> dict[str, str]:
     elif question.key == "mdns_name":
         view.update(prefix="http://" if distribution.standalone() else "https://", suffix=".local")
         if distribution.standalone():
-            view["help"] = ("其他设备打开这个地址时要加上上面的端口，例如 "
-                            "http://peach.local:8900。首次连接请允许 Windows 专用网络访问。")
+            view["help"] = "pages.setup.question.mdnsName.standaloneHelp"
     return view
 
 
@@ -171,6 +184,12 @@ def _normal_url(config) -> str:
     if distribution.standalone() or config.server.host in _LOOPBACK:
         return f"http://127.0.0.1:{config.server.port}/"
     return f"https://{config.server.mdns_name}.local/"
+
+
+def _ledger_migrating(request: Request) -> bool:
+    """服务启动时正在迁移账本（`api.LedgerMigration`）：页面壳照给，但不读账本。"""
+    migration = getattr(request.app.state, "ledger_migration", None)
+    return bool(migration is not None and migration.running)
 
 
 def asset_response(request: Request, path: Path, media: str, *, immutable: bool = False) -> Response:
@@ -305,7 +324,7 @@ def index(request: Request, args: dict[str, str] = Depends(require_page_auth)):
         return response
     if not settings.configured:
         # 未配置不是错误状态：服务照常起，首页（和任何前端路由的深链）变成首次运行页。
-        html = setup_shell()
+        html = setup_shell(interface_text.request_language(request.headers.get("accept-language")))
         if "edit" in request.query_params and _copy_editor_available():
             html = _with_copy_editor(html)
         response = HTMLResponse(html)
@@ -319,7 +338,8 @@ def index(request: Request, args: dict[str, str] = Depends(require_page_auth)):
     html = settings.page_path.read_text(encoding="utf-8")
     from .web_tutorial import q_tutorial_progress
     try:
-        if q_tutorial_progress(request.app.state.web_contract)['completed']:
+        # 启动迁移期间不读账本：页面壳照给，教程入口按未完成显示。
+        if not _ledger_migrating(request) and q_tutorial_progress(request.app.state.web_contract)['completed']:
             html = html.replace('id="tutorialBtn"', 'id="tutorialBtn" hidden', 1)
     except sqlite3.Error:
         # 账本不可读时仍可进入配置；教程客户端保留“未取得状态”的提示与重试入口。
@@ -381,7 +401,7 @@ def copy_editor_candidates(text: str = "", args: dict[str, str] = Depends(requir
     try:
         return JSONResponse(dev_copy.candidates(PROJECT_ROOT, text), headers={"Cache-Control": "no-store"})
     except ValueError as error:
-        raise HTTPException(400, str(error)) from error
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.post("/dev/copy-save")
@@ -434,19 +454,20 @@ def _setup_guard(request: Request, *, submit: bool) -> None:
         raise HTTPException(status_code=404, detail="not found")
     if distribution.docker():
         if not local_client(request):
-            raise HTTPException(status_code=403, detail={"message": FIRST_ACCESS_DENIED, "docker": True})
+            raise HTTPException(status_code=403, detail={**message_fields(FIRST_ACCESS_DENIED_CODE),
+                                                         "docker": True})
         if submit and not origin_allowed(request, guard="setup", tunnels=False):
-            raise HTTPException(status_code=403, detail="请从 Peach 设置页提交")
+            raise HTTPException(status_code=403, detail=message_fields("api.pages.submitFromSetup"))
         return
     host = request.client.host if request.client else ""
     if host not in _LOOPBACK:
         raise HTTPException(status_code=403, detail="setup is loopback-only")
     if distribution.standalone() and request.url.hostname not in _LOOPBACK:
-        raise HTTPException(status_code=403, detail="请使用本机地址打开设置")
+        raise HTTPException(status_code=403, detail=message_fields("api.pages.openSetupLocally"))
     if not submit:
         return
     if not origin_allowed(request, guard="setup", tunnels=False):
-        raise HTTPException(status_code=403, detail="请从 Peach 设置页提交")
+        raise HTTPException(status_code=403, detail=message_fields("api.pages.submitFromSetup"))
 
 
 @router.get("/api/setup/questions")
@@ -468,9 +489,12 @@ def setup_questions(request: Request):
     for question in asked:
         view = _question_view(question)
         note = _POSIX_MEDIA_NOTE if question.key == "media_dir" and not windows else ""
+        label = _setup_text(str(view["label"]))
+        help_lines = [_setup_text(code) for code in (view["help"], note) if code]
         item: dict[str, object] = {
-            "key": question.key, "label": view["label"],
-            "help": [line for line in (view["help"], note) if line],
+            # `label`、`help` 是 zh-CN 原句；`label_code` 与逐行对应的 `help_codes` 给页面按当前语言取译文。
+            "key": question.key, "label": label["text"], "label_code": label["code"],
+            "help": [line["text"] for line in help_lines], "help_codes": [line["code"] for line in help_lines],
             "default": (DOCKER_MEDIA_DIR if docker else "") if question.key == "media_dir" else question.default,
             # 星号与 `required` 跟着输入框走：两段式单选总有一项选中，不标。
             "required": question.key != "host",
@@ -479,7 +503,8 @@ def setup_questions(request: Request):
             "input": view["input"], "prefix": view["prefix"], "suffix": view["suffix"],
         }
         if question.key == "host":
-            item["options"] = [{"value": choice, "label": host_labels[choice]} for choice in _HOST_ORDER]
+            item["options"] = [{"value": choice, "label": interface_text.text(f"server:{host_labels[choice]}"),
+                                "label_code": host_labels[choice]} for choice in _HOST_ORDER]
         if question.key == "mdns_name":
             # 局域网地址只在选了「同一局域网的设备」时显示并提交；不提交时服务端按默认值补。
             item["visible_when"] = {"host": "2"}
@@ -491,7 +516,9 @@ def setup_questions(request: Request):
         "media_sources": [{"value": value, "label": label} for value, label in SOURCE_OPTIONS],
         "media_source_default": "local",
         "media_root": None,
-        "cloud": {"help": _CLOUD_HELP, "link": {"url": _CLOUD_HELP_URL, "label": _CLOUD_HELP_LABEL},
+        "cloud": {"help": interface_text.text(f"server:{_CLOUD_HELP}"), "help_code": _CLOUD_HELP,
+                  "link": {"url": _CLOUD_HELP_URL, "label": interface_text.text(f"server:{_CLOUD_HELP_LABEL}"),
+                           "label_code": _CLOUD_HELP_LABEL},
                   "dependencies": missing_mount_dependencies(windows=windows)},
         "access_enabled": _access_on_by_default(asked),
         "scan_now": True,
@@ -552,12 +579,12 @@ async def setup_submit_json(request: Request):
     except ValueError:
         body = None
     if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="请求正文要是 JSON 对象")
+        raise HTTPException(status_code=400, detail=message_fields("api.pages.bodyNotObject"))
     from . import remote_reporting
     try:
         reporting = remote_reporting.parse_choices(body.get("remote_reporting", {}), partial=True)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=error_detail(exc)) from exc
     submitted: dict[str, object] = {
         key: _json_text(body[key])
         for key in ("data_root", "host", "port", "mdns_name", "access_password", "access_confirm")
@@ -574,10 +601,10 @@ async def setup_submit_json(request: Request):
     confirmation = submitted.get("access_confirm", "") if password_enabled else ""
     try:
         if password_enabled and not password:
-            raise ValueError("请输入访问密码")
+            raise UserValueError("api.pages.passwordRequired")
         access.validate_password(password, confirmation)
     except ValueError as exc:
-        errors["access_password"] = str(exc)
+        errors["access_password"] = exc
     standalone = distribution.standalone()
     from . import peach_proxy
     proxy_values = None
@@ -588,12 +615,12 @@ async def setup_submit_json(request: Request):
     try:
         proxy_values = peach_proxy.validate(proxy_root, body.get("peach_proxy", {"mode": "environment"}))
     except ValueError as exc:
-        errors["peach_proxy"] = str(exc)
+        errors["peach_proxy"] = exc
     if standalone and answers is not None:
         try:
             onboarding.check_available_port(answers.port, request.url.port or 80)
         except ValueError as exc:
-            errors["port"] = str(exc)
+            errors["port"] = exc
     if not errors:
         # Peach 数据目录决定设置文件在哪，所以拿到它之后要按它重新解析一次，不能沿用进程启动
         # 那一刻按发现顺序算出来的这份。
@@ -605,9 +632,9 @@ async def setup_submit_json(request: Request):
                                        peach_proxy_values=proxy_values, require_tls=windows and not standalone)
             settings_file.remember_data_root(settings_file.active(), applied.config)
         except (OSError, RuntimeError) as exc:
-            errors = {"data_root": str(exc)}
+            errors = {"data_root": exc}
     if errors:
-        raise HTTPException(status_code=400, detail={"message": "有几项需要修改", "errors": errors})
+        raise HTTPException(status_code=400, detail={**message_fields("api.pages.needsChanges"), **field_errors(errors)})
     remote_reporting.save(reporting, applied.config)
     if scan_now:
         onboarding.request_first_scan(applied.config, "configured" if answers.media_sources is not None else "local")
@@ -645,33 +672,35 @@ async def setup_restore(request: Request):
         body = await request.json()
         raw = body.get("data_root") if isinstance(body, dict) else None
         if not isinstance(raw, str) or not raw.strip() or not Path(raw).is_absolute():
-            raise ValueError("请选择已有数据目录的绝对路径")
+            raise UserValueError("api.pages.restoreNeedsAbsolutePath")
         config, broken = onboarding.resolve_config(Path(raw))
         if broken:
             raise broken
         if not config.present:
-            raise ValueError("此目录中没有有效的 config.toml")
+            raise UserValueError("api.pages.restoreMissingConfig")
         if not (config.directory("database") / "ledger.db").is_file():
-            raise ValueError("此目录中没有数据库，请选择保存原配置和数据库的数据目录")
+            raise UserValueError("api.pages.restoreMissingDatabase")
         if distribution.standalone():
             onboarding.check_available_port(config.server.port, request.url.port or 80)
         settings_file.remember_data_root(settings_file.active(), config)
     except (ValueError, OSError, RuntimeError) as exc:
-        raise HTTPException(400, {"message": "无法使用此数据目录", "errors": {"data_root": str(exc)}}) from exc
+        raise HTTPException(400, {**message_fields("api.pages.restoreRejected"),
+                                  **field_errors({"data_root": exc})}) from exc
     return _setup_done(config, restored=True)
 
 
 def _setup_media_source_errors(dirs: Sequence[str], kinds: object,
-                               problems: Sequence[str], validate) -> list[str]:
+                               problems: Sequence[object], validate) -> list[object]:
     """首启的本地来源必须真的可读；CloudDrive 来源仍可离线保存。
 
     `media_configuration.validate` 对整表不成立的情况（一行都没填、超过 100 行）
     只回一句话，和行数对不上。那种时候原样交回去让页面显示，不能按行去覆盖——
     索引会越界，用户看到的是 500 而不是「请添加 1 到 100 个媒体目录」。
+    每行的原因是空串、文字或异常，由 `field_errors` 写成原句与 code。
     """
     if problems and len(problems) != len(dirs):
         return list(problems)
-    errors = list(problems) if problems else [""] * len(dirs)
+    errors: list[object] = list(problems) if problems else [""] * len(dirs)
     source_kinds = list(kinds) if isinstance(kinds, (list, tuple)) else []
     for index, path in enumerate(dirs):
         kind = source_kinds[index] if index < len(source_kinds) else "local"
@@ -680,7 +709,7 @@ def _setup_media_source_errors(dirs: Sequence[str], kinds: object,
         try:
             validate(path)
         except ValueError as exc:
-            errors[index] = str(exc)
+            errors[index] = exc
     return errors if any(errors) else []
 
 
@@ -689,7 +718,7 @@ def _read_answers(
 ) -> tuple[object, dict[str, object]]:
     """逐字段校验，错误按字段收集。校验器和 CLI 问答用的是同一批。
 
-    媒体目录那一项是多行：错误是与行对应的列表，其余字段的错误是一句话。
+    媒体目录那一项是多行：错误是与行对应的列表，其余字段的错误是一个异常；出口由 `field_errors` 写成原句与 code。
     """
     values: dict[str, object] = {}
     errors: dict[str, object] = {}
@@ -718,7 +747,7 @@ def _read_answers(
                 try:
                     media_identity.configure_sources(config, sources, windows=windows)
                 except ValueError as exc:
-                    problems = [str(exc)] * len(sources)
+                    problems = [exc] * len(sources)
             problems = _setup_media_source_errors(dirs, kinds, problems, question.validate)
             if problems:
                 errors["media_dir"] = problems
@@ -728,7 +757,7 @@ def _read_answers(
         try:
             values[question.key] = question.validate(raw if raw.strip() else question.default)
         except ValueError as exc:
-            errors[question.key] = str(exc)
+            errors[question.key] = exc
     if errors:
         return None, errors
     return onboarding.Answers(**values), {}  # type: ignore[arg-type]
@@ -960,7 +989,8 @@ def settings_section_route(request: Request, section: str,
 @router.api_route("/tags/{name:path}", methods=["GET", "HEAD"])
 def entity_route(request: Request, name: str,
                  args: dict[str, str] = Depends(require_page_auth)):
-    if not request.app.state.settings.configured:
+    if not request.app.state.settings.configured or _ledger_migrating(request):
+        # 启动迁移期间不查实体：给页面壳，页面自己的请求会拿到「正在更新本地数据库」。
         return index(request, args)
     from .web_entity import INDEX_ENTITY_KINDS, entity_id_redirect, entity_page_shape
 

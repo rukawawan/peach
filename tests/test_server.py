@@ -190,6 +190,12 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(server.supervise("0.0.0.0", 8900, stopping), 0)
         self.assertEqual([arguments[:2] for arguments in launched], [("serve", "--setup"), ("serve", "--host")])
 
+    def test_the_container_log_line_follows_the_command_line_language(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = settings_file.load_config(environ={"PEACH_DATA_ROOT": str(Path(directory).resolve())})
+            with patch.dict(server.os.environ, {server.ACCESS_PASSWORD_ENV: "container-secret", "PEACH_LANGUAGE": "en"}):
+                self.assertEqual(server.seed_access_password(config), "Access password set from PEACH_ACCESS_PASSWORD.")
+
     def test_access_password_from_the_environment_is_written_once_and_never_echoed(self):
         from peach import access
         with tempfile.TemporaryDirectory() as directory:
@@ -216,3 +222,112 @@ class ServerTests(unittest.TestCase):
             with patch.dict(server.os.environ, {}, clear=False):
                 server.os.environ.pop(server.ACCESS_PASSWORD_ENV, None)
                 self.assertEqual(server.seed_access_password(config), "")
+
+
+class NasComposeTests(unittest.TestCase):
+    def test_installation_errors_keep_value_error_compatibility_and_a_message_code(self):
+        from peach.nas_setup import compose
+        from peach.user_messages import error_fields
+        with self.assertRaises(ValueError) as caught:
+            compose(bind='0.0.0.0', media='/srv/videos')
+        self.assertEqual(error_fields(caught.exception), {
+            'error': '请填写 NAS 的局域网 IP 或回环地址',
+            'message_code': 'nasSetup.invalidBind', 'message_params': {}})
+
+    def test_generated_config_preserves_literal_paths_and_scopes_permissions(self):
+        from peach.nas_setup import compose
+        import json
+        text = compose(bind='192.0.2.10', media='/srv/电影 $archive/owner\'s videos',
+                       render_device='/dev/dri/renderD128', prepare_render=True)
+        # 从 YAML 的 JSON 字符串解码，再模拟 Compose 的美元转义，目录必须逐字保留。
+        source = next(line.split('source: ', 1)[1] for line in text.splitlines() if 'source: ' in line)
+        self.assertEqual(json.loads(source).replace('$$', '$'), '/srv/电影 $archive/owner\'s videos')
+        self.assertIn('read_only: true', text)
+        self.assertIn('create_host_path: false', text)
+        self.assertIn('peach-data:/data', text)
+        self.assertIn('PEACH_VAAPI_PREPARE: "1"', text, "节点由镜像入口在降权前准备")
+        self.assertNotIn('entrypoint:', text, "只有一个入口，UID/GID 与核显准备在同一处降权")
+        self.assertNotIn('user:', text)
+        self.assertNotIn('privileged', text)
+        self.assertNotIn('SYS_ADMIN', text)
+        self.assertIn('image: "longmeidao/peach:latest"', text, "NAS 面板只按 latest 检查更新")
+
+    def test_the_run_identity_can_follow_the_nas_share_owner(self):
+        from peach.nas_setup import compose
+        text = compose(bind='192.0.2.10', media='/srv/videos', uid=1026, gid=100)
+        self.assertIn('PEACH_UID: "1026"', text)
+        self.assertIn('PEACH_GID: "100"', text)
+        self.assertNotIn('environment:', compose(bind='192.0.2.10', media='/srv/videos'))
+        for value in (0, -1, 2**32 - 1):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                compose(bind='192.0.2.10', media='/srv/videos', uid=value)
+
+    def test_cpu_and_group_access_do_not_request_root(self):
+        from peach.nas_setup import compose
+        cpu = compose(bind='::1', media='/srv/videos')
+        self.assertIn('[::1]:8900:8900', cpu)
+        self.assertNotIn('devices:', cpu)
+        group = compose(bind='192.0.2.10', media='/srv/videos',
+                        render_device='/dev/dri/renderD129', render_gid=107)
+        self.assertIn('group_add:\n      - "107"', group)
+        self.assertNotIn('user:', group)
+        self.assertNotIn('entrypoint:', group)
+
+    def test_invalid_installation_values_and_ambiguous_gpu_access_are_rejected(self):
+        from peach.nas_setup import compose
+        for changes in ({'bind': '0.0.0.0'}, {'media': 'relative'}, {'port': 0},
+                        {'render_device': '/dev/sda', 'prepare_render': True},
+                        {'render_device': '/dev/dri/renderD128'},
+                        {'render_device': '/dev/dri/renderD128', 'prepare_render': True, 'render_gid': 107},
+                        {'render_gid': 107}, {'hostname': 'invalid name'}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                compose(**dict({'bind': '192.0.2.10', 'media': '/srv/videos'}, **changes))
+
+    def test_existing_compose_is_never_overwritten(self):
+        from peach.nas_setup import main
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'compose.yaml'
+            output.write_text('existing deployment', encoding='utf-8')
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as failed:
+                main(['--bind', '192.0.2.10', '--media', '/srv/videos', '--output', str(output)])
+            self.assertEqual(failed.exception.code, 2)
+            self.assertEqual(output.read_text(encoding='utf-8'), 'existing deployment')
+
+
+@unittest.skipIf(sys.platform == 'win32', 'Linux container device entry point')
+class RenderDevicePreparationTests(unittest.TestCase):
+    def test_host_bind_mount_and_non_render_devices_are_rejected_before_mutation(self):
+        from peach import docker_vaapi
+        import stat
+        for device, info in (
+            ('/dev/dri/renderD128', SimpleNamespace(st_mode=stat.S_IFCHR, st_rdev=0, st_dev=2)),
+            ('/dev/dri/renderD128', SimpleNamespace(st_mode=stat.S_IFLNK, st_rdev=0, st_dev=1)),
+        ):
+            with (self.subTest(info=info), patch.object(docker_vaapi.os, 'geteuid', return_value=0),
+                  patch.object(docker_vaapi.os, 'lstat', return_value=info),
+                  patch.object(docker_vaapi.os, 'major', return_value=226),
+                  patch.object(docker_vaapi.os, 'minor', return_value=128),
+                  patch.object(docker_vaapi.os, 'stat', return_value=SimpleNamespace(st_dev=1)),
+                  patch.object(docker_vaapi.os, 'chown') as chown,
+                  self.assertRaises((PermissionError, ValueError))):
+                docker_vaapi.prepare(device, 1027)
+            chown.assert_not_called()
+
+    def test_the_node_goes_to_the_service_group_and_identity_is_left_to_the_entrypoint(self):
+        from peach import docker_vaapi
+        import stat
+        device = SimpleNamespace(st_mode=stat.S_IFCHR, st_rdev=0, st_dev=1)
+        with (patch.object(docker_vaapi.os, 'geteuid', return_value=0),
+              patch.object(docker_vaapi.os, 'lstat', return_value=device),
+              patch.object(docker_vaapi.os, 'stat', return_value=SimpleNamespace(st_dev=1)),
+              patch.object(docker_vaapi.os, 'major', return_value=226),
+              patch.object(docker_vaapi.os, 'minor', return_value=128),
+              patch.object(docker_vaapi.os, 'chown') as chown,
+              patch.object(docker_vaapi.os, 'chmod') as chmod):
+            docker_vaapi.prepare('/dev/dri/renderD128', 1027)
+            with self.assertRaises(PermissionError):
+                docker_vaapi.prepare('/dev/dri/renderD128', 0)
+        chown.assert_called_once_with('/dev/dri/renderD128', 0, 1027)
+        chmod.assert_called_once_with('/dev/dri/renderD128', 0o660)

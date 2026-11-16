@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 import json
+import logging
 import os
 from pathlib import Path
 import socket
@@ -14,10 +15,12 @@ from weakref import WeakValueDictionary
 
 from filelock import FileLock, Timeout
 
+from . import interface_text
 from .fsutil import atomic_write_text
+from .user_messages import UserFacingError
 
 
-class UpdateBusy(ValueError):
+class UpdateBusy(UserFacingError, ValueError):
     """任务或安装事务占用数据目录，调用方应保留当前程序。"""
 
 
@@ -34,6 +37,28 @@ def state_for(db: Path) -> Path:
 _locks = WeakValueDictionary()
 _locks_guard = threading.Lock()
 current_db = ContextVar('peach_task_database', default=None)
+LOGGER = logging.getLogger(__name__)
+
+#: 本进程里关心安装预约的人（任务恢复服务）：预约撤下（`released`）、本进程看见活着的预约
+#: （`pausing`）时各收到一次 `(闸门目录, 事件)`。回调在调用方线程里、可能还持着闸门锁，只登记就返回。
+_listeners: list = []
+
+
+def subscribe(callback) -> None:
+    _listeners.append(callback)
+
+
+def unsubscribe(callback) -> None:
+    if callback in _listeners:
+        _listeners.remove(callback)
+
+
+def _announce(root: Path, event: str) -> None:
+    for callback in tuple(_listeners):
+        try:
+            callback(root, event)
+        except Exception:
+            LOGGER.exception('update task listener failed')
 
 
 def _mutex(root: Path) -> FileLock:
@@ -52,10 +77,20 @@ def _read(path: Path) -> dict:
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:
-        raise UpdateBusy("任务保护状态无法读取，请检查数据目录后重试。") from exc
+        raise UpdateBusy("errors.updateTasks.stateUnreadable") from exc
     if not isinstance(value, dict):
-        raise UpdateBusy("任务保护状态无效，请检查数据目录后重试。")
+        raise UpdateBusy("errors.updateTasks.stateInvalid")
     return value
+
+
+def _busy(data: dict, code: str) -> UpdateBusy:
+    """预约期间拒绝新任务：预约者写下了自己的那句话（`reserve(busy=<code>)`）就用它，否则用 `code`。
+    旧版写下的是原文（`busy`），照转。"""
+    if isinstance(data.get("busy_code"), str) and interface_text.has(f"server:{data['busy_code']}"):
+        return UpdateBusy(data["busy_code"])
+    if data.get("busy"):
+        return UpdateBusy("errors.updateTasks.reservedBusy", {"message": str(data["busy"])})
+    return UpdateBusy(code)
 
 
 def _alive(data: dict) -> bool:
@@ -69,6 +104,7 @@ def _maintenance(root: Path) -> dict:
     data = _read(path)
     if data and not _alive(data):
         path.unlink(missing_ok=True)
+        _announce(root, 'released')
         return {}
     return data
 
@@ -83,7 +119,7 @@ def gate(root: Path):
     try:
         stack.enter_context(_mutex(root))
     except Timeout:
-        raise GateBusy("任务闸门正忙，稍后自动重试。") from None
+        raise GateBusy("errors.updateTasks.gateBusy") from None
     with stack:
         yield
 
@@ -94,7 +130,9 @@ def admission(db: Path):
     root = state_for(db)
     with gate(root):
         if data := _maintenance(root):
-            raise UpdateBusy(data.get("busy") or "正在准备安装更新，暂时不能启动新任务。请等待安装完成。")
+            # 被挡下的任务会存成「等安装结束」，恢复服务要等预约撤下再接回它。
+            _announce(root, 'pausing')
+            raise _busy(data, "errors.updateTasks.preparingInstall")
         yield
 
 
@@ -121,16 +159,16 @@ def activity(db: Path, label: str):
 def reserve(db: Path, *, owner: int | None = None, busy: str | None = None) -> str:
     """接受安装预约并通知所有服务保存进度、暂停任务。
 
-    `busy` 是预约期间拒绝新任务时给人看的那句话；账本恢复也借这把闸门挡新任务。
+    `busy` 是预约期间拒绝新任务时给人看的那句话的 code（`server` 命名空间）；账本恢复也借这把闸门挡新任务。
     """
     root = state_for(db)
     with _mutex(root):
         if data := _maintenance(root):
-            raise UpdateBusy(data.get("busy") or "已有更新安装正在进行，请等待完成。")
+            raise _busy(data, "errors.updateTasks.installInProgress")
         token = uuid.uuid4().hex
         atomic_write_text(root / "install.json", json.dumps({
             "pid": owner if owner is not None else os.getpid(), "token": token,
-            **({"busy": busy} if busy else {})}, ensure_ascii=False))
+            **({"busy_code": busy} if busy else {})}, ensure_ascii=False))
         from .job_recovery import request_pause
         request_pause(db)
         return token
@@ -152,14 +190,19 @@ def is_pausing(db: Path) -> bool:
         data = None
     if not isinstance(data, dict):
         with gate(root):
-            return bool(_maintenance(root))
-    return bool(data) and _alive(data)
+            pausing = bool(_maintenance(root))
+    else:
+        pausing = bool(data) and _alive(data)
+    if pausing:
+        # 预约可能是别的进程（安装助手、安装器）下的：本进程看见了，恢复服务才知道要等它撤下。
+        _announce(root, 'pausing')
+    return pausing
 
 
 def check_pause(db: Path | None) -> None:
     if db is not None and is_pausing(db):
         from .jobs import JobPaused
-        raise JobPaused('任务已暂停，安装完成后自动继续。')
+        raise JobPaused('errors.updateTasks.pausedForInstall')
 
 
 def running(db: Path, *, own_files=(), own_runs=(), task_rows: bool = True) -> list[str]:
@@ -183,13 +226,13 @@ def _running(db: Path, *, own_files=(), own_runs=(), task_rows: bool = True) -> 
                 continue
             data = _read(path)
             if _alive(data):
-                labels.append(str(data.get("label") or "后台任务"))
+                labels.append(str(data.get("label") or interface_text.text("server:labels.updateTasks.unnamedTask")))
             else:
                 path.unlink(missing_ok=True)
         if task_rows:
             gate = task_gate(db, host=socket.gethostname(), alive=process_alive)
             if gate.error:
-                labels.append('任务状态未取得')
+                labels.append(interface_text.text("server:labels.updateTasks.stateUnknown"))
             labels.extend(run.describe() for run in (*gate.blocking, *gate.resumable)
                           if run.status == "running" and run.id not in own_runs
                           and (run.pid is None or process_alive(run.pid)))
@@ -201,7 +244,7 @@ def _running(db: Path, *, own_files=(), own_runs=(), task_rows: bool = True) -> 
             try:
                 pid = int(path.read_text(encoding="ascii").strip())
             except (OSError, ValueError):
-                raise UpdateBusy("批处理进程状态无法确认，安装已取消。") from None
+                raise UpdateBusy("errors.updateTasks.batchStateUnknown") from None
             paused = _read(root / 'paused' / f'{pid}.json')
             if process_alive(pid) and not paused:
                 labels.append(path.stem)
@@ -210,7 +253,7 @@ def _running(db: Path, *, own_files=(), own_runs=(), task_rows: bool = True) -> 
             with FileLock(library_lock, timeout=0):
                 pass
         except Timeout:
-            labels.append('馆藏资料与预览处理')
+            labels.append(interface_text.text("server:labels.updateTasks.libraryProcessing"))
         return list(dict.fromkeys(labels))
 
 
@@ -241,7 +284,7 @@ def transfer(db: Path, token: str, owner: int) -> None:
     with _mutex(root):
         data = _read(root / "install.json")
         if not token or data.get("token") != token:
-            raise UpdateBusy("更新安装预约已失效，请重新准备更新。")
+            raise UpdateBusy("errors.updateTasks.reservationExpired")
         atomic_write_text(root / "install.json", json.dumps({"pid": owner, "token": token}))
 
 
@@ -250,6 +293,7 @@ def release(db: Path, token: str) -> None:
     with _mutex(root):
         if _read(root / "install.json").get("token") == token:
             (root / "install.json").unlink(missing_ok=True)
+            _announce(root, 'released')
 
 
 def release_owner(db: Path, owner: int) -> None:

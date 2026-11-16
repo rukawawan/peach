@@ -32,14 +32,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+sys.path.append(str(Path(__file__).resolve().parent))
 
 from peach import javdb
 from peach.config import DATA_ROOT, GENERATED_DIR
 from peach.entities import merge_entity, normalize_entity_name
 from peach.entry_links import JAV_DIRECTORIES
+from peach.interface_text import dev as t
 from peach.kanji import JP_KANJI_TO_SIMPLIFIED, simplify_kanji   # noqa: F401 - 供测试与脚本共用
 from peach.review_csv import read_rows, write_rows
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write
+from legacy_values import JAVDB_NAME_VERDICTS
 
 
 RELEASE_SOURCES = frozenset({
@@ -113,8 +116,9 @@ def read_mapping(path: Path) -> list[ActorMapping]:
 def read_mapping_csv(path: Path, accept: Sequence[str] = ("ok",)) -> list[ActorMapping]:
     """读资料页复核映射，只收 `accept` 里那几种判定的行。
 
-    默认只收 `ok`。站上已经改了名的（`改艺名`、`旧名`）要不要跟着改，是人的决定，
-    所以得在命令行里点名——判定名照抄 CSV 里那一列的字面值。
+    默认只收 `ok`。站上已经改了名的（`renamed`、`former-name`）要不要跟着改，是人的决定，
+    所以得在命令行里点名——判定名照抄 CSV 里那一列的字面值。旧版 CSV 与 `--accept` 里的中文判定词
+    先归一成英文 id 再比。
 
     `jp` 取账本规范名而不是页面上的日文写法：规范名在账本里唯一，拿它回查是一对一，
     页面写法还要绕别名。采用的名字在这里再过一次字形归一：javdb 给的是繁体中文，
@@ -122,13 +126,18 @@ def read_mapping_csv(path: Path, accept: Sequence[str] = ("ok",)) -> list[ActorM
     字形不是译名判断，这一步不需要外部证据。
     """
     rows = []
-    order = {str(value).strip(): rank for rank, value in enumerate(accept)}
+    def verdict(value) -> str:
+        value = str(value or "").strip()
+        return JAVDB_NAME_VERDICTS.get(value, value)
+
+    order: dict[str, int] = {}
+    for rank, value in enumerate(accept):
+        order.setdefault(verdict(value), rank)
     taken: dict[str, int] = {}
-    candidates = [record for record in read_rows(path)
-                  if str(record.get("verdict") or "").strip() in order]
+    candidates = [record for record in read_rows(path) if verdict(record.get("verdict")) in order]
     # 同一位女优可能命中多页（`アンナ` 命中了 `安娜`、`Anna`、`ANNA` 三页）。
     # 按 `--accept` 的书写次序定优先级：先写的判定先采用，一位只留一条。
-    candidates.sort(key=lambda record: order[str(record["verdict"]).strip()])
+    candidates.sort(key=lambda record: order[verdict(record["verdict"])])
     for record in candidates:
         name = str(record.get("current_name") or "").strip()
         if not name or name in taken:
@@ -429,10 +438,10 @@ def _rewrite_actor_tags(
     rewritten = 0
     asset_ids = [int(row[0]) for row in connection.execute(
         "SELECT DISTINCT asset_id FROM asset_entity WHERE entity_id=?", (entity_id,))]
-    target_tag = f"演员:{target}"
+    target_tag = f"performer:{target}"
     for asset_id in asset_ids:
         for old_name in old_names:
-            old_tag = f"演员:{old_name}"
+            old_tag = f"performer:{old_name}"
             if old_tag == target_tag:
                 continue
             connection.execute(
@@ -450,8 +459,7 @@ def report_conflicts(rows: list[dict[str, object]]) -> int:
     """逐条打出重名冲突：它们靠被人看见来解决，不靠把整批改名扣在门外。"""
     stuck = [row for row in rows if row["action"] == "conflict"]
     for row in stuck:
-        print(f"  重名待裁决：{row['entity_id']} {row['current_name']} -> "
-              f"{row['target_name']}（{row['resolution']}）")
+        print(t("localize_performer_names.conflict", entityId=row['entity_id'], current=row['current_name'], target=row['target_name'], resolution=row['resolution']))
     return len(stuck)
 
 
@@ -547,7 +555,7 @@ EXTRA_COUNTS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="用中日映射本地化番号体系女优姓名")
+    parser = argparse.ArgumentParser(description=t("localize_performer_names.description"))
     add_ledger_write_args(parser)
     # 映射 XML 不在仓库里，也可能已经不在这台机器上。不给就只跑字形归一，
     # 那一道不需要外部来源，缺了 XML 也不该把整个脚本变成跑不起来。
@@ -556,13 +564,13 @@ def build_parser() -> argparse.ArgumentParser:
     # XML 那份覆盖的是已收录艺人，两份不冲突也不必同时给。
     parser.add_argument("--mapping-csv", type=Path)
     parser.add_argument("--mapping-source", default="",
-                        help="CSV 的复核来源前缀；留空表示 javdb:performer-cn")
+                        help=t("localize_performer_names.mappingSourceHelp"))
     parser.add_argument("--only", type=int, action="append", default=[],
-                        help="只处理指定 entity id，可重复；同一映射合并组必须完整点名")
+                        help=t("localize_performer_names.onlyHelp"))
     # 站上已经改了名的要不要跟着改，是人的决定，所以判定要在命令行里点名。
     parser.add_argument(
         "--accept", default="ok",
-        help="逗号分隔的判定名，照抄 CSV 的 verdict 列；默认只收 ok")
+        help=t("localize_performer_names.acceptHelp"))
     parser.add_argument("--mapping-revision", default="")
     parser.add_argument(
         "--identity-review", type=Path,
@@ -598,22 +606,22 @@ def run(args: argparse.Namespace) -> int:
                         and not groups[str(row["mapping_key"])].issubset(selected):
                     row.update(action="conflict", resolution="partial-merge-group-selection")
         write_csv(args.review_csv, rows)
-        print(f"已审计 performer {len(rows)} 位；复核 CSV：{args.review_csv}")
-        print("  动作分布：", dict(Counter(str(row["action"]) for row in rows)))
+        print(t("localize_performer_names.audited", count=len(rows), reviewCsv=args.review_csv))
+        print(t("localize_performer_names.actions"), dict(Counter(str(row["action"]) for row in rows)))
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("localize_performer_names.notWritten"))
             return 1 if report_conflicts(rows) else 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("localize_performer_names.backedUp", backup=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             changed = apply_rows(connection, rows, args.mapping_revision, prefix)
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, foreign_keys = verify_after_write(connection)
-        print("  写入结果：", changed)
+        print(t("localize_performer_names.results"), changed)
         for key in before:
             print(f"    {key}: {before[key]} -> {after[key]}")
-        print(f"  integrity_check={integrity}；foreign_key_check={foreign_keys}")
+        print(t("localize_performer_names.checks", integrity=integrity, foreignKeys=foreign_keys))
         stuck = report_conflicts(rows)
         return 1 if integrity != "ok" or foreign_keys or stuck else 0
     finally:
@@ -624,11 +632,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.mapping_xml and args.mapping_csv:
-        parser.error("两份映射只能给一份：混着跑的话，别名来源记的是哪一份就说不清了")
+        parser.error(t("localize_performer_names.twoMappings"))
     if args.mapping_source and not args.mapping_csv:
-        parser.error("--mapping-source 必须和 --mapping-csv 一起使用")
+        parser.error(t("localize_performer_names.sourceNeedsCsv"))
     if (args.mapping_xml or args.mapping_csv) and not args.mapping_revision:
-        parser.error("给了映射就必须给 --mapping-revision，别名要记得住来源")
+        parser.error(t("localize_performer_names.needRevision"))
     args.mapping_revision = args.mapping_revision or KANJI_ONLY_REVISION
     return run(args)
 

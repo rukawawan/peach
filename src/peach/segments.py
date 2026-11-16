@@ -317,7 +317,7 @@ class HlsSegmentService:
                     returncode, stderr = await self._run(build(temporary), session, registry)
                     if returncode == 0 and temporary.is_file() and (written := temporary.stat().st_size):
                         temporary.replace(target)
-                        logger.info("HLS 分片完成：%s", name)
+                        logger.info("HLS segmenting finished: %s", name)
                         await self._evict_after(written)
                         return target
                     if registry.is_cancelled(session):
@@ -329,7 +329,7 @@ class HlsSegmentService:
                         size = temporary.stat().st_size if temporary.is_file() else None
                         detail = (
                             f"ffmpeg wrote no data: returncode={returncode} "
-                            f"bytes={'缺文件' if size is None else size} "
+                            f"bytes={'missing' if size is None else size} "
                             f"ss={start:.3f} to={start + duration:.3f}"
                         )
                     detail = f"{name}: {detail}"

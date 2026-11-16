@@ -54,8 +54,8 @@ class DuplicateIdentityMergeTests(unittest.TestCase):
              (1, 14, "creator", "legacy:asset"), (2, 14, "creator", "legacy:asset")])
         self.con.executemany(
             "INSERT INTO asset_tag(asset_id,tag,confidence,source) VALUES(?,?,1.0,?)",
-            [(1, "演员:小千", "performer"), (2, "演员:小千", "performer"),
-             (3, "演员:NOZOMI NOZOMI", "javbus:performer")])
+            [(1, "performer:小千", "performer"), (2, "performer:小千", "performer"),
+             (3, "performer:NOZOMI NOZOMI", "javbus:performer")])
         self.con.commit()
 
     def tearDown(self):
@@ -89,7 +89,7 @@ class DuplicateIdentityMergeTests(unittest.TestCase):
             "SELECT asset_id,tag FROM asset_tag ORDER BY asset_id"))
         self.assertNotIn(1, tags)
         self.assertNotIn(2, tags)
-        self.assertEqual(tags[3], "演员:NOZOMI")
+        self.assertEqual(tags[3], "performer:NOZOMI")
         self.assertEqual(counts["actor_tags_removed"], 2)
         self.assertEqual(counts["actor_tags_rewritten"], 1)
         self.assertEqual(self.con.execute(
@@ -186,8 +186,8 @@ class DuplicateIdentityMergeTests(unittest.TestCase):
         )
         self.con.executemany(
             "INSERT INTO asset_tag(asset_id,tag,confidence,source) VALUES(?,?,1.0,'javbus:performer')",
-            [(5, "演员:瀬奈まお 瀬奈まお"),
-             (6, "演员:画像を拡大する 画像を拡大する")],
+            [(5, "performer:瀬奈まお 瀬奈まお"),
+             (6, "performer:画像を拡大する 画像を拡大する")],
         )
         rows = collect_repeated_projections(self.con)
         by_name = {row["bad_name"]: row for row in rows}
@@ -200,7 +200,7 @@ class DuplicateIdentityMergeTests(unittest.TestCase):
         self.assertEqual(self.con.execute(
             "SELECT creator FROM asset WHERE id=6").fetchone()[0], None)
         self.assertEqual([row[0] for row in self.con.execute(
-            "SELECT tag FROM asset_tag WHERE asset_id=5")], ["演员:瀬奈まお"])
+            "SELECT tag FROM asset_tag WHERE asset_id=5")], ["performer:瀬奈まお"])
         self.assertEqual([row[0] for row in self.con.execute(
             "SELECT tag FROM asset_tag WHERE asset_id=6")], [])
         self.assertEqual([row[0] for row in self.con.execute(

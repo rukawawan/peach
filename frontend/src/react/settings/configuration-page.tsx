@@ -7,7 +7,7 @@
  * 没有内容的组连标题与页签一起省略。页签条第一帧就在，和整页同一次提交画出来。 */
 import { useQuery } from '@tanstack/react-query';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
-import { peachHistory, shellNavigate, settingsPath } from '@peach/history';
+import { CONFIGURATION_SECTIONS, peachHistory, sectionTitle, shellNavigate, settingsPath } from '@peach/history';
 
 import { errorMessage } from '../../api';
 import { Button } from '@/components/base/buttons/button';
@@ -28,6 +28,7 @@ import { groupRoot } from './configuration-panel';
 import { downloadsShape, maintenanceShape, networkShape } from './configuration-shape';
 import { rememberShape } from '../../configuration-skeleton';
 import { busyProps } from './use-action';
+import { t } from '../../i18n';
 
 export function ConfigurationPage({ receipt, reopenTutorial, section = '', diagnostics }: ConfigurationProps & { diagnostics?: ReactElement }) {
   const config = useQuery({
@@ -37,8 +38,8 @@ export function ConfigurationPage({ receipt, reopenTutorial, section = '', diagn
   if (!data) {
     return (
       <div className="ui-configpage">
-        <Note tone="error" title="配置读取失败">
-          {config.error ? errorMessage(config.error) : '未取得配置，请刷新页面重试。'}
+        <Note tone="error" title={t('settings:configurationPage.loadFailedTitle')}>
+          {config.error ? errorMessage(config.error) : t('settings:configurationPage.loadFailed')}
         </Note>
       </div>
     );
@@ -53,7 +54,7 @@ function ConfigurationIssues({ data, sections, reload, refreshing }: {
   return <>{sections.map(key => {
     const issue = data.section_errors?.[key];
     return issue ? <Note key={key} tone="error" title={issue.title}
-      action={<Button variant="secondary" size="small" onClick={reload} {...busyProps(refreshing)}>重新读取</Button>}>{issue.message}</Note> : null;
+      action={<Button variant="secondary" size="small" onClick={reload} {...busyProps(refreshing)}>{t('settings:shared.reload')}</Button>}>{issue.message}</Note> : null;
   })}</>;
 }
 
@@ -111,21 +112,21 @@ function ConfigurationGroups(
     || networkKeys.some(key => data.section_errors?.[key]));
   const downloads = data.downloads;
   const groups: Group[] = [
-    { id: 'library', title: '媒体库与入库', body: (panel) => <div {...groupRoot(panel)}>
+    { id: 'library', title: CONFIGURATION_SECTIONS.library, body: (panel) => <div {...groupRoot(panel)}>
       {issues(['media_sources', 'library_count', 'mount_dependencies'])}
       {!data.section_errors?.media_sources && !data.section_errors?.library_count ? <MediaSettings {...group} /> : null}
       <CodePatternSettings receipt={receipt} />
       <MediaProcessingSettings receipt={receipt} />
       <TaskSpeedSettings receipt={receipt} />
     </div> },
-    { id: 'sources', title: '来源与订阅', body: (panel) => <SourceSettings {...group} panel={panel} issues={issues(['entry_links'])} /> },
+    { id: 'sources', title: CONFIGURATION_SECTIONS.subscriptions, body: (panel) => <SourceSettings {...group} panel={panel} issues={issues(['entry_links'])} /> },
     ...(downloads || data.section_errors?.downloads ? [{
-      id: 'downloads', title: '下载渠道',
+      id: 'downloads', title: CONFIGURATION_SECTIONS.downloads,
       body: (panel: ConfigurationPanel) => <DownloadGroup initial={downloads} receipt={receipt} panel={panel} issues={issues(['downloads'])} />,
     }] : []),
-    ...(network ? [{ id: 'network', title: '网络与访问', body: (panel: ConfigurationPanel) => <NetworkSettings {...group} panel={panel} issues={issues(networkKeys)} /> }] : []),
+    ...(network ? [{ id: 'network', title: CONFIGURATION_SECTIONS.network, body: (panel: ConfigurationPanel) => <NetworkSettings {...group} panel={panel} issues={issues(networkKeys)} /> }] : []),
     {
-      id: 'maintenance', title: '应用与维护',
+      id: 'maintenance', title: CONFIGURATION_SECTIONS.maintenance,
       body: (panel) => <div {...groupRoot(panel)}>
         {issues(['startup', 'uninstall', 'storage', 'remote_reporting', 'library_sharing', 'updates', 'update_job', 'automatic_updates', 'facts'])}
         <GeneralSettings {...group} />
@@ -133,13 +134,13 @@ function ConfigurationGroups(
         <MaintenanceSettings {...group} reopenTutorial={reopenTutorial} />
       </div>,
     },
-    { id: 'diagnostics', title: '系统诊断', body: panel => <div {...groupRoot(panel)}>{panel.active ? diagnostics : null}</div> },
+    { id: 'diagnostics', title: CONFIGURATION_SECTIONS.diagnostics, body: panel => <div {...groupRoot(panel)}>{panel.active ? diagnostics : null}</div> },
   ];
-  const at = Math.max(0, groups.findIndex((item) => item.title === chosen));
+  const at = Math.max(0, groups.findIndex((item) => item.title === sectionTitle(chosen)));
   return (
     <div ref={workspace} className="ui-configpage">
       <div className="ui-board-local-nav" data-section-nav="">
-        <SortableBoardTabs group="configuration" label="配置分区" value={groups[at].id}
+        <SortableBoardTabs group="configuration" label={t('settings:configurationPage.sectionsLabel')} value={groups[at].id}
           tabs={groups.map(({ id, title }) => ({ value: id, label: title }))} sectionItems panelPrefix={prefix}
           orientation={narrow ? 'horizontal' : 'vertical'} className=""
           onChange={id => choose(groups.find(group => group.id === id)!.title)} />

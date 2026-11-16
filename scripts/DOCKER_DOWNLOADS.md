@@ -4,4 +4,4 @@ kind: howto
 
 ### Docker
 
-镜像为 `longmeidao/peach:{version}`，同一镜像也发布为 `ghcr.io/peach-mitao/peach:{version}`；`edge` 指向最新一版。部署、更新与回滚见 [Docker 部署](https://github.com/peach-mitao/peach/blob/master/docs/DOCKER.md)。
+`edge` 标签始终指向最新一版，要固定版本就用上表里带版本号的标签。部署、更新与回滚见 [Docker 部署](https://github.com/peach-mitao/peach/blob/master/docs/DOCKER.md)。

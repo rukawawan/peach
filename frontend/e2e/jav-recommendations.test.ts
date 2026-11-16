@@ -35,12 +35,31 @@ describe('JAV 推荐与加载结构', () => {
       const count = reads.length;
       const drawer = () => page.evaluate(() => document.body.classList.contains('drawer-open'));
       const drawerOpen = await drawer();
+      // 页内改地址与详情撤下都不重画页面，导航时冻住的文档高度与滚动锚定要随之放开。
+      const released = () => page.waitForFunction(() => {
+        const root = document.documentElement;
+        return !root.hasAttribute('data-page-navigation-pending') && !root.style.minHeight && !root.style.overflowAnchor;
+      });
+      await page.waitForFunction(() => new URLSearchParams(location.search).get('q') === 'PCH');
+      await released();
       for (const exit of ['close', 'escape', 'back']) {
         const link = section.locator('[data-jav-card]').nth(8).locator('[data-jav-cover-box]');
         await link.scrollIntoViewIfNeeded();
-        const top = await page.evaluate(() => window.scrollY);
+        // 参照点取详情打开那一刻：跳过去的那几张卡首次排版会长高，滚动锚定随之把位置补上，点下去时才定。
+        await page.evaluate(() => {
+          const probe = window as typeof window & { stageOpenedAt?: number };
+          delete probe.stageOpenedAt;
+          const observer = new MutationObserver(() => {
+            if (!document.body.hasAttribute('data-detail-open')) return;
+            probe.stageOpenedAt = window.scrollY;
+            observer.disconnect();
+          });
+          observer.observe(document.body, { attributes: true, attributeFilter: ['data-detail-open'] });
+        });
         await link.click();
         await page.locator('#stage[open] [data-item-side]').waitFor();
+        const top = await page.evaluate(() => (window as typeof window & { stageOpenedAt?: number }).stageOpenedAt);
+        assert.equal(typeof top, 'number', `${exit} 打开详情时没有记下位置`);
         assert.equal(await section.getAttribute('data-return-probe'), 'kept');
         if (exit === 'close') await page.locator('#closeStage').click();
         else if (exit === 'escape') await page.keyboard.press('Escape');
@@ -53,7 +72,8 @@ describe('JAV 推荐与加载结构', () => {
         assert.equal(await section.locator('[data-entity-sort="release_date"]').getAttribute('aria-pressed'), 'true');
         assert.equal(await section.getAttribute('data-return-probe'), 'kept');
         assert.equal(reads.length, count, JSON.stringify(reads));
-        await page.waitForFunction(previous => Math.abs(window.scrollY - previous) < 2, top);
+        await released();
+        await page.waitForFunction(previous => Math.abs(window.scrollY - previous!) < 2, top);
       }
       assert.deepEqual(opened.problems.filter(line => !line.includes('VIDEOJS')), []);
     } finally { await opened.close() }

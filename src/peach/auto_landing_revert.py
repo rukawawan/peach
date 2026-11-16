@@ -43,8 +43,11 @@ id 或路径已被别的行占用时那一批拒绝撤回。登记时自动接�
 这一批的链接与别名，再解绑关注来源；实体还被别的行引用（人挂上的作品、链接）就留着，没有才删。
 
 升级补修解除的乱码人物关联（#478）按 `upgrade:garbled-performers` 认，批次是那份升级回执的 id。
-回执 `garbled_people` 存着删掉的关联、`演员:` 标签与实体子表行的原样快照，撤回把账本里还没有的
+回执 `garbled_people` 存着删掉的关联、`performer:` 标签与实体子表行的原样快照，撤回把账本里还没有的
 那几行插回；实体的 id 或名字已被占用时整批拒绝。
+
+升级补修解除的来源分辨率标签（`4K` 等）按 `upgrade:source-resolution-tags` 认，批次是回执行的 id。
+回执存着删掉的 `asset_tag` 与 `asset_entity` 行，撤回把账本里还没有的那几行插回。
 
 升级补修记下的 JavDB 演员页有码／无码（#271）按 `upgrade:javdb-actor-records` 认，批次是回执行的 id。
 撤回去掉还原样在账本里的那几项类型，重新启用补修停掉的订阅。
@@ -282,6 +285,8 @@ def plan(connection, source: str, batch: str = "", *, logo_root: Path, cover_roo
         "verified": planned_verified_revert(connection, source, batch, item_keys),
         "garbled": metadata_text_repair.planned_revert(connection, source, batch),
         "javdb_records": _planned_javdb_records(connection, source, batch),
+        "resolution_tags": _planned_resolution_tags(connection, source, batch),
+        "quality": _planned_quality(connection, source, batch),
     }
 
 
@@ -291,24 +296,34 @@ def _planned_javdb_records(connection, source: str, batch: str) -> list[dict]:
     return planned_javdb_records_revert(connection, source, batch)
 
 
+def _planned_resolution_tags(connection, source: str, batch: str) -> list[dict]:
+    from .upgrade_repairs import planned_resolution_tags_revert
+    return planned_resolution_tags_revert(connection, source, batch)
+
+
+def _planned_quality(connection, source: str, batch: str) -> list[dict]:
+    from .quality_repair import planned_revert
+    return planned_revert(connection, source, batch)
+
+
 def counts(planned: dict) -> dict:
-    """计划里每一类各有几条，命令行 dry-run 的那一行摘要。"""
-    return {"链接": len(planned["links"]), "别名": len(planned["aliases"]),
-            "资料": len(planned["profiles"]), "断言": len(planned["claims"]),
-            "公司资料": len(planned["companies"]), "卖家": len(planned["sellers"]),
-            "关注建档": len(planned["creators"]), "编号": len(planned["refs"]),
-            "归属": len(planned["memberships"]), "片商": len(planned["makers"]),
-            "标识文件": len(planned["files"]), "封面": len(planned["covers"]),
-            "样张": sum(sample["count"] for sample in planned["samples"]),
-            "否决": len(planned["rejections"]), "标签": len(planned["tags"]),
-            "接回": len(planned["rehomes"]), "想要入库": len(planned["acquired"]),
-            "中文名": len(planned["names"]), "核查结算": len(planned["verified"]),
-            "乱码人物": len(planned["garbled"]),
-            "JavDB 类型与订阅": len(planned.get("javdb_records", []))}
+    """计划里每一类各有几条，命令行 dry-run 的那一行摘要。键是计划里那一类的英文标识。"""
+    plain = ("links", "aliases", "profiles", "claims", "companies", "sellers", "creators", "refs", "memberships",
+             "makers", "files", "covers")
+    return {**{key: len(planned[key]) for key in plain},
+            "samples": sum(sample["count"] for sample in planned["samples"]),
+            "rejections": len(planned["rejections"]), "tags": len(planned["tags"]),
+            "rehomes": len(planned["rehomes"]), "acquired": len(planned["acquired"]),
+            "names": len(planned["names"]), "verified": len(planned["verified"]),
+            "garbled": len(planned["garbled"]),
+            "javdb_records": len(planned.get("javdb_records", [])),
+            "resolution_tags": len(planned.get("resolution_tags", [])),
+            "quality": len(planned.get("quality", []))}
 
 
 def apply(connection, planned: dict) -> dict:
-    """按计划改账本，返回各类改了几条。不开不提交事务，由调用方包住；盘上文件不在这里删。"""
+    """按计划改账本，返回各类改了几条（键是英文标识，给代码与命令行读）。不开不提交事务，
+    由调用方包住；盘上文件不在这里删。"""
     source, batch = planned["source"], planned["batch"]
     links, aliases, profiles, claims = (planned["links"], planned["aliases"], planned["profiles"],
                                         planned["claims"])
@@ -357,16 +372,23 @@ def apply(connection, planned: dict) -> dict:
     restored_garbled = metadata_text_repair.revert(connection, planned.get("garbled", []))
     from .upgrade_repairs import revert_javdb_records
     restored_javdb = revert_javdb_records(connection, planned.get("javdb_records", []))
-    return {"删除链接": len(links), "删除别名": len(aliases), "删除资料": len(profiles),
-            "删除断言": len(claims), "删除编号": len(refs), "删除归属": len(memberships),
-            "删除片商": len(makers), "删除样张": removed_samples, "删除否决": len(rejections),
-            "删除标签": len(tags), "删除扁平标签": removed_tag_rows, "重开决定": reopened,
-            "撤回接回": restored, "想要回到待找": reopened_wants, "卖家关系": removed_seller_relations,
-            "解绑关注来源": creator_revert["unbound"], "删除建档实体": creator_revert["removed"],
-            "还原中文名": restored_names, "还原核查覆盖": verified_revert["restored"],
-            "删除核查并集标签": verified_revert["removed_tags"],
-            "删除核查决定": verified_revert["decisions"], "插回乱码人物行": restored_garbled,
-            "还原 JavDB 类型与订阅": restored_javdb}
+    from .upgrade_repairs import revert_resolution_tags
+    restored_resolution = revert_resolution_tags(connection, planned.get("resolution_tags", []))
+    from .quality_repair import revert as revert_quality
+    restored_quality = revert_quality(connection, planned.get("quality", []))
+    return {"deleted_links": len(links), "deleted_aliases": len(aliases), "deleted_profiles": len(profiles),
+            "deleted_claims": len(claims), "deleted_refs": len(refs), "deleted_memberships": len(memberships),
+            "deleted_makers": len(makers), "deleted_samples": removed_samples,
+            "deleted_rejections": len(rejections), "deleted_tags": len(tags), "deleted_tag_rows": removed_tag_rows,
+            "reopened_decisions": reopened, "reverted_rehomes": restored, "reopened_wants": reopened_wants,
+            "deleted_seller_relations": removed_seller_relations,
+            "unbound_creator_sources": creator_revert["unbound"],
+            "deleted_creator_entities": creator_revert["removed"], "restored_names": restored_names,
+            "restored_verified": verified_revert["restored"],
+            "deleted_verified_tags": verified_revert["removed_tags"],
+            "deleted_verified_decisions": verified_revert["decisions"], "restored_garbled_rows": restored_garbled,
+            "restored_javdb_records": restored_javdb, "restored_resolution_tags": restored_resolution,
+            "restored_quality": restored_quality}
 
 
 def remove_files(planned: dict) -> int:

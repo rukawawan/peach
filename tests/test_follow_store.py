@@ -391,6 +391,18 @@ class RecordTests(_StoreCase):
         self.assertEqual(row["last_status"], "unauthorized")
         self.assertEqual(row["last_error"], "HTTP 403")
 
+    def test_record_error_keeps_the_code_beside_the_message_until_the_next_success(self):
+        from peach.coded_text import Said
+        source_id = self._source()
+        self.store.record_error(source_id, Said("errors.followSources.httpStatus", provider="kemono", status=503),
+                                moment=MOMENT)
+        row = self.store.sources()[0]
+        self.assertEqual((row["last_error_code"], json.loads(row["last_error_params"])),
+                         ("errors.followSources.httpStatus", {"provider": "kemono", "status": 503}))
+        self.store.record(source_id, _fetch([_candidate("1", "A")]), moment=MOMENT)
+        row = self.store.sources()[0]
+        self.assertEqual((row["last_error"], row["last_error_code"], row["last_error_params"]), (None, None, None))
+
     def test_items_can_be_filtered_by_status(self):
         source_id = self._source()
         self.store.record(source_id, _fetch([_candidate("1", "A"), _candidate("2", "B")]),

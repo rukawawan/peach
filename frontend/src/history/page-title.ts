@@ -1,7 +1,8 @@
 import { t } from '../i18n';
+import { PORTRAIT, orientParam } from '../core/stored-values';
 
-/** 首页的竖屏栏。`竖屏` 是地址参数 `orient` 的取值，不是界面文案。 */
-export const portraitColumn = (query: URLSearchParams) => query.get('orient') === '竖屏';
+/** 首页的竖屏栏：地址参数 `orient` 是 `portrait`（旧书签里的旧值也认）。 */
+export const portraitColumn = (query: URLSearchParams) => orientParam(query.get('orient')) === PORTRAIT;
 
 /** 首页那几栏（全部、JAV、竖屏都在 `/` 上）与搜索结果的标签页名称；不在 `/` 上是空串。 */
 export function homeRouteLabel(pathname: string, search: string): string {

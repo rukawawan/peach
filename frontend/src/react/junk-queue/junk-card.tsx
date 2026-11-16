@@ -18,6 +18,7 @@ import {
 } from './junk-queue';
 import { suppressShiftTextSelection } from '../components/row-click';
 import { t } from '../../i18n';
+import { partsLabel } from '../../core/server-text';
 
 /** 雪碧图里的一枚字形，写法同遗留层 `icon()`：尺寸与描边由样式表按位置给。 */
 function Icon({ name }: { name: string }) {
@@ -106,7 +107,7 @@ function JunkCardView({ item, view, selected, selectMode, helpers, actions }: Ju
         {title}
         <div data-junk-facts="">
           <span data-junk-who="">{label}</span>
-          {item.why ? <span data-junk-why="">{item.why}</span> : null}
+          {item.why ? <span data-junk-why="">{partsLabel(item.why_parts, item.why)}</span> : null}
           <span data-junk-size="">{Number(item.size) > 0 ? fmtSize(Number(item.size)) : t('cleanup:junk.unknownSize')}</span>
         </div>
       </div>

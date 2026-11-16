@@ -29,7 +29,7 @@ def remove_records(paths) -> None:
         try:
             path.unlink(missing_ok=True)
         except OSError:
-            logging.getLogger(__name__).warning("托盘监视记录清理失败：%s", path, exc_info=True)
+            logging.getLogger(__name__).warning("Failed to clean up the tray watcher record: %s", path, exc_info=True)
 
 
 def audit(log: Path, event: str, session: str, **fields) -> None:
@@ -40,7 +40,7 @@ def audit(log: Path, event: str, session: str, **fields) -> None:
         with log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
     except OSError:
-        logging.getLogger(__name__).exception("托盘退出记录写入失败")
+        logging.getLogger(__name__).exception("Failed to write the tray exit record")
 
 
 def recovery_history(value: str, now: float) -> list[float]:
@@ -102,7 +102,7 @@ def watch(path: Path, *, open_process=ProcessHandle, popen=None,
     try:
         process = open_process(record["pid"])
         if process.created != record["created"]:
-            raise RuntimeError("托盘进程身份不一致")
+            raise RuntimeError("tray process identity does not match")
         audit(log, "watchdog_ready", session, tray_pid=record["pid"])
         atomic_write_text(ready, str(os.getpid()))
         while True:
@@ -215,7 +215,7 @@ class Lifecycle:
             deadline = time.monotonic() + 10
             while not self.path.with_suffix(".ready").exists():
                 if self.guard.poll() is not None or time.monotonic() >= deadline:
-                    raise RuntimeError("托盘监视器未能就绪")
+                    raise RuntimeError("tray watchdog did not become ready")
                 time.sleep(0.05)
             ack = os.environ.pop(ACK_ENV, None)
             if ack:
@@ -232,7 +232,7 @@ class Lifecycle:
                   reason=reason, actor_pid=actor_pid)
             atomic_write_text(self.path.with_suffix(".stop"), reason)
         except OSError:
-            logging.getLogger(__name__).exception("托盘退出意图写入失败，正在停止本实例监视器")
+            logging.getLogger(__name__).exception("Failed to write the tray exit intent; stopping this instance's watcher")
         finally:
             if self.guard is not None:
                 self._disarm()
@@ -270,7 +270,7 @@ class Lifecycle:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
-    parser = argparse.ArgumentParser(description="监视一个 Windows Peach 托盘实例")
+    parser = argparse.ArgumentParser(description="Watch one Windows Peach tray instance")
     parser.add_argument("record", type=Path)
     return watch(parser.parse_args(argv).record)
 

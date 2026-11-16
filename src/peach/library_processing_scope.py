@@ -5,6 +5,7 @@ from contextlib import closing
 
 from .media_identity import catalog, project
 from .media_libraries import predicate
+from .user_messages import UserValueError
 
 
 def scoped_config(config, library_id):
@@ -12,10 +13,10 @@ def scoped_config(config, library_id):
         return config
     libraries, roots = catalog(config)
     if not isinstance(library_id, str) or library_id not in libraries:
-        raise ValueError('所选媒体库已不存在，请重新选择')
+        raise UserValueError('errors.libraryProcessingScope.libraryGone')
     chosen = {key: value for key, value in roots.items() if value['library_id'] == library_id}
     if not chosen:
-        raise ValueError('所选媒体库没有可处理的目录')
+        raise UserValueError('errors.libraryProcessingScope.noDirectories')
     return project(config, {library_id: libraries[library_id]}, chosen)
 
 

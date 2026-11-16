@@ -91,7 +91,7 @@ class MetadataPolicyTests(unittest.TestCase):
                 [row["field_rank"] for row in ordered],
                 sorted(row["field_rank"] for row in ordered),
             )
-        with self.assertRaisesRegex(ValueError, "未知 Peach 元数据字段"):
+        with self.assertRaisesRegex(ValueError, "unknown Peach metadata field"):
             sort_candidates("runtime", candidates)
 
     def test_tags_prefer_mgstage_over_the_dmm_dvd_page(self):

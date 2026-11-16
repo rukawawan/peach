@@ -18,10 +18,10 @@ React 与 BoardUI 的组件、颜色和尺寸采用 [BoardUI 适配](BOARD_UI.md
 | 写操作前的确认 | `confirmModal()` | 原生 `confirm()`、Toast |
 | 一个主动作加 1–4 个近亲做法 | Split Button（主动作在左，第一项菜单项与它同名同事） | 把变体摊平成并排按钮、把破坏性动作当主动作 |
 | 一行内的重排 | `wireDragReorder()` 拖动 | 上下移动按钮 |
-| 已知总量的进行状态 | Progress | 装饰性蓝条 |
-| 用户触发动作等待结果 | Spinner | 旋转原操作图标、Loading Dots |
-| 后台任务仍在推进 | Loading Dots | Spinner、假百分比 |
-| 整页或大区块首次等待内容结构 | Skeleton | Spinner、Loading Dots |
+| 已知总量的进行状态 | 整行宽用 Progress；图标大小的位置（状态行前导、横幅、通知卡图标位）用 ProgressRing | 装饰性蓝条、各写一套圆环 |
+| 用户触发动作等待结果 | Spinner | 旋转原操作图标、语义动画 |
+| 后台任务仍在推进、没有分母 | 按语义选 loading.dev 动画（`activity-kinds.ts` 一张表），后台任务整体用 `TaskProgress` | Spinner、假百分比、三颗点 |
+| 整页或大区块首次等待内容结构 | Skeleton | Spinner、语义动画 |
 | 2–3 个互斥视图 | 遗留 Switch（radio）或现有分段组件 | Toggle |
 | 布尔开关 | 遗留 Toggle 或 BoardUI Switch | radio 分段器 |
 | 无布局高度变化的菜单 | Menu／Listbox；开合走 `presentMenu`／`dismissMenu`，动效只在 Board 层那一份 | Collapse 动画、自己再写一份 150ms |
@@ -49,14 +49,18 @@ React 与 BoardUI 的组件、颜色和尺寸采用 [BoardUI 适配](BOARD_UI.md
 - 危险动作的悬停态一律 `--drop` 实底加白字。只描红边、红字的话，静止态和悬停态在暗色底上几乎一样亮，按下去之前看不出这是不可逆动作；带文字的销毁按钮全站一个写法，纯图标删除键不适用。Geist 的 error Button 同样是实心红填充，只是它静止态就红。实测见 `vercel-geist-controls-measured.md`。
 - 按钮的前置图标只在图标指向对象（来源站点、当前选中项、平台）或形态方向（触发器右侧的 `chevron-down`）时出现；文字已经把动词说完的不加，`+ 添加`、`↻ 刷新`、`✓ 保存` 这枚多余字形会把同一行主次动作的视觉重量拉平。图标键必须给 `aria-label`，名称点出动作和对象、不描述图标形状。判据与 Geist Button 文档正文见 `docs/reference-snapshots/vercel-geist-button-icons.md`；官方 Geist 图标 SVG 没有可直取的入口，同一份快照记了原因。
 - 同一行里的输入框和按钮共用 `--control-h`，不各写一个像素数：两个控件差 3px 就不是一行了，而差值往往来自窄屏那条防放大规则只抬其中一个。
-- 一枚字形只代表一个意思，同一个意思也只有一枚字形。取字形先问它指的是哪个名词或哪个方向：文件类型取 `file-*`，本地取 `hard-drive`、订阅源取 `rss`，往下接一页取 `chevron-down`，原地换一批取 `shuffle`，`refresh-cw` 只归「去问一遍来源有没有更新」；筛不出结果和一次比对没有发现是两个空态，不能共用一枚。图标语义结合控件的可访问名称与实际操作复核。没有使用者的 symbol 从 `scripts/vendor_web_dependencies.mjs` 的名单和雪碧图里一起删，用户点名留的备用件在名单旁说明用途。
+- 一枚字形只代表一个意思，同一个意思也只有一枚字形。取字形先问它指的是哪个名词或哪个方向：文件类型取 `file-*`，本地取 `hard-drive`、订阅源取 `rss`，往下接一页取 `chevron-down`，原地换一批取 `shuffle`，`refresh-cw` 只归「去问一遍来源有没有更新」；筛不出结果和一次比对没有发现是两个空态，不能共用一枚。图标语义结合控件的可访问名称与实际操作复核。没有使用者的 symbol 从 `scripts/vendor_web_dependencies.ts` 的名单和雪碧图里一起删，用户点名留的备用件在名单旁说明用途。
 - 没有直接证据不得新增动效。菜单开合的证据是 boardui `menu-styles.ts`（`docs/BOARD_UI.md`），已落在 board.css 的共用规则里；旧版 Geist 层仍无动画。
 - 界面优先显示读数、当前状态与可执行动作，省略无助于决策的实现细节。费用、估算限制、隐私上传同意与不可逆操作的范围必须保留；单位跟随数字，必要口径放适当帮助入口。
 
 ## 等待与回执
 
 - Progress 必须有真实 `value/max`、可见单位与 `aria-valuemin/max/now`；分隔线放在完整指标（含进度条）之后。
-- Spinner 只反馈用户直接触发的动作，触发器统一调用 `setActionBusy()`：写入 `aria-busy=true` 与 `aria-disabled=true`、视觉变灰、拦截重复触发，同时保持可聚焦；请求等待期不得再用原生 `disabled`，它只留给缺输入、无权限等动作确实不可执行的状态。未知时长的后台抓取使用 Loading Dots。整页或大区块首次取数使用 Skeleton 预留最终结构。Spinner／Loading Dots 保留可见状态文字；Skeleton 只保留给辅助技术的状态名，不另画「正在读取」文案。三者都尊重 reduced motion。
+- 等待按顺序判断：有真实分母就画确定进度（整行宽 `Progress`，图标大小的位置 `ProgressRing`）；没有分母、是用户刚点下的那一下（保存、定位、换页键、搜索框查询）用 Spinner，等待留在触发点；其余后台推进按做的事选 loading.dev 语义动画——排队与等外部 Clock，搜索、检查与探测 Radar，传输 LinearDots（也兼做语义不明的通用后台推进），写入入库 Gather，整理与分析 Blocks。任务类型与后端阶段 code 到动画只查 `frontend/src/activity-kinds.ts`，不在调用处另起判断。
+- Spinner 只反馈用户直接触发的动作，触发器统一调用 `setActionBusy()`：写入 `aria-busy=true` 与 `aria-disabled=true`、视觉变灰、拦截重复触发，同时保持可聚焦；请求等待期不得再用原生 `disabled`，它只留给缺输入、无权限等动作确实不可执行的状态。整页或大区块首次取数使用 Skeleton 预留最终结构。Spinner 与语义动画保留可见状态文字；Skeleton 只保留给辅助技术的状态名，不另画「正在读取」文案。三者都尊重 reduced motion：语义动画与骨架微光停在静帧。
+- 后台任务的进度提示全站一套结构，即 `TaskProgress`：一行说明，加横条或语义动画，失败时同一位置换成 `Note`；独立任务带框，卡片或分区里的任务用所在容器。遗留层不能直接用 React 组件时，只给出要画的内容，由页面用同一组件画，不另画一套盒子。
+- 语义动画与小环形的尺寸跟所在那一行的字号走：行内与旁边的图标同为 `--icon-inline`，区块正中的等待大一档，封面格按卡片角标的档并随网格密度变；颜色取强调色，与进度条填充一致。封面网格里只有正在抓的卡片在动，排队的卡片是静止的 Clock。估算出来的分母（按上次文件数推的进度）在文案里写明「估算」。
+- 「换一批」描线、资源同步「检查文件」与链接检查键的忙态动画是按钮自带的例外；沉浸页等媒体加载与播放器缓冲共用一枚转圈。
 - 用户写操作只在服务端终态成功后调用共享 `actionReceipt()` 发一条过去时 Toast；可由安全逆操作完整恢复的状态提供 8 秒「撤销」，永久删除、凭据、保存到账本等不伪造撤销。仅打开面板／菜单／Dialog 不算操作完成，不发 Toast；失败除短 Toast 外仍在原位置保留原因与重试入口。
 - 同一次页面进入只呈现一段等待态；深链启动与页面取数复用同一个 Skeleton，禁止 Spinner 再切换成 Loading Dots 或 Skeleton。
 - 页面顶边的换页进度条（`navigation-progress.ts`）顶替单页换页时不再出现的浏览器加载条，属于壳，不算页面的等待态：壳在取某一页首屏、或屏上组件在等第一份数据时亮，200ms 内画完不出现，出现后至少停 400ms。它只是不定进度，不报百分比，也不替代 Skeleton。

@@ -8,11 +8,12 @@ import { playerHost } from './host';
 import { detailPlayer, resizeSoon } from './registry';
 import { PLAYER_PANEL_EVENT } from './stats';
 import type { PlayerItem, SourceQuality, VjsPlayer } from './types';
-import { SubtitleControls, subtitleIcon } from './subtitles';
+import { SubtitleControls, languageName, subtitleIcon } from './subtitles';
 import { createSeekPreview } from './seek-preview';
 import { mountPlayerRotation } from './rotation';
 import { mountPlayerPipControl } from './pip';
 import { mountPlaybackRate, playerMemory } from './memory';
+import { t } from '../i18n';
 
 type TooltipSync = (label?: string, aria?: string) => void;
 
@@ -55,7 +56,7 @@ function syncPlayerTheaterButton(button: Element | null | undefined): void {
   const theater = playerHost().settings().theaterMode;
   button.setAttribute('aria-pressed', String(theater));
   button.querySelector('use')?.setAttribute('href', theater ? '#i-theater-exit' : '#i-theater-enter');
-  theaterSyncs.get(button)?.(theater ? '默认视图' : '影院模式');
+  theaterSyncs.get(button)?.(theater ? t('catalog:playerControls.defaultView') : t('catalog:playerControls.theaterMode'));
 }
 
 export function applyTheaterMode(enabled: boolean, save = true): void {
@@ -124,21 +125,23 @@ export function mountPlayerAmbient(video: HTMLVideoElement): () => void {
  *
  *  `sourceQualities` 是来源自己给的清晰度表（[{height,label}]，从高到低）。rule34video 把每档
  *  写成独立字段，videojs 的 qualityLevels 看不到它们——那套只认 HLS/DASH 的自适应轨道，而这里
- *  是四个各自独立的 mp4。所以由调用方查好再传进来。 */
+ *  是四个各自独立的 mp4。所以由调用方查好再传进来。
+ *
+ *  `fallbackSize` 是账本记的宽高，视频还没读到尺寸时按它的短边写档位：竖屏 1080×1920 是 1080p。 */
 export function mountPlayerQualityControl(
-  player: VjsPlayer, video: HTMLVideoElement, fallbackHeight: unknown = 0, initialSourceQualities: SourceQuality[] | null = null,
+  player: VjsPlayer, video: HTMLVideoElement, fallbackSize: { width?: unknown; height?: unknown } = {}, initialSourceQualities: SourceQuality[] | null = null,
 ): ((next: SourceQuality[] | null) => void) | undefined {
   const controlBar = player.el().querySelector<HTMLElement>('.vjs-control-bar');
   if (!controlBar || controlBar.querySelector('[data-player-quality]')) return undefined;
   const root = document.createElement('div');
   root.className = 'vjs-peach-settings vjs-control'; root.dataset.playerQuality = '';
-  root.innerHTML = `<button type="button" class="vjs-peach-settings-toggle" aria-label="播放器设置" aria-expanded="false">
+  root.innerHTML = `<button type="button" class="vjs-peach-settings-toggle" aria-label="${t('catalog:playerQuality.playerSettings')}" aria-expanded="false">
     ${icon('settings')}<span data-player-quality-badge hidden></span></button>
-    <div class="vjs-peach-settings-menu" role="menu" aria-label="播放器设置" aria-hidden="true"></div>`;
+    <div class="vjs-peach-settings-menu" role="menu" aria-label="${t('catalog:playerQuality.playerSettings')}" aria-hidden="true"></div>`;
   const fullscreen = controlBar.querySelector('.vjs-fullscreen-control');
   controlBar.insertBefore(root, fullscreen || null);
   const toggle = root.querySelector('button')!, badge = root.querySelector<HTMLElement>('[data-player-quality-badge]')!;
-  playerControlTooltip(toggle, '设置');
+  playerControlTooltip(toggle, t('catalog:playerQuality.settings'));
   const menu = root.querySelector<HTMLElement>('.vjs-peach-settings-menu')!;
   const rotation = mountPlayerRotation(player, video);
   const rememberRate = mountPlaybackRate(player, video);
@@ -155,20 +158,20 @@ export function mountPlayerQualityControl(
   const rows = (): Row[] => {
     const result: Row[] = [];
     if (levels?.length) {
-      if (levels.length > 1) result.push({ key: 'auto', label: '自动', pixels: 0 });
+      if (levels.length > 1) result.push({ key: 'auto', label: t('catalog:playerQuality.auto'), pixels: 0 });
       for (let index = 0; index < levels.length; index++) {
         const level = levels[index]!;
         const pixels = resolution(level.width, level.height)
           || (levels.length === 1 ? resolution(video.videoWidth, video.videoHeight) : 0);
-        result.push({ key: String(index), label: pixels ? `${pixels}p` : (levels.length === 1 ? '当前画质' : `线路 ${index + 1}`), pixels });
+        result.push({ key: String(index), label: pixels ? `${pixels}p` : (levels.length === 1 ? t('catalog:playerQuality.current') : t('catalog:playerQuality.stream', { number: index + 1 })), pixels });
       }
       return result;
     }
     if (sourceQualities?.length) {
       return sourceQualities.map((quality) => ({ key: `h${quality.height}`, label: quality.label || `${quality.height}p`, pixels: quality.height }));
     }
-    const pixels = resolution(video.videoWidth, video.videoHeight) || Number(fallbackHeight) || 0;
-    return [{ key: 'original', label: pixels ? `${pixels}p` : '原画', pixels }];
+    const pixels = resolution(video.videoWidth, video.videoHeight) || resolution(fallbackSize.width, fallbackSize.height);
+    return [{ key: 'original', label: pixels ? `${pixels}p` : t('catalog:playerQuality.original'), pixels }];
   };
   const qualityRows = () => {
     const options = rows();
@@ -231,12 +234,12 @@ export function mountPlayerQualityControl(
     view = 'main';
     const { active } = qualityRows(), speed = rememberRate.current();
     const panel = renderPanel(`<div class="vjs-peach-panel-menu"><button type="button" class="vjs-peach-menu-row" role="menuitemcheckbox" data-player-ambient aria-checked="${playerHost().settings().ambientMode}">
-      ${icon('player-ambient')}<span>氛围模式</span><i class="vjs-peach-switch" aria-hidden="true"></i></button>
-      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-speed>${icon('player-speed')}<span>播放速度</span><b>${speed === 1 ? '正常' : `${speed}×`}</b>${icon('player-menu-next')}</button>
-      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-subtitles><span class="vjs-peach-menu-cc" aria-hidden="true">${subtitleIcon()}</span><span>字幕</span><b>${esc(subtitleControls?.label() || '关闭')}</b>${icon('player-menu-next')}</button>
-      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-rotation>${icon('rotate-cw', 'vjs-peach-menu-line-icon')}<span>画面旋转</span><b>${rotation.angle()}°</b>${icon('player-menu-next')}</button>
-      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-quality-view>${icon('player-quality')}<span>清晰度</span><b>${esc(active.label)}</b>${icon('player-menu-next')}</button>
-      <div data-player-memory-error hidden><p class="vjs-peach-subtitle-status" role="status"></p><button type="button" class="vjs-peach-menu-row" data-player-memory-retry>重试保存播放记忆</button></div></div>`, direction);
+      ${icon('player-ambient')}<span>${t('catalog:playerQuality.ambientMode')}</span><i class="vjs-peach-switch" aria-hidden="true"></i></button>
+      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-speed>${icon('player-speed')}<span>${t('catalog:playerQuality.speed')}</span><b>${speed === 1 ? t('catalog:playerQuality.normalSpeed') : `${speed}×`}</b>${icon('player-menu-next')}</button>
+      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-subtitles><span class="vjs-peach-menu-cc" aria-hidden="true">${subtitleIcon()}</span><span>${t('catalog:playerControls.subtitles')}</span><b>${esc(subtitleControls?.label() || t('catalog:subtitles.off'))}</b>${icon('player-menu-next')}</button>
+      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-rotation>${icon('rotate-cw', 'vjs-peach-menu-line-icon')}<span>${t('catalog:playerQuality.rotation')}</span><b>${rotation.angle()}°</b>${icon('player-menu-next')}</button>
+      <button type="button" class="vjs-peach-menu-row" role="menuitem" data-player-quality-view>${icon('player-quality')}<span>${t('catalog:playerQuality.quality')}</span><b>${esc(active.label)}</b>${icon('player-menu-next')}</button>
+      <div data-player-memory-error hidden><p class="vjs-peach-subtitle-status" role="status"></p><button type="button" class="vjs-peach-menu-row" data-player-memory-retry>${t('catalog:playerQuality.retryMemorySave')}</button></div></div>`, direction);
     button(panel, '[data-player-ambient]').onclick = () => { applyAmbientMode(!playerHost().settings().ambientMode); showMain() };
     button(panel, '[data-player-speed]').onclick = () => showSpeed();
     button(panel, '[data-player-subtitles]').onclick = () => subtitleControls?.show();
@@ -253,8 +256,8 @@ export function mountPlayerQualityControl(
   };
   const showRotation = () => {
     view = 'rotation';
-    const panel = renderPanel(`<div class="vjs-peach-panel-header"><button type="button" class="vjs-peach-menu-back" data-player-menu-back aria-label="返回上一个菜单">${icon('player-menu-back')}</button><strong>画面旋转</strong></div><div class="vjs-peach-panel-menu">${[0, 90, 180, 270].map(angle =>
-      `<button type="button" class="vjs-peach-menu-option" role="menuitemradio" data-player-rotation-option="${angle}" aria-checked="${angle === rotation.angle()}"><span class="vjs-peach-option-check">${angle === rotation.angle() ? icon('player-option-check') : ''}</span><span class="vjs-peach-option-label">${angle}°${angle === 0 ? '（原始方向）' : ''}</span></button>`).join('')}</div>`, 1);
+    const panel = renderPanel(`<div class="vjs-peach-panel-header"><button type="button" class="vjs-peach-menu-back" data-player-menu-back aria-label="${t('catalog:playerQuality.backMenu')}">${icon('player-menu-back')}</button><strong>${t('catalog:playerQuality.rotation')}</strong></div><div class="vjs-peach-panel-menu">${[0, 90, 180, 270].map(angle =>
+      `<button type="button" class="vjs-peach-menu-option" role="menuitemradio" data-player-rotation-option="${angle}" aria-checked="${angle === rotation.angle()}"><span class="vjs-peach-option-check">${angle === rotation.angle() ? icon('player-option-check') : ''}</span><span class="vjs-peach-option-label">${angle === 0 ? t('catalog:playerQuality.originalOrientation', { angle }) : `${angle}°`}</span></button>`).join('')}</div>`, 1);
     button(panel, '[data-player-menu-back]').onclick = () => showMain(-1);
     panel.querySelectorAll<HTMLElement>('[data-player-rotation-option]').forEach(option => {
       option.onclick = () => { rotation.set(Number(option.dataset.playerRotationOption)); showMain(-1) };
@@ -271,13 +274,13 @@ export function mountPlayerQualityControl(
     view = 'speed';
     const min = SPEED_MIN, max = SPEED_MAX;
     const clampSpeed = (value: number) => Math.min(max, Math.max(min, Number(value.toFixed(2))));
-    const panel = renderPanel(`<div class="vjs-peach-panel-header"><button type="button" class="vjs-peach-menu-back" data-player-menu-back aria-label="返回上一个菜单">${icon('player-menu-back')}</button><strong>播放速度</strong></div>
+    const panel = renderPanel(`<div class="vjs-peach-panel-header"><button type="button" class="vjs-peach-menu-back" data-player-menu-back aria-label="${t('catalog:playerQuality.backMenu')}">${icon('player-menu-back')}</button><strong>${t('catalog:playerQuality.speed')}</strong></div>
       <div class="vjs-peach-speed-panel"><div class="vjs-peach-speed-display"><output data-player-speed-display></output></div>
-      <div class="vjs-peach-speed-slider"><button type="button" class="vjs-peach-speed-button" data-player-speed-step="-1" aria-label="播放速度减 0.05">${icon('minus')}</button>
-      <input type="range" class="vjs-peach-speed-range" data-player-speed-range min="${min}" max="${max}" step="${SPEED_STEP}" aria-label="播放速度">
-      <button type="button" class="vjs-peach-speed-button" data-player-speed-step="1" aria-label="播放速度加 0.05">${icon('plus')}</button></div>
+      <div class="vjs-peach-speed-slider"><button type="button" class="vjs-peach-speed-button" data-player-speed-step="-1" aria-label="${t('catalog:playerQuality.speedDown', { step: SPEED_STEP })}">${icon('minus')}</button>
+      <input type="range" class="vjs-peach-speed-range" data-player-speed-range min="${min}" max="${max}" step="${SPEED_STEP}" aria-label="${t('catalog:playerQuality.speed')}">
+      <button type="button" class="vjs-peach-speed-button" data-player-speed-step="1" aria-label="${t('catalog:playerQuality.speedUp', { step: SPEED_STEP })}">${icon('plus')}</button></div>
       <div class="vjs-peach-speed-chips">${SPEED_PRESETS.map((speed) =>
-        `<span class="vjs-peach-speed-preset"><button type="button" class="vjs-peach-speed-button" data-player-speed-option="${speed}" aria-pressed="false">${speedLabel(speed)}</button>${speed === 1 ? '<span class="vjs-peach-speed-preset-label">正常</span>' : ''}</span>`).join('')}</div></div>`, direction);
+        `<span class="vjs-peach-speed-preset"><button type="button" class="vjs-peach-speed-button" data-player-speed-option="${speed}" aria-pressed="false">${speedLabel(speed)}</button>${speed === 1 ? `<span class="vjs-peach-speed-preset-label">${t('catalog:playerQuality.normalSpeed')}</span>` : ''}</span>`).join('')}</div></div>`, direction);
     const display = panel.querySelector<HTMLOutputElement>('[data-player-speed-display]')!;
     const range = panel.querySelector<HTMLInputElement>('[data-player-speed-range]')!;
     // player.playbackRate() 读的是 ratechange 之后才写的缓存，面板自己记住这一次的倍速。
@@ -299,15 +302,23 @@ export function mountPlayerQualityControl(
     });
     syncSpeed();
   };
-  /** 清晰度那一列：打开面板时画一次，轨道增减或自动档换轨时原地重画，焦点留在同一档上。 */
-  const fillQualityOptions = (list: HTMLElement) => {
+  /** 清晰度那一列的各档。打开面板时随面板一起画好：`renderPanel` 当场量新面板的高度做过渡，
+   *  先画空列表再填，量到的只有标题栏，菜单缩成一条、动画结束又弹回原高。 */
+  const qualityOptionsHtml = () => {
     const { options, active } = qualityRows();
-    const focused = list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.playerQualityOption : undefined;
-    list.innerHTML = options.map((option) =>
+    return options.map((option) =>
       `<button type="button" class="vjs-peach-menu-option" role="menuitemradio" data-player-quality-option="${esc(option.key)}" aria-checked="${option.key === active.key}"><span class="vjs-peach-option-check">${option.key === active.key ? icon('player-option-check') : ''}</span><span class="vjs-peach-option-label">${esc(option.label)}</span></button>`).join('');
-    const buttons = [...list.querySelectorAll<HTMLElement>('[data-player-quality-option]')];
-    buttons.find((option) => focused !== undefined && option.dataset.playerQualityOption === focused)?.focus();
-    buttons.forEach((option) => {
+  };
+  /** 轨道增减或自动档换轨时原地重画这一列，焦点留在同一档上。 */
+  const fillQualityOptions = (list: HTMLElement) => {
+    const focused = list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.playerQualityOption : undefined;
+    list.innerHTML = qualityOptionsHtml();
+    bindQualityOptions(list);
+    [...list.querySelectorAll<HTMLElement>('[data-player-quality-option]')]
+      .find((option) => focused !== undefined && option.dataset.playerQualityOption === focused)?.focus();
+  };
+  const bindQualityOptions = (list: HTMLElement) => {
+    list.querySelectorAll<HTMLElement>('[data-player-quality-option]').forEach((option) => {
       option.onclick = () => {
         selectedQuality = option.dataset.playerQualityOption || 'auto';
         if (levels?.length) {
@@ -332,9 +343,9 @@ export function mountPlayerQualityControl(
   };
   const showQuality = (direction = 1) => {
     view = 'quality';
-    const panel = renderPanel(`<div class="vjs-peach-panel-header"><button type="button" class="vjs-peach-menu-back" data-player-menu-back aria-label="返回上一个菜单">${icon('player-menu-back')}</button><strong>清晰度</strong></div><div class="vjs-peach-panel-menu"></div>`, direction);
+    const panel = renderPanel(`<div class="vjs-peach-panel-header"><button type="button" class="vjs-peach-menu-back" data-player-menu-back aria-label="${t('catalog:playerQuality.backMenu')}">${icon('player-menu-back')}</button><strong>${t('catalog:playerQuality.quality')}</strong></div><div class="vjs-peach-panel-menu">${qualityOptionsHtml()}</div>`, direction);
     button(panel, '[data-player-menu-back]').onclick = () => showMain(-1);
-    fillQualityOptions(button(panel, '.vjs-peach-panel-menu'));
+    bindQualityOptions(button(panel, '.vjs-peach-panel-menu'));
   };
   /* HLS 自动码率起播时轨道陆续登记、码率随网速换档，视频尺寸也跟着变：这些事件只更新角标和
      正在看的那一面。退回主菜单的话，正在清晰度面板里挑档的人会被一次换轨踢出去。 */
@@ -348,7 +359,7 @@ export function mountPlayerQualityControl(
     const angle = view === 'main' ? panel?.querySelector('[data-player-rotation] b') : null;
     const speed = view === 'main' ? panel?.querySelector('[data-player-speed] b') : null;
     if (angle) angle.textContent = `${rotation.angle()}°`;
-    if (speed) speed.textContent = rememberRate.current() === 1 ? '正常' : `${rememberRate.current()}×`;
+    if (speed) speed.textContent = rememberRate.current() === 1 ? t('catalog:playerQuality.normalSpeed') : `${rememberRate.current()}×`;
   };
   toggle.onclick = (event) => { event.stopPropagation(); const open = !isOpen(); if (open) showMain(); setOpen(open) };
   const outside = (event: Event) => { if (!root.contains(event.target as Node)) close() };
@@ -395,7 +406,7 @@ function mountPlayerTheaterControl(player: VjsPlayer, settingsRoot: Element): vo
   root.innerHTML = `<button type="button" data-player-theater aria-pressed="${theater}">${icon(theater ? 'theater-exit' : 'theater-enter')}</button>`;
   controlBar.insertBefore(root, settingsRoot.nextSibling);
   const theaterButton = root.querySelector('button')!;
-  theaterSyncs.set(theaterButton, playerControlTooltip(theaterButton, '影院模式', 'T'));
+  theaterSyncs.set(theaterButton, playerControlTooltip(theaterButton, t('catalog:playerControls.theaterMode'), 'T'));
   syncPlayerTheaterButton(theaterButton);
   theaterButton.onclick = (event) => { event.stopPropagation(); applyTheaterMode(!playerHost().settings().theaterMode) };
 }
@@ -430,14 +441,14 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
   const spritePaths = (name: string) => [...(document.getElementById(`i-${name}`)?.querySelectorAll('path') || [])];
   const playIcon = morphIcon(play, 'player-play'), playPath = playIcon?.querySelector('path');
   const playD = spritePaths('player-play')[0]?.getAttribute('d') || '', pauseD = spritePaths('player-pause')[0]?.getAttribute('d') || '';
-  const syncPlayTooltip = playerControlTooltip(play, '播放', 'K');
+  const syncPlayTooltip = playerControlTooltip(play, t('catalog:shared.play'), 'K');
   /* WebKit（Safari 与 iOS 上的所有浏览器）不认 CSS 的 `d` 属性，写进 style 等于没写，图标
      停在播放那一枚。那边直接改路径属性：没有插值，瞬间切换。 */
   const cssPathD = CSS.supports('d', 'path("M0 0")');
   const syncPlayIcon = () => {
     const paused = player.paused() || player.ended(), d = paused ? playD : pauseD;
     if (playPath) { if (cssPathD) playPath.style.setProperty('d', `path("${d}")`); else playPath.setAttribute('d', d) }
-    syncPlayTooltip(paused ? '播放' : '暂停');
+    syncPlayTooltip(paused ? t('catalog:shared.play') : t('catalog:shared.pause'));
   };
   player.on(['play', 'pause', 'ended'], syncPlayIcon); syncPlayIcon();
   const volume = controlBar.querySelector<HTMLElement>(':scope>.vjs-volume-panel');
@@ -445,12 +456,12 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
   /* 静音那张图标搬进同一个 svg：挖空的喇叭和叉号跟实心喇叭、两道弧共处一处，弧缩完了
      它们才一起顶上，靠 opacity 换而不是换整块 svg。 */
   if (muteIcon) spritePaths('player-volume-muted').forEach((path) => muteIcon.append(path.cloneNode(true)));
-  const syncMuteTooltip = playerControlTooltip(mute, '静音', 'M');
+  const syncMuteTooltip = playerControlTooltip(mute, t('catalog:playerControls.mute'), 'M');
   /* 外弧跟音量走：上游 `setVolume` 里超过 50 才给 1，否则 0，静音时两道弧一起收掉。 */
   const syncVolumeIcon = () => {
     const silent = player.muted() || player.volume() === 0;
     if (muteIcon) { muteIcon.dataset.silent = String(silent); muteIcon.dataset.loud = String(!silent && player.volume() > .5) }
-    syncMuteTooltip(silent ? '取消静音' : '静音');
+    syncMuteTooltip(silent ? t('catalog:playerControls.unmute') : t('catalog:playerControls.mute'));
   };
   player.on('volumechange', syncVolumeIcon); syncVolumeIcon();
   /* 中心提示照 YouTube delhi-modern（player 9470c977 的 www-player.css 与 base.js）：一块
@@ -477,10 +488,10 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
     const target = event.target as Element;
     if (target.closest('.vjs-mute-control')) {
       const silent = player.muted() || player.volume() === 0;
-      flashBezel(silent ? 'player-volume' : 'player-volume-muted', silent ? '取消静音' : '静音');
+      flashBezel(silent ? 'player-volume' : 'player-volume-muted', silent ? t('catalog:playerControls.unmute') : t('catalog:playerControls.mute'));
     } else if (target.closest('.vjs-play-control,.vjs-tech,.vjs-poster')) {
       const paused = player.paused() || player.ended();
-      flashBezel(paused ? 'player-play' : 'player-pause', paused ? '播放' : '暂停');
+      flashBezel(paused ? 'player-play' : 'player-pause', paused ? t('catalog:shared.play') : t('catalog:shared.pause'));
     }
   }, true);
   player.on('dispose', () => { if (bezelTimer) clearTimeout(bezelTimer) });
@@ -488,28 +499,28 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
   time.type = 'button'; time.className = 'vjs-peach-time vjs-control'; time.dataset.playerTime = '';
   time.innerHTML = '<span class="vjs-peach-time-text"></span>';
   const timeText = time.querySelector('.vjs-peach-time-text')!;
-  const syncTimeTooltip = playerControlTooltip(time, '显示剩余时间');
+  const syncTimeTooltip = playerControlTooltip(time, t('catalog:playerControls.showRemaining'));
   const syncTime = () => {
     const current = Math.max(0, Number(player.currentTime()) || 0), duration = Math.max(0, Number(player.duration()) || 0);
     const left = fmtClock(Math.max(0, duration - current));
     timeText.textContent = `${remaining ? `-${left}` : fmtClock(current)} / ${fmtClock(duration)}`;
     time.dataset.remaining = String(remaining);
-    syncTimeTooltip(remaining ? '显示已播放时间' : '显示剩余时间', remaining
-      ? `剩余 ${left}，总时长 ${fmtClock(duration)}；点击显示已播放时间`
-      : `已播放 ${fmtClock(current)}，总时长 ${fmtClock(duration)}；点击显示剩余时间`);
+    syncTimeTooltip(remaining ? t('catalog:playerControls.showElapsed') : t('catalog:playerControls.showRemaining'), remaining
+      ? t('catalog:playerControls.remainingTooltip', { remaining: left, duration: fmtClock(duration) })
+      : t('catalog:playerControls.elapsedTooltip', { elapsed: fmtClock(current), duration: fmtClock(duration) }));
   };
   time.onclick = (event) => { event.stopPropagation(); remaining = !remaining; syncTime() };
   player.on(['timeupdate', 'durationchange', 'loadedmetadata'], syncTime); syncTime();
   if (volume) volume.insertAdjacentElement('afterend', time); else controlBar.append(time);
   const pip = controlBar.querySelector<HTMLElement>(':scope>.vjs-picture-in-picture-control');
-  playerControlTooltip(controlBar.querySelector('.vjs-subtitles-control>button'), '字幕');
+  playerControlTooltip(controlBar.querySelector('.vjs-subtitles-control>button'), t('catalog:playerControls.subtitles'));
   explicitIcon(pip, 'player-pip');
   // i 键归迷你播放器（YouTube 的 aria-keyshortcuts="i"），画中画只留按钮。
-  const syncPipTooltip = playerControlTooltip(pip, '画中画');
+  const syncPipTooltip = playerControlTooltip(pip, t('catalog:playerControls.pictureInPicture'));
   mountPlayerPipControl(player, pip, syncPipTooltip, text => playerHost().toast(text, { warn: true }));
   const fullscreen = controlBar.querySelector<HTMLElement>(':scope>.vjs-fullscreen-control');
   const fullscreenUse = explicitIcon(fullscreen, 'player-fullscreen-enter');
-  const syncFullscreenTooltip = playerControlTooltip(fullscreen, '全屏', 'F');
+  const syncFullscreenTooltip = playerControlTooltip(fullscreen, t('catalog:playerControls.fullScreen'), 'F');
   /* CSS 的 `.vjs-fullscreen` 只能覆盖 Video.js 已经同步状态类的路径。实际浏览器还可能
      走 full-window 回退，或者先触发 fullscreenchange、下一帧才完成 class 更新。把播放器
      自己的 `isFullscreen()` 结果登记到 DOM，画面填充不再依赖某一个实现细节类名。 */
@@ -517,7 +528,7 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
     const active = !!player.isFullscreen();
     player.el().toggleAttribute('data-peach-fullscreen', active);
     fullscreenUse?.setAttribute('href', active ? '#i-player-fullscreen-exit' : '#i-player-fullscreen-enter');
-    syncFullscreenTooltip(active ? '退出全屏' : '全屏');
+    syncFullscreenTooltip(active ? t('catalog:playerControls.exitFullScreen') : t('catalog:playerControls.fullScreen'));
     resizeSoon(player);
   };
   player.on(['fullscreenchange', 'enterFullWindow', 'exitFullWindow'], syncFullscreenState);
@@ -530,7 +541,7 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
     fullscreen,
   ].filter((control): control is HTMLElement => !!control);
   if (!controls.length) return;
-  const group = document.createElement('div'); group.className = 'vjs-peach-right-controls'; group.setAttribute('aria-label', '播放器视图控制');
+  const group = document.createElement('div'); group.className = 'vjs-peach-right-controls'; group.setAttribute('aria-label', t('catalog:playerControls.viewControls'));
   controlBar.insertBefore(group, controls[0]!);
   controls.forEach((control) => {
     control.insertAdjacentHTML('beforeend', '<span class="vjs-peach-hover" aria-hidden="true"></span>');
@@ -548,10 +559,10 @@ function mountPlayerChromeLayout(player: VjsPlayer): void {
   expand.innerHTML = `<button type="button" data-player-expand aria-expanded="false">${icon('player-expand')}</button><span class="vjs-peach-hover" aria-hidden="true"></span>`;
   group.prepend(expand);
   const expandButton = expand.querySelector('button')!;
-  const syncExpandTooltip = playerControlTooltip(expandButton, '展开控件');
+  const syncExpandTooltip = playerControlTooltip(expandButton, t('catalog:playerControls.expandControls'));
   const setExpanded = (open: boolean) => {
     player.el().classList.toggle('vjs-peach-right-expanded', open);
-    expandButton.setAttribute('aria-expanded', String(open)); syncExpandTooltip(open ? '收起控件' : '展开控件');
+    expandButton.setAttribute('aria-expanded', String(open)); syncExpandTooltip(open ? t('catalog:playerControls.collapseControls') : t('catalog:playerControls.expandControls'));
   };
   expandButton.onclick = (event) => { event.stopPropagation(); setExpanded(!player.el().classList.contains('vjs-peach-right-expanded')) };
   const syncWidthMode = () => {
@@ -637,13 +648,17 @@ export function mountPlayerMediaSession(player: VjsPlayer, item: PlayerItem): vo
 }
 
 /** 加载提示复用 YouTube e937390a 的 `FsY`：四段嵌套元素与四段动画。 */
+/** 播放器缓冲那一圈（`player.css` 的 `vjs-peach-spinner-*`）。沉浸页等媒体加载用同一份，媒体等待只有这一种转圈。 */
+export const PLAYER_SPINNER_HTML = '<span class="vjs-peach-spinner-container"><span class="vjs-peach-spinner-rotator"><span class="vjs-peach-spinner-left"><span class="vjs-peach-spinner-circle"></span></span><span class="vjs-peach-spinner-right"><span class="vjs-peach-spinner-circle"></span></span></span></span>';
+
 export function mountPlayerSpinner(player: VjsPlayer): void {
   const spinner = player.el().querySelector('.vjs-loading-spinner');
   if (!spinner || spinner.querySelector('.vjs-peach-spinner-container')) return;
-  spinner.innerHTML = '<span class="vjs-peach-spinner-container"><span class="vjs-peach-spinner-rotator"><span class="vjs-peach-spinner-left"><span class="vjs-peach-spinner-circle"></span></span><span class="vjs-peach-spinner-right"><span class="vjs-peach-spinner-circle"></span></span></span></span>';
+  spinner.innerHTML = PLAYER_SPINNER_HTML;
 }
 
 /** 本机资产的外挂字幕。服务端已经把 srt/ass/ssa 换成 WebVTT，这里只把它挂成 text track。
+ *  认出语言的轨道按语言码显示界面语言的语言名；`label` 是服务端的中文兜底或文件名多出来的那一段。
  *  一律不设 default：自动打开某一条等于替用户选了语言，而同一部片常有简体、繁体、日语三条。
  *  Peach 字幕菜单只在有轨的时候出现；轨道挂在原生 video 上，随同一枚元素保留。 */
 export function mountPlayerSubtitles(player: VjsPlayer, assetId: number): void {
@@ -651,7 +666,8 @@ export function mountPlayerSubtitles(player: VjsPlayer, assetId: number): void {
     .then((payload) => {
       if (!player || player.isDisposed()) return;
       (payload?.subtitles || []).filter((track) => track.playable).forEach((track) => {
-        player.addRemoteTextTrack({ id: track.id, kind: 'subtitles', src: track.src, srclang: track.language || '', label: track.label, default: false,
+        player.addRemoteTextTrack({ id: track.id, kind: 'subtitles', src: track.src, srclang: track.language || '',
+          label: track.language ? languageName(track.language) : track.label, default: false,
           ...(track.legacy_id ? { legacyId: track.legacy_id } : {}) }, true);
       });
     }).catch(() => {});

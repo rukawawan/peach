@@ -48,14 +48,14 @@ BASELINE: dict[str, int] = {
     "scripts/fetch_studio_avatar_candidates.py:main": 44,
     "src/peach/web_catalog.py:q_item": 44,
     "src/peach/web_follow.py:_follow_author_rows": 35,
-    "src/peach/taste_history.py:_taste_analysis": 40,
+    "src/peach/taste_history.py:_taste_analysis": 34,
     "src/peach/web_catalog.py:catalog_filter": 40,
     "scripts/audit_domain_codes.py:collect": 39,
-    "scripts/harvest_social_avatars.py:harvest_entity": 37,
+    "scripts/harvest_social_avatars.py:harvest_entity": 36,
     "scripts/merge_duplicate_identities.py:collect_repeated_projections": 34,
     "src/peach/fc2_similarity.py:media_evidence": 34,
     "scripts/clean_names.py:run": 33,
-    "src/peach/studio_icons.py:icon_row": 32,
+    "src/peach/studio_icons.py:icon_row": 31,
     "scripts/find_ads.py:find_candidates": 31,
     "scripts/rehome_unknown_jav.py:build_plan": 31,
     "src/peach/resource_identification.py:ingest_results": 30,
@@ -64,7 +64,7 @@ BASELINE: dict[str, int] = {
 #: 判过就该这么长的函数：`(分支数, 为什么拆开更差)`。键与 `BASELINE` 同形、不重叠。
 ACCEPTED: dict[str, tuple[int, str]] = {
     "src/peach/api.py:create_app": (
-        40, "应用工厂：按启动顺序构造数据库、各项后台服务（含可选分享）与路由并接成一个 app，每个可注入的"
+        37, "应用工厂：按启动顺序构造数据库、各项后台服务（含可选分享）与路由并接成一个 app，每个可注入的"
             "依赖各带一个缺省；挂载探测按配置状态启动。拆开会把同一条构造顺序分散到几处"),
     "src/peach/library_processing.py:process_library": (
         48, "顺序流水线：垃圾检查、媒体属性、本地资料、本地预览、联网采集、写候选、收尾共用一份进度状态"

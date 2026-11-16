@@ -14,8 +14,11 @@ from typing import Mapping
 
 from bs4 import BeautifulSoup
 
+from .coded_text import Said
+from .user_messages import UserFacingError
 
-class FanboxContentError(ValueError):
+
+class FanboxContentError(UserFacingError, ValueError):
     """A public post used an invalid or unsupported FANBOX body shape."""
 
 
@@ -117,7 +120,7 @@ def _add_cover(post: Mapping[str, object], media: list[dict],
     matched = _COVER_DIMS_RE.search(cover)
     media.append({
         "id": "cover",
-        "name": "封面",
+        "name": Said("labels.fanbox.cover"),
         "url": cover,
         "thumb_url": cover,
         "media_kind": "image",
@@ -132,10 +135,12 @@ def normalize_fanbox_post(post: Mapping[str, object]) -> FanboxContent:
     """Return ordered text, links and playable media from one public post."""
     post_type = str(post.get("type") or "image").casefold()
     if post_type not in _SUPPORTED_TYPES:
-        raise FanboxContentError(f"FANBOX 正文类型不受支持：{post_type or '空'}")
+        if not post_type:
+            raise FanboxContentError("errors.fanbox.emptyPostType")
+        raise FanboxContentError("errors.fanbox.unsupportedPostType", {"type": post_type})
     body = post.get("body")
     if not isinstance(body, Mapping):
-        raise FanboxContentError("FANBOX 公开正文缺少 body")
+        raise FanboxContentError("errors.fanbox.missingBody")
 
     text_parts: list[str] = []
     links: list[str] = []
@@ -192,7 +197,7 @@ def normalize_fanbox_post(post: Mapping[str, object]) -> FanboxContent:
         for index, image in enumerate(parsed.select("img"), start=1):
             source = image.get("data-src-original") or image.get("src")
             add_media({"originalUrl": source}, item_id=f"html-{index}",
-                      fallback_name=f"图片 {len(media) + 1}", force_kind="image")
+                      fallback_name=Said("labels.fanbox.image", number=len(media) + 1), force_kind="image")
 
     image_map = body.get("imageMap") if isinstance(body.get("imageMap"), Mapping) else {}
     file_map = body.get("fileMap") if isinstance(body.get("fileMap"), Mapping) else {}
@@ -212,7 +217,7 @@ def normalize_fanbox_post(post: Mapping[str, object]) -> FanboxContent:
             image_id = str(block.get("imageId") or "")
             referenced_images.add(image_id)
             add_media(image_map.get(image_id), item_id=image_id,
-                      fallback_name=f"图片 {len(media) + 1}", force_kind="image")
+                      fallback_name=Said("labels.fanbox.image", number=len(media) + 1), force_kind="image")
         elif block_type == "file":
             file_id = str(block.get("fileId") or "")
             referenced_files.add(file_id)
@@ -221,7 +226,7 @@ def normalize_fanbox_post(post: Mapping[str, object]) -> FanboxContent:
                 file_count += 1
                 add_link(node.get("url"))
                 add_media(node, item_id=file_id,
-                          fallback_name=f"文件 {file_count}")
+                          fallback_name=Said("labels.fanbox.file", number=file_count))
         elif block_type == "embed":
             node = embed_map.get(str(block.get("embedId") or ""))
             add_link(node)
@@ -233,25 +238,25 @@ def normalize_fanbox_post(post: Mapping[str, object]) -> FanboxContent:
     for image_id, node in image_map.items():
         if str(image_id) not in referenced_images:
             add_media(node, item_id=str(image_id),
-                      fallback_name=f"图片 {len(media) + 1}", force_kind="image")
+                      fallback_name=Said("labels.fanbox.image", number=len(media) + 1), force_kind="image")
     for file_id, node in file_map.items():
         if str(file_id) in referenced_files or not isinstance(node, Mapping):
             continue
         file_count += 1
         add_link(node.get("url"))
-        add_media(node, item_id=str(file_id), fallback_name=f"文件 {file_count}")
+        add_media(node, item_id=str(file_id), fallback_name=Said("labels.fanbox.file", number=file_count))
 
     body_images = body.get("images") if isinstance(body.get("images"), list) else []
     for index, node in enumerate(body_images, start=1):
         add_media(node, item_id=f"image-{index}",
-                  fallback_name=f"图片 {len(media) + 1}", force_kind="image")
+                  fallback_name=Said("labels.fanbox.image", number=len(media) + 1), force_kind="image")
     body_files = body.get("files") if isinstance(body.get("files"), list) else []
     for index, node in enumerate(body_files, start=1):
         if not isinstance(node, Mapping):
             continue
         file_count += 1
         add_link(node.get("url"))
-        add_media(node, item_id=f"file-{index}", fallback_name=f"文件 {file_count}")
+        add_media(node, item_id=f"file-{index}", fallback_name=Said("labels.fanbox.file", number=file_count))
 
     _add_cover(post, media, media_urls)
 

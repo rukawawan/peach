@@ -56,6 +56,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 import demo_portraits  # noqa: E402
 from peach.config import FFMPEG_DIR  # noqa: E402
 from peach.ffmpeg import FFmpegResolver  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 
 MANIFEST_NAME = "demo-manifest.json"
 #: 取回的人像放在输出目录旁边，重跑不再联网。
@@ -150,16 +151,16 @@ class DemoItem:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="生成 SFW 演示媒体库")
-    parser.add_argument("--output", type=Path, required=True, help="生成到这个目录（不存在则创建）")
-    parser.add_argument("--count", type=int, default=24, help="作品数量")
-    parser.add_argument("--seed", type=int, default=7, help="随机种子；同一种子生成同一套内容")
+    parser = argparse.ArgumentParser(description=t("demo_dataset.description"))
+    parser.add_argument("--output", type=Path, required=True, help=t("demo_dataset.outputHelp"))
+    parser.add_argument("--count", type=int, default=24, help=t("demo_dataset.countHelp"))
+    parser.add_argument("--seed", type=int, default=7, help=t("demo_dataset.seedHelp"))
     parser.add_argument("--art", choices=("portrait", "synthetic"), default="portrait",
-                        help="portrait 按清单取人像排版；synthetic 用几何图与 lavfi 画面，不联网")
+                        help=t("demo_dataset.artHelp"))
     parser.add_argument("--video", choices=("ffmpeg", "stub"), default="ffmpeg",
-                        help="ffmpeg 真实编码短片；stub 只写占位字节，给规模测试用")
-    parser.add_argument("--duration", type=int, default=8, help="每条短片的秒数（ffmpeg 模式）")
-    parser.add_argument("--ffmpeg", type=Path, help="显式指定 ffmpeg 可执行文件")
+                        help=t("demo_dataset.videoHelp"))
+    parser.add_argument("--duration", type=int, default=8, help=t("demo_dataset.durationHelp"))
+    parser.add_argument("--ffmpeg", type=Path, help=t("demo_dataset.ffmpegHelp"))
     return parser
 
 
@@ -187,7 +188,7 @@ def plan_items(count: int, seed: int, duration: int, *,
     否则细看就穿帮。
     """
     if count < 1:
-        raise ValueError("--count 至少为 1")
+        raise ValueError(t("demo_dataset.countTooSmall"))
     rng = random.Random(seed)
     tall, wide = assign_portraits(count, rng, portraits) if portraits else ([], [])
     cursor = {"竖屏": 0, "横屏": 0}
@@ -306,7 +307,8 @@ def write_video(ffmpeg: str | None, item: DemoItem, destination: Path, seed: int
                             capture_output=True, text=True, encoding="utf-8", errors="replace",
                             timeout=300)
     if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
-        raise RuntimeError(f"ffmpeg 生成 {destination.name} 失败：{result.stderr.strip()[:300]}")
+        raise RuntimeError(t("demo_dataset.ffmpegFailed", name=destination.name,
+                             error=result.stderr.strip()[:300]))
 
 
 class PortraitArt:
@@ -343,7 +345,7 @@ def resolve_portraits(art: str, portraits: list | None) -> list | None:
     if portraits is None:
         portraits = demo_portraits.load_manifest()
     if not portraits:
-        raise RuntimeError("人像清单是空的；修好 scripts/demo-portraits.json，或改用 --art synthetic")
+        raise RuntimeError(t("demo_dataset.portraitsEmpty"))
     return portraits
 
 
@@ -358,7 +360,7 @@ def generate(output: Path, *, count: int, seed: int, video: str, duration: int,
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if video == "ffmpeg" and ffmpeg is None:
-        raise RuntimeError("需要 ffmpeg 才能编码短片；装好 ffmpeg，或改用 --video stub")
+        raise RuntimeError(t("demo_dataset.ffmpegMissing"))
     using = resolve_portraits(art, portraits)
     items = plan_items(count, seed, duration,
                        performers=(tuple(p.name for p in using) if using
@@ -411,14 +413,14 @@ def next_steps(output: Path) -> str:
         settings = ["[media.locations]", "local = 'R:\\peach-demo'", "", "[media.mounts]",
                     f"local = '{resolved.as_posix()}'"]
     return "\n".join([
-        "下一步：",
-        "1. 建一个演示 Peach 数据目录：peach init --data-root <目录> --no-input",
-        "2. 在该 Peach 数据目录的设置文件里声明来源根：",
+        t("demo_dataset.nextSteps"),
+        t("demo_dataset.stepInit"),
+        t("demo_dataset.stepDeclareRoot"),
         *(f"     {line}" for line in settings),
-        "3. peach scan local，再 peach process；候选在复核页全选通过，或按字段跑",
-        "     scripts/apply_metadata_tags.py <候选 CSV> --db <账本> --source local_nfo --field <字段> --apply --backup <备份>",
-        "4. 要卡片有九宫格就再跑 scripts/probe.py 与 scripts/sheets.py；然后 peach serve 截图。",
-        f"清单：{resolved / MANIFEST_NAME}",
+        t("demo_dataset.stepScan"),
+        t("demo_dataset.stepApplyTags"),
+        t("demo_dataset.stepSheets"),
+        t("demo_dataset.manifest", path=resolved / MANIFEST_NAME),
     ])
 
 
@@ -439,10 +441,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"✗ {error}")
         return 2
     kinds = {kind: sum(1 for item in items if item.kind == kind) for kind in ("coded", "creator", "bare")}
-    print(f"✓ 生成 {len(items)} 条：番号型 {kinds['coded']}、创作者型 {kinds['creator']}、裸文件 {kinds['bare']}")
+    print(t("demo_dataset.generated", total=len(items), coded=kinds["coded"], creator=kinds["creator"],
+            bare=kinds["bare"]))
     faces = {item.portrait for item in items if item.portrait}
     if faces:
-        print(f"  画面用了清单里的 {len(faces)} 位；人像缓存在 {args.output.resolve() / PORTRAIT_CACHE}")
+        print(t("demo_dataset.portraitsUsed", count=len(faces), cache=args.output.resolve() / PORTRAIT_CACHE))
     print(next_steps(args.output))
     return 0
 

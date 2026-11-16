@@ -3,7 +3,7 @@
  * 外框取 BoardUI 设置弹层的 `SettingsSectionLabel` + `SettingsCard`，开关行直接用 `SettingsRow`。
  * 注册表里没有折叠，它用 BoardUI token 组合，差异登记在 `boardui/ORIGIN.md`。
  * 提示与进度条另有页面共用的一份，在 `../components/`。 */
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ComponentType, FormEvent, MouseEvent, ReactNode } from 'react';
 import { RiArrowRightLine, RiArrowRightSLine, RiExternalLinkLine } from '@remixicon/react';
 import { setCollapseOpen } from '@peach/legacy/ui';
@@ -11,6 +11,7 @@ import { setCollapseOpen } from '@peach/legacy/ui';
 import { SettingsCard, SettingsSectionLabel } from '@/components/application/settings/settings-rows';
 import { LinkButton } from '@/components/base/buttons/link-button';
 import { cx } from '@/utils/cx';
+import { t } from '../../i18n';
 
 interface SectionProps {
   title: string;
@@ -81,6 +82,13 @@ export function Footer({ status, children }: { status?: ReactNode; children?: Re
   );
 }
 
+/** 句中嵌组件（如滚动的数字）的译文：`nodes` 里的占位换成对应节点，其余占位照常代入，语序跟着译文走。 */
+export function translateWithNodes(key: string, options: Record<string, unknown>, nodes: Record<string, ReactNode>): ReactNode[] {
+  const marks = Object.fromEntries(Object.keys(nodes).map((name) => [name, `\u0001${name}\u0001`]));
+  return String(t(key, { ...options, ...marks })).split('\u0001')
+    .map((part, index) => index % 2 ? <Fragment key={index}>{nodes[part]}</Fragment> : part);
+}
+
 export function Help({ role, children }: { role?: 'status'; children: ReactNode }) {
   return <p role={role} className="text-body-2-regular text-text-secondary">{children}</p>;
 }
@@ -128,7 +136,7 @@ export function ExternalLink({ href, children, leadingIcon }: {
 export function TaskCenterLink() {
   return (
     <LinkButton href="/tasks" size="small" trailingIcon={RiArrowRightLine} className="self-start">
-      在任务中心查看进度
+      {t('settings:taskCenterLink.viewProgress')}
     </LinkButton>
   );
 }

@@ -1,0 +1,112 @@
+{
+  "configurationSections": {
+    "diagnostics": "Diagnostics",
+    "downloads": "Downloads",
+    "feeds": "Feeds",
+    "library": "Library",
+    "maintenance": "Maintenance",
+    "network": "Network"
+  },
+  "durationFilter": {
+    "maximum": "Maximum duration (minutes)",
+    "minimum": "Minimum duration (minutes)",
+    "minutes_one": "{{count, number}} min",
+    "minutes_other": "{{count, number}} min",
+    "noLimit": "No limit"
+  },
+  "favoritesTabs": {
+    "agencies": "Agencies",
+    "creators": "Creators",
+    "savedFilters": "Saved filters",
+    "series": "Series",
+    "studios": "Studios"
+  },
+  "followTabs": {
+    "follows": "Follows",
+    "manageTags": "Manage tags",
+    "newFollow": "New follow"
+  },
+  "javTabs": {
+    "collection": "Collection",
+    "discover": "Discover",
+    "newReleases": "New releases",
+    "wanted": "Wanted"
+  },
+  "manage": {
+    "activity": "Tasks",
+    "cleanup": "Library tools",
+    "configuration": "Settings",
+    "quality": "HD upgrades",
+    "review": "Review",
+    "stats": "Stats",
+    "subscriptions": "Subscriptions",
+    "taste": "Taste",
+    "trash": "Trash"
+  },
+  "navigationGroups": {
+    "favorites": "Favorites",
+    "jav": "JAV",
+    "preferences": "Preferences",
+    "review": "Review categories",
+    "sidebar": "Sidebar",
+    "tagVocabulary": "Tag vocabulary"
+  },
+  "pageTitle": {
+    "portrait": "Vertical",
+    "search": "Search {{term}}"
+  },
+  "preferenceSections": {
+    "appearance": "Appearance",
+    "content": "Content",
+    "jav": "JAV",
+    "playback": "Playback",
+    "search": "Search"
+  },
+  "reviewCategories": {
+    "actressAvatars": "Actress avatars",
+    "codeDirectories": "Uncertain code directories",
+    "creatorTags": "Creator tags",
+    "endCardEvidence": "End card evidence",
+    "fc2CommentFlags": "FC2 comment flags",
+    "fc2SimilarCodes": "FC2 similar codes",
+    "labelLogos": "Label logos",
+    "metadataFields": "Metadata fields",
+    "westernIdentities": "Western identities"
+  },
+  "shared": {
+    "all": "All"
+  },
+  "sidebar": {
+    "flagged": "Flagged",
+    "following": "Following",
+    "home": "Home",
+    "immerse": "Immersive",
+    "jav": "JAV",
+    "manage": "Manage",
+    "performers": "Performers",
+    "playlists": "Playlists",
+    "studios": "Studios",
+    "tags": "Tags"
+  },
+  "sidebarFilters": {
+    "collapseGroup": "Show fewer in {{title}}",
+    "contentTags": "Content tags",
+    "duration": "Duration",
+    "expandGroup": "Show all in {{title}}",
+    "followingTags": "Tags in Following",
+    "orientation": "Orientation",
+    "region": "Region",
+    "releaseYear": "Release year",
+    "storage": "Storage",
+    "videoProperties": "Video properties"
+  },
+  "sidebarReorder": {
+    "canceled": "Reordering canceled",
+    "moved": "{{label}}, moved to position {{position}}",
+    "unchanged": "Order unchanged"
+  },
+  "tagTabs": {
+    "online": "Online",
+    "localLabel": "Local"
+  }
+}

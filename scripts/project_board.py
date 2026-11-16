@@ -13,12 +13,19 @@ import sys
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-from . import issue_intake
+from peach.interface_text import dev as t  # noqa: E402
+
+from . import issue_intake  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".github/project-board.json"
 TEMPLATE_GRACE = timedelta(hours=2)
+#: 这几种身份算维护者：`Source` 按 Issue 作者归类，`Reply` 按谁最后发言判断。
+MAINTAINERS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def gh(*args, payload=None):
@@ -28,7 +35,7 @@ def gh(*args, payload=None):
     result = subprocess.run(command, input=None if payload is None else json.dumps(payload),
                             cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=120)
     if result.returncode:
-        raise RuntimeError(f"GitHub CLI 调用失败：{result.stderr.strip()} {result.stdout[:2000]}")
+        raise RuntimeError(t("project_board.ghFailed", stderr=result.stderr.strip(), stdout=result.stdout[:2000]))
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
@@ -51,7 +58,7 @@ def connection(query, path, **variables):
         if not page["hasNextPage"]:
             return nodes
         if not page["endCursor"] or page["endCursor"] == cursor:
-            raise RuntimeError("GitHub 分页游标没有前进")
+            raise RuntimeError(t("project_board.cursorStuck"))
         cursor = page["endCursor"]
 
 
@@ -61,7 +68,7 @@ def ancestor(commit, ref):
     result = subprocess.run(["git", "merge-base", "--is-ancestor", commit, ref],
                             cwd=ROOT, capture_output=True, timeout=30)
     if result.returncode not in (0, 1, 128):
-        raise RuntimeError("提交归属验证失败")
+        raise RuntimeError(t("project_board.ancestryFailed"))
     return result.returncode == 0
 
 
@@ -89,7 +96,7 @@ def canonical(key, aliases):
     seen = set()
     while key in aliases:
         if key in seen:
-            raise ValueError("Issue 迁移映射存在循环")
+            raise ValueError(t("project_board.aliasCycle"))
         seen.add(key)
         key = aliases[key]
     return key
@@ -100,39 +107,54 @@ def values(item):
             for value in item.get("fieldValues", {}).get("nodes", []) if value}
 
 
+def reply_state(content):
+    """开放 Issue 里外部用户最后发言、维护者还没接话，是 Needs reply；维护者回过之后是 Replied。
+
+    机器人的发言（模板提醒等）不算谁说了话。只有维护者自己在说的 Issue 不归任何一组。
+    """
+    if content["__typename"] != "Issue" or content["state"] != "OPEN":
+        return ""
+    speakers = [content] + content.get("comments", {}).get("nodes", [])
+    maintainer = [node.get("authorAssociation") in MAINTAINERS for node in speakers
+                  if (node.get("author") or {}).get("__typename") != "Bot"]
+    if all(maintainer):
+        return ""
+    return "Replied" if maintainer[-1] else "Needs reply"
+
+
 def decision(content, current, linked, published):
     """状态服从关闭原因与验收；交付进度单独呈现。"""
     is_pr = content["__typename"] == "PullRequest"
     merged = bool(content.get("merged")) if is_pr else any(pr.get("merged") for pr in linked)
     labels = {label["name"] for label in content.get("labels", {}).get("nodes", [])}
-    status = current.get("Status", "待评估")
+    status = current.get("Status", "Needs triage")
     if is_pr:
-        status = "已完成" if merged else ("已关闭未合入" if content["state"] == "CLOSED" else "进行中")
+        status = "Done" if merged else ("Closed unmerged" if content["state"] == "CLOSED" else "In progress")
     elif content["state"] == "CLOSED" and issue_intake.LABEL in labels and \
             datetime.now(timezone.utc) - datetime.fromisoformat(content["closedAt"]) < TEMPLATE_GRACE:
-        status = current.get("Status", "待评估")
+        status = current.get("Status", "Needs triage")
     elif content["state"] == "CLOSED":
-        status = "已取消" if content.get("stateReason") == "NOT_PLANNED" else "已完成"
+        status = "Canceled" if content.get("stateReason") == "NOT_PLANNED" else "Done"
     elif "status:needs-verification" in labels:
-        status = "待验证"
+        status = "Needs verification"
     elif "status:needs-info" in labels:
-        status = "待评估"
+        status = "Needs triage"
     elif merged:
-        status = "待验证"
+        status = "Needs verification"
     elif linked:
-        status = "进行中"
-    elif status in {"已完成", "已取消"}:
-        status = "待安排"
-    delivery = "已发布" if published else ("已合入待发布" if merged else (
-        "尚未合入" if linked or is_pr else "未关联实现"))
-    result = {"Status": status, "交付进度": delivery, "发布版本": "", "发布说明": "", "实现关联": ""}
+        status = "In progress"
+    elif status in {"Done", "Canceled"}:
+        status = "Backlog"
+    delivery = "Released" if published else ("Merged" if merged else (
+        "Not merged" if linked or is_pr else "No linked work"))
+    result = {"Status": status, "Delivery": delivery, "Release": "", "Release notes": "", "Implementation": ""}
     if published:
-        result.update({"发布版本": published["tag_name"], "发布说明": published["html_url"]})
+        result.update({"Release": published["tag_name"], "Release notes": published["html_url"]})
     return result
 
 
 ISSUE_CONTENT = '''__typename id number title url state stateReason closedAt body authorAssociation author{__typename} repository{nameWithOwner}
-labels(first:100){nodes{name}}'''
+labels(first:100){nodes{name}} comments(last:30){nodes{authorAssociation author{__typename}}}'''
 CONTENT = '''__typename ... on DraftIssue{id title} ... on Issue{''' + ISSUE_CONTENT + '''}
 ... on PullRequest{id number title url state merged mergeCommit{oid} body repository{nameWithOwner}
 closingIssuesReferences(first:100){nodes{id number repository{nameWithOwner}}}}'''
@@ -145,9 +167,9 @@ def read_project(project):
 fields(first:100){nodes{... on ProjectV2Field{id name dataType}
 ... on ProjectV2SingleSelectField{id name options{id name}}}}}}}''', id=project)["node"]["fields"]["nodes"]
     fields = {field["name"]: field for field in fields if "name" in field}
-    for required in ("Status", "交付进度", "发布版本", "发布说明", "实现关联"):
+    for required in ("Status", "Delivery", "Release", "Release notes", "Implementation"):
         if required not in fields:
-            raise ValueError(f"看板缺少字段：{required}")
+            raise ValueError(t("project_board.fieldMissing", field=required))
     items = connection('''query($id:ID!,$cursor:String){node(id:$id){... on ProjectV2{
 items(first:100,after:$cursor,archivedStates:[ARCHIVED,NOT_ARCHIVED]){nodes{id isArchived content{''' + CONTENT + '''}
 fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{name}}}
@@ -165,13 +187,15 @@ pageInfo{hasNextPage endCursor}}}}''', ("repository", "pullRequests"), owner=own
 
 def issue_links(prs, config):
     linked = {}
+    # 迁移映射里的旧仓库照样认：已转移的 Issue 在旧提交和 PR 里仍写着原来的仓库与编号。
+    allowed = list(config.get("issue_repositories", [config["repository"]]))
+    allowed += sorted({key.rsplit("#", 1)[0] for key in config.get("issue_aliases", {})} - set(allowed))
     for pr in prs:
         if pr["state"] == "CLOSED" and not pr.get("merged"):
             continue
-        allowed = config.get("issue_repositories", [config["repository"]])
         keys = {issue_key(issue) for issue in pr["closingIssuesReferences"]["nodes"]
                 if issue["repository"]["nameWithOwner"] in allowed}
-        keys |= references(pr["body"], config["repository"], config.get("issue_repositories"))
+        keys |= references(pr["body"], config["repository"], allowed)
         for key in {canonical(key, config.get("issue_aliases", {})) for key in keys}:
             linked.setdefault(key, []).append(pr)
     return linked
@@ -183,8 +207,7 @@ def incoming_issues(config):
         owner, name = repository.split("/")
         incoming.extend(connection('''query($owner:String!,$name:String!,$states:[IssueState!],$cursor:String){repository(owner:$owner,name:$name){
 issues(first:100,after:$cursor,states:$states){nodes{''' + ISSUE_CONTENT + '''}pageInfo{hasNextPage endCursor}}}}''',
-                                   ("repository", "issues"), owner=owner, name=name,
-                                   states=None if repository == config.get("planning_repository") else ["OPEN"]))
+                                   ("repository", "issues"), owner=owner, name=name, states=["OPEN"]))
     return incoming
 
 
@@ -243,9 +266,9 @@ def delivery_fields(config, content, current, linked, releases):
     desired = decision(content, current, associated, published)
     urls = [pr["url"] for pr in associated if pr.get("url")]
     if urls:
-        desired["实现关联"] = "\n".join(urls)
+        desired["Implementation"] = "\n".join(urls)
     elif integrated:
-        desired["实现关联"] = "\n".join(f"https://github.com/{repository}/commit/{commit}" for commit in integrated)
+        desired["Implementation"] = "\n".join(f"https://github.com/{repository}/commit/{commit}" for commit in integrated)
     return desired
 
 
@@ -256,7 +279,6 @@ def apply_fields(project, item, fields, desired, apply):
         if current.get(field_name, "") == value:
             continue
         field = fields[field_name]
-        update = {"singleSelectOptionId": next(option["id"] for option in field["options"] if option["name"] == value)} if "options" in field else {"text": value}
         changes.append({"repository": content["repository"]["nameWithOwner"], "number": content["number"],
                         "title": content["title"], "field": field_name, "value": value})
         if apply:
@@ -265,6 +287,8 @@ def apply_fields(project, item, fields, desired, apply):
 input:{projectId:$project,itemId:$item,fieldId:$field}){projectV2Item{id}}}''',
                         project=project, item=item["id"], field=field["id"])
                 continue
+            options = {option["name"]: option["id"] for option in field.get("options", [])}
+            update = {"singleSelectOptionId": options[value]} if "options" in field else {"text": value}
             graphql('''mutation($project:ID!,$item:ID!,$field:ID!,$value:ProjectV2FieldValue!){
 updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field,value:$value}){projectV2Item{id}}}''',
                     project=project, item=item["id"], field=field["id"], value=update)
@@ -288,21 +312,23 @@ def reconcile(config, *, apply=False, event=None):
         if content_repo not in config.get("issue_repositories", [repository]):
             continue
         desired = delivery_fields(config, content, values(item), linked, releases)
-        if "来源" in fields:
-            desired["来源"] = "维护者待办" if content_repo == config.get("planning_repository") else "用户反馈"
+        if "Source" in fields:
+            desired["Source"] = "Maintainer" if content.get("authorAssociation") in MAINTAINERS else "Community"
+        if "Reply" in fields:
+            desired["Reply"] = reply_state(content)
         changes.extend(apply_fields(project, item, fields, desired, apply))
     return changes
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("project_board.description"))
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--event", type=Path)
     args = parser.parse_args()
     event = json.loads(args.event.read_text(encoding="utf-8")) if args.event else None
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
     if os.environ.get("GITHUB_REPOSITORY", config["repository"]) != config["repository"]:
-        raise ValueError("仓库不匹配，拒绝同步项目")
+        raise ValueError(t("project_board.repositoryMismatch"))
     changes = reconcile(config, apply=args.apply, event=event)
     print(json.dumps({"apply": args.apply, "changes": changes}, ensure_ascii=False, indent=2))
     return 0

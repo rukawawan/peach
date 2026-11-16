@@ -9,7 +9,14 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import PureWindowsPath
 
+from . import interface_text
 from .media_sources import CLOUD_LOCATIONS, cost_for
+
+#: 资料来源那几行的显示名（ADR-0159），与媒体库行的库名并列。
+METADATA_LABEL = 'labels.processingTraffic.metadata'
+#: 传输量取不到实际读数的原因；`unobserved` 里存的是这些 code。
+MOUNT_UNOBSERVED = 'labels.processingTraffic.mountUnobserved'
+MEDIA_READ_MISSING = 'labels.processingTraffic.mediaReadMissing'
 
 CURRENT = ContextVar('peach_processing_traffic', default=None)
 ROUTE = ContextVar('peach_processing_traffic_route', default='metadata')
@@ -91,10 +98,9 @@ class ProcessingTraffic:
                     label=config.library_names.get(root) or root, root=root, location=location,
                     metered=connection == 'proxy', connection=connection, network=network,
                     used_bytes=0, remaining_min=0, remaining_max=0, unobserved=[])
-        for key, label, metered in [('metadata', '影片资料', True),
-                                     ('metadata-proxy', '影片资料', True),
-                                     ('metadata-direct', '影片资料', False)]:
-            self.rows[key] = dict(label=label, root='', location='metadata', metered=metered,
+        for key, metered in [('metadata', True), ('metadata-proxy', True), ('metadata-direct', False)]:
+            self.rows[key] = dict(label=interface_text.text(f'server:{METADATA_LABEL}'), label_code=METADATA_LABEL,
+                root='', location='metadata', metered=metered,
                 connection='proxy' if metered else 'direct',
                 network=True, used_bytes=0, remaining_min=0, remaining_max=0, unobserved=[])
         previous = (resume_state or {}).get('traffic') or {}
@@ -155,7 +161,7 @@ class ProcessingTraffic:
             self.plan.refresh(rows)
             for row in self.rows.values():
                 if row['root'] and row['network']:
-                    self._reason(row, '挂载缓存与预读未观测')
+                    self._reason(row, MOUNT_UNOBSERVED)
 
     def start_metadata(self, code):
         from .library_processing import _provider_code
@@ -216,9 +222,9 @@ class ProcessingTraffic:
         key = self._media_key(path)
         if key is not None:
             if self.rows[key]['network']:
-                self.mark(key, '挂载缓存与预读未观测')
+                self.mark(key, MOUNT_UNOBSERVED)
             if missing:
-                self.mark(key, '媒体读取量未取得')
+                self.mark(key, MEDIA_READ_MISSING)
             self.add(key, size)
 
     def snapshot(self, *, finished=False):

@@ -3,6 +3,7 @@ import { $, esc, icon, newSeed, seededRank } from '../core';
 import { playUiSound } from '../ui-kit/sounds';
 import { mountToaster, showToast } from '../react/application-residents';
 import { setActionBusy } from '../ui-kit';
+import { t } from '../i18n';
 export const receiptsState = { toastBody: undefined, toastSeq: undefined, toast: undefined, actionReceipt: undefined, actionFailure: undefined, rollSeed: undefined, seededSample: undefined };
 
 
@@ -29,15 +30,15 @@ receiptsState.actionReceipt = (message,{undo=null,timeout=undo?8000:6000}={})=>{
   let item=null;
   item=receiptsState.toast({text:message},{
     timeout,
-    action:undo?{label:'撤销',run:async()=>{
-      try{await undo();item.replaceMessage({text:'已撤销'})}
-      catch(error){item.replaceMessage({text:`撤销失败：${error.message||'请重试'}`},{warn:true})}
+    action:undo?{label:t('shell:shared.undo'),run:async()=>{
+      try{await undo();item.replaceMessage({text:t('shell:receipt.undone')})}
+      catch(error){item.replaceMessage({text:t('shell:receipt.undoFailed',{message:error.message||t('shell:receipt.tryAgain')})},{warn:true})}
     }}:null,
   });
   return item;
 };
 receiptsState.actionFailure = (message,error)=>receiptsState.toast(
-  {text:`${message}失败：${error?.message||'请重试'}`},{warn:true});
+  {text:t('shell:receipt.actionFailed',{action:message,message:error?.message||t('shell:receipt.tryAgain')})},{warn:true});
 receiptsState.rollSeed = ()=>newSeed();
 receiptsState.seededSample = (rows,count,seed,key=row=>row.k)=>{
   if(rows.length<=count)return rows;

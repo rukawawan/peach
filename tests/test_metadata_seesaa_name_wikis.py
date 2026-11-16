@@ -202,11 +202,11 @@ class ScrapeCodesTests(unittest.TestCase):
         """样本批里 FC2 排在前面、两站都没收录：连着几个「搜索范围内没有」不该把整站冷却掉。"""
         script = self.script()
         throttle = script._Throttle(script._health_rows(('av_name',), 'custom'))
-        miss = MetadataProviderError('miss', kind='incomplete_search', retryable=True)
+        miss = MetadataProviderError('errors.seesaa.notInSearch', kind='incomplete_search', retryable=True)
         for _ in range(script.COOLDOWN_AFTER_FAILURES + 2):
             throttle.record_failure('av_name', miss)
         self.assertEqual(throttle.open_members(('av_name',)), ('av_name',))
-        down = MetadataProviderError('down', kind='unavailable', retryable=True)
+        down = MetadataProviderError('errors.seesaa.networkFailed', kind='unavailable', retryable=True)
         for _ in range(script.COOLDOWN_AFTER_FAILURES):
             throttle.record_failure('av_name', down)
         self.assertEqual(throttle.open_members(('av_name',)), ())

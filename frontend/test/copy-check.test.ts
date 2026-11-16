@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
-import { scanSource, sourceFiles } from '../scripts/copy-check.mjs';
+import { scanSource, sourceFiles } from '../scripts/copy-check.ts';
 
 describe('源码文案解析', () => {
   it('变量、属性键和模块路径不属于叙述', () => {

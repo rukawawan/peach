@@ -25,32 +25,12 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .studio_words import ADULT, BROKEN_TITLE, CONFIRMED_SITES, MISSING, PARKED, PARKED_TITLE, PLATFORM_VERDICT
+from .coded_text import Said
 from .http import HttpRequest, HttpxTransport
 from .user_agent import USER_AGENT
 
 TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
-# 抢注页与停放页的自述。它们同样会 200，也同样会在标题里回显域名，
-# 只有这些词能把它们和真站区分开。
-#
-# 标题单独判，而且判得更松。实测两次漏判都出在这上面：`kawaii.com - domain for sale`
-# 的关键词在正文第 81683 字节，早已超出任何合理的正文扫描窗口，可它就写在标题里；
-# `Attackers - The Domain Name Attackers.com is Now For Sale.` 则是中间插了词，
-# 逐字匹配「domain for sale」全文都对不上。标题只有几十个字符，真站的标题不会说
-# 自己在出售，所以这里可以放心用最宽的判据。
-PARKED_TITLE = re.compile(
-    r"for sale|domain name|buy this domain|このドメイン|ドメイン(?:の)?販売", re.I)
-# 站点自述打不开的标题。实测 `bangbus.com` 与 `monstersofcock.com` 都返回 200、82 KB、
-# 正文里成人词一应俱全，标题却只有 `Site Unavailable`——「域名由厂牌名推出且是成人站」
-# 那条因此把它们判成 ok。一页自己说自己不可用，就不能拿来当官网证据；这类页面还常常
-# 是 CDN 或地区封锁的产物，换个出口再取才有意义，写成 ok 只会把它固化成结论。
-BROKEN_TITLE = re.compile(
-    r"site unavailable|service unavailable|temporarily unavailable|access denied"
-    r"|forbidden|not found|bad gateway|under construction|coming soon"
-    r"|maintenance|メンテナンス|工事中|しばらく(?:お待ち|お待たせ)", re.I)
-PARKED = re.compile(
-    r"domain (?:is )?for sale|buy this domain|parked (?:free )?at|このドメイン(?:は|を)"
-    r"|ドメイン(?:の)?販売|sedo\.com|afternic|godaddy\.com/domain|hugedomains",
-    re.I)
 # 停放平台自己的主机。停放页不一定自述在出售：`crusegroup.net` 在公司注销后由 ParkLogic
 # 停放，2026-09-26 实测 200、5.5 KB、标题 `Redirecting...`，正文只有一段把访客送去
 # `router.parklogic.com` 的脚本，上面两条自述词一个都对不上。认得出它的只有平台主机名，
@@ -58,52 +38,24 @@ PARKED = re.compile(
 PARKING_HOSTS = re.compile(
     r"(?<![\w-])((?:[\w-]+\.)*(?:parklogic\.com|sedoparking\.com|bodis\.com"
     r"|parkingcrew\.net))(?![\w.-]*\w)", re.I)
-#: 停放页判词的开头。链接体检按它把停放页归进「确证没了」。
-PARKED_NOTE = "停放页"
+
+
+def _said(name: str, **params) -> Said:
+    """复核件 `note` 列里的一句说明：值是 zh-CN 原文，身上带 code 与参数（`server:labels.studioSites.<名字>`，ADR-0159）。
+
+    说明也随官网登记写进 `entity_link.metadata_json` 的 `evidence`；链接体检把停放页的那句显示在面板上，可用
+    `coded_text.coded("note", note)` 交给界面按当前语言显示。
+    """
+    return Said(f"labels.studioSites.{name}", params)
+
+
+#: 停放页判词的开头。链接体检按它把停放页归进「确证没了」；各条停放页说明都以它开头。
+PARKED_NOTE = _said("parked")
 # 空壳页也会 200。真站首页（含年龄门）实测都在 10 KB 以上，取一半做下限。
 MIN_BODY = 5000
-# 「标题里有厂牌名」证明不了这是**这个**厂牌的站——同名的无关公司照样通过。实测四例：
-# `madonna.com` 是歌手麦当娜、`hunter.com` 是 Hunter Engineering（四轮定位）、
-# `bazooka.com` 是车载音响、`marrion.com` 是一个 Google Sites 页面。它们都 200、
-# 都不是停放页、标题里都有厂牌名。
-#
-# 缺的那一半是「这一页是不是 AV 厂牌站」。这不是补丁：我们要找的就是 AV 厂牌官网，
-# 成人语境本来就是判据的一部分。日站首页普遍带年龄门，这些词因此极稳；同时留下英文
-# 写法，免得把西方厂牌一律打成待复核。
-#
-# `アダルト動画` 与 `無修正` 是无码站那一头补上的：`www.1pondo.tv` 实测 200、标题正是
-# `一本道 | 美を追求する高画質アダルト動画サイト`，厂牌名自述得清清楚楚，却因为站上写的是
-# 「動画」而不是「ビデオ」被判成 weak。这两个词同样不会出现在 Hunter Engineering、
-# Bazooka、麦当娜那三个同名站上，判据的分辨力没有变松。
-ADULT = re.compile(
-    r"年齢認証|年齢チェック|AVメーカー|アダルトビデオ|アダルトDVD|アダルト動画|無修正"
-    r"|18歳未満|成人向|adult video|adult dvd|porn|18\+|over 18", re.I)
 FIELDS = ("entity_id", "studio", "assets", "candidate_url", "final_url", "status",
           "bytes", "sha256", "title", "verdict", "note")
 
-#: 用户当场确认的厂牌官网。**这不是放宽通用判据，是补一条页面上没有的信息。**
-#:
-#: 适用的形状是「账本这边的名字和站上那个牌子对不起来，而对应关系只有人知道」：厂牌属于
-#: 哪家公司（`SOD Create` → Soft On Demand）。账本记的是番号站转写的罗马音、站上只用日文
-#: 原名的，不进这张表：那是账本名字错了，按 `apply_studio_name_localization.py` 换回日文名，
-#: 旧写法降为别名，页面自述就对得上。有别名的同样走 `site_verdict` 的 `aliases`，那是页面上
-#: 能查证的路，不该拿白名单顶掉（`东京热` 就是这样自证的）。
-#:
-#: `SOD Create` 是 Soft On Demand 的厂牌。母公司官网 `www.sod.co.jp` 实测 200、是成人站，
-#: 标题却是 `SOFT ON DEMAND（ソフト・オン・デマンド）`——标题和正文里都不会出现
-#: `SOD Create` 这个串，所以「标题自述厂牌名」和「正文提到厂牌名」两条都不成立，通用
-#: 判据只能判未取得。缺的那一条是「这个厂牌属于哪家公司」，它本来就不在页面上，只有人知道。
-#:
-#: 因此走显式白名单，不去放宽通用判据：把「标题没有厂牌名也算」松开，`hunter.com`
-#: （四轮定位）、`bazooka.com`（车载音响）、`madonna.com`（歌手）那一整类同名站会跟着
-#: 一起被确认成官网。白名单只影响列出来的这几行，每行写清谁确认的、为什么通用路径不成立。
-CONFIRMED_SITES: dict[str, tuple[str, str]] = {
-    "SOD Create": (
-        "https://www.sod.co.jp/",
-        "用户 2026-09-03 确认：SOD Create 是 Soft On Demand 的厂牌，"
-        "sod.co.jp 是母公司官网",
-    ),
-}
 
 #: 发行平台不是厂牌，「厂牌官网」这条路对它们本来就不成立。
 #:
@@ -116,7 +68,6 @@ CONFIRMED_SITES: dict[str, tuple[str, str]] = {
 #: 那正是这个仓库最常见的那类缺陷。名字按 `normalise` 比，写法差异（`FC2-PPV`／`FC2 PPV`）
 #: 不影响命中。
 PLATFORM_ENTITIES = frozenset({"fc2ppv", "fc2", "myfans", "manyvids", "onlyfans", "fansly", "patreon", "fantia", "fanbox"})
-PLATFORM_VERDICT = "不适用（发行平台）"
 
 
 def is_platform(name: str) -> bool:
@@ -140,7 +91,7 @@ def is_platform(name: str) -> bool:
 #:
 #: `・`（U+30FB）住在片假名区里，但它是分隔符，和上面剥掉的那些同类，所以不收；`ー`
 #: （U+30FC）是名字本身的一部分（`スーパーモデルメディア`、`マーレーインターナショナル`），必须收。
-KEPT = re.compile(r"[^0-9a-zぁ-ゖァ-ヺー一-鿿]")
+KEPT = re.compile(r"[^0-9a-z\u3041-\u3096\u30a1-\u30faー\u4e00-\u9fff]")
 
 
 def normalise(text: str) -> str:
@@ -214,15 +165,15 @@ def parked_reason(title: str, text: str, headers: str = "", final_url: str = "")
     厂牌官网发现与实体链接体检共用这一份：两边要回答的都是「这个 200 是不是真站」。
     """
     if PARKED_TITLE.search(title):
-        return f"{PARKED_NOTE}（标题自述在出售域名：{title[:44]}）"
+        return _said("parkedTitle", parked=PARKED_NOTE, title=title[:44])
     # 不截窗口。实测停放页把「domain for sale」写在第 81683 字节，任何固定窗口都会漏；
     # 整篇扫一遍在这个量级上不值得省。
     if PARKED.search(text):
-        return f"{PARKED_NOTE}或域名出售页"
-    for where, blob in (("最终地址", final_url), ("响应头", headers), ("正文", text)):
+        return _said("parkedOrForSale", parked=PARKED_NOTE)
+    for where, blob in (("finalUrl", final_url), ("headers", headers), ("body", text)):
         match = PARKING_HOSTS.search(blob)
         if match:
-            return f"{PARKED_NOTE}（{where}指向 {match.group(1).lower()}）"
+            return _said(f"parkingHost.{where}", parked=PARKED_NOTE, host=match.group(1).lower())
     return ""
 
 
@@ -248,7 +199,7 @@ def parked_after_certificate_error(url: str, error: Exception, fetch) -> str:
     except Exception:
         return ""
     reason = response_parked_reason(response) if response.status_code == 200 else ""
-    return f"{reason}；HTTPS 证书无效" if reason else ""
+    return _said("certificateInvalid", reason=reason) if reason else ""
 
 
 def site_verdict(name: str, status: int, body: bytes, title: str,
@@ -270,17 +221,17 @@ def site_verdict(name: str, status: int, body: bytes, title: str,
     比不放松任何判据——每个别名都是账本里这个实体自己的名字，不是从页面上猜出来的。
     """
     if status != 200:
-        return "未取得", f"HTTP {status}"
+        return MISSING, f"HTTP {status}"
     if len(body) < MIN_BODY:
-        return "未取得", f"页面只有 {len(body)} 字节，疑似空壳"
+        return MISSING, _said("emptyShell", bytes=len(body))
     if PARKED_TITLE.search(title):
-        return "未取得", f"标题自述在出售域名（{title[:44]}）"
+        return MISSING, _said("forSaleTitle", title=title[:44])
     if BROKEN_TITLE.search(title):
-        return "未取得", f"站点自述不可用（{title[:44]}）"
+        return MISSING, _said("unavailableTitle", title=title[:44])
     text = decode(body)
     reason = parked_reason("", text, final_url=url)
     if reason:
-        return "未取得", reason
+        return MISSING, reason
     # 标题不比域名多说任何东西，就等于没有自述身份。实测 `prestige.com` 返回 200、
     # 不是停放页、标题正好是 `prestige.com`——它因此通过了「标题含厂牌名」，被判成
     # Prestige 官网，而真站是 `prestige-av.com`，那是另一家公司。停放页规则拦不住它：
@@ -293,17 +244,17 @@ def site_verdict(name: str, status: int, body: bytes, title: str,
     host = (urlsplit(url).hostname or "").casefold().removeprefix("www.")
     printed = title.casefold().strip()
     if host and host in printed and not re.sub(r"\W|_", "", printed.replace(host, "")):
-        return "未取得", f"标题只是域名回显，没有自述身份（{title[:40]}）"
+        return MISSING, _said("domainEcho", title=title[:40])
     # 用户确认的母公司官网。上面四道（状态码、空壳、停放页／自述不可用、域名回显）照旧
     # 要过：确认的是「这个地址属于这家公司」，不是「这个地址此刻返回的任何东西都算数」。
     # 白名单换掉的只有「页面得自述厂牌名」这一条——`SOD Create` 这个串本来就不会出现在
     # 母公司官网上，那条信息不在页面里。
     if confirmed:
-        return "ok", f"{confirmed}；实测标题：{title[:40] or '无'}"
+        return "ok", _said("confirmed", confirmed=confirmed, title=title[:40] or _said("none"))
     spellings = [(spelling, normalise(spelling)) for spelling in (name, *aliases)]
     spellings = [pair for pair in spellings if pair[1]]
     if not spellings:
-        return "未取得", "厂牌名与别名里都没有可比对的字符"
+        return MISSING, _said("nothingToCompare")
     adult = bool(ADULT.search(text))
     # 命中哪个写法要写进判词。`东京热` 的行上只写「标题自述厂牌名」，复核的人看到标题里
     # 是「東京熱」会以为判错了；写出对上的是哪个别名，这一步就自己解释了自己。写「对上的是
@@ -311,12 +262,12 @@ def site_verdict(name: str, status: int, body: bytes, title: str,
     # 是同一个串，说成页面的原文就不准了。
     spelled = next((t for t, token in spellings if token in normalise(title)), "")
     if spelled:
-        matched = "" if spelled == name else f"（对上的是别名「{spelled}」）"
+        matched = "" if spelled == name else _said("matchedAlias", alias=spelled)
         if adult:
-            return "ok", f"标题自述厂牌名{matched}，且页面是成人站"
+            return "ok", _said("titleNamesAdult", matched=matched)
         # 同名的无关公司到这里为止和真站没有任何可区分之处，所以只能交给人看，
         # 不能算已确认——一条错的官网会被下游当成社媒 handle 的来源。
-        return "weak", f"标题有厂牌名但页面不像成人站；需人工确认（{title[:40]}）"
+        return "weak", _said("titleNamesNotAdult", title=title[:40])
     # 日站普遍把品牌名写成假名：`本中`、`無垢`、`ダスッ`、`グローリークエスト`。拿账本里的
     # 拉丁名去比标题，对这一整类真站必然对不上——`honnaka.jp` 的标题是
     # 「年齢チェック | 全作品、本物中出しのAVメーカー【本中】公式サイト」。这是系统性漏判，
@@ -329,11 +280,11 @@ def site_verdict(name: str, status: int, body: bytes, title: str,
     # `linkedin.com/in/fareedkhan`，按请求地址判就成了「域名由厂牌名推出」，
     # 一个 LinkedIn 个人主页因此被确认成厂牌官网。跳走之后这条证据就不再成立。
     if host in derived_hosts and adult:
-        return "ok", "域名由厂牌名推出，且页面是成人站（标题用假名写品牌名）"
+        return "ok", _said("derivedHostAdult")
     body_text = normalise(text[:20000])
     if any(token in body_text for _, token in spellings):
-        return "weak", "标题未自述，但正文出现厂牌名；需人工看图确认"
-    return "未取得", f"标题与正文都没有厂牌名（标题：{title[:40] or '无'}）"
+        return "weak", _said("bodyNames")
+    return MISSING, _said("noName", title=title[:40] or _said("none"))
 
 
 def load_aliases(connection: sqlite3.Connection, entity_ids: Sequence[int]
@@ -389,7 +340,7 @@ def load_named_studios(connection: sqlite3.Connection, names: list[str]) -> list
             continue
         found.append({"entity_id": row[0], "studio": name, "assets": row[1]})
     if missing:
-        raise SystemExit(f"数据库里没有这些厂牌：{'、'.join(missing)}")
+        raise SystemExit(f"studios not in the database: {', '.join(missing)}")
     return found
 
 
@@ -453,12 +404,10 @@ def discover(record: dict, other_names: Sequence[str], seeds: Sequence[str], *,
     name = record["studio"]
     row = {field: "" for field in FIELDS}
     row.update(record)
-    row["verdict"], row["note"] = "未取得", "没有可推导的候选域名"
+    row["verdict"], row["note"] = MISSING, _said("noCandidates")
     if is_platform(name):
         # 一个请求都不发：这不是「查不到」，是这条路对发行平台本来就不成立。
-        row["verdict"], row["note"] = PLATFORM_VERDICT, (
-            "发行平台不是厂牌，没有「厂牌官网」可查；链接按平台登记，"
-            "有实际卖主的账号才是 creator（docs/SOURCING.md）")
+        row["verdict"], row["note"] = PLATFORM_VERDICT, _said("platform")
         return row, last
     confirmed = CONFIRMED_SITES.get(name)
     # 人工喂的种子和规则推出来的候选走同一条验证，但要分得清哪个是哪个：
@@ -481,10 +430,10 @@ def discover(record: dict, other_names: Sequence[str], seeds: Sequence[str], *,
         try:
             status, body, final = probe(url, timeout)
         except Exception as exc:
-            trail.append(f"{url} → 取不到：{type(exc).__name__}")
+            unreachable = _said("unreachable", error=type(exc).__name__)
+            trail.append(f"{url} → {unreachable}")
             if not row["candidate_url"]:
-                row.update(candidate_url=url, verdict="未取得",
-                           note=f"取不到：{type(exc).__name__}")
+                row.update(candidate_url=url, verdict=MISSING, note=unreachable)
             continue
         title = page_title(body)
         verdict, note = site_verdict(

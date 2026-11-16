@@ -19,9 +19,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from peach import (avatar_face, follow_assets, follow_discovery, follow_identity,
-                   follow_store, web_follow, web_stats)
+                   follow_store, interface_text, web_follow, web_stats)
 from peach.follow import FollowHistoryEnd
-from peach.follow import FollowSourceError
+from peach.follow import FollowSourceError, internal_error
 from peach.follow_discovery import Discovery, ExternalSearch
 from peach.follow_secrets import CredentialError
 from peach.follow_sources import FollowCandidate, SourceFetch
@@ -90,7 +90,7 @@ class FollowContractTests(unittest.TestCase):
             return original(*args, **kwargs)
         with mock.patch.object(web_follow, 'run_check', side_effect=slow), \
              mock.patch.object(web_follow, 'build_connector') as factory:
-            factory.return_value.fetch.side_effect = FollowSourceError('offline')
+            factory.return_value.fetch.side_effect = internal_error('offline')
             started = self._post('/api/follow/check', {'background': True})
             try:
                 self.assertTrue(entered.wait(2))
@@ -117,7 +117,7 @@ class FollowContractTests(unittest.TestCase):
                 def checkpoint(_job_id, *, saved=saved, **fields):
                     saved.update(fields)
                     if fields.get('results'):
-                        raise InterruptedError('停止于检查点')
+                        raise InterruptedError('stopped at checkpoint')
                     return True
                 job = SimpleNamespace(snapshot=lambda saved=saved: saved, checkpoint=checkpoint,
                                       update=lambda *a, **k: True)
@@ -170,7 +170,7 @@ class FollowContractTests(unittest.TestCase):
         selected = self._seed(ref='selected')
         self._seed(ref='unrelated')
         with mock.patch.object(web_follow, 'build_connector') as factory:
-            factory.return_value.fetch.side_effect = FollowSourceError('offline')
+            factory.return_value.fetch.side_effect = internal_error('offline')
             result = self._post('/api/follow/check', {'sources': [selected]})
         self.assertEqual([row['source'] for row in result['results']], [selected])
         self.assertEqual(factory.call_count, 1)
@@ -198,7 +198,7 @@ class FollowContractTests(unittest.TestCase):
             connection.execute("UPDATE follow_source SET last_checked_at=? WHERE id=?",
                                (datetime.now(timezone.utc).isoformat(), recent))
         with mock.patch.object(web_follow, 'build_connector') as factory:
-            factory.return_value.fetch.side_effect = FollowSourceError('offline')
+            factory.return_value.fetch.side_effect = internal_error('offline')
             scheduled = self._post('/api/follow/check', {'automatic': True})
             manual = self._post('/api/follow/check', {})
         self.assertEqual([row['source'] for row in scheduled['results']], [stale])
@@ -207,7 +207,7 @@ class FollowContractTests(unittest.TestCase):
     def test_failed_numeric_source_has_a_readable_author(self):
         source = self._seed(ref='patreon/12387984', label='Pantsushi · patreon')
         with mock.patch.object(web_follow, 'build_connector') as factory:
-            factory.return_value.fetch.side_effect = FollowSourceError('offline')
+            factory.return_value.fetch.side_effect = internal_error('offline')
             result = self._post('/api/follow/check', {'sources': [source]})
         self.assertEqual(result['results'][0]['author'], 'Pantsushi')
 
@@ -475,7 +475,7 @@ class FollowContractTests(unittest.TestCase):
             def fetch(self, ref, *, etag=None, last_modified=None, page=0):
                 pages.append(page)
                 if page > 3:
-                    raise FollowHistoryEnd("没有更多历史内容")
+                    raise FollowHistoryEnd()
                 return SourceFetch(provider="rule34video", ref=ref,
                                    request_url="https://rule34video.test/x",
                                    semantics="work", candidates=(), raw_body=b"<html/>")
@@ -504,7 +504,7 @@ class FollowContractTests(unittest.TestCase):
             def fetch(self, ref, *, etag=None, last_modified=None, page=0):
                 pages.append(page)
                 if page > 2:
-                    raise FollowHistoryEnd("没有更多历史内容")
+                    raise FollowHistoryEnd()
                 return SourceFetch(provider="rule34video", ref=ref,
                                    request_url="https://rule34video.test/x",
                                    semantics="work", candidates=(), raw_body=b"<html/>")
@@ -542,7 +542,7 @@ class FollowContractTests(unittest.TestCase):
             def fetch(self, ref, *, etag=None, last_modified=None, page=0):
                 pages.append(page)
                 if len(pages) > 6 or page > 2:
-                    raise FollowHistoryEnd("没有更多历史内容")
+                    raise FollowHistoryEnd()
                 return SourceFetch(provider="rule34video", ref=ref,
                                    request_url="https://rule34video.test/x",
                                    semantics="work", candidates=(), raw_body=b"<html/>")
@@ -569,7 +569,7 @@ class FollowContractTests(unittest.TestCase):
             provider, semantics = "rule34video", "work"
 
             def fetch(self, ref, *, etag=None, last_modified=None, page=0):
-                raise FollowHistoryEnd("没有更多历史内容")
+                raise FollowHistoryEnd()
 
         with mock.patch.object(web_follow, "build_connector", return_value=_Ended()):
             result = self._post("/api/follow/check", {"older": True})
@@ -1993,7 +1993,7 @@ class FollowContractTests(unittest.TestCase):
         self._rule34_credential()
 
         def transport(request, timeout, max_bytes):
-            raise OSError("网络不通")
+            raise OSError("Network is unreachable")
 
         with no_real_backoff():
             self.assertEqual(web_follow.work_icon_search_urls(
@@ -2261,7 +2261,7 @@ class FollowContractTests(unittest.TestCase):
         def factory(provider, **kwargs):
             connector = mock.Mock()
             if provider == "rule34xxx":
-                connector.fetch.side_effect = CredentialError("需要 user_id 与 api_key")
+                connector.fetch.side_effect = CredentialError("errors.followSources.rule34xxxCredentialsRequired")
             else:
                 connector.fetch.return_value = SourceFetch(
                     provider="rule34video", ref="lazyprocrastinator",
@@ -2305,7 +2305,7 @@ class FollowContractTests(unittest.TestCase):
 
         def evidence(store, fetch, moment):
             if fetch.provider == "rule34video":
-                raise FollowSourceError("immutable follow snapshot collision")
+                raise internal_error("immutable follow snapshot collision")
             return persist(store, fetch, moment)
 
         def factory(provider, **kwargs):
@@ -2338,10 +2338,17 @@ class FollowContractTests(unittest.TestCase):
     def test_source_errors_are_recorded_for_later_inspection(self):
         self._seed()
         with mock.patch.object(web_follow, "build_connector") as factory:
-            factory.return_value.fetch.side_effect = FollowSourceError("HTTP 503")
+            factory.return_value.fetch.side_effect = FollowSourceError(
+                "errors.followSources.httpStatus", {"provider": "rule34video", "status": 503})
             self._post("/api/follow/check", {})
-        self.assertEqual(self._get()["sources"][0]["last_status"], "error")
-        self.assertIn("503", self._get()["sources"][0]["last_error"])
+        source = self._get()["sources"][0]
+        self.assertEqual(source["last_status"], "error")
+        self.assertIn("503", source["last_error"])
+        # 原因连同 code 落在来源那一行上，英文界面照 code 显示（迁移 0056）。
+        from peach import interface_text
+        self.assertEqual(source["last_error_code"], "errors.followSources.httpStatus")
+        self.assertEqual(interface_text.text(f"server:{source['last_error_code']}", source["last_error_params"], "en"),
+                         "rule34video returned HTTP 503")
 
     def test_credentials_say_what_each_source_actually_needs(self):
         payload = self._get("/api/follow/credentials")
@@ -2760,8 +2767,12 @@ class FollowSourceAddTests(FollowContractTests):
             "provider": "fanbox", "provider_label": "FANBOX",
             "ref": "lazyprocrast", "url": "https://lazyprocrast.fanbox.cc/",
             "label": "lazyprocrast", "author": "", "aliases": [], "semantics": "work",
-            "evidence": "链接直接指明", "known": False,
+            "evidence": "链接直接指明", "evidence_code": "labels.followSources.linkEvidence", "evidence_params": {},
+            "known": False,
         }])
+        # 依据那一句带 code，英文界面拿到的是英文。
+        self.assertEqual(interface_text.text("server:labels.followSources.linkEvidence", None, "en"),
+                         "Named directly by the link")
 
     def test_resolve_progress_counts_sources_instead_of_lines(self):
         """一行的背后是十几个来源在查：进度按来源数走，环才会逐个涨过去。"""
@@ -2790,7 +2801,8 @@ class FollowSourceAddTests(FollowContractTests):
 
         def fake_discover(line, **kwargs):
             if line == "suzutaro3d":
-                raise FollowSourceError("索引下不来")
+                raise FollowSourceError("errors.followSources.requestFailed",
+                                        {"provider": "kemono", "detail": "索引下不来"})
             kwargs["on_progress"]("kemono", 0, 8)
             return Discovery(line, external_searches=())
 
@@ -2836,7 +2848,8 @@ class FollowSourceAddTests(FollowContractTests):
     def test_a_failing_first_check_still_leaves_the_source_registered(self):
         # rule34.xxx 缺 key 就是这种情况。整个回滚掉反而让人不知道发生了什么。
         with mock.patch.object(web_follow, "build_connector") as factory:
-            factory.return_value.fetch.side_effect = CredentialError("需要 user_id")
+            factory.return_value.fetch.side_effect = CredentialError(
+                "errors.followSources.rule34xxxCredentialsRequired")
             result = self._post("/api/follow/source", {
                 "action": "add",
                 "url": "https://rule34.xxx/index.php?page=post&s=list&tags=lazy"})
@@ -2968,6 +2981,7 @@ class FollowSourceAddTests(FollowContractTests):
         self.assertEqual(payload["alias_suggestions"], [{
             "canonical": "InitialA", "alias": "FFXIVInitialA",
             "evidence": "规范化名称存在包含关系，仅供人工确认",
+            "evidence_code": "labels.webFollow.nameContainsEvidence", "evidence_params": {},
         }])
 
     def test_confirmed_alias_merges_sources_and_can_be_removed(self):
@@ -3247,7 +3261,7 @@ def _source_row(**kwargs):
             "enabled": 1, "entity_id": None, "entity_name": None,
             "backfill_page": 0, "created_at": "2026-08-01T00:00:00Z",
             "last_checked_at": "2026-08-30T00:00:00Z",
-            "last_status": "ok", "last_error": None}
+            "last_status": "ok", "last_error": None, "last_error_code": None, "last_error_params": None}
     row.update(kwargs)
     return row
 

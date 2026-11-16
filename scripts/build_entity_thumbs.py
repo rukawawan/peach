@@ -21,13 +21,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.previews import DerivedImageService, entity_thumb_root
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="缩出索引页那一档实体图派生件")
+    parser = argparse.ArgumentParser(description=t("build_entity_thumbs.description"))
     parser.add_argument("--avatars", type=Path, default=GENERATED_DIR / "avatars",
-                        help="实体图目录（默认 generated/avatars）")
+                        help=t("build_entity_thumbs.helpAvatars"))
     parser.add_argument("--limit", type=int, default=0)
     return parser
 
@@ -38,7 +39,7 @@ def run(args: argparse.Namespace) -> int:
     images = sorted(args.avatars.glob("*.img"))
     if args.limit:
         images = images[:args.limit]
-    print(f"实体图 {len(images)} 张")
+    print(t("build_entity_thumbs.found", count=len(images)))
 
     source_total = derived_total = 0
     skipped = 0
@@ -54,10 +55,10 @@ def run(args: argparse.Namespace) -> int:
         if index % 100 == 0:
             print(f"[{index}/{len(images)}]", flush=True)
     if source_total:
-        print(f"\n原件 {source_total/1048576:.0f} MB，派生件 {derived_total/1048576:.1f} MB，"
-              f"省 {100 - derived_total/source_total*100:.0f}%")
+        print("\n" + t("build_entity_thumbs.summary", source=f"{source_total/1048576:.0f}",
+                         derived=f"{derived_total/1048576:.1f}", saved=f"{100 - derived_total/source_total*100:.0f}"))
     if skipped:
-        print(f"{skipped} 张缩不出来，那几格取原件。")
+        print(t("build_entity_thumbs.skipped", count=skipped))
     return 0
 
 

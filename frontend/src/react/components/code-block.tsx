@@ -4,6 +4,7 @@ import { Button } from '@/components/base/buttons/button';
 import { cx } from '@/utils/cx';
 import { cardClass } from './card';
 import { useOverlayScrollbar } from './overlay-scrollbar';
+import { t } from '../../i18n';
 
 /** JSON 与配置文本共用的只读代码块，复制始终使用完整原文。 */
 export function CodeBlock({ code, language, label, maxCharacters, bounded = true, copyLabel, onCopy }: {
@@ -18,16 +19,16 @@ export function CodeBlock({ code, language, label, maxCharacters, bounded = true
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);
-      setFailed(false); setStatus('已复制'); onCopy?.();
-      showToast('code-copy', { html: '已复制', alert: false, timeout: 4000, action: null });
+      setFailed(false); setStatus(t('shell:shared.copied')); onCopy?.();
+      showToast('code-copy', { html: t('shell:shared.copied'), alert: false, timeout: 4000, action: null });
     } catch {
-      setFailed(true); setStatus('复制失败，请选中文本复制。');
+      setFailed(true); setStatus(t('shell:codeBlock.copyFailed'));
     }
   };
   return <div className={cx(cardClass({ bordered: 'soft', radius: 'plain', padding: 'none' }), 'overflow-hidden bg-background-tertiary-default')} data-code-block>
     <div className="flex min-w-0 items-center justify-between gap-3 border-b border-separator-border px-3 py-2">
       <span className="text-caption-1-medium text-text-secondary">{language.toUpperCase()}</span>
-      <Button variant="secondary" size="small" onClick={() => void copy()}>{copyLabel || (truncated ? '复制完整内容' : '复制代码')}</Button>
+      <Button variant="secondary" size="small" onClick={() => void copy()}>{copyLabel || (truncated ? t('shell:codeBlock.copyAll') : t('shell:codeBlock.copyCode'))}</Button>
     </div>
     <div className="relative min-w-0">
       <pre ref={scroll} tabIndex={0} aria-label={label}

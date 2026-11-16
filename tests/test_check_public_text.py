@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts import check_public_text
-from scripts.check_public_text import Library, problems, publish_text
+from scripts.check_public_text import Library, insider_terms, problems, publish_text
 
 
 def ledger(path: Path) -> Path:
@@ -64,6 +64,56 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(problems(listed, None), [])
 
 
+class InsiderTermsTests(unittest.TestCase):
+    """PR、issue 与评论写给外部读者：派单的编号、批次与本机交付流程的说法他们看不懂。"""
+
+    def test_feedback_codes_batches_and_delivery_steps_are_named_by_kind(self):
+        found = insider_terms("修复反馈 N01，本轮 R0–R2；全库排查第 3 批，合批后第一轮 auto 在集成工作树里跑，"
+                              "ready：ok；门槛已改。")
+        self.assertEqual([line.split("：", 1)[0] for line in found],
+                         ["反馈条目编号", "批次与轮次", "本机交付流程", "自造用语"])
+        self.assertIn("N01", found[0])
+        self.assertIn("合批", found[1])
+
+    def test_code_spans_ordinary_words_and_a_stated_reason_pass(self):
+        for text in ("Windows 11：`& .\\scripts\\test.ps1`（按改动自动选范围）通过。",
+                     "命令是 `agent_worktree.py ready`，H264 与 N1 芯片不受影响。",
+                     "分批派发补全任务；这批文件已核对。",
+                     "第一轮反馈\npeach-public-text: 讨论的就是批次命名本身"):
+            with self.subTest(text=text):
+                self.assertEqual(insider_terms(text), [])
+
+    def test_relative_references_that_do_not_say_what_they_mean_are_named(self):
+        cases = {"剩余模块下一步再抽": "剩余模块", "剩余页面组一次抽完": "剩余页面组", "其余路由照旧": "其余路由",
+                 "前几批已经带上 code": "前几批", "另起一批处理": "另起一批", "本批的改动只动后端": "本批的",
+                 "同批检查已通过": "同批检查", "合进集成批次": "集成批次", "叠在最上层 PR 上": "最上层 PR",
+                 "维护者本轮重跑过": "维护者本轮", "本轮组合的结果": "本轮组合", "两轮主线都绿": "两轮主线",
+                 "这次是发布收口": "发布收口"}
+        for text, term in cases.items():
+            with self.subTest(text=text):
+                [line] = insider_terms(text)
+                self.assertTrue(line.startswith("相对指代："), line)
+                self.assertIn(term, line)
+
+    def test_circled_batch_numbers_and_made_up_baselines_are_named(self):
+        for text, kind, term in (("第③b批合入", "批次与轮次", "第③b批"), ("批次 ②", "批次与轮次", "批次 ②"),
+                                 ("中文基线收紧", "自造用语", "中文基线"), ("以本轮组合分支为基线", "自造用语", "为基线"),
+                                 ("基线 ab2b7d6d 上通过", "自造用语", "基线 ab2b7d6d"),
+                                 ("协调者统一执行", "本机交付流程", "协调者")):
+            with self.subTest(text=text):
+                found = [line for line in insider_terms(text) if line.startswith(kind + "：")]
+                self.assertEqual(len(found), 1, insider_terms(text))
+                self.assertIn(term, found[0])
+
+    def test_the_same_words_in_ordinary_use_pass(self):
+        for text in ("磁盘剩余空间不足时停下。", "英文界面里其余显示英文。", "这一批不再重复问。",
+                     "撞上 403 就停止本批联网。", "同批更新锁与映射表。", "关闭弹窗后不再请求后续批次。",
+                     "任务卡、回执和失败提示排进同一个通知栈，不再叠在一处。", "播放、音量与时间共用一条基线。",
+                     "本轮检查的来源名称保留在详情里。", "③a 任务中心的说明句"):
+            with self.subTest(text=text):
+                self.assertEqual(insider_terms(text), [])
+
+
 class PublishCommandTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -100,6 +150,22 @@ class PublishCommandTests(unittest.TestCase):
             load.reset_mock()
             self.assertEqual(check_public_text.hook({"tool_input": {"command": "git status"}}), 0)
             load.assert_not_called()
+
+    def test_a_delivery_script_chained_after_the_publish_command_is_not_its_text(self):
+        command = ("gh pr create --title t --body-file body.md && "
+                   "python scripts/agent_worktree.py integrate --branch agent/claude/x")
+        with mock.patch.object(check_public_text, "load_library", return_value=None):
+            self.assertEqual(check_public_text.hook({"cwd": str(self.cwd), "tool_input": {"command": command}}), 0)
+
+    def test_the_hook_blocks_insider_terms_even_without_a_ledger(self):
+        (self.cwd / "notes.md").write_text("合批验证，见批次 0570。", encoding="utf-8")
+        for command in ("gh pr edit 3 --body '修复 N01'", "gh release edit v1.0.0 --notes-file notes.md"):
+            with self.subTest(command=command), mock.patch.object(check_public_text, "load_library", return_value=None):
+                error = io.StringIO()
+                with redirect_stderr(error):
+                    self.assertEqual(check_public_text.hook({"cwd": str(self.cwd), "tool_input": {"command": command}}), 2)
+                self.assertIn("内部用语", error.getvalue())
+                self.assertIn("peach-public-text", error.getvalue())
 
     def test_the_hook_reads_a_missing_cwd_as_this_checkout(self):
         payload = {"cwd": "/no/such/place", "tool_input": {"command": "gh pr create --body x"}}

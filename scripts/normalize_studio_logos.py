@@ -30,6 +30,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.scripting import BACKUP_REQUIRED
 from peach.images import (MARK, MAX_ASPECT, bake_square, bake_square_vector,
                           classify_plate, measure_image_size, vector_image_size)
@@ -135,7 +136,7 @@ def normalize(root: Path, *, apply: bool = False,
             raise ValueError(BACKUP_REQUIRED)
         backup_dir = backup_dir.resolve()
         if backup_dir == root or root in backup_dir.parents:
-            raise ValueError("备份目录必须在 Logo 目录之外")
+            raise ValueError(t("normalize_studio_logos.backupInsideRoot"))
     rows: list[dict[str, object]] = []
     for path in sorted(root.glob("*.img")):
         installed = path.read_bytes()
@@ -219,11 +220,11 @@ def _write_report(path: Path, rows: list[dict[str, object]]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="把已安装的厂牌 Logo 归一成不透明方图")
+        description=t("normalize_studio_logos.description"))
     parser.add_argument("--root", type=Path, default=GENERATED_DIR / "logos")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--backup", type=Path,
-                        help="原图备份目录；--apply 必需")
+                        help=t("normalize_studio_logos.backupHelp"))
     parser.add_argument("--report", type=Path)
     return parser
 

@@ -2,14 +2,15 @@ import { useLayoutEffect, useRef } from 'react';
 import { Skeleton, SkulletProvider } from 'skullet/react';
 
 import { cardClass } from '../components/card';
+import { t } from '../../i18n';
 
 const FIELDS = {
-  creators: ['关注创作者', '位'],
-  enabled: ['启用来源', ''],
-  failed: ['检查失败', '个来源'],
-  updates: ['未看更新', '条'],
-  subscriptions: ['JAV 订阅', '位'],
-  releases: ['未看新作', '条'],
+  creators: [t('follow:followOverview.creators'), t('follow:followOverview.creatorUnit')],
+  enabled: [t('follow:followOverview.enabledSources'), ''],
+  failed: [t('follow:followCheck.checkFailed'), t('follow:followOverview.sourceUnit')],
+  updates: [t('follow:followOverview.unwatchedUpdates'), t('follow:followOverview.itemUnit')],
+  subscriptions: [t('follow:feedSources.footerLabel'), t('follow:followOverview.actressUnit')],
+  releases: [t('follow:followOverview.unwatchedReleases'), t('follow:followOverview.itemUnit')],
 } as const;
 
 // 只测量六个只读读数：隐藏样本没有请求、Portal、媒体或操作控件。
@@ -63,9 +64,9 @@ export function MeasuredReading({ field, figure, total, failed = false }: {
     className: 'flex flex-col gap-3 px-6 py-5 max-sm:gap-2 max-sm:p-4' })}>
     <span className="text-body-medium text-text-secondary">{term}</span>
     {figure === undefined && failed
-      ? <b data-follow-reading="" className="text-title-1-medium text-text-primary">未取得</b>
+      ? <b data-follow-reading="" className="text-title-1-medium text-text-primary">{t('follow:shared.notFound')}</b>
       : <SkulletProvider reveal={REVEAL}>
-        <Skeleton id={`peach:follow-reading:v1:${field}`} data={figure} sample={12345} label={`正在读取${term}`}>
+        <Skeleton id={`peach:follow-reading:v1:${field}`} data={figure} sample={12345} label={t('follow:followOverview.loading', { term })}>
           {value => <Value figure={value} unit={field === 'enabled' ? `/ ${total ?? 0}` : unit} />}
         </Skeleton>
       </SkulletProvider>}

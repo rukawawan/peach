@@ -178,6 +178,12 @@ class WesternArtworkBatchTests(unittest.TestCase):
             connection.commit()
             table = self.root / 'babepedia-candidates.csv'
             table.write_text('entity_id,verdict,profile_url\n'
+                             f'{kept},matched,https://www.babepedia.com/babe/Kept\n'
+                             f'{unsure},needs-review,https://www.babepedia.com/babe/Someone\n', encoding='utf-8')
+            self.assertEqual(harvest_western_artwork.profile_urls(connection, table, [kept, unsure]),
+                             {kept: 'https://www.babepedia.com/babe/Kept'})
+            # 旧版候选表写的中文判词照样认。
+            table.write_text('entity_id,verdict,profile_url\n'
                              f'{kept},命中,https://www.babepedia.com/babe/Kept\n'
                              f'{unsure},需人工确认,https://www.babepedia.com/babe/Someone\n', encoding='utf-8')
             self.assertEqual(harvest_western_artwork.profile_urls(connection, table, [kept, unsure]),

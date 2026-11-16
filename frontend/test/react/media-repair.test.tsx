@@ -74,7 +74,7 @@ function confirmEverything() {
 it('开始修复先确认，确认后把选中的库发过去，随后按服务端的进度报扫描到哪一部', async () => {
   vi.useFakeTimers();
   const seen = confirmEverything();
-  const fetcher = fetchMock(200, { ...idle, status: 'running', library: 'PikPak', stage: '扫描', checked: 3, total: 12 });
+  const fetcher = fetchMock(200, { ...idle, status: 'running', library: 'PikPak', stage: '扫描', stage_code: 'mediaRepair.scan', checked: 3, total: 12 });
   vi.stubGlobal('fetch', fetcher);
   const host = await open();
   await choose(host.querySelector('[aria-haspopup="listbox"]'), 'PikPak');
@@ -104,10 +104,10 @@ it('不在计费来源上的库，确认正文不提流量', async () => {
 
 it('修复阶段点名当前这部片，停止之后回到可以再开始的样子', async () => {
   vi.useFakeTimers();
-  const fetcher = fetchMock(200, { ...idle, status: 'complete', library: '网盘', stage: '完成', repaired: 2 });
+  const fetcher = fetchMock(200, { ...idle, status: 'complete', library: '网盘', stage: '完成', stage_code: 'mediaRepair.done', repaired: 2 });
   vi.stubGlobal('fetch', fetcher);
   const host = await open({
-    ...idle, status: 'running', library: '网盘', stage: '修复', checked: 1, total: 2, found: 2, message: 'FC2-PPV-1.mp4',
+    ...idle, status: 'running', library: '网盘', stage: '修复', stage_code: 'mediaRepair.repair', checked: 1, total: 2, found: 2, message: 'FC2-PPV-1.mp4',
   });
   expect(host.querySelector('p[role="status"]')?.textContent).toBe('修复 1 / 2 · FC2-PPV-1.mp4');
   await click(buttonNamed('停止', host));
@@ -119,7 +119,7 @@ it('修复阶段点名当前这部片，停止之后回到可以再开始的样�
 
 it('进入页面不重放已完成的修复提示', async () => {
   vi.useFakeTimers();
-  const host = await open({ ...idle, status: 'complete', library: '网盘', stage: '完成' });
+  const host = await open({ ...idle, status: 'complete', library: '网盘', stage: '完成', stage_code: 'mediaRepair.done' });
   expect(host.textContent).not.toContain('这个库里的片子都能直接播');
   expect(host.querySelector('[role="status"]')).toBeNull();
 });
@@ -128,7 +128,7 @@ it('缺索引的片子卡在没装 untrunc 上时，指明去配置页的运行�
   vi.useFakeTimers();
   confirmEverything();
   vi.stubGlobal('fetch', fetchMock(200, {
-    ...idle, status: 'complete', library: '网盘', stage: '完成', found: 2, failed: 2, missing_tool: 2,
+    ...idle, status: 'complete', library: '网盘', stage: '完成', stage_code: 'mediaRepair.done', found: 2, failed: 2, missing_tool: 2,
   }));
   const host = await open();
   await click(buttonNamed('开始修复', host));
@@ -153,6 +153,6 @@ it('本次检查完成只发一次回执', async () => {
 });
 
 it('进度读数按总数封顶：服务端报出的已查数超过总数时不写成 1,500 / 1,000', () => {
-  expect(statusLine({ ...IDLE_REPAIR, status: 'running', stage: '修复', checked: 1500, total: 1000 }))
+  expect(statusLine({ ...IDLE_REPAIR, status: 'running', stage: '修复', stage_code: 'mediaRepair.repair', checked: 1500, total: 1000 }))
     .toBe('修复 1,000 / 1,000');
 });

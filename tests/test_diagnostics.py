@@ -183,7 +183,10 @@ class DiagnosticsTests(unittest.TestCase):
             result = diagnostics.health_components(self.settings, EMPTY_MOUNTS)
         inspect.assert_not_called()
         self.assertEqual(set(result), {"database", "schema", "configured", "ffmpeg", "media_mounts", "security"})
-        self.assertTrue(all(set(value) == {"status", "reason"} for value in result.values()))
+        # 原因的原文是 zh-CN，旁边带 code：英文页面与脚本按 code 取译文。
+        self.assertTrue(all({"status", "reason"} <= set(value) <= {"status", "reason", "reason_code", "reason_params",
+                                                                  "reason_parts"} for value in result.values()))
+        self.assertTrue(all(value.get("reason_code") or value.get("reason_parts") for value in result.values()))
         self.assertNotIn(str(self.root), json.dumps(result))
 
     def test_doctor_json_uses_the_shared_report_and_packaged_dispatch_finds_it(self):
@@ -197,9 +200,30 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue()), result)
         self.assertIn("doctor", cli.subcommands())
 
+    def test_checks_carry_codes_and_render_in_english(self):
+        upgrade(self.db, ROOT / "migrations")
+        snapshot = {"state": "degraded", "sources": [{"state": "missing", "online": False}],
+                    "warnings": ["本地磁盘：目录不存在"],
+                    "warning_codes": [{"code": "labels.mountReachability.sourceState",
+                                       "params": {"label": "Local", "state": {"code": "labels.mountReachability.missing"}}}]}
+        mounts = diagnostics.media_mounts(snapshot)
+        self.assertEqual(mounts["reason"], "Local：目录不存在")
+        english = diagnostics.localized(mounts, "en")
+        self.assertEqual((english["label"], english["reason"], english["action"]),
+                         ("Media mounts", "Local: Directory doesn't exist", "Check media directories and mounts"))
+        denied = diagnostics.localized(diagnostics.item("dataRoot", "failed", "dataRootDenied",
+                                                        action="fixDataRootPermission"), "en")
+        self.assertEqual(denied["reason"], "No permission to write to the data directory")
+        tools = diagnostics.item("tools", "warning", "", reason_parts=diagnostics.joined([
+            {"code": "labels.diagnostics.reason.toolsMissing", "params": {"names": ["ffmpeg", "openssl"]}},
+            {"code": "labels.diagnostics.reason.av1Missing"}]))
+        self.assertEqual(tools["reason"], "未找到：ffmpeg、openssl；FFmpeg 缺少 AV1 软件解码器")
+        self.assertEqual(diagnostics.localized(tools, "en")["reason"],
+                         "Not found: ffmpeg, openssl; FFmpeg has no AV1 software decoder")
+
     def test_doctor_text_reports_failure_and_exits_nonzero(self):
         result = {"version": "test", "status": "failed", "checks": {
-            "database": diagnostics.item("数据库", "failed", "数据库不存在", action="检查本机数据库与备份")}}
+            "database": diagnostics.item("database", "failed", "databaseMissing", action="checkDatabase")}}
         output = io.StringIO()
         with patch.object(diagnostics, "report", return_value=result), \
              patch.object(diagnostics, "probe_mounts", return_value=EMPTY_MOUNTS), \

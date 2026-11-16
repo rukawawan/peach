@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from peach import runtime_prepare
@@ -171,6 +172,10 @@ class WriterTests(unittest.TestCase):
         writer, why = self.writer()
         self.assertFalse(writer)
         self.assertIn("win-1", why)
+        # 接口默认按源语言嵌进自己的一句；托盘按本机语言要译文。
+        english = ledger_writer(replication_enabled=True, db=self.db, shared_db=self.shared,
+                                state_dir=self.state, language="en")
+        self.assertEqual(english, (False, "The primary computer is win-1; this device is read-only"))
 
     def test_the_marked_device_is_the_writer(self):
         (self.state / "device-id").write_text("win-1", encoding="utf-8")
@@ -196,6 +201,11 @@ class MigrationTests(unittest.TestCase):
         return Migrations(self.db, peach=lambda: Path("C:/peach/.venv/Scripts/peach.exe"),
                           writer=lambda: writer, run=run,
                           environ=lambda: {"PEACH_DATA_ROOT": "C:/peach-data"})
+
+    def test_the_step_follows_the_local_language(self):
+        with unittest.mock.patch.dict(os.environ, {"PEACH_LANGUAGE": "en"}):
+            step = self.migrations(lambda *a, **k: None, writer=(False, "reader")).apply()
+        self.assertEqual(step.message, "No migration: reader")
 
     def test_a_reader_never_migrates(self):
         run = FakeRun()

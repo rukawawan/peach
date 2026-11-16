@@ -747,9 +747,10 @@ class BatchScriptTests(unittest.TestCase):
 
     def test_upgrade_resets_connections_only_for_retryable_source_failures(self):
         from peach.jav_cover_fetch import NotFound, Unavailable
+        from peach.metadata import relayed
         from unittest.mock import Mock
         script = batch_script('upgrade_audited_covers')
-        for error, expected in ((NotFound('HTTP 404'), False), (Unavailable('HTTP 503'), True)):
+        for error, expected in ((NotFound(*relayed('HTTP 404')), False), (Unavailable(*relayed('HTTP 503')), True)):
             transport = Mock()
             result = script.failure_result('ABW-232', error, transport)
             self.assertEqual(result['retryable'], expected)

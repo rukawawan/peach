@@ -2177,6 +2177,7 @@ class IwaraConnectorTests(unittest.TestCase):
         self.assertIn("外部播放器", item.extra["media_error"])
 
     def test_invalid_list_and_access_failures_are_not_empty_successes(self):
+        # `errors.privateVideo` 是站点接口原样回的 message，不是 Peach 的 code。
         for payload in ({}, {"results": {}}, {"results": [{"title": "missing id"}]},
                         {"message": "errors.privateVideo"}):
             connector, _ = self.connector([self.PROFILE, payload])

@@ -33,6 +33,7 @@ from peach.code_creators import (  # noqa: E402
     main_video_seconds,
 )
 from peach.config import DATABASE_PATH, GENERATED_DIR, SECRETS_DIR  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.metadata_policy import PREFERRED_COMMUNITY_SOURCE  # noqa: E402
 from peach.migrations import sqlite_backup  # noqa: E402
 from peach.review_csv import write_rows  # noqa: E402
@@ -52,18 +53,18 @@ def source_runtime(provider, code: str) -> tuple[str, float | None, str]:
         if payload.get("runtime"):
             return "r18dev", float(payload["runtime"]), ""
     except Exception as error:                                  # noqa: BLE001
-        note = f"r18dev：{type(error).__name__}"
+        note = t("confirm_code_dirs.r18devError", error=type(error).__name__)
     else:
-        note = "r18dev 没给片长"
+        note = t("confirm_code_dirs.r18devNoRuntime")
     try:
         found = sorted(provider.community(code),
                        key=lambda item: item[0] != PREFERRED_COMMUNITY_SOURCE)
     except Exception as error:                                  # noqa: BLE001
-        return "", None, f"{note}；社区来源：{type(error).__name__}"
+        return "", None, t("confirm_code_dirs.communityError", note=note, error=type(error).__name__)
     for name, payload in found:
         if payload.get("runtime"):
             return name, float(payload["runtime"]), note
-    return "", None, f"{note}；社区来源没给片长"
+    return "", None, t("confirm_code_dirs.communityNoRuntime", note=note)
 
 
 def assets_of(connection: sqlite3.Connection, entity_id: int) -> list:
@@ -89,8 +90,8 @@ def examine(connection: sqlite3.Connection, provider) -> list[dict[str, object]]
             "entity_id": entity_id, "creator": row["creator"], "identity": row["identity"],
             "assets": row["assets"], "local_seconds": "" if local is None else round(local),
             "source": source, "runtime_minutes": "" if runtime is None else runtime,
-            "confirmed": "是" if confirmed else "否",
-            "reason": reason if runtime else (reason + "；" + note),
+            "confirmed": t("confirm_code_dirs.yes" if confirmed else "confirm_code_dirs.no"),
+            "reason": reason if runtime else t("confirm_code_dirs.reasonWithNote", reason=reason, note=note),
             # 判定成立的按番号处理，交给 `code_creators.apply_rows` 走既有那条写入路径。
             "verdict": VERDICT_CODE if confirmed else VERDICT_UNCLEAR,
         })
@@ -98,19 +99,19 @@ def examine(connection: sqlite3.Connection, provider) -> list[dict[str, object]]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="按片长确认存疑的番号目录")
+    parser = argparse.ArgumentParser(description=t("confirm_code_dirs.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--secrets", type=Path, default=SECRETS_DIR)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "code-dir-duration-review.csv")
-    parser.add_argument("--apply", action="store_true", help="写 ledger；默认只出 CSV")
-    parser.add_argument("--backup", type=Path, help="--apply 必需：写库前的 SQLite 备份路径")
+    parser.add_argument("--apply", action="store_true", help=t("confirm_code_dirs.applyHelp"))
+    parser.add_argument("--backup", type=Path, help=t("confirm_code_dirs.backupHelp"))
     return parser
 
 
 def run(args: argparse.Namespace) -> int:
     if args.apply and not args.backup:
-        raise SystemExit("--apply 必须同时给 --backup")
+        raise SystemExit(t("confirm_code_dirs.backupRequired"))
     from peach.library_processing import LibraryMetadataProvider
 
     connection = sqlite3.connect(args.db)
@@ -120,13 +121,13 @@ def run(args: argparse.Namespace) -> int:
     finally:
         provider.close()
     confirmed = [row for row in rows if row["verdict"] == VERDICT_CODE]
-    print(f"存疑目录 {len(rows)} 个，片长对得上的 {len(confirmed)} 个")
+    print(t("confirm_code_dirs.summary", total=len(rows), confirmed=len(confirmed)))
     for row in rows:
         print(f"  {row['creator']:<34} {row['identity']:<14} {row['confirmed']} {row['reason']}")
 
     if args.apply and confirmed:
         sqlite_backup(args.db, args.backup)
-        print(f"已备份 → {args.backup}")
+        print(t("confirm_code_dirs.backedUp", path=args.backup))
         connection.execute("BEGIN IMMEDIATE")
         try:
             counts = apply_rows(connection, confirmed)
@@ -134,16 +135,16 @@ def run(args: argparse.Namespace) -> int:
         except Exception:
             connection.rollback()
             raise
-        print(f"已写入：删创作者关系 {counts['links']} 条、删实体 {counts['entities']} 个、"
-              f"补 code {counts['codes']} 条、清扁平字段 {counts['flat']} 条")
+        print(t("confirm_code_dirs.written", links=counts["links"], entities=counts["entities"],
+                codes=counts["codes"], flat=counts["flat"]))
     connection.close()
 
     # 判定用的 `verdict` 不进 CSV：那一列是给 `apply_rows` 的开关，复核看的是 `confirmed`。
     write_rows(args.review_csv, FIELDS,
                [{key: row[key] for key in FIELDS} for row in rows])
-    print(f"复核 CSV → {args.review_csv}")
+    print(t("confirm_code_dirs.reviewCsv", path=args.review_csv))
     if not args.apply:
-        print("这是预览：未写 ledger。确认后再加 --apply --backup。")
+        print(t("confirm_code_dirs.previewOnly"))
     return 0
 
 

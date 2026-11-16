@@ -21,18 +21,23 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.append(str(Path(__file__).resolve().parent))
 
 from peach.http import HttpRequest, HttpxTransport, body_text   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import read_rows, write_rows
 from peach.scripting import USER_AGENT
 from peach.social_links import NON_HANDLES, handle
+from legacy_values import STUDIO_SOCIALS_MISSED_NOTE
 
 SOCIAL = re.compile(r'https?://(?:www\.|mobile\.)?(?:twitter\.com|x\.com)/([A-Za-z0-9_]{1,15})/?(?:[?#].*)?$', re.I)
 AFFIRMATIVE = re.compile(r"はい|入室|入場|入る|同意|年齢認証|(?<![a-z])(?:ENTER|YES)(?![a-z])"
                          r"|18\s*歳以上|over\s*18", re.I)
 NEGATIVE = re.compile(r"いいえ|退出|戻る|(?<![a-z])NO\b|18\s*歳未満", re.I)
 MAX_HOPS = 2
-SCAN_FIELDS = ("studio", "site", "final_url", "handles", "note")
+SCAN_FIELDS = ("studio", "site", "final_url", "result", "handles", "note")
+#: `result` 列：官网看过了（有没有账号都算）、没取到页面（`--resume` 会重查）。
+CHECKED, MISSED = "checked", "missed"
 REVIEW_FIELDS = ("entity_id", "kind", "name", "link_kind", "label", "url", "evidence", "context", "review")
 
 
@@ -80,8 +85,9 @@ def accounts_in(html: str) -> list[dict[str, str]]:
     return list(found.values())
 
 
-def scan(http, site: str, timeout: float, *, evidence: list | None = None) -> tuple[set[str], str, str]:
-    """返回（找到的 handle, 最终 URL, 说明）。"""
+def scan(http, site: str, timeout: float, *,
+         evidence: list | None = None) -> tuple[set[str], str, str, str]:
+    """返回（找到的 handle, 最终 URL, 结果, 说明）。结果是 `CHECKED` 或 `MISSED`，说明跟本机语言。"""
     current, note = site, ""
     found: set[str] = set()
     visited = set()
@@ -91,9 +97,9 @@ def scan(http, site: str, timeout: float, *, evidence: list | None = None) -> tu
         response = http(HttpRequest("GET", current, {"User-Agent": USER_AGENT}), timeout, 8 << 20)
         current = response.url or current
         if response.status != 200:
-            return found, current, f"未取得：HTTP {response.status}"
+            return found, current, MISSED, t("find_studio_socials.missedHttp", status=response.status)
         if (urlsplit(current).hostname or "").removeprefix("www.") != host:
-            return found, current, "未取得：重定向离开官网域名"
+            return found, current, MISSED, t("find_studio_socials.missedOffsite")
         html = body_text(response.body, response.headers)
         accounts = accounts_in(html)
         found.update(item["handle"] for item in accounts)
@@ -103,10 +109,18 @@ def scan(http, site: str, timeout: float, *, evidence: list | None = None) -> tu
                                  "sha256": hashlib.sha256(response.body).hexdigest()})
         following = affirmative_link(html, current)
         if following is None or following in visited or hop == MAX_HOPS:
-            return found, current, note or ("官网页面直接给出社交链接" if found else "页面无社交链接")
-        note = f"穿过 {hop + 1} 层年龄门"
+            return found, current, CHECKED, note or (t("find_studio_socials.linksOnSite") if found
+                                                     else t("find_studio_socials.noLinksOnPage"))
+        note = t("find_studio_socials.ageGates", count=hop + 1)
         current = following
-    return found, current, note
+    return found, current, CHECKED, note
+
+
+def missed(row: dict) -> bool:
+    """上一趟没取到页面的行；旧版进度文件没有 `result` 列，按说明的中文前缀认。"""
+    if row.get("result"):
+        return row["result"] == MISSED
+    return str(row.get("note") or "").startswith(STUDIO_SOCIALS_MISSED_NOTE)
 
 
 def ledger_sites(connection: sqlite3.Connection) -> list[dict]:
@@ -134,7 +148,7 @@ def review_rows(row: dict, evidence: list[dict]) -> list[dict]:
                        "name": row["studio"], "link_kind": "social",
                        "label": f"X @{item['handle']}", "url": f"https://x.com/{item['handle']}",
                        "evidence": f"{item['page']} ; sha256={item['sha256']} ; {item['anchor']}",
-                       "context": item["context"], "review": "待复核账号归属"})
+                       "context": item["context"], "review": t("find_studio_socials.reviewOwnership")})
     return result
 
 
@@ -142,21 +156,21 @@ def parse_args():
     """校验采集输入及进度文件，避免覆盖来源。"""
     parser = argparse.ArgumentParser()
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--input", type=Path, help="含 studio,site 两列的 CSV")
-    source.add_argument("--db", type=Path, help="只读账本里的厂牌官网")
+    source.add_argument("--input", type=Path, help=t("find_studio_socials.inputHelp"))
+    source.add_argument("--db", type=Path, help=t("find_studio_socials.dbHelp"))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--review-output", type=Path, help="待复核链接表，确认归属后交 install_entity_links.py")
-    parser.add_argument("--resume", action="store_true", help="复用有账号证据的行；空结果与失败重新检查")
+    parser.add_argument("--review-output", type=Path, help=t("find_studio_socials.reviewOutputHelp"))
+    parser.add_argument("--resume", action="store_true", help=t("find_studio_socials.resumeHelp"))
     parser.add_argument("--interval", type=float, default=1.5)
     parser.add_argument("--timeout", type=float, default=25.0)
     args = parser.parse_args()
     source_path = (args.db or args.input).resolve()
     if any(path and path.resolve() == source_path for path in (args.output, args.review_output)):
-        parser.error("输出文件不能覆盖输入文件或账本")
+        parser.error(t("find_studio_socials.overwritesSource"))
     if args.review_output and args.output.resolve() == args.review_output.resolve():
-        parser.error("扫描表与复核表必须使用不同路径")
+        parser.error(t("find_studio_socials.samePaths"))
     if args.resume and args.output.exists() and args.review_output and not args.review_output.exists():
-        parser.error("续跑缺少原复核表；去掉 --resume 可重新采集")
+        parser.error(t("find_studio_socials.resumeMissingReview"))
     return args
 
 
@@ -174,7 +188,7 @@ def main() -> int:
     results = read_rows(args.output) if args.resume and args.output.exists() else []
     reviews = read_rows(args.review_output) if args.resume and args.review_output and args.review_output.exists() else []
     settled = {(r["studio"], r["site"]) for r in results
-               if r["handles"] and not r["note"].startswith("未取得")}
+               if r["handles"] and not missed(r)}
     http = HttpxTransport()
     last = 0.0
     try:
@@ -188,19 +202,20 @@ def main() -> int:
             last = time.monotonic()
             evidence: list[dict] = []
             try:
-                found, final, note = scan(http, site, args.timeout, evidence=evidence)
+                found, final, result, note = scan(http, site, args.timeout, evidence=evidence)
             except Exception as exc:
-                found, final, note = set(), "", f"未取得：{type(exc).__name__}"
+                found, final, result = set(), "", MISSED
+                note = t("find_studio_socials.missedError", error=type(exc).__name__)
             results = [r for r in results if (r["studio"], r["site"]) != (studio, site)]
             results.append({"studio": studio, "site": site, "final_url": final,
-                            "handles": "|".join(sorted(found)), "note": note})
+                            "result": result, "handles": "|".join(sorted(found)), "note": note})
             seen = {(str(r["entity_id"]), r["name"], r["url"].casefold()) for r in reviews}
             reviews.extend(r for r in review_rows(row, evidence)
                            if (str(r["entity_id"]), r["name"], r["url"].casefold()) not in seen)
             write_rows(args.output, SCAN_FIELDS, results)
             if args.review_output:
                 write_rows(args.review_output, REVIEW_FIELDS, reviews)
-            print(f"{studio:<20} {'|'.join(sorted(found)) or '未取得':<28} {note}")
+            print(f"{studio:<20} {'|'.join(sorted(found)) or t('find_studio_socials.notFound'):<28} {note}")
     finally:
         http.close()
 

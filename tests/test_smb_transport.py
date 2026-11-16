@@ -186,9 +186,11 @@ class SmbTransportTests(unittest.TestCase):
         self.conn.disconnect.assert_called_with(close=False)
 
     def test_missing_and_permission_failures_have_distinct_errno(self):
-        for exception, expected in ((ObjectNameNotFound(), errno.ENOENT), (AccessDenied(), errno.EACCES),
-                                    (SMBAuthenticationError("credential error"), errno.EACCES)):
-            with self.subTest(expected=expected):
+        """打开失败带共享内路径：诊断要靠文件名把「文件被移走」认成输入缺失，而不是代码缺陷。"""
+        for exception, expected, filename in ((ObjectNameNotFound(), errno.ENOENT, "missing"),
+                                              (AccessDenied(), errno.EACCES, "missing"),
+                                              (SMBAuthenticationError("credential error"), errno.EACCES, None)):
+            with self.subTest(expected=expected, filename=filename):
                 original = self.fd
                 def bad_fd(tree, name, original=original, exception=exception):
                     fd = original(tree, name)
@@ -198,6 +200,7 @@ class SmbTransportTests(unittest.TestCase):
                 with self.assertRaises(OSError) as caught:
                     self.transport.stat("missing")
                 self.assertEqual(caught.exception.errno, expected)
+                self.assertEqual(caught.exception.filename, filename)
 
     def test_seek_short_reads_and_eof(self):
         with self.transport.open("film.mp4") as reader:

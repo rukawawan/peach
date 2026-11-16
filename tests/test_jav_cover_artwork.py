@@ -129,7 +129,7 @@ class CoverArtworkTests(unittest.TestCase):
     def test_full_canvas_layout_is_available_without_a_face_model(self):
         for size in ((800, 600), (840, 594)):
             with self.subTest(size=size), patch('peach.cover_artwork._default_detector',
-                                                side_effect=FaceModelUnavailable('未取得')):
+                                                side_effect=FaceModelUnavailable('errors.faceDetect.faceModelMissing', {'path': 'yunet.onnx'})):
                 cover_artwork.install_cover(self.target, 'CAWD-186', jpeg((80, 90, 100), size), size)
             face = json.loads(self.target.with_suffix('.face.json').read_text(encoding='utf-8'))
             self.assertEqual(face['layout'], 'still')
@@ -226,7 +226,7 @@ class CoverArtworkTests(unittest.TestCase):
         self.target.with_suffix(".poster.json").write_text('{"version":"old"}')
         data = jpeg((240, 240, 240))
         with patch.object(cover_artwork, "_default_detector",
-                          side_effect=FaceModelUnavailable("missing")):
+                          side_effect=FaceModelUnavailable("errors.faceDetect.faceModelMissing", {"path": "yunet.onnx"})):
             cover_artwork.install_cover(self.target, "259LUXU-1537", data, (840, 472))
         self.assertEqual(self.target.read_bytes(), data)
         self.assertFalse(self.target.with_suffix(".face.json").exists())

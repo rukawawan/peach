@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from peach import data_storage, distribution, settings_file
+from peach.user_messages import UserValueError
 
 
 def write(path: Path, size: int = 10) -> Path:
@@ -228,12 +229,12 @@ class DataStorageTests(unittest.TestCase):
         def rename_once(source, destination):
             calls.append(destination)
             if len(calls) > 1:
-                raise OSError("拒绝访问")
+                raise OSError("Access is denied")
             os.rename(source, destination)
 
-        with patch.object(data_storage, "rewrite_ledger_paths", side_effect=RuntimeError("数据库被占用")), \
+        with patch.object(data_storage, "rewrite_ledger_paths", side_effect=RuntimeError("database is locked")), \
                 patch.object(data_storage, "_rename", side_effect=rename_once), \
-                self.assertRaisesRegex(data_storage.MovedWithoutRewrite, "数据库被占用"):
+                self.assertRaisesRegex(data_storage.MovedWithoutRewrite, "database is locked"):
             data_storage.relocate(self.config(), target, bootstrap=self.base / "default")
         self.assertTrue((target / "database" / "ledger.db").is_file())
         self.assertEqual((self.base / "default" / "state" / settings_file.DATA_ROOT_LOCATION).read_text(encoding="utf-8"),
@@ -298,7 +299,7 @@ class DataStorageTests(unittest.TestCase):
         from peach.storage_budget import layout
         config = self.config()
         target = self.base / "new" / "peach-data"
-        with patch.object(data_storage, "availability", return_value=(True, "")), \
+        with patch.object(data_storage, "blocked", return_value=""), \
                 patch("peach.standalone_update.public", return_value={"state": "idle"}):
             with self.assertRaisesRegex(ValueError, "请先统计"):
                 data_storage.request(config, str(target))
@@ -416,7 +417,7 @@ class DataStorageTests(unittest.TestCase):
         request = self.request_file(self.base / "new" / "peach-data")
         tray = self.tray()
 
-        _transfer, release = self.poll_with(tray, Mock(side_effect=OSError("找不到 Peach.exe")))
+        _transfer, release = self.poll_with(tray, Mock(side_effect=OSError("Peach.exe not found")))
 
         release.assert_called_once()
         self.assertEqual(release.call_args.args[1], "token-1")
@@ -424,7 +425,7 @@ class DataStorageTests(unittest.TestCase):
         tray.exit.assert_not_called()
         result = data_storage.read_result(self.config())
         self.assertEqual(result["state"], "error")
-        self.assertIn("找不到 Peach.exe", result["message"])
+        self.assertIn("Peach.exe not found", result["message"])
 
     def test_storage_routes_validate_categories_and_report_target_errors_by_field(self):
         from fastapi import FastAPI
@@ -437,7 +438,7 @@ class DataStorageTests(unittest.TestCase):
         config = self.config()
         with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 123)) as client, \
                 patch.object(settings_file, "load_config", return_value=config), \
-                patch.object(data_storage, "availability", return_value=(True, "")), \
+                patch.object(data_storage, "blocked", return_value=""), \
                 patch("peach.standalone_update.public", return_value={"state": "idle"}):
             snapshot = client.get("/api/configuration/storage").json()
             self.assertEqual((snapshot["data_root"], snapshot["usage"]), (str(self.data), None))
@@ -449,7 +450,7 @@ class DataStorageTests(unittest.TestCase):
                 detected = client.get('/api/configuration/storage/external-cache')
                 self.assertEqual(detected.json(), {'path': str(self.base / 'cache')})
                 read.assert_called_once_with(config)
-            with patch('peach.storage_external_cache.read', side_effect=ValueError('需要查看系统设置权限')):
+            with patch('peach.storage_external_cache.read', side_effect=UserValueError('errors.storageExternalCache.tokenNeedsPermission')):
                 self.assertEqual(client.get('/api/configuration/storage/external-cache').status_code, 400)
             self.assertEqual(client.post('/api/configuration/storage/policy', json={'cache_max_gib': True}).status_code, 400)
             self.assertEqual(client.post('/api/configuration/storage/policy', json={'data_max_gib': 32},
@@ -745,6 +746,11 @@ class CapacityProtectionTests(unittest.TestCase):
         refresh = patch.object(self.budget, '_refresh_in_background')
         self.background = refresh.start()
         self.addCleanup(refresh.stop)
+        # 磁盘读数默认是两块各剩 100 GiB 的盘，不读本机；要看真实磁盘的用例用 `self.real_disks`。
+        free = 100 * self.budget.GIB
+        self.disks = patch.object(self.budget, '_disks', return_value=[('system', free, free * 2), ('data', free, free * 2)])
+        self.disks.start()
+        self.addCleanup(self.disks.stop)
         # 样本文件刚写出来，用例里不按「最近用过」跳过；进程启动延迟也不等。
         for name in ('RECENT_SECONDS', 'DATA_START_DELAY'):
             delay = patch.object(self.budget, name, 0)
@@ -761,10 +767,6 @@ class CapacityProtectionTests(unittest.TestCase):
         for thread in threading.enumerate():
             if thread.name == 'PeachCapacityClean':
                 thread.join(10)
-        free = 100 * self.budget.GIB
-        self.disks = patch.object(self.budget, '_disks', return_value=[('system', free, free * 2), ('data', free, free * 2)])
-        self.disks.start()
-        self.addCleanup(self.disks.stop)
 
     def policy(self, **changes):
         from dataclasses import asdict

@@ -32,7 +32,7 @@ class LedgerFixture(unittest.TestCase):
              (14, "performer", "香西咲", "香西咲"),
              (15, "performer", "古川伊织", "古川伊织")])
         self.link_id = 0
-        self.link(1, "official", "官方网站", "https://www.prestige-av.com/")
+        self.link(1, "official", "official-site", "https://www.prestige-av.com/")
         # 事务所自家站上的共识：三条都写着 T-POWERS，够 quorum。
         for entity_id in (11, 12, 13):
             self.link(entity_id, "official", "T-POWERS",
@@ -101,15 +101,15 @@ class LabelRepairTests(LedgerFixture):
         self.assertEqual((row["verdict"], row["new_label"]), ("review", "T-POWERS"))
 
     def test_a_generic_label_carries_no_agency(self):
-        self.assertEqual(agency_from_label("官方网站", "www.prestige-av.com", set()), "")
+        self.assertEqual(agency_from_label("official-site", "www.prestige-av.com", set()), "")
         self.assertEqual(agency_from_label("Prestige", "x.jp", {"Prestige"}), "")
         # 标签就是域名本身时它是采集兜底，不是谁的名字。
         self.assertEqual(agency_from_label("tma.co.jp", "tma.co.jp", set()), "")
 
     def test_applying_moves_the_agency_into_entity_metadata(self):
         done = apply_rows(self.con, collect(self.con), STAMP)
-        self.assertEqual(done["改了标签"], 2)
-        self.assertEqual(done["其中归位成 social"], 1)
+        self.assertEqual(done["relabelled"], 2)
+        self.assertEqual(done["moved_to_social"], 1)
         agency = json.loads(self.con.execute(
             "SELECT metadata_json FROM entity WHERE id=10").fetchone()[0])["agency"]
         self.assertEqual(agency["name"], "T-POWERS")

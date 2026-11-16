@@ -8,6 +8,9 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from sqlite3 import Connection
 
+from .catalog_vocabulary import PERFORMER_TAG_PREFIX
+from .user_messages import UserValueError
+
 #: 只读请求里记住的名字解析结果，见 `memoized_resolution`。
 _RESOLVED: ContextVar[dict | None] = ContextVar("peach_resolved_entities", default=None)
 
@@ -99,7 +102,7 @@ def _ingest_name_id(connection: Connection, kind: str, name: str) -> int | None:
                    "SELECT a.entity_id,a.alias FROM entity_alias a JOIN entity e ON e.id=a.entity_id WHERE e.kind='tag'")
                    if normalize_entity_name(canonical_tag_name(row[1])) == normalized}
     if kind == 'tag' and len(matches) > 1:
-        raise ValueError('标签别名存在冲突，请先合并重复标签')
+        raise UserValueError('errors.entities.tagAliasConflict')
     return next(iter(matches)) if len(matches) == 1 else None
 
 
@@ -129,6 +132,11 @@ def split_name(raw: str) -> tuple[str, list[str]]:
         if name and name != canonical:
             aliases.append(name)
     return (canonical or raw), aliases
+
+
+#: 用户自己敲进来的别名记这个来源。它是唯一允许在界面上删掉的一类——刮削和合并留下的
+#: 那些是这个人真的用过的名字，删掉就问不出这条实体当初为什么长这样。
+USER_ALIAS_SOURCE = "user:alias"
 
 
 #: 人工驳回过的事务所，记在女优自己的元数据上。minnano-av 的「所属事務所」只记她现在
@@ -320,7 +328,7 @@ def canonicalize_entity_name(kind: str, name: str | None) -> str:
     return canonical
 
 
-#: 规范名有一份扁平投影（ADR-0005）：女优落在 `asset_tag` 的 `演员:` 标签里，其余三种
+#: 规范名有一份扁平投影（ADR-0005）：女优落在 `asset_tag` 的 `performer:` 标签里，其余三种
 #: 落在 `asset` 的同名列里。只改实体名不改这一份，卡片上还写着旧名、按旧名也照样查得到，
 #: 资料页和卡片就各说各话了。
 FLAT_COLUMN = {"studio": "studio", "creator": "creator", "series": "series"}
@@ -339,7 +347,7 @@ def rewrite_flat_projection(connection: Connection, kind: str, entity_id: int,
                            (new_name, old_name))
         return connection.execute("SELECT changes()").fetchone()[0]
     rewritten = 0
-    old_tag, new_tag = f"演员:{old_name}", f"演员:{new_name}"
+    old_tag, new_tag = PERFORMER_TAG_PREFIX + old_name, PERFORMER_TAG_PREFIX + new_name
     for item in connection.execute(
         "SELECT DISTINCT asset_id FROM asset_entity WHERE entity_id=?", (entity_id,)
     ):
@@ -453,10 +461,10 @@ def merge_entity(
     改指 target，链条始终只有一跳；`resolve_entity_id` 按它把旧 id 解析到 target。
     """
     if source_id == target_id:
-        raise ValueError("不能合并到同一份档案")
+        raise UserValueError("errors.entities.mergeIntoSelf")
     target = connection.execute("SELECT kind FROM entity WHERE id=?", (target_id,)).fetchone()
     if target is None:
-        raise ValueError(f"合并目标档案 {target_id} 不存在")
+        raise UserValueError("errors.entities.mergeTargetMissing", {"id": target_id})
     target_kind = str(target[0])
     stamp = now or datetime.now(timezone.utc).isoformat()
     moved = {"assets": 0, "aliases": 0, "refs": 0, "links": 0, "terms": 0,

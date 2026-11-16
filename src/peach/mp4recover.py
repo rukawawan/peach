@@ -23,6 +23,7 @@ from pathlib import Path, PureWindowsPath
 from .mp4repair import RepairUnavailable, _top_level
 from .ffmpeg import bundled_tools_root
 from .task_control import run as run_task_process
+from .user_messages import UserOSError
 
 UNTRUNC_ENV = "PEACH_UNTRUNC"
 #: 一部坏片最多试几个参照。每试一个都要把坏片完整读一遍，网盘上是实打实的流量。
@@ -158,7 +159,7 @@ def recover(source: Path, references: list[Path], *, untrunc: Path, ffmpeg: Path
         if best.coverage >= GOOD_ENOUGH:
             break
     if best is None:
-        raise RepairUnavailable("没有一个参照切得出能解码的片子")
+        raise RepairUnavailable("errors.mp4recover.noDecodableReference")
     return best
 
 
@@ -170,12 +171,12 @@ def replace_original(source: Path, repaired: Path) -> Path:
     """
     kept = source.with_name(f".{source.name}{ORIGINAL_SUFFIX}")
     if kept.exists():
-        raise RepairUnavailable(f"同目录已有一份留档：{kept.name}")
+        raise RepairUnavailable("errors.mp4recover.backupExists", {"name": kept.name})
     staged = source.with_name(f".{source.name}.peach-repair.tmp")
     try:
         shutil.copyfile(repaired, staged)
         if staged.stat().st_size != repaired.stat().st_size:
-            raise OSError("写到原目录的副本大小不对")
+            raise UserOSError("errors.mp4recover.stagedSizeMismatch")
         os.replace(source, kept)
     except BaseException:
         staged.unlink(missing_ok=True)

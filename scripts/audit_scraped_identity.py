@@ -26,11 +26,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.config import DATABASE_PATH, GENERATED_DIR  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.metadata import identifies_code  # noqa: E402
 from peach.review_csv import write_rows  # noqa: E402
 from peach.scripting import open_readonly  # noqa: E402
 
-MISMATCH, PREFIX, NO_ID = "错配", "前缀未证实", "来源无编号"
+#: `tier` 列：来源编号对不上番号、只差厂牌数字前缀未证实、来源没给编号。
+MISMATCH, PREFIX, NO_ID = "mismatch", "prefix-unproven", "no-source-id"
 FIELDS = ("tier", "asset_code", "review_code", "provider_id", "content_id", "source_url",
           "asset_count", "link_count", "sources", "asset_ids", "sample_path")
 _MAKER_PREFIX = re.compile(r"^\d{3}(?=[A-Z])")
@@ -86,7 +88,7 @@ def collect(connection) -> tuple[list[dict], Counter]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="重判已落库刮削归属的来源身份；只读，只出复核 CSV")
+    parser = argparse.ArgumentParser(description=t("audit_scraped_identity.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "scraped-identity-review.csv")
@@ -100,13 +102,13 @@ def main(argv: list[str] | None = None) -> int:
         rows, tiers = collect(connection)
     finally:
         connection.close()
-    print("认不出所查番号的归属行：" + (
-        "，".join(f"{tier} {tiers[tier]}" for tier in (MISMATCH, PREFIX, NO_ID)) or "无"))
+    counted = t("common.commaSeparator").join(f"{tier} {tiers[tier]}" for tier in (MISMATCH, PREFIX, NO_ID))
+    print(t("audit_scraped_identity.unrecognized", tiers=counted or t("audit_scraped_identity.none")))
     for row in rows:
-        print(f"  {row['tier']} {row['asset_code']} 查 {row['review_code']} → "
-              f"{row['provider_id'] or row['content_id']}：资产 {row['asset_count']} 条")
+        print(t("audit_scraped_identity.row", tier=row['tier'], code=row['asset_code'], review=row['review_code'],
+                source=row['provider_id'] or row['content_id'], count=row['asset_count']))
     write_rows(args.review_csv, FIELDS, rows)
-    print(f"复核 CSV → {args.review_csv}")
+    print(t("audit_scraped_identity.reviewCsv", path=args.review_csv))
     return 0
 
 

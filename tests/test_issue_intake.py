@@ -72,6 +72,22 @@ class IssueIntakeTests(unittest.TestCase):
         self.assertEqual(issue_intake.verdict(event("edited", JARGON_BODY, **closed)), "keep")
         self.assertEqual(issue_intake.verdict(event("edited", FEATURE_BODY, state="closed")), "keep")
 
+    def test_重开后只折叠工作流留下的模板提示(self):
+        comments = [
+            {"node_id": "notice", "user": {"login": "github-actions[bot]"}, "body": issue_intake.NOTICE},
+            {"node_id": "other-bot", "user": {"login": "github-actions[bot]"}, "body": "已加入项目看板。"},
+            {"node_id": "quote", "user": {"login": "reporter"}, "body": issue_intake.NOTICE},
+            {"node_id": "deleted-user", "user": None, "body": None},
+        ]
+        self.assertEqual(issue_intake.notice_ids(comments), ["notice"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "comments.json"
+            path.write_text(json.dumps(comments, ensure_ascii=False), encoding="utf-8")
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(issue_intake.main(["--notice-ids", str(path)]), 0)
+        self.assertEqual(out.getvalue().split(), ["notice"])
+
     def test_cli_reads_the_event_file_and_prints_the_notice(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "event.json"

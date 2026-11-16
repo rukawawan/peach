@@ -19,6 +19,7 @@ import { apiGet, apiSend, errorMessage } from '../../api';
 import { BrowserIcon, browserIconId } from '../components/browser-icon';
 import { devicesSkeleton, rememberShape } from '../../configuration-skeleton';
 import { ErrorText, Footer, Help, Rows, Section, SectionSkeleton, Stack } from './section';
+import { interfaceLanguage, t } from '../../i18n';
 import './device-sessions.css';
 
 const URL = '/api/configuration/access/sessions';
@@ -29,7 +30,7 @@ export interface DeviceSession {
 }
 export interface DeviceSessionList { revision: string; sessions: DeviceSession[]; manageable: boolean }
 
-const deviceName = (row: DeviceSession) => row.device || '未识别的浏览器';
+const deviceName = (row: DeviceSession) => row.device || t('settings:deviceSessions.unknownBrowser');
 
 type Glyph = typeof RiComputerLine;
 /* 平台标志与旁边的浏览器标志一样用品牌原色（色值在 device-sessions.css）；Apple 官方标志是单色，用正文色实心；
@@ -38,12 +39,13 @@ const apple = { glyph: RiAppleFill, brand: 'apple' };
 const android = { glyph: RiAndroidFill, brand: 'android' };
 type Platform = { glyph: Glyph; brand: string } | { browser: string };
 
-/** 服务端 `device_name()` 写出的系统词 → 平台标志与终端形态。没有 Linux 通用标志，只给终端图标。 */
-const SYSTEMS: Record<string, { platform?: Platform; terminal: Glyph }> = {
+/** 服务端 `device_name()` 写出的系统词 → 平台标志与终端形态；不是专名的系统词（安卓平板）按界面语言写。
+ *  没有 Linux 通用标志，只给终端图标。 */
+const SYSTEMS: Record<string, { platform?: Platform; terminal: Glyph; label?: () => string }> = {
   iPhone: { platform: apple, terminal: RiSmartphoneLine },
   iPad: { platform: apple, terminal: RiTabletLine },
   Android: { platform: android, terminal: RiSmartphoneLine },
-  'Android 平板': { platform: android, terminal: RiTabletLine },
+  'Android tablet': { platform: android, terminal: RiTabletLine, label: () => t('settings:deviceSessions.androidTablet') },
   ChromeOS: { platform: { browser: 'chrome' }, terminal: RiComputerLine },
   Windows: { platform: { glyph: RiWindowsFill, brand: 'windows' }, terminal: RiComputerLine },
   macOS: { platform: apple, terminal: RiComputerLine },
@@ -69,7 +71,7 @@ function DeviceLabel({ row }: { row: DeviceSession }) {
     <>
       {browser ? <>{browserIconId(browser) ? <BrowserIcon name={browser} className={MARK} /> : null}{browser}</> : null}
       {browser && system ? ' · ' : null}
-      {system ? <>{platform ? <PlatformMark platform={platform} /> : null}{system}</> : null}
+      {system ? <>{platform ? <PlatformMark platform={platform} /> : null}{SYSTEMS[system]!.label?.() ?? system}</> : null}
     </>
   );
 }
@@ -98,20 +100,20 @@ function DeviceRow({ row, children }: { row: DeviceSession; children?: ReactNode
 /** 最近活动按分钟落盘，所以一分钟以内都写「刚刚」。 */
 export function lastSeen(seconds: number, now = Date.now() / 1000): string {
   const elapsed = Math.max(0, now - seconds);
-  if (elapsed < 60) return '刚刚';
-  if (elapsed < 3600) return `${Math.floor(elapsed / 60)} 分钟前`;
-  if (elapsed < 86400) return `${Math.floor(elapsed / 3600)} 小时前`;
-  if (elapsed < 86400 * 30) return `${Math.floor(elapsed / 86400)} 天前`;
-  return new Date(seconds * 1000).toLocaleDateString('zh-CN');
+  if (elapsed < 60) return t('settings:deviceSessions.justNow');
+  if (elapsed < 3600) return t('settings:deviceSessions.minutesAgo', { count: Math.floor(elapsed / 60) });
+  if (elapsed < 86400) return t('settings:deviceSessions.hoursAgo', { count: Math.floor(elapsed / 3600) });
+  if (elapsed < 86400 * 30) return t('settings:deviceSessions.daysAgo', { count: Math.floor(elapsed / 86400) });
+  return new Date(seconds * 1000).toLocaleDateString(interfaceLanguage);
 }
 
 function origin(row: DeviceSession): string {
-  if (row.network === 'loopback') return '运行 Peach 的电脑';
+  if (row.network === 'loopback') return t('settings:deviceSessions.loopback');
   if (!row.network) return '';
-  return row.remote ? `公网入口 · ${row.network}` : row.network;
+  return row.remote ? t('settings:deviceSessions.viaRemoteAccess', { network: row.network }) : row.network;
 }
 
-const describe = (row: DeviceSession) => [`最近活动 ${lastSeen(row.last_seen)}`, origin(row)].filter(Boolean).join(' · ');
+const describe = (row: DeviceSession) => [t('settings:deviceSessions.lastActive', { time: lastSeen(row.last_seen) }), origin(row)].filter(Boolean).join(' · ');
 
 /** 访问密码改了（`revision` 变了）就重新取：旧行已经全部作废。 */
 export function DeviceSessions({ revision, receipt }: { revision: string; receipt(message: string): void }) {
@@ -120,9 +122,9 @@ export function DeviceSessions({ revision, receipt }: { revision: string; receip
     queryFn: ({ signal }) => apiGet<DeviceSessionList>(URL, signal),
   });
   if (query.error) {
-    return <Section title="已登录的设备"><Stack><ErrorText>{errorMessage(query.error)}</ErrorText></Stack></Section>;
+    return <Section title={t('settings:signedInDevices.title')}><Stack><ErrorText>{errorMessage(query.error)}</ErrorText></Stack></Section>;
   }
-  if (query.isFetching || !query.data) return <SectionSkeleton label="正在读取已登录的设备" html={devicesSkeleton} />;
+  if (query.isFetching || !query.data) return <SectionSkeleton label={t('settings:deviceSessions.loading')} html={devicesSkeleton} />;
   return <DeviceList initial={query.data} receipt={receipt} />;
 }
 
@@ -135,47 +137,47 @@ function DeviceList({ initial, receipt }: { initial: DeviceSessionList; receipt(
   }, [list, others.length]);
 
   const revoke = (row: DeviceSession) => void confirmModal({
-    title: '撤销这台设备的登录',
-    body: `${deviceName(row)}（${describe(row)}）下次打开 Peach 需要重新输入访问密码。`,
-    confirmLabel: '撤销登录',
+    title: t('settings:deviceSessions.revokeTitle'),
+    body: t('settings:deviceSessions.revokeBody', { device: deviceName(row), details: describe(row) }),
+    confirmLabel: t('settings:deviceSessions.revokeConfirm'),
     onConfirm: async () => {
       setList(await apiSend<DeviceSessionList>(`${URL}/revoke`, { revision: list.revision, id: row.id }));
-      receipt('已撤销登录');
+      receipt(t('settings:deviceSessions.revoked'));
     },
   });
   const revokeOthers = () => void confirmModal({
-    title: '撤销其他设备的登录',
-    body: `除本机以外的 ${others.length} 台设备下次打开 Peach 需要重新输入访问密码。`,
-    confirmLabel: '撤销登录',
+    title: t('settings:deviceSessions.revokeOthersTitle'),
+    body: t('settings:deviceSessions.revokeOthersBody', { count: others.length }),
+    confirmLabel: t('settings:deviceSessions.revokeConfirm'),
     onConfirm: async () => {
       const next = await apiSend<DeviceSessionList & { removed: number }>(`${URL}/revoke`, { revision: list.revision, scope: 'others' });
       setList(next);
-      receipt(`已撤销 ${next.removed} 台设备的登录`);
+      receipt(t('settings:deviceSessions.revokedCount', { count: next.removed }));
     },
   });
 
   return (
-    <Section title="已登录的设备">
+    <Section title={t('settings:signedInDevices.title')}>
       {list.sessions.length
         ? <Rows>
             {list.sessions.map(row => (
               <DeviceRow key={row.id} row={row}>
                 {row.current
-                  ? <Chip color="blue" variant="caption">本机</Chip>
+                  ? <Chip color="blue" variant="caption">{t('settings:deviceSessions.thisDevice')}</Chip>
                   : list.manageable
-                    ? <Button size="small" variant="secondary" aria-label={`撤销 ${deviceName(row)} 的登录`}
-                        onClick={() => revoke(row)}>撤销</Button>
+                    ? <Button size="small" variant="secondary" aria-label={t('settings:deviceSessions.revokeDevice', { device: deviceName(row) })}
+                        onClick={() => revoke(row)}>{t('settings:deviceSessions.revoke')}</Button>
                     : null}
               </DeviceRow>
             ))}
           </Rows>
-        : <Stack><Help>还没有浏览器用访问密码登录过。</Help></Stack>}
+        : <Stack><Help>{t('settings:deviceSessions.empty')}</Help></Stack>}
       {!list.manageable && others.length
-        ? <Stack divided><Help>在运行 Peach 的电脑上打开这一页才能撤销。</Help></Stack>
+        ? <Stack divided><Help>{t('settings:deviceSessions.serverOnly')}</Help></Stack>
         : null}
       {list.manageable && others.length
-        ? <Footer status="修改访问密码会让全部设备退出。">
-            <Button variant="secondary" onClick={revokeOthers}>撤销其他设备</Button>
+        ? <Footer status={t('settings:signedInDevices.passwordChangeNotice')}>
+            <Button variant="secondary" onClick={revokeOthers}>{t('settings:signedInDevices.revokeOthers')}</Button>
           </Footer>
         : null}
     </Section>

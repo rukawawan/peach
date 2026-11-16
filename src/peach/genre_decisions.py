@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from .genre_taxonomy import normalise_genre
+from .user_messages import UserValueError
 
 
 def load_genre_decisions(connection) -> dict[str, str | None]:
@@ -19,7 +20,7 @@ def record_genre_decision(connection, raw_genre: str, peach_tag: str | None, now
     """记下一条决定并返回规范化后的键。同一个词再收录一次是覆盖，不是新增一行。"""
     key = normalise_genre(raw_genre)
     if not key:
-        raise ValueError("要收录的 genre 是空的")
+        raise UserValueError("errors.genreDecisions.emptyGenre")
     tag = (peach_tag or "").strip() or None
     connection.execute(
         "INSERT INTO genre_decision(source_genre,raw_genre,peach_tag,decided_at) VALUES(?,?,?,?) "

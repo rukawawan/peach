@@ -33,6 +33,7 @@ from peach.config import DATABASE_PATH, GENERATED_DIR
 from peach.scripting import open_readonly
 from peach.classification import is_probable_mainstream_release, is_structural_creator
 from peach.entities import upsert_asset_entity
+from peach.interface_text import dev as t
 from peach.migrations import sqlite_backup
 from peach.review_csv import read_rows, write_rows
 
@@ -203,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"review queue: {total} boards, {pending} pending -> {args.review}")
         return 0
     if not args.backup:
-        raise SystemExit("--apply-review 必须同时给 --backup")
+        raise SystemExit(t("creator_tags.backupRequired"))
     assets, rows = apply_review(args.db, args.review, args.backup)
     print(f"applied: {assets} assets, {rows} tag rows; backup={args.backup}")
     return 0

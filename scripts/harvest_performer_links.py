@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.config import SECRETS_DIR, STATE_DIR   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.entities import name_chain   # noqa: E402,F401  测试从本模块取 name_chain
 from peach.http import HttpRequest   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
@@ -52,10 +53,10 @@ def scan(http, name: str, timeout: float, owner_of=None) -> tuple[list[dict], st
     response = http(HttpRequest("GET", search_url(name), {"User-Agent": USER_AGENT}),
                     timeout, 4 << 20)
     if response.status != 200:
-        return [], "", "", f"未取得：HTTP {response.status}"
+        return [], "", "", t("harvest_performer_links.httpFailed", status=response.status)
     found_id = actress_id(response.url or "")
     if not found_id:
-        return [], "", "", "未取得：检索页未唯一命中，需人工消歧"
+        return [], "", "", t("harvest_performer_links.notUnique")
     html = response.body.decode("utf-8", "replace")
     agency = profile_text(html, "所属事務所")
     rows = []
@@ -66,14 +67,14 @@ def scan(http, name: str, timeout: float, owner_of=None) -> tuple[list[dict], st
             link_kind, link_label = classify(url, agency, owner_of)
             rows.append({"link_kind": link_kind, "label": link_label, "url": url,
                          "evidence": f"minnano-av actress{found_id} 资料表「{label}」"})
-    note = (f"命中 actress{found_id}，{len(rows)} 条外链" if rows
-            else f"命中 actress{found_id}，资料表没有外链")
+    note = (t("harvest_performer_links.foundLinks", foundId=found_id, count=len(rows)) if rows
+            else t("harvest_performer_links.foundNoLinks", foundId=found_id))
     return rows, found_id, agency, note
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, required=True, help="账本路径")
+    parser = argparse.ArgumentParser(description=t("harvest_performer_links.description"))
+    parser.add_argument("--db", type=Path, required=True, help=t("harvest_performer_links.dbHelp"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--min-assets", type=int, default=3)
     parser.add_argument("--limit", type=int, default=0)
@@ -92,7 +93,7 @@ def run(args) -> int:
         connection.close()
     if args.limit:
         performers = performers[:args.limit]
-    print(f"待查 {len(performers)} 位 performer")
+    print(t("harvest_performer_links.pending", count=len(performers)))
 
     results: list[dict[str, object]] = []
     # 与补别名后继同一个入口：冷却记录共用，HTTP 客户端被拦时由本机浏览器验证（`browser_fallback`）。
@@ -101,14 +102,14 @@ def run(args) -> int:
     hit = 0
     try:
         for record in performers:
-            rows, found_id, agency, note, used = [], "", "", "未取得：没有可用于日文站的名字", ""
+            rows, found_id, agency, note, used = [], "", "", t("harvest_performer_links.noJapaneseName"), ""
             for candidate in record["chain"]:
                 limiter.wait()
                 try:
                     rows, found_id, agency, note = scan(http, candidate, args.timeout,
                                                         owners.get)
                 except Exception as exc:
-                    rows, found_id, agency, note = [], "", "", f"未取得：{type(exc).__name__}"
+                    rows, found_id, agency, note = [], "", "", t("harvest_performer_links.error", error=type(exc).__name__)
                 used = candidate
                 # 唯一命中就停：名字链后面的写法只是同一个人的别的叫法，再查是白跑。
                 if found_id:
@@ -116,6 +117,8 @@ def run(args) -> int:
             if rows:
                 hit += 1
             for row in rows:
+                # ok 行经 install_entity_links.py 写进 entity_link.metadata，
+                # merge_duplicate_identities.py 再按 `minnano-av actress<id>` 读回，保留中文。
                 row["evidence"] += f"；账本名「{record['name']}」经「{used}」检索命中"
                 results.append({"entity_id": record["entity_id"], "kind": "performer",
                                 "name": record["name"], "actress_id": found_id,
@@ -125,15 +128,16 @@ def run(args) -> int:
                 blank.update(entity_id=record["entity_id"], kind="performer",
                              name=record["name"], actress_id=found_id, agency=agency,
                              verdict="未取得",
-                             evidence=f"{note}（试过 {'、'.join(record['chain']) or '无候选'}）")
+                             evidence=t("harvest_performer_links.triedNames", note=note,
+                                        names=record["chain"] or t("harvest_performer_links.noCandidates")))
                 results.append(blank)
             print(f"{record['name'][:12]:<12} {used[:12]:<12} {note}")
     finally:
         http.close()
 
     write_rows(args.output, FIELDS, results)
-    print({"performer": len(performers), "有链接的人": hit,
-           "链接行": sum(1 for row in results if row["verdict"] == "ok"),
+    print({"performer": len(performers), t("harvest_performer_links.withLinks"): hit,
+           t("harvest_performer_links.linkRows"): sum(1 for row in results if row["verdict"] == "ok"),
            "output": str(args.output)})
     return 0
 

@@ -385,7 +385,7 @@ describe('媒体库', () => {
     const { host, sent } = await open({}, { [PICK_FOLDER_URL]: { status: 200, body: { path: 'F:\\Picked' } } });
     await click(rows(host)[0]!.querySelector('button[aria-label="选择文件夹"]'));
     await settle();
-    expect(sent(PICK_FOLDER_URL)).toEqual({ initial: '' });
+    expect(sent(PICK_FOLDER_URL)).toEqual({ initial: '', purpose: 'media', start: true });
     expect(paths(host)[0]!.value).toBe('F:\\Picked');
   });
 
@@ -464,7 +464,7 @@ describe('完成态', () => {
     await submitForm(host);
     expect(host.querySelector('h1')?.textContent).toBe('可以开始使用了');
     expect(host.textContent).toContain('馆藏，准备开启。');
-    expect(host.textContent).toContain('首次扫描已排队，在后台整理媒体库，期间可以照常使用 Peach。');
+    expect(host.textContent).toContain('首次扫描已排队，在后台进行，期间可照常使用 Peach。');
     const entry = [...host.querySelectorAll('a')].find((link) => link.textContent === '进入 Peach');
     expect(entry?.getAttribute('href')).toBe('http://127.0.0.1:8900/?onboarding=1');
     expect(document.activeElement).toBe(entry);

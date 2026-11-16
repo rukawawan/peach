@@ -29,13 +29,13 @@ def load_script():
 
 class DirectoryShapeTests(unittest.TestCase):
     def test_a_site_root_is_not_a_person_page(self):
-        self.assertEqual(directory_reason("http://lightpro.jp/"), "站点根")
-        self.assertEqual(directory_reason("http://www.julia-official.com"), "站点根")
+        self.assertEqual(directory_reason("http://lightpro.jp/"), "site root")
+        self.assertEqual(directory_reason("http://www.julia-official.com"), "site root")
 
     def test_a_directory_word_at_the_end_is_a_listing(self):
-        self.assertEqual(directory_reason("http://ai-p.love/model/"), "路径末段是目录词")
+        self.assertEqual(directory_reason("http://ai-p.love/model/"), "last path segment is a directory word")
         self.assertEqual(directory_reason("http://cmore.jp/official/model.html"),
-                         "路径末段是目录词")
+                         "last path segment is a directory word")
 
     def test_an_index_filename_is_stripped_before_judging(self):
         """`/models/kobatomugi/index.html` 是小鸠むぎ本人的页面。
@@ -45,14 +45,14 @@ class DirectoryShapeTests(unittest.TestCase):
         """
         self.assertEqual(directory_reason("http://www.8man.jp/models/kobatomugi/index.html"), "")
         self.assertEqual(directory_reason("http://www.allurepro.com/models/index.html"),
-                         "路径末段是目录词")
-        self.assertEqual(directory_reason("http://www.l-promotion.com/index.html"), "站点根")
+                         "last path segment is a directory word")
+        self.assertEqual(directory_reason("http://www.l-promotion.com/index.html"), "site root")
 
     def test_a_link_that_others_hang_below_is_a_listing(self):
         """`/model/` 下面挂着 `/model/12110`，那 `/model/` 讲的是「有哪些人」。"""
         self.assertEqual(
             directory_reason("http://official.nax-pro.com/model/", ["/model/12110", "/model/"]),
-            "同站另有更深的链接挂在它下面")
+            "a deeper link on the same site sits under it")
 
     def test_a_named_page_under_a_directory_is_left_alone(self):
         self.assertEqual(directory_reason("https://so-agent.jp/model/nagi_hikaru/"), "")
@@ -239,7 +239,7 @@ class WriteTests(unittest.TestCase):
         self.connection.close()
 
     def plan(self, link_id, new_url, verdict="ok"):
-        return {"link_id": str(link_id), "entity_id": "1", "problem": "目录页",
+        return {"link_id": str(link_id), "entity_id": "1", "problem": "directory-page",
                 "url": "http://official.nax-pro.com/model/", "new_url": new_url,
                 "verdict": verdict, "check": "标题自述该人"}
 
@@ -266,14 +266,14 @@ class WriteTests(unittest.TestCase):
         plans = [self.plan(1, "https://official.nax-pro.com/model/617")]
         tally = self.module.write_plan(self.connection, plans, "2026-09-22T10:00:00Z")
         self.assertEqual(tally, {"updated": 0, "skipped_unique": 1})
-        self.assertEqual(plans[0]["verdict"], "撞上唯一约束，整行跳过")
+        self.assertEqual(plans[0]["verdict"], "unique-clash")
         self.assertEqual(
             self.connection.execute("SELECT url FROM entity_link WHERE id=1").fetchone()[0],
             "http://official.nax-pro.com/model/")
 
     def test_only_confirmed_rows_are_written(self):
-        plans = [self.plan(1, "", verdict="未取得"),
-                 self.plan(2, "https://official.nax-pro.com/model/617", verdict="已是目标")]
+        plans = [self.plan(1, "", verdict="missed"),
+                 self.plan(2, "https://official.nax-pro.com/model/617", verdict="already-target")]
         self.assertEqual(self.module.write_plan(self.connection, plans, "2026-09-22T10:00:00Z"),
                          {"updated": 0, "skipped_unique": 0})
 

@@ -115,26 +115,26 @@ class JudgeTests(unittest.TestCase):
     def test_a_ledger_name_found_only_among_former_names_is_left_to_a_human(self):
         """站上已经改了名。用哪个当规范名是人要决定的事，不是这一步该定的。"""
         row = self.judge("JULIA", "深田えいみ")
-        self.assertEqual(row["verdict"], "旧名")
+        self.assertEqual(row["verdict"], "former-name")
         self.assertIn("JULIA", row["evidence"])
 
     def test_a_page_with_only_a_japanese_name_yields_nothing(self):
         """`長谷川るい` 那页只有日文写法。没有就是没有，不转写。"""
         self.record.update(name="長谷川るい", chain=["長谷川るい"])
         row = self.judge("長谷川るい")
-        self.assertEqual(row["verdict"], "同形（站上只有日文名）")
+        self.assertEqual(row["verdict"], "japanese-only")
         self.assertEqual(row["zh_tw"], "")
 
     def test_two_chinese_writings_in_one_field_are_ambiguous(self):
         self.record.update(name="田中レモン", chain=["田中レモン", "楓カレン"])
         row = self.judge("田中檸檬, 田中レモン, 楓花戀")
-        self.assertEqual(row["verdict"], "多义")
+        self.assertEqual(row["verdict"], "ambiguous")
 
     def test_two_different_stage_names_in_the_current_field_are_not_a_pair(self):
         """`一之瀨亞美莉, 美空あやか` 是两个艺名。姓对不上，中文那个不是这位的名字。"""
         self.record.update(name="美空あやか", chain=["美空あやか"])
         row = self.judge("一之瀨亞美莉, 美空あやか", "一ノ瀬アメリ")
-        self.assertEqual(row["verdict"], "不同名（两栏姓氏对不上）")
+        self.assertEqual(row["verdict"], "unrelated-names")
         self.assertEqual(row["zh_cn" if "zh_cn" in row else "zh_tw"], "")
 
     def test_a_shared_single_character_is_not_a_shared_surname(self):
@@ -155,14 +155,14 @@ class JudgeTests(unittest.TestCase):
         """账本规范名不在现名栏：站上写的是另一个艺名，换不换规范名是人的决定。"""
         self.record.update(name="おっぱい隊長", chain=["おっぱい隊長", "夢見るぅ"])
         row = self.judge("夢見露, 夢見るぅ")
-        self.assertEqual(row["verdict"], "改艺名（现名栏是另一个艺名）")
+        self.assertEqual(row["verdict"], "renamed")
         self.assertIn("おっぱい隊長", row["evidence"])
 
     def test_a_latin_stage_name_is_not_a_chinese_name(self):
         self.record["name"] = "京香じゅりあ"
         self.record["chain"] = ["京香じゅりあ", "JULIA"]
         row = self.judge("JULIA, 京香じゅりあ")
-        self.assertEqual(row["verdict"], "同形（站上只有日文名）")
+        self.assertEqual(row["verdict"], "japanese-only")
 
 
 class SimplifyTests(unittest.TestCase):
@@ -175,15 +175,15 @@ class SimplifyTests(unittest.TestCase):
         """复核件要看得出转了什么：只留简体的话，转错了没人能发现。"""
         rows = self.module.localize(
             [{"verdict": "ok", "zh_tw": "永瀨未萌", "adopt": "永瀨未萌"},
-             {"verdict": "旧名", "zh_tw": "", "adopt": "JULIA"}])
+             {"verdict": "former-name", "zh_tw": "", "adopt": "JULIA"}])
         self.assertEqual(rows[0]["zh_cn"], "永濑未萌")
         self.assertEqual(rows[0]["zh_tw"], "永瀨未萌")
         self.assertEqual(rows[1]["zh_cn"], "")
 
     def test_a_japanese_current_name_is_not_half_converted(self):
         """`きみかわ結衣` 转成 `きみかわ结衣` 是半假名半简体，比原样留着更糟。"""
-        rows = self.module.localize([{"verdict": "旧名", "zh_tw": "", "adopt": "きみかわ結衣"},
-                                     {"verdict": "旧名", "zh_tw": "", "adopt": "美月麗花"}])
+        rows = self.module.localize([{"verdict": "former-name", "zh_tw": "", "adopt": "きみかわ結衣"},
+                                     {"verdict": "former-name", "zh_tw": "", "adopt": "美月麗花"}])
         self.assertEqual(rows[0]["adopt"], "きみかわ結衣")
         self.assertEqual(rows[1]["adopt"], "美月丽花")
 
@@ -191,7 +191,7 @@ class SimplifyTests(unittest.TestCase):
         """改了名的那些也要有候选，不然复核件里只写着「站上不是这个名字了」。"""
         self.record.update(name="京香じゅりあ", chain=["京香じゅりあ", "JULIA"])
         row = self.module.judge(self.record, page("JULIA", "京香じゅりあ"), "https://javdb.com/x")
-        self.assertEqual(row["verdict"], "改艺名（现名栏是另一个艺名）")
+        self.assertEqual(row["verdict"], "renamed")
         self.assertEqual(row["adopt"], "JULIA")
         self.assertEqual(row["jp"], "京香じゅりあ")
 
@@ -272,13 +272,13 @@ class AliasCandidateTests(unittest.TestCase):
     def test_a_chinese_writing_in_the_former_name_field_is_a_candidate(self):
         rows = self.candidates("新有菜, 新ありな", "橋本有菜, 橋本ありな")
         self.assertEqual([(row["alias"], row["origin"], row["verdict"]) for row in rows],
-                         [("桥本有菜", "别名栏", "ok")])
+                         [("桥本有菜", "other-names", "ok")])
 
     def test_a_nickname_in_that_field_is_offered_like_any_other_writing(self):
         """站上不标这一栏放的是什么，`傻梦` 是爱称。认不认得归复核的人，解析层不猜。"""
         self.record.update(entity_id=7746, name="凉森玲梦", chain=["凉森玲梦", "涼森れむ"])
         rows = self.candidates("涼森玲夢, 涼森れむ", "傻梦")
-        self.assertEqual([(row["alias"], row["origin"]) for row in rows], [("傻梦", "别名栏")])
+        self.assertEqual([(row["alias"], row["origin"]) for row in rows], [("傻梦", "other-names")])
 
     def test_the_writing_on_the_page_is_kept_next_to_the_converted_one(self):
         """复核件要看得出转了什么，也要指得回是哪一页。"""
@@ -289,30 +289,30 @@ class AliasCandidateTests(unittest.TestCase):
     def test_a_writing_the_ledger_already_has_is_not_a_candidate(self):
         """查过、没查出东西，和还没轮到她是两件事。"""
         self.assertEqual([row["verdict"] for row in self.candidates("新有菜, 新ありな")],
-                         ["无新写法"])
+                         ["nothing-new"])
 
     def test_the_same_name_in_traditional_characters_is_not_a_new_writing(self):
         self.record["chain"] = ["新有菜", "桥本有菜"]
         self.assertEqual(
             [row["verdict"] for row in self.candidates("新有菜, 新ありな", "橋本有菜")],
-            ["无新写法"])
+            ["nothing-new"])
 
     def test_a_japanese_or_latin_writing_is_not_a_chinese_alias(self):
         """`JULIA` 是艺名本体，`きみかわ結衣` 掺着假名。两个都不是中文写法。"""
         self.assertEqual(
             [row["verdict"] for row in self.candidates("JULIA, 京香じゅりあ", "きみかわ結衣")],
-            ["无新写法"])
+            ["nothing-new"])
 
     def test_one_writing_listed_in_both_fields_is_offered_once(self):
         rows = self.candidates("新有菜, 橋本有菜", "橋本有菜")
         self.assertEqual([(row["alias"], row["origin"]) for row in rows],
-                         [("桥本有菜", "现名栏")])
+                         [("桥本有菜", "current-names")])
 
     def test_a_writing_that_belongs_to_someone_else_is_flagged_not_offered(self):
         """要么两条该合并、要么真有两位重名，都得人判。"""
         owners = {self.module.key("橋本有菜"): (99, "桥本有菜")}
         row = self.candidates("新有菜, 新ありな", "橋本有菜", owners)[0]
-        self.assertEqual(row["verdict"], "占用（另一条实体已有这个名字）")
+        self.assertEqual(row["verdict"], "taken")
         self.assertIn("99", row["evidence"])
 
 
@@ -330,7 +330,7 @@ class FakeSite:
     def get(self, url: str) -> str:
         self.asked.append(url)
         if url not in self.pages:
-            raise LookupError(f"没有这一页 {url}")
+            raise LookupError(f"no page {url}")
         return self.pages[url]
 
 
@@ -369,7 +369,7 @@ class HarvestTests(unittest.TestCase):
         names, aliases = self.module.harvest(self.con, site, 0)
         self.assertEqual([row["verdict"] for row in names], ["ok"])
         self.assertEqual([(row["alias"], row["origin"]) for row in aliases],
-                         [("深田咏美", "现名栏")])
+                         [("深田咏美", "current-names")])
 
     def test_two_pages_for_one_name_yield_no_alias_candidate(self):
         """别名进的是身份。配错了人，比缺一个写法更难查回来。"""
@@ -381,7 +381,7 @@ class HarvestTests(unittest.TestCase):
         names, aliases = self.module.harvest(self.con, site, 0, "all")
         crowded = [row for row in aliases if row["current_name"] == "三上悠亚"]
         self.assertEqual([row["verdict"] for row in crowded],
-                         ["多页（同名两位，分不清是哪一页）"])
+                         ["several-pages"])
         self.assertNotIn("https://javdb.com/actors/AAA", site.asked)
 
     def test_the_name_sheet_keeps_to_the_performers_still_named_in_kana(self):
@@ -399,13 +399,13 @@ class HarvestTests(unittest.TestCase):
     def test_a_performer_the_site_does_not_have_is_recorded_in_both_sheets(self):
         site = FakeSite({self.search("深田えいみ"): "", self.search("天海こころ"): ""})
         names, aliases = self.module.harvest(self.con, site, 1)
-        self.assertEqual([row["verdict"] for row in names], ["未取得"])
-        self.assertEqual([row["verdict"] for row in aliases], ["未取得"])
+        self.assertEqual([row["verdict"] for row in names], ["missed"])
+        self.assertEqual([row["verdict"] for row in aliases], ["missed"])
 
     def test_a_failed_fetch_lands_in_the_sheets_instead_of_stopping_the_batch(self):
         site = FakeSite({})
         names, aliases = self.module.harvest(self.con, site, 1)
-        self.assertEqual([row["verdict"] for row in names], ["取页失败"])
+        self.assertEqual([row["verdict"] for row in names], ["fetch-failed"])
         self.assertIn("LookupError", str(aliases[0]["evidence"]))
 
 
@@ -433,7 +433,7 @@ class ApplyAliasTests(unittest.TestCase):
 
     def candidate(self, **over):
         row = {"entity_id": 1, "current_name": "桥本有菜", "alias": "新有菜",
-               "origin": "别名栏", "verdict": "ok", "url": "https://javdb.com/actors/RJM8"}
+               "origin": "other-names", "verdict": "ok", "url": "https://javdb.com/actors/RJM8"}
         row.update(over)
         return row
 
@@ -446,7 +446,7 @@ class ApplyAliasTests(unittest.TestCase):
 
     def test_a_new_writing_is_written_with_the_page_as_its_source(self):
         rows = self.module.plan(self.con, [self.candidate()])
-        self.assertEqual(rows[0]["action"], "写入")
+        self.assertEqual(rows[0]["action"], "write")
         self.assertEqual(self.module.apply_rows(self.con, rows, "javdb-20260912"), 1)
         self.assertEqual(self.aliases_of(1),
                          [("新有菜", f"{javdb.ALIAS_SOURCE}@javdb-20260912")])
@@ -465,27 +465,27 @@ class ApplyAliasTests(unittest.TestCase):
     def test_a_writing_the_entity_already_has_is_left_alone(self):
         self.con.execute("INSERT INTO entity_alias VALUES(1,'新有菜',?,'javdb-actor-page',1.0)",
                          (normalize_entity_name("新有菜"),))
-        self.assertEqual(self.plan()["action"], "已有")
+        self.assertEqual(self.plan()["action"], "held")
 
     def test_the_canonical_name_is_not_added_to_its_own_alias_list(self):
-        self.assertEqual(self.plan(alias="桥本有菜")["action"], "已有")
+        self.assertEqual(self.plan(alias="桥本有菜")["action"], "held")
 
     def test_a_writing_that_belongs_to_another_performer_is_refused(self):
         """静默写下去只会给后面的合并判定多送一个假信号。"""
         self.con.execute("INSERT INTO entity_alias VALUES(2,'新有菜',?,'javdb-actor-page',1.0)",
                          (normalize_entity_name("新有菜"),))
         row = self.plan()
-        self.assertEqual(row["action"], "占用")
+        self.assertEqual(row["action"], "taken")
         self.assertIn("三上悠亚", row["detail"])
 
     def test_a_row_whose_entity_was_renamed_after_the_harvest_is_not_written(self):
         """CSV 是某一刻的快照。统称变过说明这个人后来被动过，该重抓一遍再看。"""
         row = self.plan(current_name="新ありな")
-        self.assertEqual(row["action"], "已变")
+        self.assertEqual(row["action"], "stale")
         self.assertIn("桥本有菜", row["detail"])
 
     def test_a_row_pointing_at_nobody_is_not_written(self):
-        self.assertEqual(self.plan(entity_id=404)["action"], "查无此人")
+        self.assertEqual(self.plan(entity_id=404)["action"], "gone")
 
     def test_a_writing_from_another_site_records_that_site_as_its_source(self):
         rows = self.module.plan(self.con, [self.candidate()])
@@ -496,23 +496,32 @@ class ApplyAliasTests(unittest.TestCase):
         """javdb 与 Wiki 的別名栏都混有共演男优名，人看过判「删除」就摘掉，来源留在复核 CSV。"""
         self.con.execute("INSERT INTO entity_alias VALUES(1,'島修也',?,'javdb-actor-page@x',1.0)",
                          (normalize_entity_name("島修也"),))
-        rows = self.module.plan(self.con, [self.candidate(alias="島修也", verdict="删除")])
-        self.assertEqual(rows[0]["action"], "删除")
+        rows = self.module.plan(self.con, [self.candidate(alias="島修也", verdict="remove")])
+        self.assertEqual(rows[0]["action"], "remove")
         self.assertIn("javdb-actor-page@x", rows[0]["detail"])
         self.assertEqual(self.module.apply_rows(self.con, rows, "r"), 0)
         self.assertEqual(self.module.remove_rows(self.con, rows), 1)
         self.assertEqual(self.aliases_of(1), [])
 
     def test_removing_a_writing_the_entity_does_not_have_changes_nothing(self):
-        row = self.plan(alias="島修也", verdict="删除")
-        self.assertEqual(row["action"], "名下没有")
+        row = self.plan(alias="島修也", verdict="remove")
+        self.assertEqual(row["action"], "absent")
         self.assertEqual(self.module.remove_rows(self.con, [row]), 0)
 
     def test_only_the_verdicts_named_on_the_command_line_are_taken(self):
-        rows = [self.candidate(), self.candidate(verdict="占用（另一条实体已有这个名字）"),
+        rows = [self.candidate(), self.candidate(verdict="taken"),
                 self.candidate(alias="")]
         self.assertEqual(len(self.module.accepted(rows, ["ok"])), 1)
+        self.assertEqual(len(self.module.accepted(rows, ["ok", "taken"])), 2)
+
+    def test_verdicts_written_by_the_old_script_or_by_hand_still_read(self):
+        """旧版复核 CSV 写中文判定词，人手填的是「删除」；`--accept` 里照抄的旧词也认。"""
+        self.con.execute("INSERT INTO entity_alias VALUES(1,'島修也',?,'javdb-actor-page@x',1.0)",
+                         (normalize_entity_name("島修也"),))
+        self.assertEqual(self.plan(alias="島修也", verdict="删除")["action"], "remove")
+        rows = [self.candidate(), self.candidate(verdict="占用（另一条实体已有这个名字）")]
         self.assertEqual(len(self.module.accepted(rows, ["ok", "占用（另一条实体已有这个名字）"])), 2)
+        self.assertEqual(len(self.module.accepted(rows, ["ok", "taken"])), 2)
 
 
 class MappingCsvTests(unittest.TestCase):
@@ -531,30 +540,36 @@ class MappingCsvTests(unittest.TestCase):
     def test_only_the_rows_judged_ok_become_mappings(self):
         self.write({"current_name": "深田えいみ", "adopt": "深田咏美", "verdict": "ok",
                     "actor_id": "A1"},
-                   {"current_name": "長谷川るい", "adopt": "", "verdict": "同形（站上只有日文名）"})
+                   {"current_name": "長谷川るい", "adopt": "", "verdict": "japanese-only"})
         mappings = self.module.read_mapping_csv(self.path)
         self.assertEqual([m.jp for m in mappings], ["深田えいみ"])
 
     def test_a_renamed_row_is_only_taken_when_it_is_named_on_the_command_line(self):
         """站上改了名要不要跟着改是人的决定，不能因为查到了就默认采用。"""
-        self.write({"current_name": "京香じゅりあ", "adopt": "JULIA", "verdict": "改艺名"})
+        self.write({"current_name": "京香じゅりあ", "adopt": "JULIA", "verdict": "renamed"})
         self.assertEqual(self.module.read_mapping_csv(self.path), [])
-        taken = self.module.read_mapping_csv(self.path, ["ok", "改艺名"])
+        taken = self.module.read_mapping_csv(self.path, ["ok", "renamed"])
         self.assertEqual([(m.jp, m.zh_cn) for m in taken], [("京香じゅりあ", "JULIA")])
 
     def test_one_performer_matched_on_several_pages_yields_one_mapping(self):
         """`アンナ` 命中了三页。三条映射进去，落库时只会变成一次「没有唯一映射」。"""
-        self.write({"current_name": "アンナ", "adopt": "Anna", "verdict": "改艺名"},
+        self.write({"current_name": "アンナ", "adopt": "Anna", "verdict": "renamed"},
                    {"current_name": "アンナ", "adopt": "安娜", "verdict": "ok"},
-                   {"current_name": "アンナ", "adopt": "ANNA", "verdict": "改艺名"})
-        taken = self.module.read_mapping_csv(self.path, ["ok", "改艺名"])
+                   {"current_name": "アンナ", "adopt": "ANNA", "verdict": "renamed"})
+        taken = self.module.read_mapping_csv(self.path, ["ok", "renamed"])
         self.assertEqual([(m.jp, m.zh_cn) for m in taken], [("アンナ", "安娜")])
 
     def test_a_latin_current_name_is_the_stage_name_not_a_romanization(self):
         """XML 那份偶尔把罗马字填进 `zh_cn`；javdb 的现名栏写 `JULIA` 时那就是艺名。"""
-        self.write({"current_name": "京香じゅりあ", "adopt": "JULIA", "verdict": "改艺名"})
-        taken = self.module.read_mapping_csv(self.path, ["改艺名"])
+        self.write({"current_name": "京香じゅりあ", "adopt": "JULIA", "verdict": "renamed"})
+        taken = self.module.read_mapping_csv(self.path, ["renamed"])
         self.assertTrue(taken[0].latin_is_a_stage_name)
+
+    def test_an_old_mapping_csv_and_old_accept_words_still_read(self):
+        self.write({"current_name": "京香じゅりあ", "adopt": "JULIA", "verdict": "改艺名（现名栏是另一个艺名）"})
+        for accept in (["renamed"], ["改艺名（现名栏是另一个艺名）"]):
+            taken = self.module.read_mapping_csv(self.path, accept)
+            self.assertEqual([(m.jp, m.zh_cn) for m in taken], [("京香じゅりあ", "JULIA")], accept)
 
     def test_a_row_with_nothing_to_adopt_is_not_a_mapping(self):
         """判定收了但这一行没给出可用的名字，落库时就是把规范名改成空。"""
@@ -569,7 +584,7 @@ class MappingCsvTests(unittest.TestCase):
 
     def test_the_index_points_back_into_the_returned_list(self):
         """`collect` 拿 `index` 当下标回查。跳过的行也算数就会指到别人身上。"""
-        self.write({"current_name": "跳过", "adopt": "", "verdict": "同形（站上只有日文名）"},
+        self.write({"current_name": "跳过", "adopt": "", "verdict": "japanese-only"},
                    {"current_name": "深田えいみ", "adopt": "深田咏美", "verdict": "ok",
                     "actor_id": "A1"})
         mappings = self.module.read_mapping_csv(self.path)

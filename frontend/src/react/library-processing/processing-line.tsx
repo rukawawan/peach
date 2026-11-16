@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { activityKind } from '../../activity-kinds';
 import { TaskProgress } from '../components/task-progress';
 import { processingLine, type LibraryProcessingData } from './library-processing';
 
@@ -26,5 +27,5 @@ export function ProcessingLine({ state }: { state: LibraryProcessingData }) {
 /** 每秒只更新当前进度子树，控件和结果清单沿用接口快照。 */
 export function ProcessingProgress({ state }: { state: LibraryProcessingData }) {
   const line = useProcessingLine(state);
-  return <TaskProgress embedded label={line} value={Math.min(state.checked || 0, state.total || 0)} total={state.total} />;
+  return <TaskProgress embedded kind={activityKind('library-processing', state.stage_code)} label={line} value={Math.min(state.checked || 0, state.total || 0)} total={state.total} />;
 }

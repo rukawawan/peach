@@ -19,6 +19,7 @@ import { useBackgroundJob } from '../background-job';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
 import { TaskProgress } from '../components/task-progress';
+import { activityKind } from '../../activity-kinds';
 import { queryClient } from '../query';
 import { SourceMark } from '../settings/section';
 import { FolderSearchIcon } from '../settings/folder-rows';
@@ -29,6 +30,7 @@ import {
   type OrganizeCommand, type OrganizeData, type OrganizeJob, type OrganizePlan,
 } from './organize';
 import { t } from '../../i18n';
+import { codedText, jobText, serverLabel, stageText } from '../../core/server-text';
 
 const APPLY_BODY = (name: string, path: string) => (path
   ? t('cleanup:organize.applyBodyPath', { name, path })
@@ -181,17 +183,17 @@ export function OrganizeCard(
   const current = job.job;
   const outcome = job.outcome;
   if (current?.status === 'running') {
-    const line = current.message || current.stage || t('cleanup:organize.running');
-    state = <TaskProgress embedded label={line} value={Math.min(current.checked || 0, current.total || 0)} total={current.total} />;
+    const line = jobText(current) || stageText(current) || t('cleanup:organize.running');
+    state = <TaskProgress embedded kind={activityKind('organize', current.stage_code)} label={line} value={Math.min(current.checked || 0, current.total || 0)} total={current.total} />;
   } else if (outcome?.status === 'failed') {
-    state = <Note tone="error" title={t('cleanup:organize.incomplete')}>{outcome.error || t('cleanup:shared.checkTaskLogFiles')}</Note>;
+    state = <Note tone="error" title={t('cleanup:organize.incomplete')}>{jobText(outcome, 'error') || t('cleanup:shared.checkTaskLogFiles')}</Note>;
   } else if (outcome) {
     const { text, failed } = organizeOutcome(outcome);
     state = <Note tone={failed ? 'warning' : 'success'} title={failed ? t('cleanup:shared.partiallyCompleted') : t('cleanup:organize.result')}>{text}</Note>;
   } else if (job.start.isError) {
     state = <Note tone="error" title={t('cleanup:organize.failed')}>{errorMessage(job.start.error)}</Note>;
   } else if (preview.isPending) {
-    state = <TaskProgress embedded label={t('cleanup:organize.checkingPlan')} />;
+    state = <TaskProgress embedded kind={activityKind('organize', 'organize.checkingPlan')} label={t('cleanup:organize.checkingPlan')} />;
   } else if (preview.isError && previewMatches) {
     state = <Note tone="error" title={t('cleanup:organize.previewFailed')}>{errorMessage(preview.error)}</Note>;
   } else if (plan) {
@@ -257,13 +259,16 @@ export function OrganizeCard(
           ? <div className="flex flex-col gap-2" role="group" aria-label={t('cleanup:organize.applyPreset')}>
               <p className="text-caption-1-medium text-text-secondary">{t('cleanup:organize.applyPreset')}</p>
               <div className="flex flex-wrap gap-2">
-              {data.presets.map((preset) => (
-                <Button key={preset.label} variant="secondary" size="small" title={preset.example || preset.label}
-                  className="max-w-full [&>span]:min-w-0 [&>span]:shrink"
-                  onClick={() => { changeTemplates({ file: preset.file, dir: preset.dir }); focused.current = false }}>
-                  <span className="truncate">{preset.label}</span>
-                </Button>
-              ))}
+              {data.presets.map((preset) => {
+                const label = codedText(preset, 'label');
+                return (
+                  <Button key={preset.id || preset.label} variant="secondary" size="small" title={preset.example || label}
+                    className="max-w-full [&>span]:min-w-0 [&>span]:shrink"
+                    onClick={() => { changeTemplates({ file: preset.file, dir: preset.dir }); focused.current = false }}>
+                    <span className="truncate">{label}</span>
+                  </Button>
+                );
+              })}
               </div>
             </div>
           : null}
@@ -277,12 +282,16 @@ export function OrganizeCard(
             <strong className="text-caption-1-semibold text-text-primary">{t('cleanup:organize.insertParameter')}</strong>{t('cleanup:organize.insertTarget', { target: target === 'file' ? t('cleanup:organize.fileTemplate') : t('cleanup:organize.dirTemplate') })}
           </p>
           <div className="flex flex-wrap gap-1">
-            {data.placeholders.map((item) => <Button key={item.key} variant="ghost" size="small"
-              aria-label={`${item.label} {${item.key}}`} onClick={() => insertParameter(item.key)}>
-              <span className="inline-flex flex-wrap items-center gap-x-1.5">
-                <code>{`{${item.key}}`}</code><span className="text-text-secondary">{item.label}</span>
-              </span>
-            </Button>)}
+            {data.placeholders.map((item) => {
+              /* 占位符本身（`{code}`）是模板语法，不翻译；说明按 key 取当前语言。 */
+              const label = serverLabel(`labels.organizeTemplates.placeholder.${item.key}`, item.label);
+              return <Button key={item.key} variant="ghost" size="small"
+                aria-label={`${label} {${item.key}}`} onClick={() => insertParameter(item.key)}>
+                <span className="inline-flex flex-wrap items-center gap-x-1.5">
+                  <code>{`{${item.key}}`}</code><span className="text-text-secondary">{label}</span>
+                </span>
+              </Button>;
+            })}
           </div>
         </div> : null}
         <p className="text-caption-1-regular leading-4.5 text-text-secondary">

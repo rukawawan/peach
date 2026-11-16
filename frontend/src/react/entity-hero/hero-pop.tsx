@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 
 import { Glyph } from './glyph';
+import { t } from '../../i18n';
 
 /** 把 `pop` 摆到 `anchor` 下方，放不下翻上方，左右夹在视口内 8px。两边都放不下时摆到空间大的
  *  那一边，高度压到那一边真正剩下的空间、浮层里自己滚：浮层从不横跨锚点，盖住「+N」那一下
@@ -153,7 +154,7 @@ export function FeedSwitch({ following, busy, onToggle, tip }: {
     <label ref={label} data-entry-feed="" onPointerEnter={showTip}
       onPointerLeave={() => { if (!input.current?.matches(':focus-visible')) restore() }}>
       <Glyph name="rss" />
-      <input ref={input} type="checkbox" role="switch" aria-label="订阅新作" aria-describedby="entityFeedTip"
+      <input ref={input} type="checkbox" role="switch" aria-label={t('catalog:entityHero.subscribeNewReleases')} aria-describedby="entityFeedTip"
         data-entity-feed="" checked={following} aria-busy={busy || undefined} aria-disabled={busy || undefined}
         onChange={(event) => { if (!busy) onToggle(event.currentTarget.checked) }}
         onKeyDown={(event) => { if (event.key === 'Escape') { dismissed.current = true; hideTip() } }}

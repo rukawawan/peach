@@ -17,8 +17,10 @@ import time
 from datetime import datetime
 
 from .ingest_notices import NOTICES
+from .jobs import TaskRunMissing
 from .task_runs import ACTIVE_STATUSES, SETTLED_FOLLOWUP_LIMIT, TERMINAL_STATUSES
 from .task_results import RESULT_FIELDS, result_counts
+from .user_messages import UserValueError, message_fields
 from .web_result_versions import result_versions
 
 #: 不带筛选时「最近完成」那一段每页的默认条数。一屏看得完，更早的往前翻。
@@ -26,23 +28,46 @@ RECENT_LIMIT = 20
 #: 单轮任务详情（`/api/tasks/{id}`）下发的后继条数上限，与任务中心列表每轮的已结束后继同一档。
 TASK_FOLLOWUP_LIMIT = SETTLED_FOLLOWUP_LIMIT
 
-#: 账本还没跑到 0028 时页面上显示这一句。迁移是单独一步，升级后第一次打开活动页
+#: 账本还没跑到 0028 时页面上显示的那一句的 code。迁移是单独一步，升级后第一次打开活动页
 #: 撞上没有这张表是正常路径，不该是一个 500。
-NO_TABLE = "数据库缺少任务记录表，请按运行文档检查备份后执行 peach migrate upgrade --yes"
+NO_TABLE = "api.tasks.noTaskTable"
 
 
 def q_result_updates(contract, _args):
-    """每个页面常驻的轻量轮询：结果版本、入库通知与有没有任务在排或在跑，不组装任务列表。
+    """每个页面常驻的轻量轮询：结果版本、入库通知与在排或在跑的任务，不组装任务列表。
 
-    全局组件只用这三样，却曾每两秒取一次完整的 `/api/tasks`；任务一多，那份组装就把服务进程
+    全局组件只用这几样，却曾每两秒取一次完整的 `/api/tasks`；任务一多，那份组装就把服务进程
     占满，所有页面一起变慢。完整列表只留给任务中心页。
+
+    `running_tasks` 是全站「有什么任务在跑」的唯一来源：页面据此决定要不要开始盯自己那份
+    任务进度，闲着时不各自轮询。
     """
     try:
-        busy = any(contract.task_runs.query(status=status, limit=1) for status in ACTIVE_STATUSES)
+        running = running_tasks(contract)
     except sqlite3.OperationalError:
-        busy = False
+        running = []
+    busy = bool(running)
     return {"ok": True, "result_versions": _throttled_versions(contract, busy),
-            "ingest_notices": NOTICES.snapshot(), "busy": busy}
+            "ingest_notices": NOTICES.snapshot(), "busy": busy, "running_tasks": running}
+
+
+def running_tasks(contract) -> list[dict]:
+    """在排或在跑的任务，每个 `task_key` 一项 `{task_key, run_id, status}`，按 `task_key` 排。
+
+    有一轮在跑时 `status` 是 `running`，`run_id` 是在跑的最新一轮；只在排队时是 `pending`
+    与最新排进来的那一轮。一轮派出上千条后继也只多几项，一条分组查询取齐。
+    """
+    marks = ",".join(f"'{name}'" for name in ACTIVE_STATUSES)
+    with contract.task_runs.database.read_connection() as connection:
+        rows = connection.execute(
+            f"SELECT task_key, status, MAX(id) FROM task_run WHERE status IN ({marks}) "
+            "GROUP BY task_key, status").fetchall()
+    tasks: dict[str, dict] = {}
+    for task_key, status, run_id in rows:
+        known = tasks.get(task_key)
+        if known is None or (status == "running" and known["status"] != "running"):
+            tasks[task_key] = {"task_key": task_key, "run_id": int(run_id), "status": status}
+    return [tasks[key] for key in sorted(tasks)]
 
 
 #: 有任务在跑时，结果版本最多隔这么久变一次（`_throttled_versions`）。
@@ -76,7 +101,7 @@ def q_tasks(contract, args):
     except sqlite3.OperationalError:
         # 只可能是这张表还不存在——这个函数别的地方不碰库。
         return {"ok": True, "filtered": False, "available": False,
-                "message": NO_TABLE, "running": [], "skipped": [], "finished": [],
+                **message_fields(NO_TABLE), "running": [], "skipped": [], "finished": [],
                 "finished_has_more": False,
                 "statuses": {"active": list(ACTIVE_STATUSES),
                              "finished": list(TERMINAL_STATUSES)}}
@@ -89,14 +114,14 @@ def _tasks(contract, args):
     limit = _limit(args)
     before = _before(args)
     if before is not None and (status or task_key):
-        raise ValueError("before_finished_at／before_id 只用于最近完成那一段，不和 status、task_key 同用")
+        raise UserValueError("api.tasks.cursorWithFilter")
     if status or task_key:
         rows = contract.task_runs.query(status=status, task_key=task_key, limit=limit)
         return {"ok": True, "filtered": True, "available": True,
                 "runs": [payload(row) for row in rows]}
     page = int((args or {}).get('page') or 1)
     if page < 1 or (before is not None and page != 1):
-        raise ValueError('任务页码无效')
+        raise UserValueError('api.tasks.invalidPage')
     total = contract.task_runs.finished_count()
     page = min(page, max(1, (total + limit - 1) // limit))
     finished, has_more = contract.task_runs.finished_page(before=before, limit=limit, offset=(page - 1) * limit)
@@ -154,7 +179,7 @@ def q_task(contract, run_id):
     run = contract.task_runs.get(int(run_id))
     if run is None:
         # KeyError 在 API 层被翻成 404；ValueError 会变成 400，那是参数错，不是这里的事。
-        raise KeyError(f"没有第 {run_id} 轮任务")
+        raise TaskRunMissing("errors.webTasks.runMissing", {"run_id": run_id})
     # 父子两头都给：从后继那一行点进来的人要知道它是哪一轮派出来的，从父任务点进来的
     # 要知道派出去的几条跑成什么样（ADR-0040）。父只给一层，链根在 `root_run_id` 上。
     parent = (contract.task_runs.get(run.parent_run_id)
@@ -227,12 +252,12 @@ def _before(args) -> tuple[str, int] | None:
     if not moment and not raw_id:
         return None
     if not moment or not raw_id:
-        raise ValueError("before_finished_at 与 before_id 要一起给")
+        raise UserValueError("api.tasks.cursorIncomplete")
     # 只核对写法；比较仍用原文，与库里 `stamp()` 写下的文本逐字对齐。
     datetime.fromisoformat(moment.replace("Z", "+00:00"))
     run_id = int(raw_id)
     if run_id < 1:
-        raise ValueError("before_id 必须是正整数")
+        raise UserValueError("api.tasks.cursorIdInvalid")
     return moment, run_id
 
 

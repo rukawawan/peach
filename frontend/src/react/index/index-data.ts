@@ -18,6 +18,7 @@ import {
   type OnlineAuthor, type OnlineTag,
 } from '../follow/online-vocab';
 import { queryClient } from '../query';
+import { t } from '../../i18n';
 
 export type IndexKind = 'performers' | 'creators' | 'studios' | 'agencies' | 'series' | 'tags';
 export type IndexScope = 'local' | 'online';
@@ -28,7 +29,7 @@ export const INDEX_URL = '/api/index';
 
 /** 页头标题与名册口径。 */
 export const INDEX_TITLES: Record<IndexKind, string> = {
-  performers: '艺人', creators: '卖家', studios: '厂牌', agencies: '事务所', series: '系列', tags: '标签',
+  performers: t('catalog:shared.performers'), creators: t('catalog:shared.sellers'), studios: t('catalog:shared.studios'), agencies: t('catalog:shared.agencies'), series: t('catalog:shared.series'), tags: t('catalog:shared.tags'),
 };
 
 /** 索引格对应的实体类型，资料页与取图链都按它分。 */
@@ -38,15 +39,15 @@ export const ENTITY_KINDS: Record<Exclude<IndexKind, 'tags'>, string> = {
 
 /** 本地标签的九类。次序就是浮层上排药丸的次序。 */
 export const TAG_CATEGORIES: readonly (readonly [string, string])[] = [
-  ['all', '全部'], ['meta', '影片属性'], ['relationship', '人物关系'], ['role', '角色设定'],
-  ['appearance', '外貌身材'], ['scene', '情境场所'], ['story', '故事剧情'], ['position', '性交体位'],
-  ['general', '其他内容'],
+  ['all', t('catalog:shared.all')], ['meta', t('catalog:tagCategories.videoProperties')], ['relationship', t('catalog:tagCategories.relationships')], ['role', t('catalog:tagCategories.roles')],
+  ['appearance', t('catalog:tagCategories.appearance')], ['scene', t('catalog:tagCategories.locations')], ['story', t('catalog:tagCategories.story')], ['position', t('catalog:tagCategories.sexPositions')],
+  ['general', t('catalog:tagCategories.other')],
 ];
 
 /** 在线标签的分类来自上游 booru 的 tag_type。 */
 export const ONLINE_TAG_CATEGORIES: readonly (readonly [string, string])[] = [
-  ['all', '全部'], ['general', '通用'], ['artist', '创作者'], ['character', '角色'],
-  ['copyright', '作品'], ['metadata', '元数据'],
+  ['all', t('catalog:shared.all')], ['general', t('catalog:tagCategories.onlineGeneral')], ['artist', t('catalog:tagCategories.onlineCreators')], ['character', t('catalog:tagCategories.onlineCharacters')],
+  ['copyright', t('catalog:shared.video')], ['metadata', t('catalog:tagCategories.onlineMeta')],
 ];
 /** 本地艺人名册的身份分类；卖家名册不分类。词表与壳的骨架共用一份。 */
 export { IDENTITY_CATEGORIES };
@@ -61,6 +62,8 @@ export const isCompany = (kind: IndexKind) => kind === 'studios' || kind === 'ag
 export interface IndexPerson {
   entity_kind?: string;
   identity_labels?: string[];
+  /** 与 `identity_labels` 一一对应的分类 id，按它取译文。 */
+  identity_categories?: string[];
   following?: boolean;
   entity_id?: number;
   id?: number;
@@ -227,7 +230,7 @@ export const flatItems = <T>(data: InfiniteData<IndexPage<T>> | undefined): T[] 
   data ? data.pages.flatMap((page) => page.items) : [];
 
 /** 读数：取到几条，后面还有就带一个加号。 */
-export const countText = (count: number, more: boolean) => `${count.toLocaleString()}${more ? '+' : ''} 项`;
+export const countText = (count: number, more: boolean) => more ? t('catalog:peopleIndex.loadedCountMore', { count }) : t('catalog:peopleIndex.loadedCount', { count });
 
 /** 一枚标签的类型色键（`../styles.css` 的 `[data-tag-cat]`）。在线那一套取上游 tag_type，
  *  加 `r34-` 前缀与本地同名的类分开：本地的 `artist` 是橙色，在线的是红色。 */
@@ -237,7 +240,7 @@ export const tagColorKey = (online: boolean, cat: string | undefined) =>
 /** 格子底下那个读数。事务所数的是人：它名下的视频是成员拍的，只报视频数会让它唯一独有的
  *  读数消失。数字一律带单位，同一排格子才读得出数的是人还是片，单独一个「0」也不像漏了字。 */
 export const personReadout = (kind: IndexKind, item: IndexPerson) =>
-  kind === 'agencies' ? `${(item.members || 0).toLocaleString()} 人` : `${(item.n || 0).toLocaleString()} 个视频`;
+  kind === 'agencies' ? t('catalog:peopleIndex.memberCount', { count: item.members || 0 }) : t('catalog:peopleIndex.videoCount', { count: item.n || 0 });
 
 const COLLATOR = { numeric: true, sensitivity: 'base' } as const;
 
@@ -246,7 +249,7 @@ export function tagGroups<T extends { k: string }>(items: T[], label: (tag: stri
   const groups = new Map<string, T[]>();
   for (const item of [...items].sort((a, b) => a.k.localeCompare(b.k, 'zh-CN', COLLATOR))) {
     const first = firstGrapheme(label(item.k).normalize('NFKC'), '').toUpperCase();
-    const key = /[A-Z]/.test(first) ? first : /[0-9]/.test(first) ? '#' : /[㐀-鿿]/.test(first) ? '中文' : '其他';
+    const key = /[A-Z]/.test(first) ? first : /[0-9]/.test(first) ? '#' : /[㐀-鿿]/.test(first) ? t('catalog:peopleIndex.groupCjk') : t('catalog:peopleIndex.groupOther');
     const group = groups.get(key);
     if (group) group.push(item); else groups.set(key, [item]);
   }

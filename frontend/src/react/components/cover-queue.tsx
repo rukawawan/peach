@@ -5,6 +5,8 @@ import { Button } from '@/components/base/buttons/button';
 import { prioritiseCovers } from '../jav/jav';
 import { Note } from './note';
 import { TaskProgress } from './task-progress';
+import { activityKind } from '../../activity-kinds';
+import { t } from '../../i18n';
 
 /** 空闲是一条带「全部优先处理」的中性提示；跑起来换成一条已知总量的 `TaskProgress`（Geist：任务进度用
  *  Progress，Gauge 留给比率与单次请求的不定档），与「正在读取作品资料」同一种条。离开页面就停在当前这部。 */
@@ -29,11 +31,11 @@ export function CoverQueue({ codes, scope, fetchOne, settled }: {
     setProgress(null);
     settled?.(got, total);
   };
-  if (progress) return <div data-cover-queue="running" className="min-w-0"><TaskProgress value={progress.done} total={progress.total}
-    label={`正在取封面 · ${progress.done} / ${progress.total} 部。离开这一页会停在当前这部，没取的照旧排在后台`} /></div>;
+  if (progress) return <div data-cover-queue="running" className="min-w-0"><TaskProgress kind={activityKind('jav-covers')} value={progress.done} total={progress.total}
+    label={t('shell:coverQueue.progress', { done: progress.done, count: progress.total })} /></div>;
   return <div data-cover-queue="idle" className="min-w-0">
-    <Note tone="neutral" action={<Button size="small" variant="secondary" onClick={() => void run()}>全部优先处理</Button>}>
-      {`${scope} ${codes.length} 部新作的封面还在排队，可以现在一起取，不用等后台的队。`}
+    <Note tone="neutral" action={<Button size="small" variant="secondary" onClick={() => void run()}>{t('shell:coverQueue.prioritizeAll')}</Button>}>
+      {t('shell:coverQueue.waiting', { scope, count: codes.length })}
     </Note>
   </div>;
 }

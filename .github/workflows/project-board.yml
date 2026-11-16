@@ -33,13 +33,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+      # 组织 Project 不接受仓库的 GITHUB_TOKEN；用 Peach Board App 的安装令牌，看板上的操作记在
+      # peach-board[bot] 名下，不记在维护者本人名下。令牌只覆盖应用仓库，作业结束即吊销。
+      - name: 取得看板机器人令牌
+        id: board-token
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ vars.PROJECT_BOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROJECT_BOARD_APP_KEY }}
+          owner: peach-mitao
+          repositories: peach
       - name: 同步 Issue、PR、已发布版本与看板
         env:
-          GH_TOKEN: ${{ secrets.PROJECT_BOARD_TOKEN }}
+          GH_TOKEN: ${{ steps.board-token.outputs.token }}
           PYTHONUTF8: '1'
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo '缺少 PROJECT_BOARD_TOKEN：需要 repo 与 project 权限的项目自动化凭据。' >&2
-            exit 1
-          fi
-          python scripts/project_board.py --apply --event "$GITHUB_EVENT_PATH"
+        run: python scripts/project_board.py --apply --event "$GITHUB_EVENT_PATH"

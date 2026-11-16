@@ -23,8 +23,9 @@ import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Sequence
 
-from . import junk
+from . import interface_text, junk
 from .catalog_rules import duration_clusters, is_jav_code, normalise_code_key
+from .catalog_vocabulary import KEEP_DUPLICATES_NOTE, NOT_JUNK_NOTE
 from .config import GENERATED_DIR, LOCATION_ROOT_DECLARATIONS
 from .field_owners import USER_MANUAL, write_owned_fields
 from .media_sources import SCANNABLE_LOCATIONS
@@ -32,9 +33,11 @@ from .personal_records import ASSET_REFERENCE_TABLES, VANISHED
 from .platform import is_unmapped, root_online, translate_ledger_path, within_root
 from .regions import normalize_region
 from .task_runs import TaskRunHandle
+from .task_stages import batch_progress
 from .web_activity import DEFAULT_PROFILE_ID
 from .web_catalog import attach_card_performers
 from .media_sources import cost_for
+from .user_messages import UserFacingError, UserOSError, UserValueError
 from .web_resource_sync import _managed_cache_root, clean_purged_caches
 from .web_state import WebContract
 
@@ -67,15 +70,6 @@ JUNK_SCORE_TABLES = ("asset", "review_decision", "download_task")
 
 # Linux 容器可从 mountinfo 识别媒体实际所在的 FUSE 文件系统。
 MOUNTINFO_PATH = Path("/proc/self/mountinfo")
-
-#: 批量操作在活动页上的名字。表里存 `operation`，人看的是这一列。
-BATCH_LABELS = {
-    "like": "批量标记喜欢", "seen": "批量标记看过", "later": "批量加入稍后看",
-    "dispose": "批量移入回收站", "restore": "批量还原", "delete": "批量永久删除",
-    "dismiss-junk": "批量确认不是垃圾", "reconsider-junk": "批量重新判定垃圾",
-    "keep-duplicates": "重复组标记都保留", "reconsider-duplicates": "重复组重新列出",
-    "region": "批量判定产地",
-}
 
 #: 重复组「都保留」记在 `review_decision` 的这一类下，键是组员 id 升序连写。组里文件一增一减，
 #: 键就对不上，这组自动回到列表（做法参考 SakuraMedia `608abc0bfb`）。
@@ -164,10 +158,10 @@ def _restore_staged_media(staged):
             if quarantine.name == 'content' and manifest.is_file():
                 record = json.loads(manifest.read_text(encoding='utf-8'))
                 if record['original'] != str(original):
-                    raise ValueError('隔离恢复路径不符')
+                    raise UserValueError('api.batch.quarantinePathMismatch')
                 shutil.copyfile(quarantine, original)
                 if hashlib.sha256(original.read_bytes()).hexdigest() != record['sha256']:
-                    raise ValueError('隔离恢复内容不符')
+                    raise UserValueError('api.batch.quarantineContentMismatch')
                 quarantine.unlink()
                 manifest.unlink()
                 quarantine.parent.rmdir()
@@ -249,7 +243,7 @@ def _quarantine_media(original: Path, *, location: str | None = None) -> Path:
         body = quarantine.read_bytes()
         current = original.stat()
         if len(body) != stat.st_size or (current.st_size, current.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
-            raise OSError('文件在隔离备份期间发生变化')
+            raise UserOSError("errors.webBatch.changedDuringQuarantine")
         record = dict(original=str(original), size=len(body),
                       sha256=hashlib.sha256(body).hexdigest())
         manifest.write_text(json.dumps(record, ensure_ascii=False), encoding='utf-8')
@@ -367,7 +361,7 @@ def _finish_purge(outcome, contract=None):
         try:
             withdraw_purged_rows(candidate_root, ids)
         except (OSError, ValueError, csv.Error):
-            LOGGER.exception("撤下已删除资产的资料候选失败")
+            LOGGER.exception("Failed to withdraw metadata candidates of deleted assets")
     cleanup_pending = []
     for _original, quarantine in outcome.pop("_staged"):
         try:
@@ -407,7 +401,7 @@ def _purge_media_path(row, online_roots: dict[str, tuple[Path, ...]], *,
         return remote
     translated = translate_ledger_path(media)
     if is_unmapped(translated):
-        raise OSError("媒体路径未映射到可访问的挂载目录")
+        raise UserOSError("errors.webBatch.pathUnmapped")
     if PureWindowsPath(str(media)).drive:
         location = row["location"] if "location" in row.keys() else None
         if any(within_root(translated, root) and root_online(root)
@@ -415,7 +409,7 @@ def _purge_media_path(row, online_roots: dict[str, tuple[Path, ...]], *,
             return translated
         if missing_only and not _inside_declared_root(translated) and root_online(Path(translated.anchor)):
             return translated
-        raise OSError("媒体来源未挂载或不可读取")
+        raise UserOSError("errors.webBatch.storageOffline")
     return translated
 
 
@@ -455,6 +449,17 @@ def purge_assets(connection, rows, *, missing_only: bool = False):
     return outcome
 
 
+def _blocked(asset_id, path, error: OSError | None = None, *, code: str | None = None) -> dict:
+    """删不掉的一条：`reason` 是 zh-CN 原文；带 code 的原因另给 `reason_code` 与 `reason_params`，
+    界面按它取译文。系统报的错（权限、占用）只有原文。"""
+    item = {"id": asset_id, "path": path}
+    if code is not None:
+        return {**item, "reason": interface_text.text(f"server:{code}"), "reason_code": code, "reason_params": {}}
+    if isinstance(error, UserFacingError):
+        return {**item, "reason": error.message, "reason_code": error.code, "reason_params": dict(error.params)}
+    return {**item, "reason": error.strerror or str(error)}
+
+
 def stage_purge(rows, *, missing_only: bool = False) -> dict:
     """在写事务外处理媒体文件：核对路径与来源、stat、同目录隔离。
 
@@ -478,8 +483,7 @@ def stage_purge(rows, *, missing_only: bool = False) -> dict:
                     online_roots = _online_source_roots()
                 translated = _purge_media_path(row, online_roots or {}, missing_only=missing_only)
             except OSError as error:
-                blocked.append({"id": row["id"], "path": media,
-                                "reason": error.strerror or str(error)})
+                blocked.append(_blocked(row["id"], media, error))
                 continue
         media_stat = None
         local = _windows_long_path(translated)
@@ -489,12 +493,11 @@ def stage_purge(rows, *, missing_only: bool = False) -> dict:
             except FileNotFoundError:
                 pass
             except OSError as error:
-                blocked.append({"id": row["id"], "path": media,
-                                "reason": error.strerror or str(error)})
+                blocked.append(_blocked(row["id"], media, error))
                 continue
         if media and missing_only:
             if media_stat is not None:
-                blocked.append({"id": row["id"], "path": media, "reason": "文件仍在盘上"})
+                blocked.append(_blocked(row["id"], media, code="labels.webBatch.stillOnDisk"))
                 continue
         staged = None
         if media and not missing_only:
@@ -509,8 +512,7 @@ def stage_purge(rows, *, missing_only: bool = False) -> dict:
                         staged = (original, _quarantine_media(
                             original, location=row['location'] if 'location' in row.keys() else None))
             except OSError as error:
-                blocked.append({"id": row["id"], "path": media,
-                                "reason": error.strerror or str(error)})
+                blocked.append(_blocked(row["id"], media, error))
                 continue
         snapshot = row["snapshot_path"]
         items.append({"id": row["id"], "path": media, "staged": staged,
@@ -562,7 +564,7 @@ def commit_purge(connection, outcome: dict, *, eligible=None) -> None:
             "DELETE FROM review_decision WHERE category='metadata_fields' AND item_key GLOB ?",
             [(f"asset:{asset_id}:*",) for asset_id in purged])
         connection.execute(f"DELETE FROM asset WHERE id IN ({marks})", purged)
-    outcome["blocked"].extend({"id": item["id"], "path": item["path"], "reason": "删除期间这一条已经变了"}
+    outcome["blocked"].extend(_blocked(item["id"], item["path"], code="labels.webBatch.changedDuringDelete")
                               for item in returned)
     outcome.update(
         purged=len(purged), _ids=purged,
@@ -642,11 +644,11 @@ def _write_review_mark(connection, operation, ids, now):
               "status='rejected',note=excluded.note,updated_at=excluded.updated_at")
     remove = "DELETE FROM review_decision WHERE category=? AND item_key=?"
     if operation == "dismiss-junk":
-        connection.executemany(upsert, [("junk_file", str(i), "用户确认不是垃圾", stamp) for i in ids])
+        connection.executemany(upsert, [("junk_file", str(i), NOT_JUNK_NOTE, stamp) for i in ids])
     elif operation == "reconsider-junk":
         connection.executemany(remove, [("junk_file", str(i)) for i in ids])
     elif operation == "keep-duplicates":
-        connection.execute(upsert, (DUPLICATE_KEEP_CATEGORY, duplicate_group_key(ids), "用户确认这组都保留", stamp))
+        connection.execute(upsert, (DUPLICATE_KEEP_CATEGORY, duplicate_group_key(ids), KEEP_DUPLICATES_NOTE, stamp))
     else:
         connection.execute(remove, (DUPLICATE_KEEP_CATEGORY, duplicate_group_key(ids)))
 
@@ -695,7 +697,7 @@ def w_batch(contract: WebContract, body):
     # 删了多少、有没有半路失败」只有这条记录答得出。不声明互斥——两批不同的资产
     # 各改各的，互斥只会把正常的连续操作挡住。
     run = contract.task_runs.start("batch", trigger="manual", total=len(ids),
-                                   label=BATCH_LABELS.get(operation, operation))
+                                   **batch_progress(operation))
     handle = TaskRunHandle(contract.task_runs, run.id if run else None)
     from .task_control import bind, Cancelled
     try:

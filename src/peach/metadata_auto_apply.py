@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from .catalog_vocabulary import PERFORMER_TAG_PREFIX
 from .catalog_rules import (
     code_release_date,
     current_tags,
@@ -63,6 +64,7 @@ from .metadata_routes import classify
 from .review_csv import read_candidates
 from .javdb_identity import current_candidate as current_javdb_candidate
 from .sources import fc2
+from .user_messages import UserValueError
 
 #: 一个写事务里最多落多少条。整批一个事务在本机实测是几千条候选压着写锁不放，
 #: 页面上任何一次写入都得等它跑完；分批之后每段只占一小会儿，被停止时也只丢这一段。
@@ -1148,6 +1150,16 @@ def _leads_chain(field: str, candidate: dict, code: str) -> bool:
     return chain_rank(field, source, code=code)[0] <= CHAIN_OFFICIAL
 
 
+#: 来源写的分辨率说的是官方发行版本，不是手里这份文件（`genre_taxonomy.NON_CONTENT_GENRES`）。
+#: 旧映射写进候选文件的这几个落库时丢掉，文件自己的画质由探测写进 `ctx_quality`。
+SOURCE_RESOLUTION_TAGS = frozenset({"4K", "2K", "2160P", "1080P", "720P", "480P"})
+
+
+def _landing_tags(names) -> list[str]:
+    """候选标签按现在的词表换名（`current_tags`），再去掉来源给的分辨率。"""
+    return [tag for tag in current_tags(names) if tag not in SOURCE_RESOLUTION_TAGS]
+
+
 def _tag_names(candidate: dict) -> list[str]:
     """候选里按现在的词表认得出、落库时会写下的标签名。"""
     names = []
@@ -1156,7 +1168,7 @@ def _tag_names(candidate: dict) -> list[str]:
             names.append(_approved_entity_name(raw, "tag"))
         except ValueError:
             continue
-    return current_tags(names)
+    return _landing_tags(names)
 
 
 def _verified_tags(row: dict, evidence: list[dict], current: str) -> Verification:
@@ -1513,7 +1525,7 @@ def _approved_entity_name(value: object, kind: str) -> str:
     if kind not in {"creator", "performer"}:
         cleaned = collapse_repeated_entity_name(cleaned)
     if not name or not cleaned or cleaned != name:
-        raise ValueError("候选仍含重复或未规范化的实体名，拒绝写入")
+        raise UserValueError("errors.metadataAutoApply.unnormalizedName")
     return cleaned
 
 
@@ -1570,19 +1582,19 @@ def _drop_superseded_links(connection, asset_ids: list[int], field: str, entity_
 def _apply_performer_candidate(connection, asset_ids: list[int], candidate: dict, *,
                                source: str, confidence: float, metadata: dict,
                                now: str) -> None:
-    """把演员候选写成这些资产的 performer 实体与 `演员:` 标签。
+    """把演员候选写成这些资产的 performer 实体与 `performer:` 标签。
 
     演员是 performer 真相，不回写 `asset.creator`；两种身份混写正是重复名称事故的
     来源之一。
     """
     raw_performers = candidate.get("value")
     if not isinstance(raw_performers, list):
-        raise ValueError("演员候选必须是数组")
+        raise UserValueError("errors.metadataAutoApply.performersNotArray")
     performers: list[dict] = []
     seen: set[str] = set()
     for raw in raw_performers:
         if not isinstance(raw, dict):
-            raise ValueError("演员候选条目无效")
+            raise UserValueError("errors.metadataAutoApply.invalidPerformer")
         name = _approved_entity_name(raw.get("name"), "performer")
         normalized = normalize_entity_name(name)
         if normalized in seen:
@@ -1590,7 +1602,7 @@ def _apply_performer_candidate(connection, asset_ids: list[int], candidate: dict
         seen.add(normalized)
         performers.append({**raw, "name": name})
     if not performers:
-        raise ValueError("演员候选为空")
+        raise UserValueError("errors.metadataAutoApply.performersEmpty")
     marks = ",".join("?" * len(asset_ids))
     scraped = ",".join("?" * len(_SCRAPED_ROLE_SOURCES["performer"]))
     connection.execute(
@@ -1610,7 +1622,7 @@ def _apply_performer_candidate(connection, asset_ids: list[int], candidate: dict
             external_id = str(performer.get("external_id") or "").strip()
             connection.execute(
                 "INSERT OR IGNORE INTO asset_tag(asset_id,tag,confidence,source) VALUES(?,?,?,?)",
-                (asset_id, "演员:" + name, confidence, f"javinizer:{source}:performer"),
+                (asset_id, PERFORMER_TAG_PREFIX + name, confidence, f"javinizer:{source}:performer"),
             )
             entity_id = upsert_asset_entity(
                 connection, kind="performer", name=name, asset_id=asset_id,
@@ -1670,7 +1682,7 @@ def _landing_scope(connection, group: dict, candidate: dict,
     共用这一份：范围、并发凭据和番号身份不能只在其中一条路上核。
     """
     if not candidate_text_is_valid(candidate):
-        raise ValueError('来源文字含无法解码的字符，请重新采集资料')
+        raise UserValueError("errors.metadataAutoApply.undecodableText")
     code = str(group.get("code") or "").strip()
     query = str(group.get("query") or code).strip()
     if group.get('asset_path'):
@@ -1681,21 +1693,22 @@ def _landing_scope(connection, group: dict, candidate: dict,
         assets = _codes_matching(connection, [code, query], "id,code")
     asset_ids = sorted({int(row["id"]) for row in assets})
     if not asset_ids:
-        raise ValueError("当前 ledger 已没有匹配的可用资产")
+        raise UserValueError("errors.metadataAutoApply.noMatchingAsset")
     if len(asset_ids) > REVIEW_APPLY_LIMIT:
-        raise ValueError(f"同番号资产 {len(asset_ids)} 条，超过单次批准上限 {REVIEW_APPLY_LIMIT}")
+        raise UserValueError("errors.metadataAutoApply.tooManyAssets",
+                             {"count": len(asset_ids), "limit": REVIEW_APPLY_LIMIT})
     # 乐观并发的凭据在写任何一张表之前验，多值字段那两条分支才同样受它保护。
     check_revision(connection, asset_ids, expected_revision)
     source = str(candidate.get("source") or "").strip()
     candidate_key = str(candidate.get("candidate_key") or "").strip()
     if not re.fullmatch(r"[a-z0-9_-]+", source) or not candidate_key:
-        raise ValueError("字段候选来源无效")
+        raise UserValueError("errors.metadataAutoApply.invalidSource")
     try:
         confidence = float(candidate.get("confidence"))
     except (TypeError, ValueError) as exc:
-        raise ValueError("字段候选置信度无效") from exc
+        raise UserValueError("errors.metadataAutoApply.invalidConfidence") from exc
     if not 0 <= confidence <= 1:
-        raise ValueError("字段候选置信度越界")
+        raise UserValueError("errors.metadataAutoApply.confidenceOutOfRange")
     # 来源返回的必须就是这个番号。抓取时也核验，但那道闸只管「快照落盘之前」，
     # 而候选一旦进了 CSV 就再没人问过身份：2026-09-08 的自动批准读的正是 09-02
     # 落盘的那批，把 356 条错配写进真相字段，`AR-101` 拿的是 `STAR-101`、
@@ -1708,9 +1721,9 @@ def _landing_scope(connection, group: dict, candidate: dict,
         "id": candidate.get("provider_id"), "content_id": candidate.get("content_id"),
         "source_url": candidate.get("source_url"),
     }):
-        raise ValueError(
-            f"来源返回的不是 {code}：id={candidate.get('provider_id')!r} "
-            f"content_id={candidate.get('content_id')!r}")
+        raise UserValueError("errors.metadataAutoApply.codeMismatch", {
+            "code": code, "providerId": repr(candidate.get('provider_id')),
+            "contentId": repr(candidate.get('content_id'))})
     metadata = {
         "provider": candidate.get("provider") or "javinizer-go", "source": source,
         "source_url": candidate.get("source_url"),
@@ -1734,7 +1747,7 @@ def _apply_metadata_candidate(
     if field not in {
         "title", "original_title", "performers", "studio", "series", "release_date", "tags",
     }:
-        raise ValueError("该元数据字段没有 Peach 写入映射")
+        raise UserValueError("errors.metadataAutoApply.unmappedField")
     code = str(group.get("code") or "").strip()
     asset_ids, source, confidence, metadata = _landing_scope(
         connection, group, candidate, expected_revision)
@@ -1742,12 +1755,12 @@ def _apply_metadata_candidate(
 
     if field in {"title", "original_title"}:
         if not _original_title_candidate(field, candidate, code):
-            raise ValueError('r18 标题原文证据未取得，请重新采集资料')
+            raise UserValueError("errors.metadataAutoApply.r18TitleEvidenceMissing")
         raw_value = str(candidate.get("value") or "")
         value = " ".join(raw_value.split())
         if (not value or len(value) > 1000
                 or any(ord(char) < 32 for char in raw_value)):
-            raise ValueError("标题候选为空、过长或含控制字符")
+            raise UserValueError("errors.metadataAutoApply.invalidTitle")
         write_owned_fields(
             connection, asset_ids, {METADATA_FIELD_COLUMNS[field]: value}, owner)
         return len(asset_ids)
@@ -1755,11 +1768,11 @@ def _apply_metadata_candidate(
     if field == "release_date":
         value = str(candidate.get("value") or "").strip()
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-            raise ValueError("发行日期候选必须是 YYYY-MM-DD")
+            raise UserValueError("errors.metadataAutoApply.releaseDateFormat")
         try:
             time.strptime(value, "%Y-%m-%d")
         except ValueError as exc:
-            raise ValueError("发行日期候选无效") from exc
+            raise UserValueError("errors.metadataAutoApply.invalidReleaseDate") from exc
         write_owned_fields(
             connection, asset_ids, {"release_date": value}, owner)
         return len(asset_ids)
@@ -1792,12 +1805,12 @@ def _apply_metadata_candidate(
 
     raw_tags = candidate.get("value")
     if not isinstance(raw_tags, list):
-        raise ValueError("标签候选必须是数组")
+        raise UserValueError("errors.metadataAutoApply.tagsNotArray")
     # 候选文件停在抓取那一刻：那时的映射可能还给过退役名或已撤掉的粗桶，
     # 落库这一步按现在的词表换名或丢掉。
-    tags = current_tags(_approved_entity_name(tag, "tag") for tag in raw_tags)
+    tags = _landing_tags(_approved_entity_name(tag, "tag") for tag in raw_tags)
     if not tags:
-        raise ValueError("标签候选为空")
+        raise UserValueError("errors.metadataAutoApply.tagsEmpty")
     # 整套换掉的时候，并集补进来的那几个（`_extend_approved_tags`）一起清：它们是
     # 上一套候选的一部分，留下来就成了哪一套都不属于的标签。
     connection.execute(
@@ -1850,7 +1863,7 @@ def _extend_approved_tags(connection, row: dict, candidate: dict, batch: str,
     if not isinstance(raw_tags, list):
         return None
     try:
-        written = current_tags(_approved_entity_name(tag, "tag") for tag in raw_tags)
+        written = _landing_tags(_approved_entity_name(tag, "tag") for tag in raw_tags)
         asset_ids, _source, confidence, metadata = _landing_scope(connection, row, candidate)
     except ValueError:
         return None

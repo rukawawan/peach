@@ -8,6 +8,7 @@ import { appSettingsStore } from '@peach/appearance';
 import type { CoverState } from '@peach/card-art';
 import { api } from '@peach/legacy/core';
 
+import { withBackoff } from '../../polling';
 import { queryClient } from '../query';
 
 /** `/api/feeds/discoveries` 的回话：条目与最近一轮取封面断在连接上的部数。 */
@@ -25,6 +26,12 @@ export interface FeedNew {
 
 /** 壳拼的整段 HTML：连不上图片主机时的 Note 与一排卡（`feedNewCardHtml`）。 */
 export type FeedRowHtml = (data: FeedDiscoveries | null, allHref?: string) => string;
+
+/** 有封面还在取时多久重取这一行。一张图取回来要几秒，更密只是重复读到同一份。 */
+export const FEED_COVER_POLL_MS = 5000;
+
+/** 有封面还在取时五秒一次，取完就停；读失败按 4、8、16、30 秒退避。 */
+export const feedNewInterval = withBackoff<FeedNew>((data) => (data?.fetching ? FEED_COVER_POLL_MS : false));
 
 /** 资料页那一行用实体 id，首页那一行不分人。 */
 export const feedNewKey = (entityId: number | null) => ['feed-new', entityId ?? 'home'] as const;
@@ -47,7 +54,7 @@ export const feedNewOptions = (entityId: number | null, rowHtml: FeedRowHtml) =>
   queryKey: feedNewKey(entityId),
   queryFn: () => fetchFeedNew(entityId, rowHtml),
   staleTime: Infinity,
-  refetchInterval: (query: { state: { data?: FeedNew } }) => query.state.data?.fetching ? 2000 : false,
+  refetchInterval: feedNewInterval,
 });
 
 /** 卡上那三颗键（想要、不想看、标为已看过）。都是标记，写失败了卡片照样换样子：这一行下次取数时

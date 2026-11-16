@@ -9,18 +9,19 @@ from pathlib import Path
 
 from .downloads import (
     CLOUDDRIVE_CREDENTIAL, MAX_WAIT_HOURS, PIKPAK_CREDENTIAL, DownloadError,
-    DownloadService, Landing, OfflineProvider, clean_address, normalise_target,
-    submit_offline_download,
+    DownloadService, Landing, OfflineProvider, Problem, clean_address, normalise_target,
+    problem_codes, submit_offline_download,
 )
 from .follow_secrets import CredentialError, CredentialStore
 from .repository import LedgerDatabase
+from .user_messages import UserValueError, message_fields
 
 
 def _values(credentials: CredentialStore, provider: str) -> dict:
     try:
         credential = credentials.load(provider)
     except CredentialError as error:
-        raise DownloadError("config", f"本机凭据文件读不出来，请在设置页重新填写：{error}") from None
+        raise DownloadError("config", "errors.webDownloads.credentialsUnreadable", {"error": str(error)}) from None
     return dict(credential.values) if credential else {}
 
 
@@ -45,7 +46,7 @@ def build_download_service(*, database: LedgerDatabase, state_root: Path,
         if key == "pikpak":
             return PikPakProvider(lambda: _values(credentials, PIKPAK_CREDENTIAL),
                                   persist=lambda values: credentials.save(PIKPAK_CREDENTIAL, values))
-        raise DownloadError("config", f"不认识的云下载渠道：{key}")
+        raise DownloadError("config", "errors.webDownloads.unknownChannel", {"key": key})
 
     service = DownloadService(database=database, state_root=state_root, credentials=credentials,
                               providers=providers, landing=Landing(push_discovery),
@@ -64,7 +65,7 @@ def build_download_service(*, database: LedgerDatabase, state_root: Path,
 def _service(contract) -> DownloadService:
     service = getattr(contract, "downloads", None)
     if service is None:
-        raise ValueError("云下载没有启用")
+        raise UserValueError("api.downloads.disabled")
     return service
 
 
@@ -80,12 +81,12 @@ def q_downloads(contract, args) -> dict:
     try:
         before_id = int(before) if before is not None else None
     except (TypeError, ValueError):
-        raise ValueError("下载任务分页位置无效") from None
+        raise UserValueError("api.downloads.invalidCursor") from None
     if before_id is not None and before_id < 1:
-        raise ValueError("下载任务分页位置无效")
+        raise UserValueError("api.downloads.invalidCursor")
     page = int(args.get('page') or 1)
     if page < 1 or (before_id is not None and page != 1):
-        raise ValueError('下载任务页码无效')
+        raise UserValueError("api.downloads.invalidPage")
     snapshot = _service(contract).snapshot(limit, before_id=before_id, page=page)
     _attach_library_artwork(contract, snapshot["tasks"])
     return snapshot
@@ -115,7 +116,7 @@ def _attach_library_artwork(contract, tasks: list[dict]) -> None:
 
 def w_download_submit(contract, body) -> dict:
     if not isinstance(body, dict):
-        raise ValueError("请求体必须是一个对象")
+        raise UserValueError("api.downloads.bodyNotObject")
     return submit_offline_download(
         _service(contract), magnet=str(body.get("magnet") or ""),
         provider=str(body.get("provider") or ""), target=body.get("target") or None,
@@ -124,14 +125,14 @@ def w_download_submit(contract, body) -> dict:
 
 def w_download_cancel(contract, body) -> dict:
     if not isinstance(body, dict) or not str(body.get("id") or "").isdigit():
-        raise ValueError("缺少任务编号")
+        raise UserValueError("api.downloads.missingTaskId")
     task = _service(contract).cancel(int(body["id"]))
     return {"ok": True, "task": task.payload()}
 
 
 def w_download_postprocess(contract, body) -> dict:
     if not isinstance(body, dict) or not str(body.get("id") or "").isdigit():
-        raise ValueError("缺少任务编号")
+        raise UserValueError("api.downloads.missingTaskId")
     task = _service(contract).retry_postprocess(int(body["id"]))
     return {"ok": True, "task": task.payload()}
 
@@ -148,14 +149,15 @@ def settings_payload(service: DownloadService, declared_roots) -> dict:
         pikpak = account(_values(credentials, PIKPAK_CREDENTIAL))
     except DownloadError:
         pikpak = account(None)
-        problems.append("PikPak 登录信息无法读取，请重新登录。")
+        problems.append(Problem("labels.downloadsChannels.pikpakSignInUnreadable"))
     try:
         token_set = "token" in credentials.describe(CLOUDDRIVE_CREDENTIAL)["fields"]
     except CredentialError:
         token_set = False
-        problems.append("CloudDrive2 令牌无法读取，请重新填写。")
+        problems.append(Problem("labels.downloadsChannels.clouddriveTokenUnreadable"))
     login = _browser_login(service)
     channels = service.channel_snapshot()
+    problems = list(dict.fromkeys((*problems, *channels.get("problems", ()))))
     return {
         "available": service.available,
         "media_sources": [key for key, roots in declared_roots.items() if roots],
@@ -166,7 +168,8 @@ def settings_payload(service: DownloadService, declared_roots) -> dict:
                            **(login.status() if login is not None else {"state": "idle", "message": ""})},
         "pikpak_roots": list(declared_roots.get("pikpak", ())),
         "providers": channels["providers"],
-        "problems": list(dict.fromkeys((*problems, *channels.get("problems", ())))),
+        "problems": problems,
+        "problem_codes": problem_codes(problems),
         "max_wait_hours": MAX_WAIT_HOURS,
     }
 
@@ -179,7 +182,7 @@ def save_settings(service: DownloadService, body: dict, declared_roots) -> dict:
     在报告里给出建议值，其他字段照常保存。没有令牌时 `report` 为 None。
     """
     if not isinstance(body, dict):
-        raise ValueError("设置必须是一个对象")
+        raise UserValueError("api.downloads.settingsNotObject")
     token = str(body.get("token") or "").strip()
     config = service.save_settings(body, declared_roots)
     if token:
@@ -195,7 +198,7 @@ def save_settings(service: DownloadService, body: dict, declared_roots) -> dict:
                 "target": config.targets.get("115", ""), "pikpak_root": config.pikpak_root,
                 "pikpak_account": body.get("pikpak_account") is True})
         except DownloadError as error:
-            report = empty_report(config.clouddrive_address, [error.detail])
+            report = empty_report(config.clouddrive_address, [Problem.of(error)])
         suggested = report.get("suggested_target")
         if not config.targets.get("115") and suggested and suggested.get("exists"):
             filled = config.payload()
@@ -249,7 +252,7 @@ def check_clouddrive(service: DownloadService, body: dict) -> dict:
     try:
         return check(address, token, target, hints=_hints(service, body))
     except DownloadError as error:
-        return empty_report(address, [error.detail])
+        return empty_report(address, [Problem.of(error)])
 
 
 def create_clouddrive_folder(service: DownloadService, body: dict) -> dict:
@@ -260,7 +263,7 @@ def create_clouddrive_folder(service: DownloadService, body: dict) -> dict:
     try:
         return create_folder(address, token, path, hints=_hints(service, body))
     except DownloadError as error:
-        raise ValueError(error.detail) from None
+        raise UserValueError(error.code, error.params) from None
 
 
 def pikpak_login(service: DownloadService, body: dict, declared_roots, *, transport=None) -> dict:
@@ -274,10 +277,10 @@ def pikpak_login(service: DownloadService, body: dict, declared_roots, *, transp
               persist=lambda values: credentials.save(PIKPAK_CREDENTIAL, values),
               transport=transport)
     except CaptchaRequired as error:
-        return {"ok": False, "captcha_url": error.url, "message": error.detail,
+        return {"ok": False, "captcha_url": error.url, **message_fields(error.code, error.params),
                 "settings": settings_payload(service, declared_roots)}
     except DownloadError as error:
-        raise ValueError(error.detail) from None
+        raise UserValueError(error.code, error.params) from None
     service.wake()
     return {"ok": True, "settings": settings_payload(service, declared_roots)}
 
@@ -294,10 +297,10 @@ def _browser_login(service: DownloadService):
 def pikpak_browser_start(service: DownloadService, declared_roots) -> dict:
     """拉起登录窗口，立刻回设置块；页面看 `pikpak_browser.state` 轮询，不在这里等。"""
     if not service.available:
-        raise ValueError("云下载只在允许修改数据库的设备上可用")
+        raise UserValueError("api.downloads.writableDeviceOnly")
     login = _browser_login(service)
     if login is None:
-        raise ValueError("浏览器登录没有启用")
+        raise UserValueError("api.downloads.browserLoginDisabled")
     login.start()
     return settings_payload(service, declared_roots)
 

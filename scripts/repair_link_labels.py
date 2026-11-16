@@ -35,6 +35,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.config import GENERATED_DIR   # noqa: E402
 from peach.entities import agency_key, rejected_agencies   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args, counts_of, open_for_write, verify_after_write,
@@ -45,12 +46,12 @@ FIELDS = ("verdict", "entity_id", "performer", "link_id", "hostname",
           "label", "new_label", "link_kind", "new_link_kind", "agency", "note")
 
 #: 不承诺点过去会见到谁的兜底标签。它没有说错话，所以不算需要修的。
-GENERIC_LABEL = "官方网站"
+GENERIC_LABEL = "official-site"
 
 EXTRA_COUNTS = {
     "official_link": "SELECT count(*) FROM entity_link WHERE link_kind='official'",
     "social_link": "SELECT count(*) FROM entity_link WHERE link_kind='social'",
-    "有事务所的女优": (
+    t("repair_link_labels.performersWithAgency"): (
         "SELECT count(*) FROM entity WHERE kind='performer'"
         " AND json_extract(metadata_json,'$.agency.name') IS NOT NULL"),
 }
@@ -101,14 +102,15 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
         new_kind, new_label = classify(url, agency, owners.get)
         owner = owners.get(owner_key(hostname), "")
         if (new_kind, new_label) == (kind, label):
-            verdict, note = "keep", "标签与域名归属一致"
+            verdict, note = "keep", t("repair_link_labels.labelMatchesOwner")
         elif new_kind != kind:
-            verdict, note = "auto", f"{hostname} 是平台账号，不是 official"
+            verdict, note = "auto", t("repair_link_labels.platformAccount", host=hostname)
         elif owner or rejected:
-            verdict, note = "auto", (f"{hostname} 归 {owner}" if owner else f"「{label}」是已驳回的事务所")
+            verdict, note = "auto", (t("repair_link_labels.ownedBy", host=hostname, owner=owner) if owner
+                                     else t("repair_link_labels.rejectedAgency", label=label))
         else:
             # 归属未知时 classify 会把原标签原样还回来，走不到这里；留着兜底。
-            verdict, note = "review", f"{hostname} 归属未取得"
+            verdict, note = "review", t("repair_link_labels.ownerUnknown", host=hostname)
         rows.append({
             "verdict": verdict, "entity_id": entity_id, "performer": performer,
             "link_id": link_id, "hostname": hostname, "label": label,
@@ -119,7 +121,7 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
         if (row["verdict"] == "keep" and row["agency"]
                 and not owners.get(owner_key(str(row["hostname"])))):
             row["verdict"] = "review"
-            row["note"] = f"{row['hostname']} 归属未取得，标签只有这一条孤证"
+            row["note"] = t("repair_link_labels.singleEvidence", host=row['hostname'])
     rows.sort(key=lambda row: ({"auto": 0, "review": 1, "keep": 2}[str(row["verdict"])],
                                int(row["link_id"])))
     return rows
@@ -158,16 +160,16 @@ def apply_rows(connection: sqlite3.Connection,
         relabelled += 1
         if row["new_link_kind"] != row["link_kind"]:
             moved += 1
-    return {"改了标签": relabelled, "其中归位成 social": moved, "写下事务所": agencies}
+    return {"relabelled": relabelled, "moved_to_social": moved, "agencies": agencies}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=t("repair_link_labels.description"),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     add_ledger_write_args(parser)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "review" / "link-labels.csv",
-                        help="复核 CSV 输出路径")
+                        help=t("repair_link_labels.reviewCsvHelp"))
     return parser
 
 
@@ -180,27 +182,28 @@ def run(args: argparse.Namespace) -> int:
         tally: dict[str, int] = {}
         for row in rows:
             tally[str(row["verdict"])] = tally.get(str(row["verdict"]), 0) + 1
-        print(f"{len(rows)} 条女优官方链接 -> {args.review_csv}")
+        print(t("repair_link_labels.collected", count=len(rows), path=args.review_csv))
         print("  ", tally)
         for row in rows:
             if row["verdict"] == "auto":
-                print(f"    [{row['entity_id']}] {row['performer']}："
-                      f"{row['label']} -> {row['new_label']}（{row['note']}）")
+                print(t("repair_link_labels.autoRow", id=row['entity_id'], performer=row['performer'],
+                        label=row['label'], newLabel=row['new_label'], note=row['note']))
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("repair_link_labels.dryRun"))
             return 0
-        print(f"  已备份到 {args.backup}")
+        print(t("repair_link_labels.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with connection:
             done = apply_rows(connection, rows, stamp)
         after = counts_of(connection, EXTRA_COUNTS)
         _integrity, violations = verify_after_write(connection)
-        print("  结果：", done)
+        print(t("repair_link_labels.result", relabelled=done["relabelled"], moved=done["moved_to_social"],
+                agencies=done["agencies"]))
         for key in before:
-            mark = "" if before[key] == after[key] else "  <-- 变化"
+            mark = "" if before[key] == after[key] else t("repair_link_labels.changedMark")
             print(f"    {key}: {before[key]} -> {after[key]}{mark}")
-        print(f"  foreign_key_check 违规 {violations} 条")
+        print(t("repair_link_labels.foreignKeys", count=violations))
         return 1 if violations else 0
     finally:
         connection.close()

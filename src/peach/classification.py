@@ -4,6 +4,8 @@ import re
 import unicodedata
 from functools import cache
 
+from . import interface_text
+from .content_words import COLLECTION_SUFFIX, DIRECTORY_COUNT_UNITS, DIRECTORY_MONTH
 from .settings_file import PROJECT_ROOT
 
 STRUCTURAL_WORDS_FILE = PROJECT_ROOT / "resources" / "naming" / "structural_directory_words.txt"
@@ -13,10 +15,10 @@ _MAINSTREAM_RELEASE = re.compile(
     r"WEB[ ._-]?(?:DL|Rip)|HDTV|BluRay|AppleTor|\[rartv\]",
     re.IGNORECASE,
 )
-_MONTH = r"(?:\d{4}[年._-]?)?(?:0?[1-9]|1[0-2])月"
+_MONTH = DIRECTORY_MONTH
 _QUALITY = r"(?:[2468]k|\d{3,4}[pi])"
 _SEPARATORS = re.compile(r"[\s_\-.,，、&+·|/\\()（）\[\]【】「」『』《》<>@!！?？~～:：;；'\"]+")
-_FILLER = re.compile(rf"\d+(?:mm|cm|gb|g|tb|v|p|部|集|个)?|{_MONTH}|{_QUALITY}|[a-z]", re.IGNORECASE)
+_FILLER = re.compile(rf"\d+(?:mm|cm|gb|g|tb|v|p|{DIRECTORY_COUNT_UNITS})?|{_MONTH}|{_QUALITY}|[a-z]", re.IGNORECASE)
 _SCRIPT_RUNS = re.compile(r"[a-z0-9]+|[^a-z0-9]+")
 
 
@@ -98,15 +100,7 @@ def is_repost_creator(name: str | None) -> bool:
     return bool(match and match[1].casefold() in REPOST_SITE_LABELS)
 
 
-_COLLECTION_SUFFIX = re.compile(
-    r'(?:\s*(?:4k|6k|8k|2160p|1080p|720p|去重版|整合用|合集|合辑|全集)'
-    r'|\s*(?:20\d{2}[.年_-](?:0?[1-9]|1[0-2])(?:月)?'
-    r'|(?:0?[1-9]|1[0-2])月|20\d{2}年[一二三四五六七八九十]+月'
-    r'|\d{4}\s*[一二三四五六七八九十]+月)'
-    r'|(?:\s+|最新)\d+v(?:\s+\d+(?:\.\d+)?\s*(?:gb|g|tb))?'
-    r'|\s+v\d+(?:\s+\d+(?:\.\d+)?\s*(?:gb|g|tb))?'
-    r'|\s+\d+(?:\.\d+)?\s*(?:gb|tb)'
-    r'|\s*[(（]\d+[)）])$', re.I)
+_COLLECTION_SUFFIX = re.compile(COLLECTION_SUFFIX, re.I)
 
 
 def creator_collection_base(name: str) -> str:
@@ -131,45 +125,53 @@ def _site_release(value: str) -> str:
     return f'{match[1]}-{int(match[2])}' if match else ''
 
 
+def _said(name: str, **params) -> str:
+    """发行标识判据的说明，按 zh-CN 资源渲染（`server:labels.classification.<名字>`）。
+
+    说明写进创作者归属复核 CSV 的 `reason` 列（`metadata_creator_attributions`），那一列只存一句原文。
+    """
+    return interface_text.text(f"server:labels.classification.{name}", params)
+
+
 def creator_release_identifier(creator: str, *, path: str, filename: str, code: str | None) -> tuple[str, str]:
     """审计与摄取共用文件级发行证据；账号形似番号并不足以拒绝身份。"""
     from .catalog_rules import release_code_from_text, is_jav_code, normalise_code_key
-    from .code_creators import SETTLED_VERDICTS, classify as classify_code
+    from .code_creators import SETTLED_VERDICTS, VERDICT_UNCLEAR, classify as classify_code
     from .sources.dmm import matching_cids
     verdict, _, reason = classify_code(creator,[dict(path=path,name=filename,code=code)])
     if verdict in SETTLED_VERDICTS:
-        return 'release_identifier', f'{reason}；只移除创作者投影，番号不改写'
+        return 'release_identifier', _said('settledCode', reason=reason)
     site = _site_release(creator)
     site_path = any(_site_release(part) == site for part in re.split(r'[\\/]',path)) if site else False
     numbered_file = re.match(r'^(\d{3,6})[-_]',filename)
     if site and (site == _site_release(filename) or
                  (site_path and numbered_file and int(numbered_file[1]) == int(site.split('-')[1]))):
-        return 'release_identifier', f'目录与媒体文件同为站点作品号 {site}；官网目录 {SITE_RELEASES[site.split("-")[0]]}'
+        return 'release_identifier', _said('siteRelease', site=site, catalog=SITE_RELEASES[site.split('-')[0]])
     versionless = re.sub(r'[-_](?:[468]k|hd)(?:[-_](?:c|ch))?$', '', creator, flags=re.I)
     identity = release_code_from_text(versionless)
     if (versionless != creator and identity and is_jav_code(identity)
             and normalise_code_key(versionless) == normalise_code_key(identity)
             and creator.casefold() in [part.casefold() for part in re.split(r'[\\/]', path)]):
-        return 'release_identifier', f'目录名是发行标识 {identity} 与画质版本后缀；不作为账号，也不推断目录内文件的番号'
+        return 'release_identifier', _said('versionedDirectory', identity=identity)
     ppv = re.fullmatch(r'gachincoppv[-_](\d{3,6})[-_](?:hd|fhd|[468]k)', creator, re.I)
     if ppv and re.fullmatch(re.escape(creator) + r'(?:[-_]?\d+)?\.[a-z0-9]+', filename, re.I):
-        return 'release_identifier', '目录与分段文件使用 Gachinco PPV 作品号及画质后缀；不作为账号'
+        return 'release_identifier', _said('gachincoPpv')
     if identity and is_jav_code(identity) and re.search(
             r'(?<![a-z0-9])' + re.escape(versionless) + r'(?:[-_](?:[468]k|hd)\d?(?:[-_]c)?)?\.[a-z0-9]+$',filename,re.I):
-        return 'release_identifier', f'目录与媒体文件的发行标识 {identity} 一致；画质与版本后缀不作为账号'
+        return 'release_identifier', _said('matchingIdentity', identity=identity)
     product = re.fullmatch(r'([a-z]{2,8})(\d{5})(?:hhb|mhb|dmb|dm|hq|sd|hd|pl)',creator,re.I)
     if product and re.fullmatch(re.escape(product[1]+product[2])+r'(?:\.part\d+)?\.[a-z0-9]+',filename,re.I):
         identity = normalise_code_key(product[1]+'-'+product[2])
         if is_jav_code(identity):
-            return 'release_identifier', f'目录商品标识与媒体文件 {product[1]+product[2]} 一致；番号不改写'
+            return 'release_identifier', _said('matchingProduct', product=product[1] + product[2])
     identifier = release_code_from_text(re.sub(r'_\d{3}$', '', creator))
     cid = re.sub(r'_\d{3}$', '', re.sub(r'\.[^.]+$', '', filename))
     if identifier and re.fullmatch(r'[a-z]+\d{5}(?:hhb|mhb|dmb|dm|hq|sd|hd|pl)',cid,re.I) and matching_cids(identifier,[cid]):
-        return 'release_identifier', f'目录番号 {identifier} 与文件 DMM 商品标识一致；番号不改写'
-    return ('identifier_candidate',reason) if verdict == '存疑' else ('','')
+        return 'release_identifier', _said('matchingDmmProduct', identifier=identifier)
+    return ('identifier_candidate',reason) if verdict == VERDICT_UNCLEAR else ('','')
 
 
-_JP_NAME = r'[぀-ヿ一-鿿々ー・]{2,10}'
+_JP_NAME = r'[\u3040-\u30ff\u4e00-\u9fff々ー・]{2,10}'
 _ROMAN_NAME = r'[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}'
 _CAMEL_NAME = r'[A-Z][a-z]+[A-Z][a-z]+'
 #: `こすっち238 宇流木さら`：固定前缀紧跟编号，后面只有一个人名。

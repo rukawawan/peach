@@ -7,11 +7,13 @@ from collections import defaultdict
 from pathlib import Path
 
 from .taste_evidence import era, length_band, preference_evidence
+from .taste_history import taste_phrase, taste_text
 
+#: 各维度的权重；维度的显示名在 `taste.dimension.<维度>`。
 WEIGHTS = {"performer": .4, "creator": .4, "tag": .34, "studio": .12, "series": .08,
            "era": .03, "length": .03}
-LABELS = {"performer": "出演者偏好", "creator": "创作者偏好", "tag": "标签偏好",
-          "studio": "厂牌偏好", "series": "系列偏好", "era": "发行年代偏好", "length": "时长偏好"}
+#: 一条推荐理由：「维度：命中的名字（证据来源）」。
+REASON_CODE = "taste.reason.line"
 _PROFILES = {}
 _POLICY_FINGERPRINT = None
 PROFILE_TABLES = ('asset', 'asset_entity', 'asset_preference', 'entity', 'entity_alias',
@@ -77,11 +79,15 @@ def preference_profile(connection, store, *, cache=True):
 
 
 def preference_score(row, strengths, names, evidence):
-    """按候选特征匹配偏好；未知资料不加分，人物与账号只计一个身份维度。"""
+    """按候选特征匹配偏好；未知资料不加分，人物与账号只计一个身份维度。
+
+    返回分数与按 zh-CN 渲染好的理由；同时把每条理由的 code 与参数写进 `row` 的 `reason_codes`、
+    `reason_params`（与理由一一对应），推荐结果带着它们下发，前端按界面语言重排。
+    """
     denominator = sum(WEIGHTS[kind] for kind, values in strengths.items() if values and kind not in {"performer", "creator"})
     denominator += .4 if strengths.get("performer") or strengths.get("creator") else 0
     total = people_score = 0.0
-    reasons = []
+    reasons, reason_params = [], []
     for kind, values in strengths.items():
         features = row.get("entities", {}).get(kind, set())
         if kind == "era":
@@ -97,9 +103,16 @@ def preference_score(row, strengths, names, evidence):
             people_score = max(people_score, .4 * strength)
         else:
             total += WEIGHTS[kind] * strength
-        sources = sorted({source for eid in matches for source in evidence[kind][eid]})
-        labels = sorted(str(names[kind].get(eid, eid)) for eid in matches)
+        # 证据来源是 id，按显示名排序，与改成 code 之前的先后一致。
+        sources = sorted((taste_phrase(f"taste.evidence.{source}", fallback=source) for source in
+                          {source for eid in matches for source in evidence[kind][eid]}),
+                         key=lambda phrase: phrase["text"])
+        labels = sorted(str(names[kind].get(eid, eid)) for eid in matches)[:3]
         if kind in {"era", "length"}:
-            labels = ["与你的馆藏和观看分布接近"]
-        reasons.append(f"{LABELS[kind]}：{'、'.join(labels[:3])}（{'、'.join(sources)}）")
+            labels = [taste_phrase("taste.reason.nearDistribution")]
+        params = {"dimension": taste_phrase(f"taste.dimension.{kind}"), "names": labels, "sources": sources}
+        reasons.append(taste_text(REASON_CODE, params))
+        reason_params.append(params)
+    row["reason_codes"] = [REASON_CODE] * len(reasons)
+    row["reason_params"] = reason_params
     return round((total + people_score) / denominator, 4) if denominator else 0.0, reasons

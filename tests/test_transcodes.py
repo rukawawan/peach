@@ -69,7 +69,7 @@ class TranscodeServiceTests(unittest.TestCase):
             source = root / 'movie.mkv'
             source.write_bytes(b'original')
             service = TranscodeService(_Resolver(root / 'ffmpeg.exe'), root / 'cache')
-            service.capacity_guard = SimpleNamespace(check=lambda **kwargs: (_ for _ in ()).throw(DiskSpaceDenied('capacity')))
+            service.capacity_guard = SimpleNamespace(check=lambda **kwargs: (_ for _ in ()).throw(DiskSpaceDenied('errors.storageBudget.cacheWritesStopped', {'reasons': '缓存超限'})))
             with patch('peach.transcodes.subprocess.Popen') as process:
                 with self.assertRaises(TranscodeCapacityDenied):
                     service.browser_path(1, source)

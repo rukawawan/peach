@@ -64,7 +64,7 @@ def cost_sql(location_column: str = "location", path_column: str = "path", *, co
     """返回求值为 free/metered 的参数化 CASE；NULL/空路径使用来源聚合值。"""
     for column in (location_column, path_column):
         if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?", column, flags=re.ASCII):
-            raise ValueError("成本查询列名不正确")
+            raise ValueError("invalid column name for cost query")
     config = _config(config)
     clauses, parameters = [], []
     for location in getattr(config, "locations", {}):

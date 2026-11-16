@@ -18,7 +18,7 @@ class _CurlStream(httpx.SyncByteStream):
         try:
             yield from self.response.iter_content()
         except CurlError as error:
-            raise OSError('预览传输中断') from error
+            raise OSError('preview transfer interrupted') from error
 
     def close(self):
         try:
@@ -41,7 +41,7 @@ class _CurlClient:
             response = self.session.request(request.method, str(request.url), headers=dict(request.headers),
                 stream=stream, allow_redirects=follow_redirects, accept_encoding=None, timeout=20)
         except CurlError as error:
-            raise OSError('预览连接未取得') from error
+            raise OSError('preview connection failed') from error
         return httpx.Response(response.status_code, headers=dict(response.headers),
                               stream=_CurlStream(response), request=request)
 

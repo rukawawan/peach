@@ -15,6 +15,10 @@ import tempfile
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
+
 from .release_r2 import rclone_environment, require_capacity
 
 GROUPS = {
@@ -42,7 +46,7 @@ def identity() -> dict:
             or not re.fullmatch(r"[0-9a-f]{40}", result["commit"])
             or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", result["tag"])
             or os.environ.get("CI_COMMIT_REF_PROTECTED") != "true"):
-        raise ValueError("R2 暂存仅允许受保护版本标签与明确的项目、流水线和提交")
+        raise ValueError(t("ci_r2_artifacts.protectedTagOnly"))
     return result
 
 
@@ -50,7 +54,7 @@ def prefix(build: dict, group: str | None = None, producer_job: str | None = Non
     value = f"_ci/{build['project']}/{build['pipeline']}/{build['commit']}"
     if group is not None:
         if group not in GROUPS or not isinstance(producer_job, str) or not re.fullmatch(r"[1-9][0-9]*", producer_job):
-            raise ValueError("产物暂存需要明确的生成作业 ID")
+            raise ValueError(t("ci_r2_artifacts.jobIdRequired"))
         return value + "/" + group + "/" + producer_job
     return value
 
@@ -77,10 +81,10 @@ def allowed_path(name: str, group: str) -> bool:
 
 def local_path(root: Path, name: str, group: str) -> Path:
     if not allowed_path(name, group):
-        raise ValueError("产物路径不属于本任务输出目录")
+        raise ValueError(t("ci_r2_artifacts.pathOutsideOutput"))
     path = root / name
     if not path.resolve().is_relative_to(root) or any(parent.is_symlink() for parent in (path, *path.parents) if parent != root and parent.is_relative_to(root)):
-        raise ValueError("产物路径包含软链接或越出工作目录")
+        raise ValueError(t("ci_r2_artifacts.pathUnsafe"))
     return path
 
 
@@ -93,7 +97,7 @@ def rclone_executable(root: Path) -> str:
     suffix = ".exe" if os.name == "nt" else ""
     path = root / "build/release-tools" / ("rclone" + suffix)
     if not path.is_file() or path.is_symlink():
-        raise ValueError("CI 中转仅使用项目内已核对官方 SHA-256 的 rclone")
+        raise ValueError(t("ci_r2_artifacts.rcloneUnverified"))
     return str(path)
 
 
@@ -102,7 +106,7 @@ def inventory(root: Path, group: str) -> list[dict]:
     for base in GROUPS[group]:
         source = root / base
         if not source.exists():
-            raise ValueError(f"缺少构建产物目录或文件：{base}")
+            raise ValueError(t("ci_r2_artifacts.missingBuildOutput", path=base))
         paths.extend(source.rglob("*") if source.is_dir() else [source])
     items = []
     for path in sorted(paths):
@@ -110,13 +114,13 @@ def inventory(root: Path, group: str) -> list[dict]:
         if group == "macos-release" and not allowed_path(name, group):
             continue
         if path.is_symlink():
-            raise ValueError("CI 产物不允许软链接")
+            raise ValueError(t("ci_r2_artifacts.noSymlinks"))
         if not path.is_file():
             continue
         local_path(root, name, group)
         items.append({"path": name, "size": path.stat().st_size, "sha256": checksum(path)})
     if not items or len({item["path"].casefold() for item in items}) != len(items):
-        raise ValueError("产物清单为空或包含跨平台同名文件")
+        raise ValueError(t("ci_r2_artifacts.manifestEmptyOrClash"))
     if group == "macos-release":
         build = identity()
         for arch in ("arm64", "x86_64"):
@@ -127,7 +131,7 @@ def inventory(root: Path, group: str) -> list[dict]:
             present = {PurePosixPath(item["path"]).name for item in items
                        if item["path"].startswith(f"dist/macos.noindex/{arch}/")}
             if present != listed | {"build-info.json", "SHA256SUMS.txt"}:
-                raise ValueError("每种 macOS 架构须包含 DMG、两份对应源码、构建身份与 SHA-256 清单")
+                raise ValueError(t("ci_r2_artifacts.macosIncomplete"))
             info = json.loads((folder / "build-info.json").read_text(encoding="utf-8"))
             sums = {}
             for line in (folder / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
@@ -137,31 +141,31 @@ def inventory(root: Path, group: str) -> list[dict]:
                     or info.get("architecture") != arch or info.get("dirty") is not False
                     or set(sums) != listed
                     or any(sums[name] != checksum(folder / name) for name in listed)):
-                raise ValueError("macOS 构建身份或镜像 SHA-256 不符")
+                raise ValueError(t("ci_r2_artifacts.macosMismatch"))
     return items
 
 
 def validate_manifest(manifest: dict, group: str, build: dict) -> list[dict]:
     if manifest.get("format") != 1 or manifest.get("identity") != build or manifest.get("group") != group:
-        raise ValueError("产物清单不属于当前版本、提交或流水线")
+        raise ValueError(t("ci_r2_artifacts.manifestNotCurrent"))
     prefix(build, group, manifest.get("producer_job"))
     items = manifest.get("files")
     if not isinstance(items, list) or not items:
-        raise ValueError("产物清单缺少文件")
+        raise ValueError(t("ci_r2_artifacts.manifestMissingFiles"))
     names = set()
     for item in items:
         name = item.get("path", "")
         if (not allowed_path(name, group) or name.casefold() in names
                 or type(item.get("size")) is not int or item["size"] < 0
                 or not re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))):
-            raise ValueError("产物清单的路径、大小或 SHA-256 无效")
+            raise ValueError(t("ci_r2_artifacts.manifestInvalidEntry"))
         names.add(name.casefold())
     return items
 
 
 def checkpoint(build: dict, group: str) -> str:
     if group not in GROUPS:
-        raise ValueError("未知的产物组")
+        raise ValueError(t("ci_r2_artifacts.unknownGroup"))
     return prefix(build) + "/completed/" + group + ".json"
 
 
@@ -170,13 +174,13 @@ def upload_backup(root: Path, build: dict, group: str) -> Path | None:
     if not value:
         return None
     if group not in GROUPS or any(not re.fullmatch(r"[1-9][0-9]*", build[key]) for key in ("project", "pipeline")):
-        raise ValueError("无效的构建续传身份")
+        raise ValueError(t("ci_r2_artifacts.invalidResumeIdentity"))
     base = Path(value).resolve() / ".peach-upload-resume"
     path = base / build["project"] / build["pipeline"] / build["commit"] / group
     if not path.resolve().is_relative_to(base.resolve()) or path.resolve().is_relative_to(root.resolve()):
-        raise ValueError("续传目录必须位于 CI 构建根的独立命名空间")
+        raise ValueError(t("ci_r2_artifacts.resumeOutsideNamespace"))
     if path.is_symlink() or any(parent.is_symlink() for parent in path.parents if parent.is_relative_to(base)):
-        raise ValueError("续传目录不能包含软链接")
+        raise ValueError(t("ci_r2_artifacts.resumeSymlinks"))
     return path
 
 
@@ -205,7 +209,7 @@ def discard_upload(root: Path, build: dict, group: str) -> None:
 def remote_json(root: Path, key: str, payload: dict | None = None) -> dict | None:
     """只在受保护 CI 的暂存命名空间读取或登记完整对象；网络失败不当作不存在。"""
     if not re.fullmatch(r"_ci/[1-9][0-9]*/[1-9][0-9]*/[0-9a-f]{40}/(?:completed/[a-z-]+|release-candidate)\.json", key):
-        raise ValueError("无效的 CI 元数据路径")
+        raise ValueError(t("ci_r2_artifacts.invalidMetadataPath"))
     environment = rclone_environment()
     executable = rclone_executable(root.resolve(strict=True))
     bucket = f"peach:{environment['PEACH_R2_BUCKET']}"
@@ -248,7 +252,7 @@ def restore(root: Path, group: str) -> dict:
             for item in items:
                 path = local_path(backup, item["path"], group)
                 if not path.is_file() or path.stat().st_size != item["size"] or checksum(path) != item["sha256"]:
-                    raise ValueError("本机续传文件的大小或 SHA-256 不符")
+                    raise ValueError(t("ci_r2_artifacts.resumeFileMismatch"))
             for item in items:
                 target = local_path(root, item["path"], group)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -264,7 +268,7 @@ def transfer(root: Path, group: str, mode: str, *, source: dict | None = None) -
     current = identity()
     build = current if source is None else source
     if source is not None and (mode != "pull" or any(build[key] != current[key] for key in ("project", "commit", "tag"))):
-        raise ValueError("晋级产物必须属于同一项目、版本与提交")
+        raise ValueError(t("ci_r2_artifacts.promotionMismatch"))
     environment = rclone_environment()
     executable = rclone_executable(root)
     manifest_path = root / "build/ci-artifacts" / (group + ".json")
@@ -296,7 +300,7 @@ def transfer(root: Path, group: str, mode: str, *, source: dict | None = None) -
             actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8").strip()
             dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True, encoding="utf-8").strip()
             if actual != build["commit"] or dirty:
-                raise ValueError("暂存需要当前提交的干净构建目录")
+                raise ValueError(t("ci_r2_artifacts.cleanBuildRequired"))
             items = inventory(root, group)
             manifest = {"format": 1, "identity": build, "group": group, "producer_job": producer_job, "files": items}
             preserve_upload(root, manifest)
@@ -319,7 +323,7 @@ def transfer(root: Path, group: str, mode: str, *, source: dict | None = None) -
             for item in items:
                 source = temporary / "download" / item["path"]
                 if not source.is_file() or source.stat().st_size != item["size"] or checksum(source) != item["sha256"]:
-                    raise ValueError(f"R2 暂存产物的大小或 SHA-256 不符：{item['path']}")
+                    raise ValueError(t("ci_r2_artifacts.stagedMismatch", path=item['path']))
             for item in items:
                 target = local_path(root, item["path"], group)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -332,7 +336,7 @@ def cleanup(root: Path, *, source: dict | None = None) -> dict:
     current = identity()
     build = current if source is None else source
     if source is not None and any(build[key] != current[key] for key in ("project", "commit", "tag")):
-        raise ValueError("回收范围必须属于同一项目、版本与提交")
+        raise ValueError(t("ci_r2_artifacts.cleanupMismatch"))
     rehearsal = os.environ.get("PEACH_RELEASE_REHEARSAL") == "1" and not os.environ.get("CI_COMMIT_TAG")
     environment = rclone_environment()
     executable = rclone_executable(root.resolve(strict=True))
@@ -346,18 +350,18 @@ def cleanup(root: Path, *, source: dict | None = None) -> dict:
                 env=environment, text=True, encoding="utf-8"))
             if not any(item.get("tag_name") == build["tag"] and item.get("commit_sha") == build["commit"]
                        for item in index):
-                raise ValueError("公开版本索引尚未登记当前提交，保留暂存产物")
+                raise ValueError(t("ci_r2_artifacts.indexNotUpdated"))
         subprocess.run([executable, "purge", remote, "--config", str(configuration)], env=environment, check=True)
     return {"cleaned_pipeline": build["pipeline"], "commit": build["commit"]}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("ci_r2_artifacts.description"))
     parser.add_argument("mode", choices=("push", "pull", "restore", "cleanup"))
     parser.add_argument("group", nargs="?", choices=tuple(GROUPS))
     args = parser.parse_args()
     if args.mode != "cleanup" and not args.group:
-        parser.error("上传和下载须指定产物组")
+        parser.error(t("ci_r2_artifacts.groupRequired"))
     result = (cleanup(Path.cwd()) if args.mode == "cleanup" else restore(Path.cwd(), args.group)
               if args.mode == "restore" else transfer(Path.cwd(), args.group, args.mode))
     print(json.dumps(result, ensure_ascii=False))

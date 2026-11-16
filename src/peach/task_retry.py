@@ -10,23 +10,29 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+from .user_messages import UserFacingError
+
 RETRY_DELAYS = (60.0, 300.0, 1800.0)
 TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
-class RetryableTaskError(RuntimeError):
+#: 转述别处已经写好的一句话（采集状态里的报错、下载渠道的原因）时用的 code，模板只有 `{{message}}`。
+RELAYED = "errors.taskRetry.relayed"
+
+
+class RetryableTaskError(UserFacingError, RuntimeError):
     """底层已经确认属于暂时故障，保留来源要求的最早重试间隔。"""
 
-    def __init__(self, message: str, *, after: float = 0):
-        super().__init__(message)
+    def __init__(self, code: str, params=None, *, after: float = 0):
+        super().__init__(code, params)
         self.after = after
 
 
-class RetryableIOError(OSError):
+class RetryableIOError(UserFacingError, OSError):
     """文件服务已确认的暂时故障，仍沿用整理器的 OSError 契约。"""
 
-    def __init__(self, message: str, *, after: float = 0):
-        super().__init__(message)
+    def __init__(self, code: str, params=None, *, after: float = 0):
+        super().__init__(code, params)
         self.after = after
 
 

@@ -24,6 +24,7 @@ import { REVIEW_DECISION_LABELS } from './review';
 import {
   canApprove, ENTITY_REVIEW_KINDS, rowEvidence, rowFieldName, rowSubject, rowTags, rowTitle,
 } from './review';
+import { t } from '../../i18n';
 
 /* 卡面与管理页同层；来源选择是卡内唯一带单选边框的表单。 */
 const CARD = cardClass({
@@ -100,7 +101,7 @@ export function ReviewCard(props: ReviewCardProps) {
         ))}
         {comparison.length > COMPARISON_SHOWN
           ? <p className="text-body-2-regular text-text-secondary">
-              {`另有 ${(comparison.length - COMPARISON_SHOWN).toLocaleString()} 部对照作品`}
+              {t('manage:reviewCard.moreComparison', { count: comparison.length - COMPARISON_SHOWN })}
             </p>
           : null}
       </div>
@@ -128,8 +129,8 @@ export function ReviewCard(props: ReviewCardProps) {
         ? <AssetPicker assets={assets} picked={choice.assets} locked={locked}
             onPicked={(next) => onChoice({ ...choice, assets: next })} />
         /* 空白一片会被当成界面坏了。真实原因是这些作品还没抽帧，说清楚比留白好。 */
-        : <EmptyState size="compact" icon={RiImageLine} title="这批作品尚未抽帧">
-            {`${row.video_count || ''} 条作品还没有可用预览；批准后仍会按所选资料写入标签。`}
+        : <EmptyState size="compact" icon={RiImageLine} title={t('manage:reviewCard.noFramesTitle')}>
+            {row.video_count ? t('manage:reviewCard.noFramesBody', { count: row.video_count }) : t('manage:reviewCard.noFramesBodyUncounted')}
           </EmptyState>)
       : category === 'fc2_similarity'
         ? null
@@ -162,7 +163,7 @@ export function ReviewCard(props: ReviewCardProps) {
           <span className={cx(HEADING_LINE, 'shrink-0')}
             onPointerDownCapture={(event) => { range.current = event.shiftKey }}
             onKeyDownCapture={(event) => { range.current = event.shiftKey }}>
-            <Checkbox isSelected={selected} aria-label={`选择 ${title}`}
+            <Checkbox isSelected={selected} aria-label={t('manage:reviewCard.selectItem', { title })}
               onChange={(on) => onSelect(range.current, on)} />
           </span>
         )}
@@ -177,48 +178,48 @@ export function ReviewCard(props: ReviewCardProps) {
         <div ref={body} className="flex min-w-0 min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-4">
           {/* 数据库规范名当标题，抓取来源给的写法（多为罗马音）留作副标题。 */}
           {row.source_name
-            ? <p className="text-body-2-regular text-text-secondary">{`来源写法：${row.source_name}`}</p>
+            ? <p className="text-body-2-regular text-text-secondary">{t('manage:reviewCard.sourceSpelling', { name: row.source_name })}</p>
             : null}
           {/* 实体类卡片的作品数已经写在创作者入口里，这里再写一遍就是同一个数字两处。 */}
           {!asEntity && (row.board || row.assets)
             ? <p className="text-body-2-regular text-text-secondary">
-                {`对照文件：${Number(row.video_count || row.assets || 0).toLocaleString()}`}
+                {t('manage:reviewCard.comparisonFiles', { count: Number(row.video_count || row.assets || 0) })}
               </p>
             : null}
           {!asEntity && origin ? origin : null}
-          {metadata && (evidence || row.current_value !== undefined) ? <div role="region" aria-label="当前信息"
+          {metadata && (evidence || row.current_value !== undefined) ? <div role="region" aria-label={t('manage:reviewCard.currentInfo')}
             className="flex min-w-0 flex-col gap-1 border-b border-separator-border pb-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h5 data-copy-key="review.card.current_value" className="text-caption-1-medium text-text-secondary">当前值</h5>
+              <h5 data-copy-key="review.card.current_value" className="text-caption-1-medium text-text-secondary">{t('manage:reviewCard.currentValue')}</h5>
               {row.current_owner?.startsWith('user:') || row.current_owner?.startsWith('review:')
-                ? <Chip variant="caption" color="neutral">人工确认</Chip> : null}
+                ? <Chip variant="caption" color="neutral">{t('manage:reviewCard.manuallyConfirmed')}</Chip> : null}
             </div>
             <p className="text-body-2-regular text-text-primary wrap-anywhere">
               {row.current_value === undefined ? evidence : row.current_value
                 ? <ComparisonText value={row.current_value}
                     reference={(row.candidates?.find(candidate => candidate.candidate_key === choice.candidateKey)
                       || row.candidates?.[0])?.display_value} />
-                : '尚无资料'}
+                : t('manage:reviewCard.noMetadata')}
             </p>
             {row.videos !== undefined ? <p className="text-caption-1-regular text-text-secondary">
-              {`${Number(row.videos).toLocaleString()} 个${row.asset_path ? '匹配文件' : '同番号文件'}`}
+              {t(row.asset_path ? 'manage:reviewCard.matchingFiles' : 'manage:reviewCard.sameCodeFiles', { count: Number(row.videos) })}
             </p> : null}
           </div> : null}
           {tags.length || category === 'creator_tags' ? (
             <div className="flex flex-wrap gap-1">
               {tags.length
                 ? tags.map((tag) => <Chip key={tag} variant="caption" color="soft">{tag}</Chip>)
-                : <small className="text-body-2-regular text-text-secondary">暂无待确认标签</small>}
+                : <small className="text-body-2-regular text-text-secondary">{t('manage:reviewCard.noPendingTags')}</small>}
             </div>
           ) : null}
           {metadata ? <div className="flex flex-wrap items-center justify-between gap-2">
             <h5 className="text-caption-1-medium text-text-secondary">
-              <span data-copy-key="review.card.candidate_sources">候选来源</span>{` · ${row.candidates?.length || 0}`}
+              <span data-copy-key="review.card.candidate_sources">{t('manage:reviewCard.candidateSources')}</span>{` · ${row.candidates?.length || 0}`}
             </h5>
             {row.current_value || (row.candidates?.length || 0) > 1 ? <span
               data-copy-key={row.current_value ? 'review.card.compare_current' : 'review.card.compare_sources'}
               className="text-caption-1-regular text-text-tertiary">
-              {row.current_value ? '与当前值比较' : '来源间差异'}
+              {row.current_value ? t('manage:reviewCard.comparedToCurrent') : t('manage:reviewCard.sourceDifferences')}
             </span> : null}
           </div> : null}
           {preview}
@@ -231,15 +232,15 @@ export function ReviewCard(props: ReviewCardProps) {
 
       <footer className={cx(FIELDSET_FOOT.stack, 'shrink-0')}>
         {queueView !== 'ignored' ? <LinkButton variant="secondary" size="small" className="me-auto" disabled={locked} {...busyProps(busy)}
-          onClick={() => onDecide('rejected')}>忽略</LinkButton> : null}
+          onClick={() => onDecide('rejected')}>{t('manage:shared.ignore')}</LinkButton> : null}
         {queueView === 'pending' ? <Button variant="secondary" size="small" disabled={locked} {...busyProps(busy)}
-          onClick={() => onDecide('skipped')}>稍后处理</Button> : <Button
+          onClick={() => onDecide('skipped')}>{t('manage:reviewDecision.later')}</Button> : <Button
           variant={queueView === 'ignored' ? 'primary' : 'secondary'} size="small" disabled={locked} {...busyProps(busy)}
-          onClick={() => onDecide('restore')}>恢复待处理</Button>}
+          onClick={() => onDecide('restore')}>{t('manage:reviewDecision.moveToPending')}</Button>}
         {queueView !== 'ignored' ? <Button variant="primary" size="small" disabled={locked || !approvable} {...busyProps(busy)}
-          title={approvable ? undefined : '没有可采用的资料，可先保留或忽略'}
+          title={approvable ? undefined : t('manage:reviewCard.cannotApproveHint')}
           onClick={() => onDecide('approved')}>
-          {approvable ? '通过' : '不可通过'}
+          {approvable ? t('manage:reviewDecision.approve') : t('manage:reviewCard.cannotApprove')}
         </Button> : null}
         {problem
           ? <p role="status" className="w-full text-body-2-regular text-text-error-primary">{problem}</p>

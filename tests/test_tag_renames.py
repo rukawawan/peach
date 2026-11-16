@@ -143,7 +143,7 @@ class RenameTests(unittest.TestCase):
         self._entity(14, "足底足指")
         rows = tag_renames.collect(self.connection)
         verdicts = [row["entity"] for row in rows if row["new"] == "恋足"]
-        self.assertEqual(verdicts, ["改名", "合并"])
+        self.assertEqual(verdicts, ["rename", "merge"])
         tag_renames.apply_rows(self.connection, rows)
         self.assertEqual(
             [row[0] for row in self.connection.execute(
@@ -159,7 +159,7 @@ class RenameTests(unittest.TestCase):
             "INSERT INTO entity_alias(entity_id,alias,normalized_alias,source) VALUES(20,'乳','乳','stash')")
         rows = {row["old"]: row for row in tag_renames.collect(self.connection)}
         self.assertEqual((rows["乳系"]["new"], rows["乳系"]["assets"], rows["乳系"]["entity"]),
-                         ("", 1, "删除"))
+                         ("", 1, "delete"))
         counts = tag_renames.apply_rows(self.connection, list(rows.values()))
         self.assertEqual(self._tags_of(6), ["美乳"])
         self.assertEqual((counts["dropped"], counts["entities"]), (1, 1))

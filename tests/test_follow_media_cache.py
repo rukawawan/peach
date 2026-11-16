@@ -21,7 +21,7 @@ class RemoteMediaCacheTests(unittest.IsolatedAsyncioTestCase):
         from peach.jobs import DiskSpaceDenied
         from peach.remote_media_cache import RemoteMediaUnavailable
         guard = mock.Mock()
-        guard.check.side_effect = [None, DiskSpaceDenied('capacity')]
+        guard.check.side_effect = [None, DiskSpaceDenied('errors.storageBudget.cacheWritesStopped', {'reasons': '缓存超限'})]
         self.cache.capacity_guard = guard
         with self.assertRaises(RemoteMediaUnavailable):
             self.cache.bytes('new-image', lambda: b'image')
@@ -53,6 +53,19 @@ class RemoteMediaCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.content,self.payload)
         self.assertEqual(self.calls,1)
         self.assertEqual(response.headers['cache-control'],'private, no-cache')
+
+    async def test_damaged_cache_metadata_is_a_miss_not_a_server_error(self):
+        slot = self.cache._slot('follow:1:media:0')
+        slot.parent.mkdir(parents=True)
+        slot.with_suffix('.bin').write_bytes(b'x' * 4)
+        for headers in (['content-type'], {'content-type': ['video/mp4']}):
+            with self.subTest(headers=headers):
+                slot.with_suffix('.json').write_text(json.dumps({'status': 200, 'size': 4, 'headers': headers}),
+                                                     encoding='utf-8')
+                self.assertIsNone(self.cache.stored('follow:1:media:0'))
+        response = await self.client.get('/media')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, self.payload)
 
     async def test_hls_manifests_remain_available_as_passive_media(self):
         self.payload=b'#EXTM3U\n'

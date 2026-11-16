@@ -37,6 +37,9 @@ export interface TunnelState {
   state: 'stopped' | 'starting' | 'running' | 'error';
   url: string;
   error: string;
+  /** `error` 的 code 与参数（ADR-0159）；旧状态文件没有，界面照原文显示。 */
+  error_code?: string;
+  error_params?: Record<string, unknown>;
   available: boolean;
   mode: 'quick' | 'named';
   /** 命名隧道绑定的公开主机名，临时链接模式下为空。 */
@@ -70,23 +73,36 @@ export interface StorageCategory {
   bytes: number; files: number; reclaimable: number;
 }
 
-export interface StorageRelocation { state: 'done' | 'error'; message: string; notes?: string[]; finished_at: number }
+/** 一句带 code 的话（`interface_text.nested` 的形状）；`null` 是这一项没有 code，照原文显示。 */
+type CodedPhrase = { code: string; params?: Record<string, unknown> } | null;
+
+export interface StorageRelocation {
+  state: 'done' | 'error'; message: string; notes?: string[]; finished_at: number;
+  message_code?: string; message_params?: Record<string, unknown>;
+  /** 与 `notes` 同序的 code；旧回执没有。 */
+  note_codes?: CodedPhrase[];
+}
 
 export interface StorageState {
   data_root: string;
   free_bytes: number | null;
   total_bytes: number | null;
   system_drive: boolean;
-  budget?: { policy: StoragePolicy | null; error: string; recommendation_state?: string; last_check: {
-    checked_at: number; paused: boolean; reasons: string[]; freed_bytes: number;
+  budget?: { policy: StoragePolicy | null; error: string; error_code?: string; error_params?: Record<string, unknown>;
+    recommendation_state?: string; last_check: {
+    checked_at: number; paused: boolean; reasons: string[]; reason_codes?: CodedPhrase[]; freed_bytes: number;
     cache_bytes: number | null; data_bytes: number | null; external_cache_bytes: number | null;
   } | null };
   usage: { measured_at: number; total_bytes: number; total_files: number; categories: StorageCategory[];
     allocated_bytes?: number | null; managed_cache_bytes?: number | null; external_cache_bytes?: number | null;
     capacity_error?: string } | null;
   job: { state: 'idle' | 'measuring' | 'cleaning'; category?: string; categories?: string[]; message: string; error?: boolean;
+    message_code?: string | null; message_params?: Record<string, unknown>;
     files?: number; bytes?: number; expected_files?: number | null };
-  relocation: { available: boolean; message: string; steps?: { text: string; command: string }[]; last: StorageRelocation | null };
+  relocation: { available: boolean; message: string; message_code?: string; message_params?: Record<string, unknown>;
+    steps?: { id?: string; text: string; text_code?: string; command: string; command_code?: string;
+      command_params?: Record<string, unknown> }[];
+    last: StorageRelocation | null };
 }
 
 export interface StoragePolicy {
@@ -132,6 +148,8 @@ export interface PushDiscoveryState {
   endpoint: string;
   local_running: boolean;
   local_message: string;
+  local_message_code?: string;
+  local_message_params?: Record<string, unknown>;
   local_roots: string[];
   queue: PushDiscoveryQueue;
   /** 可选的媒体根，前缀表里的下拉就从这里取。 */
@@ -160,8 +178,13 @@ export interface DownloadConfig {
 export type PikPakBrowserState = 'idle' | 'waiting' | 'done' | 'cancelled' | 'timeout' | 'failed';
 
 /** 设置页的云下载块。凭据只报存没存过，不回值。 */
+/** 服务端一句话的 code 与参数（ADR-0159）；与原句一一对应，code 为空串时照原句。 */
+export interface CodedLine { code: string; params?: Record<string, unknown> }
+
 export interface DownloadSettingsState {
   problems?: string[];
+  /** 与 `problems` 一一对应。 */
+  problem_codes?: CodedLine[];
   media_sources: string[];
   available: boolean;
   config: DownloadConfig;
@@ -169,7 +192,8 @@ export interface DownloadSettingsState {
   /** `method`：`browser` 是浏览器登录取来的网页端会话，`password` 是账号密码换的令牌。 */
   pikpak: { logged_in: boolean; username: string; remember: boolean; method: 'browser' | 'password' };
   /** 浏览器登录（ADR-0093）：这台电脑有没有 Chrome 或 Edge，登录窗口此刻在哪一步。 */
-  pikpak_browser: { available: boolean; state: PikPakBrowserState; message: string };
+  pikpak_browser: { available: boolean; state: PikPakBrowserState; message: string;
+                    message_code?: string; message_params?: Record<string, unknown> };
   pikpak_roots: string[];
   providers: { key: DownloadProviderKey; label: string }[];
   max_wait_hours: number;
@@ -185,8 +209,10 @@ export interface DownloadCheckReport {
   ok: boolean;
   /** 实际查的 CloudDrive2 地址。表单留空时是探测到的本机地址，探测不到时为空串。 */
   address: string;
-  permissions: { name: string; label: string; granted: boolean }[];
+  permissions: { name: string; label: string; label_code?: string; granted: boolean }[];
   missing: string[];
+  /** 与 `missing` 一一对应。 */
+  missing_codes?: string[];
   root: string;
   folder: { path: string; can_offline: boolean; cloud: string } | null;
   quota: { total: number; used: number; left: number } | null;
@@ -195,6 +221,8 @@ export interface DownloadCheckReport {
   /** 未选择 PikPak 对应目录时，按推送发现的配置建议数据库路径前缀；无法确定时为空串。 */
   suggested_pikpak_root: string;
   problems: string[];
+  /** 与 `problems` 一一对应。 */
+  problem_codes?: CodedLine[];
 }
 
 export interface PikPakLoginResult {
@@ -202,6 +230,8 @@ export interface PikPakLoginResult {
   /** 要人机验证时给验证页地址，用户在浏览器里完成后再登录一次。 */
   captcha_url?: string;
   message?: string;
+  message_code?: string;
+  message_params?: Record<string, unknown>;
   settings: DownloadSettingsState;
 }
 
@@ -224,6 +254,9 @@ export interface DownloadTask {
   failure: string | null;
   failure_label: string | null;
   failure_detail: string | null;
+  /** 有 code 的按界面语言显示；旧任务只有原文。 */
+  failure_detail_code?: string;
+  failure_detail_params?: Record<string, unknown>;
   progress: number | null;
   remote_name: string | null;
   ledger_path: string | null;
@@ -236,7 +269,12 @@ export interface DownloadTask {
   resubmittable: boolean;
   postprocess_state: string;
   postprocess_label: string;
+  /** 排了自动重试时是 `labels.downloads.postprocessRetrying`，其余照 `postprocess_label`。 */
+  postprocess_label_code?: string;
+  postprocess_label_params?: Record<string, unknown>;
   postprocess_detail: string | null;
+  postprocess_detail_code?: string;
+  postprocess_detail_params?: Record<string, unknown>;
   postprocess_run_id: number | null;
   postprocessed_at: string | null;
   postprocess_active: boolean;
@@ -251,6 +289,18 @@ export interface DownloadsSnapshot {
   tasks: DownloadTask[];
   has_more?: boolean;
   next_before_id?: number | null;
+  /** 渠道级失败（额度用完、网盘空间不足、配置失效、CloudDrive2 连不上）：这个渠道下一次提交成功前一直列着。 */
+  channel_alerts?: DownloadChannelAlert[];
+}
+
+export interface DownloadChannelAlert {
+  provider: string;
+  provider_label: string;
+  failure: 'quota' | 'storage' | 'config' | 'network';
+  message: string;
+  message_code: string;
+  message_params: Record<string, string | number>;
+  since: string;
 }
 
 export interface DownloadSubmitResult {
@@ -262,10 +312,16 @@ export interface DownloadSubmitResult {
 export interface ReleaseState {
   current_version: string;
   latest_version: string | null;
+  /** 通道与安装方式的中文名，没有译文时显示；判断和取译文用对应的 `*_code`。 */
   channel: string;
+  channel_code?: string;
   installation: string;
+  installation_code: 'docker' | 'standalone' | 'source';
   state: string;
+  /** 检查结果的一句话；有 `message_code` 时按它取译文（`serverText`）。 */
   message: string;
+  message_code?: string;
+  message_params?: Record<string, unknown>;
   release_url: string;
   checked_at?: number;
   /** `installer` 是 macOS 的 DMG：没有应用内安装，下载后手动替换。 */
@@ -274,14 +330,15 @@ export interface ReleaseState {
   asset_size?: number;
   /** 能在页面里下载并重启安装；只有 Windows 独立包是 true。 */
   in_app_update?: boolean;
-  /** 容器换新版要在宿主机上做的几步；其他安装方式是空表。 */
-  steps?: { text: string; command: string }[];
+  /** 容器换新版要在宿主机上做的几步；其他安装方式是空表。`id` 用来取说明的译文。 */
+  steps?: { id?: string; text: string; command: string }[];
   /** Docker 镜像检查到新镜像时才有：能否经 Watchtower 一键更新（ADR-0140），不能时 `reason` 说明为什么。 */
-  one_click?: { available: boolean; reason: string };
+  one_click?: { available: boolean; reason: string; reason_code?: string; reason_params?: Record<string, unknown> };
 }
 
 export interface UpdateJob {
   state: string; progress: number; message?: string; downloaded?: number; total?: number; version?: string;
+  message_code?: string; message_params?: Record<string, unknown>;
 }
 
 export interface MediaSource {
@@ -298,12 +355,19 @@ export interface ConfigurationFact {
   value: string;
   download_url?: string;
   download_label?: string;
+  term_code?: string; term_params?: Record<string, unknown>;
+  value_code?: string; value_params?: Record<string, unknown>;
+  download_label_code?: string; download_label_params?: Record<string, unknown>;
   /** 能由 Peach 装进数据目录的缺失工具（`ffmpeg`、`untrunc`），有它就不给下载外链。 */
   install_tool?: string;
 }
 
 export interface ConfigurationData {
-  section_errors?: Record<string, { title: string; message: string; error_id: string }>;
+  section_errors?: Record<string, {
+    title: string; message: string; error_id: string;
+    title_code?: string; title_params?: { section?: string }; section_code?: string;
+    message_code?: string; message_params?: Record<string, unknown>;
+  }>;
   remote_reporting?: import('./settings/remote-reporting-settings').RemoteReportingState;
   library_sharing?: import('./settings/library-sharing-settings').LibrarySharingState;
   ledger_read_only?: boolean;
@@ -325,6 +389,7 @@ export interface ConfigurationData {
   editable: boolean;
   /** 不能编辑时给用户看的原因，可编辑时为空。 */
   notice: string;
+  notice_code?: string;
   /** 设置文件的指纹，保存时带回去，服务端据此拒绝盖掉别处的改动。 */
   revision: string;
   media_dirs: string[];
@@ -470,10 +535,8 @@ export interface LibraryProcessingProps {
   toast(message: string): void;
   /** 这一趟从运行走到终态：让遗留层重画数据管理页那几个计数。 */
   onComplete?(): void;
-    /** 紧凑任务面持续观察后台状态。 */
+  /** 紧凑任务面：这一个键的轮询只由它驱动，卡片只读缓存。 */
   mode?: 'notice';
-  /** 卡片闲着时也接着问：任务由后台自己起，页面要认出「现在跑起来了」。 */
-  monitor?: boolean;
 }
 
 /** 换头像：资料页圆框角上那个加号，连同它点开的那一屏候选。资料卡（`entity-hero`）在自己

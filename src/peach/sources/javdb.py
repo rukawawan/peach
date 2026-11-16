@@ -9,11 +9,12 @@ MGS 的 5/23、标题带 MGS 附注、演员里有男优，各字段按 Peach �
 
 一部分页面要登录才给，回的是登入页而不是 401/403（`peach.javdb.LOGIN`），搜索页与详情页都要认。
 
-刮削不读详情页，走 `JavDBPublicSource` 的匿名接口（ADR-0144）：不带 Cookie，不占 javdb.com
-的出口配额，字段投影成与详情页同形的记录。详情页解析留给视频预览。
+刮削先走 `JavDBPublicSource` 的匿名接口（ADR-0144）：不带 Cookie，不占 javdb.com
+的出口配额，字段投影成与详情页同形的记录。接口冷却或未取得时退回详情页（ADR-0160）；详情页解析也供视频预览。
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import re
 import time
@@ -26,6 +27,9 @@ from ..javdb import LOGIN, clean
 from ..javdb_genres import page_genres
 from ..javdb_identity import RULE
 from ..javdb_public import actor_gender, public_image_url
+from ..metadata import relay_args
+from ..catalog_vocabulary import RESOURCE_COMMENT_SOURCE
+from ..source_page_words import JAVDB_FIELDS
 from .base import FailureReason, Page, Session, SiteConfig, SiteRecord, SiteSource, SourceFailure
 
 #: 主机间隔由用户定（2026-09-22 定为 3 秒，每分钟 20 页）。参照面：每分钟 40～50 页会招来 3～7 天
@@ -53,7 +57,15 @@ _ACTRESS = re.compile(r'<a\s([^>]*)>([^<]+)</a>')
 #: 演員一栏里每个人名都挂着自己的资料页。那串 id 正是人物页 JavDB 入口要的东西，
 #: 取名字时顺手带出来——另走一趟演员页只是把同一页再取一遍，而 javdb 的配额最紧。
 _ACTOR_HREF = re.compile(r'href="/actors/([A-Za-z0-9]+)"')
-_JAPANESE = re.compile(r"[぀-ヿ一-鿿]")
+_JAPANESE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+#: 网页上的封面与样张在 `c0.jdbstatic.com`，与 javdb.com 同算出口配额。接口 CDN 上同一路径的图
+#: 不占这份配额，图片校验也只放行它（2026-11-12 实测封面、小封面、样张与头像都在）。
+_CDN = "https://tp.spfcas.com/rhe951l4q/"
+_STATIC = re.compile(r"https://c\d+\.jdbstatic\.com/((?:covers|samples)/[a-z0-9]{2}/[A-Za-z0-9_]+\.jpg)")
+#: 评分是星级图标后面那个数，短评数在评论页签的括号里；按页面结构认，不按文字认。
+_SCORE = re.compile(r'class="score-stars".*?</span>&nbsp;([0-9]+(?:\.[0-9]+)?)', re.S)
+_REVIEWS = re.compile(r'class="review-tab"[^>]*>\s*<span>[^<(]*\(([0-9]+)\)')
+_MISSING = "errors.javdb.notFound"
 
 
 def actresses(value: str) -> list[dict]:
@@ -78,6 +90,93 @@ def maker_writing(value: str) -> str:
     return next((part for part in parts if _JAPANESE.search(part)), parts[0] if parts else "")
 
 
+def _cdn(url: object) -> str:
+    match = _STATIC.fullmatch(str(url or ""))
+    return _CDN + match[1] if match else ""
+
+
+def page_search_rows(text: str) -> list[dict]:
+    """搜索页的结果卡片，投影成接口搜索行：来源 id、番号与卡片标题。"""
+    rows = []
+    for box in BeautifulSoup(text, "html.parser").select('a.box[href^="/v/"]'):
+        movie_id = box["href"].rsplit("/", 1)[-1]
+        number = box.find("strong")
+        if number and re.fullmatch(r"[A-Za-z0-9]+", movie_id):
+            rows.append({"id": movie_id, "number": clean(number.get_text(" ", strip=True)),
+                         "origin_title": clean(box.get("title") or "")})
+    return rows
+
+
+def _detail(text: str) -> dict:
+    """详情页面板与标题区：刮削记录与接口同名投影共用一份读法。栏名是站上 `?locale=zh` 的繁体原词。"""
+    panel = {clean(label): value for label, value in _PANEL.findall(text)}
+    soup = BeautifulSoup(text, "html.parser")
+    title = soup.select_one("strong.current-title")
+    original = soup.select_one(".origin-title")
+    runtime = re.search(r"\d+", clean(panel.get(JAVDB_FIELDS["runtime"], "")))
+    cover = _COVER.search(text)
+    cover = _IMG_SRC.search(cover.group(0)) if cover else None
+    genres = (clean(link.get_text(" ", strip=True))
+              for link in BeautifulSoup(panel.get(JAVDB_FIELDS["genres"], ""), "html.parser").find_all("a"))
+    return {"code": clean(panel.get(JAVDB_FIELDS["code"], "")).replace(" ", ""), "soup": soup,
+            "display_title": clean(title.get_text(" ", strip=True)) if title else "",
+            "origin_title": clean(original.get_text(" ", strip=True)) if original else "",
+            "cover": cover.group(1) if cover else "", "actors": panel.get(JAVDB_FIELDS["actors"], ""),
+            "studio": maker_writing(clean(panel.get(JAVDB_FIELDS["studio"], ""))), "label": clean(panel.get(JAVDB_FIELDS["label"], "")),
+            "series": clean(panel.get(JAVDB_FIELDS["series"], "")), "director": clean(panel.get(JAVDB_FIELDS["director"], "")),
+            "release_date": clean(panel.get(JAVDB_FIELDS["release_date"], "")), "runtime": int(runtime.group()) if runtime else None,
+            "genres": tuple(dict.fromkeys(word for word in genres if word))}
+
+
+def page_movie(text: str, movie_id: str) -> dict:
+    """详情页投影成接口作品资料的同名字段，库外详情、评论与磁链照旧按来源 id 取。
+
+    男优与女优挂同样的 `/actors/` 链接，只有女优带 `actor-female`，所以没带的记作男优；头像按演员 id
+    指向接口 CDN。网页不给视频预览地址，预告仍由视频预览那条路读同一页。
+    """
+    fields = _detail(text)
+    score = _SCORE.search(text)
+    reviews = _REVIEWS.search(text)
+    actors = []
+    for attributes, name in _ACTRESS.findall(fields["actors"]):
+        actor = _ACTOR_HREF.search(attributes)
+        if actor and clean(name):
+            actors.append({"id": actor[1], "name": clean(name),
+                           "gender": "female" if "actor-female" in attributes else "male",
+                           "avatar_url": f"{_CDN}avatars/{actor[1][:2].lower()}/{actor[1]}.jpg"})
+    previews = [_cdn(link.get("href")) for link in fields["soup"].select(".preview-images a.tile-item")]
+    return {"id": movie_id, "number": fields["code"], "title": fields["display_title"],
+            "origin_title": fields["origin_title"], "cover_url": _cdn(fields["cover"]),
+            "preview_images": [url for url in previews if url], "actors": actors,
+            "maker_name": fields["studio"], "publisher_name": fields["label"], "series_name": fields["series"],
+            "director_name": fields["director"], "release_date": fields["release_date"],
+            "duration": fields["runtime"], "score": float(score[1]) if score else None,
+            "comments_count": int(reviews[1]) if reviews else 0, "tags": list(fields["genres"])}
+
+
+@contextlib.contextmanager
+def page_reader(secrets_root, *, seconds: float = 30.0):
+    """库外详情与磁链读 javdb.com 网页的入口：带用户在「来源和凭证」里贴的 Cookie，与资料处理和视频预览
+    共用 `SOURCE_LIMITER` 的主机间隔，撞登录页、验证页或封禁时按 `javdb` 这一站的来源冷却停下。"""
+    from ..jav_cover_fetch import HostLimitedTransport
+    from ..library_processing import SOURCE_LIMITER
+    from ..scraping_access import SourceTransport
+
+    transport = HostLimitedTransport(SourceTransport(secrets_root, max_requests=6, max_bytes=6 * 1024 * 1024,
+                                                     max_seconds=seconds), JAVDB.interval, limiter=SOURCE_LIMITER)
+    session = Session(transport, deadline=time.monotonic() + seconds)
+    source = JavDBSource(JAVDB)
+
+    def read(path: str) -> str:
+        with source.holding(session):
+            return source._page(JAVDB.base_url + path, session=session).text
+
+    try:
+        yield read
+    finally:
+        transport.close()
+
+
 class JavDBSource(SiteSource):
     DEFAULT = JAVDB
 
@@ -87,7 +186,7 @@ class JavDBSource(SiteSource):
     def _page(self, url: str, *, session: Session) -> Page:
         page = session.get(url, config=self.config)
         if LOGIN.search(page.text):
-            raise SourceFailure(FailureReason.AUTH_REQUIRED, "javdb 要求登录")
+            raise SourceFailure(FailureReason.AUTH_REQUIRED, "errors.javdb.loginRequired")
         return page
 
     def fetch(self, code: str, *, session: Session) -> Page:
@@ -95,42 +194,27 @@ class JavDBSource(SiteSource):
         paths = list(dict.fromkeys(path for path, shown in _BOX.findall(search.text)
                                   if same_release_code(code, clean(shown))))
         if not paths:
-            raise SourceFailure(FailureReason.NOT_FOUND, "javdb 没有这个番号")
+            raise SourceFailure(FailureReason.NOT_FOUND, _MISSING)
         if len(paths) > 1:
-            raise SourceFailure(FailureReason.PARSE_ERROR, "javdb 同番号对应多个作品，请核对来源身份：" + '、'.join(paths),
-                                detail='identity_ambiguous')
+            raise SourceFailure(FailureReason.PARSE_ERROR, "errors.javdb.identityAmbiguous",
+                                {"identities": '、'.join(paths)}, detail='identity_ambiguous')
         path = paths[0]
         detail = self._page(self.config.base_url + path + "?locale=zh", session=session)
         # `source_url` 记不带界面语言参数的详情页地址。
         return Page(self.config.base_url + path, detail.body)
 
     def parse(self, page: Page, code: str) -> SiteRecord:
-        text = page.text
-        panel = {clean(label): value for label, value in _PANEL.findall(text)}
-        shown = clean(panel.get("番號", "")).replace(" ", "")
+        fields = _detail(page.text)
+        shown = fields["code"]
         if not same_release_code(code, shown):
-            raise SourceFailure(FailureReason.PARSE_ERROR, "javdb 详情页的番号与搜索结果不一致")
-        runtime = re.search(r"\d+", clean(panel.get("時長", "")))
-        soup = BeautifulSoup(text, "html.parser")
-        title = soup.select_one('strong.current-title')
-        original = soup.select_one('.origin-title')
-        display_title = clean(title.get_text(' ', strip=True)) if title else ''
-        origin_title = clean(original.get_text(' ', strip=True)) if original else ''
-        tag = _COVER.search(text)
-        cover = _IMG_SRC.search(tag.group(0)) if tag else None
-        genres = tuple(dict.fromkeys(
-            clean(link.get_text(" ", strip=True))
-            for link in BeautifulSoup(panel.get("類別", ""), "html.parser").find_all("a")
-            if clean(link.get_text(" ", strip=True))))
+            raise SourceFailure(FailureReason.PARSE_ERROR, "errors.javdb.detailCodeMismatch")
+        display_title, origin_title = fields["display_title"], fields["origin_title"]
         return SiteRecord(
             source=self.config.name, provenance=self.config.provider, code=shown, source_url=page.url,
-            title=origin_title or display_title,
-            performers=tuple(actresses(panel.get("演員", ""))),
-            studio=maker_writing(clean(panel.get("片商", ""))), label=clean(panel.get("發行", "")),
-            series=clean(panel.get("系列", "")), director=clean(panel.get("導演", "")),
-            release_date=clean(panel.get("日期", "")), runtime=int(runtime.group()) if runtime else None,
-            tags=genres,
-            cover_urls=(cover.group(1),) if cover else (),
+            title=origin_title or display_title, performers=tuple(actresses(fields["actors"])),
+            studio=fields["studio"], label=fields["label"], series=fields["series"], director=fields["director"],
+            release_date=fields["release_date"], runtime=fields["runtime"], tags=fields["genres"],
+            cover_urls=(fields["cover"],) if fields["cover"] else (),
             extra={'origin_title': origin_title, 'display_title': display_title,
                    'source_id': urllib.parse.urlsplit(page.url).path.rsplit('/', 1)[-1], 'javdb_rule': RULE})
 
@@ -166,19 +250,28 @@ def public_record(movie: dict) -> SiteRecord:
         extra={"origin_title": origin, "display_title": display, "source_id": movie_id, "javdb_rule": RULE})
 
 
-class JavDBPublicSource(JavDBSource):
-    """刮削的 javdb 一问：匿名接口取资料，失败按缺失、歧义、冷却与未取得分档。
+class _PublicDown(Exception):
+    """匿名接口这一问没答（冷却或未取得），交给详情页那条路。"""
 
-    接口的问题不写 `javdb` 的来源冷却：那份冷却管的是详情页那条路（视频预览），
-    接口自己按 `PUBLIC_API` 的冷却停下，这里翻成 `SourcePaused`，本趟记作没轮到。
+
+class JavDBPublicSource(JavDBSource):
+    """刮削的 javdb 一问：匿名接口取资料，缺失、歧义与预算按接口的结论分档。
+
+    接口冷却或未取得时改读详情页（ADR-0160）：2026-11-10 起接口三家主机都要求登录，详情页匿名仍给
+    全部面板字段。详情页那一问按 `javdb` 这一站的主机间隔与来源冷却走，失败按详情页的分档交出。
     """
 
     DEFAULT = JAVDB_PUBLIC
 
     def query(self, code: str, *, session: Session) -> SiteRecord:
+        try:
+            return self._public_query(code, session=session)
+        except _PublicDown:
+            return JavDBSource(JAVDB).query(code, session=session)
+
+    def _public_query(self, code: str, *, session: Session) -> SiteRecord:
         from ..javdb_public import (PUBLIC_API, PublicBudgetExceeded, PublicIdentityAmbiguous, PublicNotFound,
-                                    PublicRequestBudget, PublicSourcePaused, PublicSourceUnavailable)
-        from ..scraping_access import SourcePaused
+                                    PublicRequestBudget, PublicSourceUnavailable)
         seconds = PUBLIC_SECONDS if session.deadline is None else session.deadline - time.monotonic()
         budget = PublicRequestBudget(max_requests=PUBLIC_REQUESTS, max_seconds=max(1.0, seconds))
         with self.holding(session):
@@ -186,15 +279,17 @@ class JavDBPublicSource(JavDBSource):
                 with PUBLIC_API.request_budget(budget):
                     movie = PUBLIC_API.movie(code)
             except PublicIdentityAmbiguous as error:
-                raise SourceFailure(FailureReason.PARSE_ERROR, f"javdb {error}", detail="identity_ambiguous") from None
+                if "identities" not in error.params:
+                    raise SourceFailure(FailureReason.PARSE_ERROR, *relay_args(error),
+                                        detail="identity_ambiguous") from None
+                raise SourceFailure(FailureReason.PARSE_ERROR, "errors.javdb.identityAmbiguous",
+                                    {"identities": error.params["identities"]}, detail="identity_ambiguous") from None
             except PublicNotFound:
-                raise SourceFailure(FailureReason.NOT_FOUND, "javdb 没有这个番号") from None
-            except PublicSourcePaused as error:
-                raise SourcePaused(f"javdb：{error}") from None
+                raise SourceFailure(FailureReason.NOT_FOUND, _MISSING) from None
             except PublicBudgetExceeded:
-                raise SourceFailure(FailureReason.TIMEOUT, "javdb 作品资料在本次预算内未取得") from None
-            except PublicSourceUnavailable as error:
-                raise SourceFailure(FailureReason.NETWORK, f"javdb：{error}") from None
+                raise SourceFailure(FailureReason.TIMEOUT, "errors.javdb.budgetExceeded") from None
+            except PublicSourceUnavailable:
+                raise _PublicDown() from None
             return public_record(movie)
 
 
@@ -215,7 +310,8 @@ def comment_resources(links: list[str], origin: str, date: str) -> list[dict]:
         uri = uri.strip()
         item = {"id": "", "protocol": "url", "info_hash": "", "uri": uri,
                 "name": uri, "size": "", "files": "", "date": date,
-                "attributes": [], "source": "JavDB 评论", "source_url": origin, "origins": [origin]}
+                "attributes": [], "source": RESOURCE_COMMENT_SOURCE, "source_code": "labels.javdb.commentSource",
+                "source_url": origin, "origins": [origin]}
         if uri.lower().startswith('magnet:'):
             try:
                 magnet = parse_magnet(uri)

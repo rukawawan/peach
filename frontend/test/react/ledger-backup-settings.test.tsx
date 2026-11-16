@@ -69,7 +69,7 @@ it('恢复先确认，确认框写明替换当前账本并先另存；取消不�
   expect(seen[0]!.danger).toBe(true);
   expect(seen[0]!.confirmLabel).toBe('替换当前账本');
   expect(String(seen[0]!.body)).toContain('自动 · 迁移前 · 118 MB');
-  expect(String(seen[0]!.body)).toContain('替换前先把当前账本另存为一份备份');
+  expect(String(seen[0]!.body)).toContain('替换前会先备份当前账本');
   expect(sent).toEqual([]);
 });
 
@@ -87,7 +87,7 @@ it('确认后发出恢复，恢复中禁用全部按钮并显示进度，完成�
   expect(sent).toEqual([['/api/configuration/ledger-backups/restore',
     { id: 'database/ledger.pre-manual-20261104-101500.db', confirm: true }]]);
   const bar = host.querySelector('[role="progressbar"]')!;
-  expect([bar.getAttribute('aria-label'), bar.getAttribute('aria-valuenow')]).toEqual(['恢复进度', '3']);
+  expect([bar.getAttribute('aria-label'), bar.getAttribute('aria-valuenow')]).toEqual(['恢复进度 · 复制备份', '3']);
   expect(host.textContent).toContain('复制备份');
   expect(buttonNamed('立即备份', host)!.disabled).toBe(true);
   expect([...host.querySelectorAll('button')].filter((button) => button.textContent === '恢复')

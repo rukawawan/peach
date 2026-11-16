@@ -19,6 +19,7 @@ import { useOverlayScrollbar } from '../components/overlay-scrollbar';
 import { SettingsDialogClose } from '../components/settings-dialog-close';
 import { mountGuidePopover } from './guide-popover';
 import { stageApi } from '../application-residents';
+import { t } from '../../i18n';
 
 interface ProgressCounts {
   library: { total: number }; taste: { history_sources: number };
@@ -34,7 +35,7 @@ function GettingStarted({ go }: { go(path: string): void }) {
     const controller = new AbortController();
     setError('');
     void apiGet<ProgressCounts>('/api/post-setup-tutorial', controller.signal).then(result => { if (!controller.signal.aborted) setData(result) })
-      .catch(() => { if (!controller.signal.aborted) setError('未取得安装状态。可以重试，或直接打开对应页面。') });
+      .catch(() => { if (!controller.signal.aborted) setError(t('onboarding:gettingStarted.statusError')) });
     return () => controller.abort();
   }, [attempt]);
   const sources = data?.follow.sources.filter(row => row.enabled !== false) || [];
@@ -42,24 +43,24 @@ function GettingStarted({ go }: { go(path: string): void }) {
   const ready = sources.length > 0 && required.every(row => row.present && !row.missing?.length);
   const reviews = Object.values(data?.review.counts || {}).reduce((total, value) => total + Number(value || 0), 0);
   return <div className="flex flex-col gap-4">
-    <GuideBanner icon={RiRocketLine} title="从第一份收藏开始" description="连接媒体目录，查看入库结果，再打开馆藏。">
-      <Button onClick={() => go('/settings/library')}>连接媒体目录</Button>
+    <GuideBanner icon={RiRocketLine} title={t('onboarding:gettingStarted.title')} description={t('onboarding:gettingStarted.summary')}>
+      <Button onClick={() => go('/settings/library')}>{t('onboarding:gettingStarted.connectDirectories')}</Button>
     </GuideBanner>
-    {error ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => setAttempt(attempt + 1)}>重试</Button>}>{error}</Note> : null}
+    {error ? <Note tone="error" action={<Button variant="secondary" size="small" onClick={() => setAttempt(attempt + 1)}>{t('onboarding:shared.retry')}</Button>}>{error}</Note> : null}
     <ol className="peach-guide-routes">
-      <li><span className="peach-guide-topic-icon"><RiFolderLine aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>连接媒体目录</strong><p>确认媒体文件夹、所属媒体库和读取策略。</p></div><Button variant="secondary" size="small" onClick={() => go('/settings/library')}>查看配置</Button></li>
-      <li><span className="peach-guide-topic-icon"><RiListCheck3 aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>查看首次扫描</strong><p>{data ? data.library.total ? `已入库 ${data.library.total.toLocaleString()} 项，可在任务中心查看处理情况。` : '馆藏尚无内容，查看扫描任务是否已开始。' : '在任务中心查看实际扫描进度。'}</p></div><Button variant="secondary" size="small" onClick={() => go('/tasks')}>任务中心</Button></li>
-      <li><span className="peach-guide-topic-icon"><RiPlayCircleLine aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>打开馆藏</strong><p>从首页搜索和浏览已经入库的内容。</p></div><Button variant="secondary" size="small" onClick={() => go('/')}>进入馆藏</Button></li>
+      <li><span className="peach-guide-topic-icon"><RiFolderLine aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>{t('onboarding:gettingStarted.connectDirectories')}</strong><p>{t('onboarding:gettingStarted.connectDirectoriesHint')}</p></div><Button variant="secondary" size="small" onClick={() => go('/settings/library')}>{t('onboarding:gettingStarted.viewSettings')}</Button></li>
+      <li><span className="peach-guide-topic-icon"><RiListCheck3 aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>{t('onboarding:gettingStarted.firstScan')}</strong><p>{data ? data.library.total ? t('onboarding:gettingStarted.importedCount', { count: data.library.total }) : t('onboarding:gettingStarted.emptyCollection') : t('onboarding:gettingStarted.scanProgress')}</p></div><Button variant="secondary" size="small" onClick={() => go('/tasks')}>{t('onboarding:gettingStarted.tasks')}</Button></li>
+      <li><span className="peach-guide-topic-icon"><RiPlayCircleLine aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>{t('onboarding:gettingStarted.openCollection')}</strong><p>{t('onboarding:gettingStarted.openCollectionHint')}</p></div><Button variant="secondary" size="small" onClick={() => go('/')}>{t('onboarding:gettingStarted.goToCollection')}</Button></li>
     </ol>
-    <Disclosure summary="更多接入方式">
+    <Disclosure summary={t('onboarding:gettingStarted.moreWays')}>
     <div className="peach-guide-routes">
       {[
-        { title: '关注创作者', description: ready ? '当前启用来源的必要凭据已具备。' : sources.length ? '已有关注来源，请检查必要凭据。' : '添加想持续追踪的创作者与来源。', path: '/subscriptions', icon: RiRssLine },
-        { title: '口味与记录', description: data?.taste.history_sources ? `已导入 ${data.taste.history_sources} 份浏览器历史。` : '按需要导入浏览历史或书签。', path: '/taste', icon: RiBarChartLine },
-        { title: '云下载与浏览器添加', description: '连接渠道、设置目标目录，按需要配对用户脚本。', path: '/settings/downloads', icon: RiDownloadCloudLine },
-        { title: '手机访问', description: '查看访问范围、地址与密码。', path: '/settings/network', icon: RiSmartphoneLine },
-        ...(reviews ? [{ title: '人工复核', description: `当前有 ${reviews.toLocaleString()} 条待复核资料。`, path: '/review', icon: RiCheckboxCircleLine }] : []),
-      ].map(({title, description, path, icon: Icon}) => <div key={title}><span className="peach-guide-topic-icon"><Icon aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>{title}</strong><p>{description}</p></div><Button variant="ghost" size="small" aria-label={`查看${title}`} onClick={() => go(path)}>查看</Button></div>)}
+        { title: t('onboarding:shared.followCreators'), description: ready ? t('onboarding:gettingStarted.followReady') : sources.length ? t('onboarding:gettingStarted.followCheck') : t('onboarding:gettingStarted.followEmpty'), path: '/subscriptions', icon: RiRssLine },
+        { title: t('onboarding:shared.tasteAndHistory'), description: data?.taste.history_sources ? t('onboarding:gettingStarted.historyImported', { count: data.taste.history_sources }) : t('onboarding:gettingStarted.historyEmpty'), path: '/taste', icon: RiBarChartLine },
+        { title: t('onboarding:gettingStarted.downloadsTitle'), description: t('onboarding:gettingStarted.downloadsHint'), path: '/settings/downloads', icon: RiDownloadCloudLine },
+        { title: t('onboarding:gettingStarted.phoneAccess'), description: t('onboarding:gettingStarted.phoneAccessHint'), path: '/settings/network', icon: RiSmartphoneLine },
+        ...(reviews ? [{ title: t('onboarding:shared.review'), description: t('onboarding:gettingStarted.reviewCount', { count: reviews }), path: '/review', icon: RiCheckboxCircleLine }] : []),
+      ].map(({title, description, path, icon: Icon}) => <div key={title}><span className="peach-guide-topic-icon"><Icon aria-hidden className="size-5" /></span><div className="min-w-0 flex-1"><strong>{title}</strong><p>{description}</p></div><Button variant="ghost" size="small" aria-label={t('onboarding:gettingStarted.viewItem', { title })} onClick={() => go(path)}>{t('onboarding:shared.view')}</Button></div>)}
     </div>
     </Disclosure>
   </div>;
@@ -102,7 +103,7 @@ export function TutorialCenter({ actions }: { actions: ShellActions }) {
       if (!session.current) setInvitation(!next.invited && !next.completed);
       return true;
     } catch {
-      if (mounted.current) setSyncError('未取得账本中的教程状态，请重新读取。');
+      if (mounted.current) setSyncError(t('onboarding:tutorialCenter.loadError'));
       return false;
     }
   };
@@ -116,7 +117,7 @@ export function TutorialCenter({ actions }: { actions: ShellActions }) {
         if (mounted.current && ticket === revision.current) applyProgress(saved);
       } catch {
         if (mounted.current) {
-          setSyncError('教程进度未保存到本机账本，其他设备尚未同步。请重新读取后继续。');
+          setSyncError(t('onboarding:tutorialCenter.saveError'));
           if (ticket === revision.current) await refresh(false);
         }
       } finally { pendingWrites.current -= 1 }
@@ -129,7 +130,7 @@ export function TutorialCenter({ actions }: { actions: ShellActions }) {
     if (!syncError || open) { toast.dismiss(SYNC_TOAST); return }
     toast.error(syncError, {
       id: SYNC_TOAST, toasterId: 'receipts', duration: Infinity,
-      action: { label: '重新读取', onClick: (event) => { event.preventDefault(); void refreshRef.current() } },
+      action: { label: t('onboarding:tutorialCenter.reload'), onClick: (event) => { event.preventDefault(); void refreshRef.current() } },
     });
   }, [syncError, open]);
   useEffect(() => () => { toast.dismiss(SYNC_TOAST) }, []);
@@ -154,9 +155,9 @@ export function TutorialCenter({ actions }: { actions: ShellActions }) {
         next: () => { dismissInvite(); setOpen(true) },
       });
       invitationSession.current = intro;
-      void intro.show({ id: 'tutorial-entry', title: '从这里打开新手教程',
-        body: '点击这个指南针，先用 4 步认识 Peach。其他功能用到时再看。', target: '#tutorialBtn' }, 0, 1);
-    }).catch(() => setSyncError('教程提示未能加载，请重新读取。'));
+      void intro.show({ id: 'tutorial-entry', title: t('onboarding:tutorialCenter.inviteTitle'),
+        body: t('onboarding:tutorialCenter.inviteBody', { count: GUIDE_CHAPTERS.find(item => item.id === 'basics')?.steps.length ?? 0 }), target: '#tutorialBtn' }, 0, 1);
+    }).catch(() => setSyncError(t('onboarding:tutorialCenter.inviteError')));
     return () => {
       cancelled = true;
       const closing = intro;
@@ -221,18 +222,18 @@ export function TutorialCenter({ actions }: { actions: ShellActions }) {
   useEffect(() => { if (body.current) body.current.scrollTop = 0 }, [tab]);
   const close = () => { epoch.current += 1; setLoading(false); setOpen(false); restoreFocus() };
   const go = (path: string) => {
-    if (dirty.current && path !== location.pathname) { setNotice('当前配置表单有编辑内容。请先处理表单，再打开其他页面。'); return }
+    if (dirty.current && path !== location.pathname) { setNotice(t('onboarding:tutorialCenter.unsavedForm')); return }
     close(); actions.navigate(path);
   };
   const start = async (chapter: GuideChapter, resume: boolean) => {
-    if (!progressRef.current.campaign || syncError) { setNotice('请先重新读取教程状态，再开始导览。'); return }
-    if (document.querySelector('dialog[open]:not(.peach-guide-center)')) { setNotice('请先关闭当前详情或对话框，再开始导览。'); return }
+    if (!progressRef.current.campaign || syncError) { setNotice(t('onboarding:tutorialCenter.reloadFirst')); return }
+    if (document.querySelector('dialog[open]:not(.peach-guide-center)')) { setNotice(t('onboarding:tutorialCenter.closeDialogFirst')); return }
     if (chapter.steps.some(step => step.surface) && stageApi()?.miniplayerActive()) {
-      setNotice('请先关闭正在播放的小窗，再开始播放器导览。'); return;
+      setNotice(t('onboarding:tutorialCenter.closeMiniPlayer')); return;
     }
     const from = resume ? guideResumePosition(progressRef.current, chapter) : 0;
     if (dirty.current && chapter.steps.some(item => item.route && item.route !== location.pathname)) {
-      setNotice('当前配置表单有编辑内容。请先处理表单，再开启需要切换页面的章节。'); return;
+      setNotice(t('onboarding:tutorialCenter.unsavedFormChapter')); return;
     }
     const ticket = ++epoch.current; setLoading(true); setNotice('');
     try {
@@ -267,33 +268,33 @@ export function TutorialCenter({ actions }: { actions: ShellActions }) {
             if (ticket !== epoch.current) return;
             stop(true); setTab(chapter.kind);
             setNotice(!guideChapterComplete(progressRef.current, chapter)
-              ? '本章已结束，未显示的步骤尚未完成，可以稍后继续。'
+              ? t('onboarding:tutorialCenter.chapterIncomplete')
               : chapter.id === 'basics'
               ? progressRef.current.completed
-                ? '快速导览已完成，所有设备的教程入口都会收起。以后可到设置 → Peach 配置 → 应用与维护 → 新手教程重新打开，其余内容按需查看。'
-                : '导览已结束，但完成状态未保存。请重新读取教程状态后再试。'
-              : '这段导览已完成。需要时再了解其他功能。');
+                ? t('onboarding:tutorialCenter.quickTourDone')
+                : t('onboarding:tutorialCenter.completionNotSaved')
+              : t('onboarding:tutorialCenter.chapterDone'));
           } else { position.current = next; show() }
         },
       });
       show();
-    } catch { setNotice('导览未能加载，请重试。') }
+    } catch { setNotice(t('onboarding:tutorialCenter.tourLoadError')) }
     finally { if (ticket === epoch.current) setLoading(false) }
   };
   startRequest.current = (chapter, resume) => { void start(chapter, resume) };
   const context = contextualChapter(location.pathname);
   return createPortal(<>
-    <ModalFrame isOpen={open} onOpenChange={value => { if (!value) close() }} width="tutorial" label="新手教程" surfaceClassName="peach-react peach-guide-center">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-separator-border px-6 py-4"><h2 id="guideTitle" className="text-title-2-medium text-text-primary">新手教程</h2><SettingsDialogClose label="关闭新手教程" onPress={close} /></header>
+    <ModalFrame isOpen={open} onOpenChange={value => { if (!value) close() }} width="tutorial" label={t('onboarding:tutorialCenter.title')} surfaceClassName="peach-react peach-guide-center">
+      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-separator-border px-6 py-4"><h2 id="guideTitle" className="text-title-2-medium text-text-primary">{t('onboarding:tutorialCenter.title')}</h2><SettingsDialogClose label={t('onboarding:tutorialCenter.close')} onPress={close} /></header>
       <div className="peach-guide-tools flex shrink-0 flex-col gap-4 px-6 pt-4 pb-3">
-        <SegmentedRadioGroup aria-label="教程路径" name="guide-path" orientation="horizontal" className={SEGMENTED_TRACK}
+        <SegmentedRadioGroup aria-label={t('onboarding:tutorialCenter.pathLabel')} name="guide-path" orientation="horizontal" className={SEGMENTED_TRACK}
           value={tab} onChange={value => { setTab(value as typeof tab); setQuery(''); setNotice('') }}>
-          {([['start', '开始使用'], ['interface', '界面导览'], ['settings', '设置导览']] as const).map(([key, label]) => <Radio key={key} value={key} className={SEGMENT}>{label}</Radio>)}
+          {([['start', t('onboarding:tutorialCenter.getStarted')], ['interface', t('onboarding:tutorialCenter.interfaceTour')], ['settings', t('onboarding:tutorialCenter.settingsTour')]] as const).map(([key, label]) => <Radio key={key} value={key} className={SEGMENT}>{label}</Radio>)}
         </SegmentedRadioGroup>
       </div>
       <div className="peach-guide-scroll-frame">
       <div ref={body} className="peach-guide-body">
-        {syncError ? <Note tone="error" className="mb-4" action={<Button size="small" onClick={() => { void refresh() }}>重新读取</Button>}>{syncError}</Note> : null}
+        {syncError ? <Note tone="error" className="mb-4" action={<Button size="small" onClick={() => { void refresh() }}>{t('onboarding:tutorialCenter.reload')}</Button>}>{syncError}</Note> : null}
         {notice ? <Note tone="neutral" className="mb-4">{notice}</Note> : null}
         {tab === 'start' ? <GettingStarted go={go} /> : <GuideDirectory key={tab} kind={tab} query={query} setQuery={setQuery} context={context} progress={progress} loading={loading} start={(item, resume) => { void start(item, resume) }} />}
       </div>

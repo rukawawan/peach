@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 if not __package__:
     sys.path.insert(0, str(ROOT))
     __package__ = "scripts"
+from peach.interface_text import dev as t
 from peach.user_agent import USER_AGENT
 from peach.peach_proxy import read_url
 
@@ -26,10 +27,10 @@ def verify_local_assets(root: Path, assets: list[dict]) -> None:
         path = root / asset['name']
         if (not re.fullmatch(r'[A-Za-z0-9_.-]+', asset['name']) or path.is_symlink()
                 or not path.is_file() or path.stat().st_size != asset['size']):
-            raise ValueError('GitGud 镜像文件与发行清单不一致')
+            raise ValueError(t("publish_gitlab_release.assetMismatch"))
         with path.open('rb') as stream:
             if hashlib.file_digest(stream, 'sha256').hexdigest() != asset['sha256']:
-                raise ValueError('GitGud 镜像文件的 SHA-256 不符')
+                raise ValueError(t("publish_gitlab_release.assetDigestMismatch"))
 
 
 def gitgud_package_links(root: Path, release: dict, project_url: str) -> list[dict]:
@@ -38,10 +39,10 @@ def gitgud_package_links(root: Path, release: dict, project_url: str) -> list[di
 
     tag = release['tag_name']
     if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
-        raise ValueError('GitGud 镜像需要明确的版本标签')
+        raise ValueError(t("publish_gitlab_release.mirrorNeedsTag"))
     project = urlsplit(project_url)
     if project.scheme != 'https' or not project.hostname or project.username or project.password:
-        raise ValueError('GitGud 项目必须使用无凭据的 HTTPS 地址')
+        raise ValueError(t("publish_gitlab_release.projectUrlUnsafe"))
     repo = project.path.strip('/')
     executable = os.environ.get('PEACH_GLAB', 'glab')
     forge = GitLabForge(project.netloc, lambda *args: subprocess.check_output(
@@ -62,13 +63,13 @@ def gitgud_package_links(root: Path, release: dict, project_url: str) -> list[di
                 if len(batch) < 100:
                     break
             else:
-                raise ValueError('GitGud 制品文件超过核对上限')
+                raise ValueError(t("publish_gitlab_release.tooManyPackageFiles"))
         return result
 
     def matches(asset: dict, files: list[dict]) -> bool:
         rows = [row for row in files if row['file_name'] == asset['name']]
         if any(row['size'] != asset['size'] or row.get('file_sha256') != asset['sha256'] for row in rows):
-            raise ValueError(f"GitGud 已有同名制品内容不同，保留原文件：{asset['name']}")
+            raise ValueError(t("publish_gitlab_release.packageConflict", name=asset['name']))
         return bool(rows)
 
     existing = package_files()
@@ -81,7 +82,7 @@ def gitgud_package_links(root: Path, release: dict, project_url: str) -> list[di
         if all(matches(asset, current) for asset in assets):
             break
         if attempt == 2:
-            raise ValueError('GitGud 制品尚未全部登记，保留 R2 文件并停止登记 Release')
+            raise ValueError(t("publish_gitlab_release.packagesNotRegistered"))
         time.sleep(attempt + 1)
     prefix = f"https://{project.netloc}/api/v4/projects/{quote(repo, safe='')}/packages/generic/peach-release/{tag}"
     return [{'name': asset['name'] + ' · GitGud', 'url': prefix + '/' + quote(asset['name']),
@@ -93,22 +94,21 @@ def r2_release_notes(body: str, version: str, base: str, project_url: str) -> st
     text = body.split('\n## 下载选择\n', 1)[0].rstrip() + '\n'
     text = text.replace('https://github.com/peach-mitao/peach/blob/master/',
                         f'{project_url.rstrip("/")}/-/blob/v{version}/')
-    return text + download_notes(version, lite_installer=True, download_base=f'{base.rstrip("/")}/v{version}',
-                                 macos=True)
+    return text + download_notes(version, lite_installer=True, download_base=f'{base.rstrip("/")}/v{version}')
 
 
 def publish(root: Path = Path('release')) -> None:
     tag = os.environ["CI_COMMIT_TAG"]
     sha = os.environ["CI_COMMIT_SHA"]
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag) or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError("Release 必须使用明确的版本标签与完整提交 SHA")
+        raise ValueError(t("publish_gitlab_release.releaseNeedsTagAndSha"))
     actual = subprocess.check_output(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"],
                                      text=True, encoding="utf-8").strip()
     if actual != sha:
-        raise ValueError("标签不指向当前已验收的提交")
+        raise ValueError(t("publish_gitlab_release.tagMismatch"))
     notes = root / 'RELEASE_NOTES.md'
     if not notes.is_file() or not notes.stat().st_size:
-        raise ValueError("缺少发行说明")
+        raise ValueError(t("publish_gitlab_release.notesMissing"))
     command = [os.environ.get("PEACH_GLAB", "glab"), "release", "create", tag,
                     "--repo", os.environ["CI_PROJECT_URL"], "--ref", sha,
                     "--name", tag,
@@ -121,7 +121,7 @@ def publish(root: Path = Path('release')) -> None:
         if (release["tag_name"] != tag or release.get("commit_sha") != sha or not release["assets"]
                 or any(item["state"] != "uploaded" or not item["browser_download_url"].startswith(f"{base}/{tag}/")
                        for item in release["assets"])):
-            raise ValueError("R2 发布清单尚未就绪")
+            raise ValueError(t("publish_gitlab_release.r2NotReady"))
         links = [{"name": item["name"], "url": item["browser_download_url"], "link_type": "package",
                   "direct_asset_path": "/" + item["name"]} for item in release["assets"]]
         if backend == 'both':
@@ -141,7 +141,7 @@ def publish(root: Path = Path('release')) -> None:
         command.extend([*(str(root / item["name"]) for item in files), str(sums),
                         "--use-package-registry", "--package-name", "peach-release"])
     else:
-        raise ValueError("未知的下载后端")
+        raise ValueError(t("publish_gitlab_release.unknownBackend"))
     subprocess.run(command, check=True)
 
 

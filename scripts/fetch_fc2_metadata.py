@@ -48,20 +48,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+sys.path.append(str(Path(__file__).resolve().parent))
 
 from peach.catalog_rules import normalise_code_key
 from peach.config import SECRETS_DIR
 from peach.scraping_access import client_for
 from peach.genre_decisions import load_genre_decisions
 from peach.genre_taxonomy import map_genres
+from peach.interface_text import dev as t
 from peach.review_csv import read_rows, write_rows
 from peach.scripting import open_readonly
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from legacy_values import FC2_LOG_RESULTS
 from peach.sources.fc2 import canonical_code
 from peach.sources.fc2cmadb import (VIDEO_ID, Fc2cmadbSource, collection_parts, inertia_props,
                                     page_comments, parse_equivalences, parse_performers)
 
 FC2_COVER_WIDTH = 1200
+#: 候选日志 `fc2-candidate-log.csv` 的 `result` 取值：取到、没取到。封面取图（`peach.jav_cover_fetch`）也按这两个读。
+FOUND, MISSED = "found", "missed"
 #: 判定合集所需的最少分片映射数。一两条可能只是同一段内容的重复投稿。
 COLLECTION_MIN_PARTS = 3
 
@@ -85,11 +90,11 @@ def article_url(video_id: str) -> str:
 def fetch_article(client: httpx.Client, video_id: str) -> dict:
     response = client.get(article_url(video_id), timeout=30)
     if response.status_code == 404:
-        raise LookupError("站上无此作品")
+        raise LookupError(t("fetch_fc2_metadata.notOnSite"))
     response.raise_for_status()
     props = inertia_props(response.text)
     if not props:
-        raise LookupError("页面没有 Inertia 数据，可能被挡在登录或人机验证外")
+        raise LookupError(t("fetch_fc2_metadata.noInertia"))
     return props
 
 
@@ -130,8 +135,8 @@ def summarise(video_id: str, props: dict) -> dict:
         "cover_url": "" if is_collection else high_resolution_cover_url(
             article.get("image_url") or ""
         ),
-        "note": (f"合集，{len(parts)} 个分片各自独立，封面不下发" if is_collection
-                 else ("FC2 官方页已下架" if article.get("not_found") else "")),
+        "note": (t("fetch_fc2_metadata.collectionNote", count=len(parts)) if is_collection
+                 else (t("fetch_fc2_metadata.delisted") if article.get("not_found") else "")),
     }
 
 
@@ -227,7 +232,8 @@ def metadata_candidate_rows(rows: list[dict], database: Path, *, raw_snapshot: P
         # 用户在复核页收录过的 genre 这一批就当已知词，不再作为未收录回来问一遍。
         genre_decisions = load_genre_decisions(connection)
         for row in rows:
-            if row.get("result") != "取得":
+            result = str(row.get("result") or "")
+            if FC2_LOG_RESULTS.get(result, result) != FOUND:
                 continue
             code = normalise_code_key(str(row.get("code") or ""))
             assets = connection.execute(
@@ -308,21 +314,21 @@ def pending(database: Path, limit: int) -> list[tuple[str, str]]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("fetch_fc2_metadata.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--log", type=Path,
                         default=GENERATED_DIR / "fc2-candidate-log.csv")
     parser.add_argument("--harvest", type=Path,
                         default=GENERATED_DIR / "fc2-comment-harvest.csv",
-                        help="评论里出现过的所有 video_id，不限于库里有的")
+                        help=t("fetch_fc2_metadata.harvestHelp"))
     parser.add_argument("--raw", type=Path,
                         default=GENERATED_DIR / "fc2-comments-raw.jsonl",
-                        help="原始评论存档；解析规则以后改了不必重爬")
+                        help=t("fetch_fc2_metadata.rawHelp"))
     parser.add_argument("--metadata-log", type=Path,
                         default=GENERATED_DIR / "fc2-metadata-field-candidates.csv",
-                        help="标题与标签的统一元数据复核候选")
+                        help=t("fetch_fc2_metadata.metadataLogHelp"))
     parser.add_argument("--rebuild-metadata-only", action="store_true",
-                        help="不联网，只用既有 --log 重建元数据候选")
+                        help=t("fetch_fc2_metadata.rebuildHelp"))
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--delay", type=float, default=2.0)
     return parser
@@ -336,7 +342,7 @@ def run(args: argparse.Namespace) -> int:
             rows, args.db, raw_snapshot=args.log, fetched_at=fetched_at,
         )
         write_rows(args.metadata_log, METADATA_FIELDS, candidates)
-        print(f"完成：{len(candidates)} 个 FC2 元数据字段候选 -> {args.metadata_log}")
+        print(t("fetch_fc2_metadata.rebuilt", count=len(candidates), metadataLog=args.metadata_log))
         return 0
     todo = pending(args.db, args.limit)
     owned = {video_id for _, video_id in todo}
@@ -345,24 +351,24 @@ def run(args: argparse.Namespace) -> int:
     stats = {"hit": 0, "miss": 0}
     args.raw.parent.mkdir(parents=True, exist_ok=True)
     raw_log = args.raw.open("w", encoding="utf-8")
-    print(f"待抓 {len(todo)} 个 FC2 作品", flush=True)
+    print(t("fetch_fc2_metadata.pending", count=len(todo)), flush=True)
     with client_for(SECRETS_DIR, "fc2cmadb", session=True) as client:
         for index, (code, video_id) in enumerate(todo, 1):
             try:
                 props = fetch_article(client, video_id)
                 data = summarise(video_id, props)
-            # 长跑任务不能因为一个作品的网络问题整体退出；按条记「未取得」继续。
+            # 长跑任务不能因为一个作品的网络问题整体退出；按条记 `missed` 继续。
             # Ctrl-C 是 BaseException，不受影响。
             except Exception as exc:
                 stats["miss"] += 1
                 reason = f"{type(exc).__name__}: {exc}"
                 rows.append({"code": code, "video_id": video_id,
-                             "result": "未取得", "note": reason[:120]})
-                print(f"[{index}/{len(todo)}] 未取得 {code}：{reason[:70]}", flush=True)
+                             "result": MISSED, "note": reason[:120]})
+                print(t("fetch_fc2_metadata.missed", index=index, total=len(todo), code=code, reason=reason[:70]), flush=True)
             else:
                 stats["hit"] += 1
                 rows.append({"code": code, "video_id": video_id,
-                             "result": "取得", **data})
+                             "result": FOUND, **data})
                 harvest(video_id, props, collected)
                 # 原文照存。这些是用户多年攒下的标记，我的正则漏掉哪种写法都不该
                 # 意味着要重爬一遍。
@@ -370,8 +376,8 @@ def run(args: argparse.Namespace) -> int:
                                           "comments": page_comments(props)},
                                          ensure_ascii=False) + "\n")
                 raw_log.flush()
-                mark = "合集" if data["is_collection"] else (data["performers"] or "无演员标记")
-                print(f"[{index}/{len(todo)}] 取得 {code} {mark}", flush=True)
+                mark = t("fetch_fc2_metadata.collection") if data["is_collection"] else (data["performers"] or t("fetch_fc2_metadata.noPerformers"))
+                print(t("fetch_fc2_metadata.hit", index=index, total=len(todo), code=code, mark=mark), flush=True)
             # 每条都落盘：上次抓取死在半路时进度全丢，重来一遍是三小时。
             write_rows(args.log, FIELDS, backfill(rows, collected))
             write_rows(args.harvest, HARVEST_FIELDS, harvest_rows(collected, owned))
@@ -382,8 +388,8 @@ def run(args: argparse.Namespace) -> int:
             time.sleep(args.delay)
     raw_log.close()
     extra = sum(1 for vid in collected if vid not in owned)
-    print(f"完成：取得 {stats['hit']}，未取得 {stats['miss']} -> {args.log}")
-    print(f"评论收获 {len(collected)} 个 video_id，其中 {extra} 个库里还没有 -> {args.harvest}")
+    print(t("fetch_fc2_metadata.done", hit=stats['hit'], miss=stats['miss'], log=args.log))
+    print(t("fetch_fc2_metadata.harvested", count=len(collected), extra=extra, harvest=args.harvest))
     return 0
 
 

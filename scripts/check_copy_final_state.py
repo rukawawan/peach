@@ -12,6 +12,10 @@ import re
 import sys
 import tokenize
 
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 DISABLE_MARKER = "copy-lint-disable-line"
 RULES = json.loads((ROOT / "scripts/copy-rules.json").read_text(encoding="utf-8"))
@@ -28,7 +32,8 @@ class Finding:
     severity: str = "error"
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line}: {self.severity}: 「{self.term}」 — {self.message}"
+        return t("check_copy_final_state.finding", path=self.path, line=self.line, severity=self.severity,
+                 term=self.term, message=self.message)
 
 
 def _scan_text(path: str, line_no: int, text: str, *, group: str = "prose") -> list[Finding]:
@@ -78,7 +83,7 @@ def scan_python(path: str, source: str) -> list[Finding]:
             if token.type == tokenize.COMMENT:
                 scan(token.string, token.start[0])
     except (tokenize.TokenError, IndentationError, SyntaxError) as error:
-        return [Finding(path, getattr(error, "lineno", None) or 1, "syntax", "无法解析 Python 文案")]
+        return [Finding(path, getattr(error, "lineno", None) or 1, "syntax", t("check_copy_final_state.unparsable"))]
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             scan(node.value, node.lineno, end=node.end_lineno)
@@ -150,13 +155,13 @@ def scan_repo(root: Path = ROOT) -> list[Finding]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("check_copy_final_state.description"))
     parser.add_argument("--root", default=str(ROOT))
     findings = scan_repo(Path(parser.parse_args(argv).root).resolve())
     for finding in findings:
         print(finding)
     errors = sum(item.severity == "error" for item in findings)
-    print(f"文案检查：{errors} 处错误，{len(findings) - errors} 处待人工核对。")
+    print(t("check_copy_final_state.summary", errors=errors, review=len(findings) - errors))
     return int(bool(errors))
 
 

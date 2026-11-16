@@ -239,7 +239,7 @@ class Fc2cmadbSource(SiteSource):
             raise unrecognised()
         article = inertia_props(page.body).get("article")
         if not isinstance(article, dict) or str(article.get("video_id") or "").strip() != wanted:
-            raise SourceFailure(FailureReason.NOT_FOUND, f"{self.config.label} 上没有这个商品")
+            raise SourceFailure(FailureReason.NOT_FOUND, "errors.base.itemNotListed", {"label": self.config.label})
         writer = article.get("writer") if isinstance(article.get("writer"), dict) else {}
         slug = str(writer.get("slug") or "").strip()
         return fc2_record(

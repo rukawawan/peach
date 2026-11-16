@@ -6,6 +6,7 @@ import re
 import time
 
 from .profiles import DEFAULT_PROFILE_ID, read_settings
+from .user_messages import UserValueError
 
 # 只有明确需要重新介绍新教程的版本才修改；不跟随应用版本号递增。
 CAMPAIGN = 'tutorial-center-1'
@@ -28,25 +29,25 @@ def q_tutorial_progress(contract, _args=None):
 def _identifier(body, key):
     value = body.get(key)
     if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', value):
-        raise ValueError('教程章节或步骤标识无效')
+        raise UserValueError('api.tutorial.invalidIdentifier')
     return value
 
 
 def w_tutorial_progress(contract, body):
     if body.get('campaign') != CAMPAIGN:
-        raise ValueError('教程已更新，请刷新后继续')
+        raise UserValueError('api.tutorial.campaignChanged')
     action = body.get('action')
     if action not in {'dismiss', 'reopen', 'complete', 'position', 'step'}:
-        raise ValueError('不支持的教程操作')
+        raise UserValueError('api.tutorial.unsupportedAction')
     if action in {'position', 'step'}:
         chapter = _identifier(body, 'chapter')
         position = body.get('next')
         if type(position) is not int or not 0 <= position <= 200:
-            raise ValueError('教程位置无效')
+            raise UserValueError('api.tutorial.invalidPosition')
         if action == 'step':
             step = _identifier(body, 'step')
             if type(body.get('skipped')) is not bool:
-                raise ValueError('教程跳过状态无效')
+                raise UserValueError('api.tutorial.invalidSkipped')
     with contract.write_transaction() as connection:
         settings = read_settings(connection)
         stored = settings.setdefault(KEY, {})
@@ -59,12 +60,12 @@ def w_tutorial_progress(contract, body):
         else:
             chapters = stored.setdefault('chapters', {})
             if chapter not in chapters and len(chapters) >= 100:
-                raise ValueError('教程章节数量超出范围')
+                raise UserValueError('api.tutorial.tooManyChapters')
             row = chapters.setdefault(chapter, {'next': 0, 'read': [], 'skipped': []})
             row['next'] = position
             if action == 'step':
                 if step not in row['read'] + row['skipped'] and len(row['read']) + len(row['skipped']) >= 200:
-                    raise ValueError('教程步骤数量超出范围')
+                    raise UserValueError('api.tutorial.tooManySteps')
                 row['read'] = [value for value in row['read'] if value != step]
                 row['skipped'] = [value for value in row['skipped'] if value != step]
                 row['skipped' if body['skipped'] else 'read'].append(step)
@@ -73,5 +74,5 @@ def w_tutorial_progress(contract, body):
             (json.dumps(settings, ensure_ascii=False), time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
              DEFAULT_PROFILE_ID)).rowcount
         if not updated:
-            raise ValueError('当前用户设置不存在')
+            raise UserValueError('api.tutorial.profileMissing')
         return _snapshot(settings)

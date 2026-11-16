@@ -31,8 +31,29 @@ if not __package__:
 from . import change_impact, test_evidence, test_history, test_resume, test_run_progress, test_shard_results
 from .test_inputs import repository_paths_read_by as repository_paths_read_by
 
+#: 给人看的输出用哪种语言。作为脚本运行时 `__main__` 在把测试固定到源语言之前记下本机语言；
+#: 被导入时为空，跟当时的环境走。
+OUTPUT_LANGUAGE: str | None = None
+
+
+def t(key: str, **values) -> str:
+    """开发工具文字（`scripts/locales/<语言>/dev.json`）。测试进程的 `PEACH_LANGUAGE` 固定为源语言，
+    运行器自己的输出仍按 `OUTPUT_LANGUAGE` 显示。"""
+    from peach.interface_text import DEV_LOCALES, local_language, text
+    return text(f"dev:{key}", values, OUTPUT_LANGUAGE or local_language(), root=DEV_LOCALES)
+
+
+#: 阶段名是测试记录 `phases` 的键，保持原样；给人看时换成当前语言。
+PHASE_KEYS = {"输入快照": "phaseSnapshot", "历史记录": "phaseHistory", "恢复规划": "phasePlanning",
+              "测试执行": "phaseExecution", "结束核验": "phaseVerification",
+              "快速门槛": "phaseGates", "普通测试": "phaseRegular"}
+
+
+def phase_label(name: str) -> str:
+    return t(f"test_runner.{PHASE_KEYS[name]}") if name in PHASE_KEYS else name
+
 COMMON_PATTERNS = ("test_context_budget.py", "test_test_collection.py", "test_complexity_ratchet.py",
-                   "test_source_assertion_ratchet.py", "test_python_lint.py")
+                   "test_source_assertion_ratchet.py", "test_python_lint.py", "test_user_messages.py")
 SCOPES: dict[str, tuple[str, ...]] = {
     "checks": ("test_copy_final_state.py", "test_dependency_policy.py", "test_repo_hygiene.py", "test_test_planning.py", "test_reference_updates.py", "test_readme_contracts.py",
                "test_complexity_ratchet.py", "test_source_assertion_ratchet.py", "test_python_lint.py"),
@@ -46,7 +67,7 @@ SCOPES: dict[str, tuple[str, ...]] = {
                 "test_review_mirror.py", "test_rm_web.py",
                 "test_entity_link_install.py", "test_web_links.py", "test_entry_links.py",
                 "test_feeds.py", "test_feeds_web.py", "test_wants_web.py",
-                "test_link_marks.py", "test_site_icons.py", "test_site_logos.py",
+                "test_link_marks.py", "test_site_icons.py", "test_site_logos.py", "test_public_http.py",
                 "test_avatar_face.py",
                 "test_brand_marks.py", "test_studio_icon_variants.py",
                 "test_push_discovery.py", "test_media_probe.py",
@@ -111,7 +132,7 @@ SCOPES: dict[str, tuple[str, ...]] = {
                  "test_resource_identification.py",
                  "test_agency_entity.py", "test_agency_reject.py", "test_label_maker.py",
                  "test_seed_pack.py", "test_seed_followup.py", "test_seed_corrections.py"),
-    "tooling": ("test_scripts.py", "test_trash_junk.py", "test_auth.py", "test_access.py", "test_cli.py", "test_server.py", "test_diagnostics.py", "test_error_reporting.py", "test_remote_reporting.py", "test_reporting_*.py", "test_library_sharing.py", "test_library_diagnostics.py", "test_script_policy.py",
+    "tooling": ("test_scripts.py", "test_trash_junk.py", "test_auth.py", "test_access.py", "test_cli.py", "test_server.py", "test_diagnostics.py", "test_error_reporting.py", "test_remote_reporting.py", "test_reporting_*.py", "test_library_sharing.py", "test_research_archive.py", "test_library_diagnostics.py", "test_script_policy.py",
                 "test_scan.py", "test_record_rehome.py", "test_wants.py", "test_push_discovery.py", "test_media_probe.py", "test_subtitles.py", "test_onboarding.py", "test_configuration_sources.py", "test_clouddrive_proxy.py", "test_folder_picker.py", "test_ledger_backups.py", "test_clear_camera_filename_codes.py",
                 "test_agent_worktree.py", "test_ci_test_evidence.py", "test_check_public_text.py", "test_issue_intake.py", "test_star_history.py", "test_test_evidence.py", "test_test_history.py", "test_test_environment.py", "test_dependency_policy.py",
                 "test_version_bump.py", "test_changelog.py", "test_release_due.py", "test_release_candidate.py", "test_media_build_cache.py", "test_runner_launcher.py",
@@ -129,7 +150,7 @@ SCOPES: dict[str, tuple[str, ...]] = {
                 "test_copy_final_state.py", "test_demo_dataset.py",
                 "test_cloudflared_packaging.py", "test_tunnel.py", "test_process_job.py",
                 "test_ffmpeg_build.py", "test_ffmpeg_bundle.py", "test_untrunc_build.py", "test_macos_media.py",
-                "test_media_tool_import.py", "test_seed_corrections.py", "test_face_models_bundle.py"),
+                "test_media_tool_import.py", "test_seed_corrections.py", "test_face_models_bundle.py", "test_dev_text.py"),
     # 前端 island 层（ADR-0022）。产物与源码的断言不需要 Node；vitest 那部分在没有
     # npm 时自己跳过，所以这个域在任何机器上都能跑，`full` 也就自动包含它。
     # `test_web_perf.py` 两个域都登记：压缩与 ETag 是 API 交付（catalog），
@@ -158,7 +179,8 @@ SCOPES: dict[str, tuple[str, ...]] = {
                   "test_cli.py", "test_server.py", "test_versioning.py", "test_frontend_build.py", "test_frontend_preflight.py",
                   "test_cloudflared_packaging.py", "test_desktop_installer.py",
                   "test_ffmpeg_build.py", "test_ffmpeg_bundle.py", "test_untrunc_build.py", "test_macos_media.py",
-                  "test_face_models_bundle.py", "test_metadata_amane_bridge.py", "test_release_candidate.py", "test_media_build_cache.py"),
+                  "test_face_models_bundle.py", "test_metadata_amane_bridge.py", "test_release_candidate.py",
+                  "test_media_build_cache.py", "test_docker_entrypoint.py"),
 }
 
 SCOPE_TEST_IDS: dict[str, tuple[str, ...]] = {
@@ -179,7 +201,7 @@ SCOPE_TEST_IDS: dict[str, tuple[str, ...]] = {
 AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     "scripts/run_gitlab_runner.py": ("tooling",),
     "scripts/render_star_history.py": ("tooling",),
-    "frontend/e2e/jav-userscript-contract.mjs": ("catalog", "web"),
+    "frontend/e2e/jav-userscript-contract.ts": ("catalog", "web"),
     "web/integrations/peach-jav.user.js": ("catalog", "web"),
     "scripts/build_macos_media.py": ("tooling", "packaging"),
     "scripts/setup_macos_media_tools.py": ("tooling", "packaging"),
@@ -233,6 +255,15 @@ AUTO_SCOPE_FILES: dict[str, tuple[str, ...]] = {
     "src/peach/genre_taxonomy.py": ("metadata", "catalog", "web"),
     # 标签词表是 genre 投影的落点，复核页与目录页也按它筛选。
     "src/peach/catalog_rules.py": ("metadata", "catalog", "web"),
+    # 内容数据模块与带 code 的原句（ADR-0159）：没有自己的测试文件，域取直接用它们的那些模块。
+    # 账本取值、文件名原词与 `Said` 散在扫描、采集、关注、下载与页面各处，几乎每个域都有读者。
+    "src/peach/catalog_vocabulary.py": ("follow", "catalog", "media", "sync", "metadata", "tooling", "web", "core"),
+    "src/peach/content_words.py": ("follow", "catalog", "media", "sync", "metadata", "tooling", "web", "core"),
+    "src/peach/coded_text.py": ("follow", "catalog", "media", "metadata", "tooling", "web", "core"),
+    "src/peach/junk_words.py": ("follow", "catalog", "media", "metadata", "tooling", "web", "core"),
+    "src/peach/source_page_words.py": ("metadata",),
+    "src/peach/studio_words.py": ("catalog", "metadata", "web"),
+    "src/peach/taste_words.py": ("catalog", "tooling"),
     # 来源顺序一变，`test_scripts.py` 里钉住的 field_rank 就跟着挪，而那份用例
     # 住在 tooling——按名字只推得出 metadata，不指明就跑不到。
     "src/peach/metadata_policy.py": ("metadata", "tooling"),
@@ -339,6 +370,8 @@ AUTO_SCOPE_PREFIXES: tuple[tuple[str, str | tuple[str, ...]], ...] = (
     ("scripts/localize_studio_names.py", ("metadata", "tooling")),
     ("scripts/apply_studio_name_localization.py", ("metadata", "tooling")),
     ("scripts/match_babepedia_creators.py", ("metadata", "tooling")),
+    # 旧版中文取值的对照表，读它的多是元数据脚本（babepedia、javdb 名字、厂牌名本地化）。
+    ("scripts/legacy_values.py", ("metadata", "tooling")),
     ("scripts/audit_code_creators.py", ("metadata", "tooling")),
     ("scripts/rename_retired_tags.py", ("metadata", "tooling")),
     ("scripts/reproject_snapshot_tags.py", ("metadata", "tooling")),
@@ -357,7 +390,7 @@ AUTO_SCOPE_PREFIXES: tuple[tuple[str, str | tuple[str, ...]], ...] = (
     ("scripts/sync_brand_marks.py", ("catalog", "tooling")),
     ("scripts/detect_cover_faces.py", ("web", "tooling")),
     ("scripts/demo_dataset.py", ("web", "tooling")),
-    ("scripts/vendor_web_dependencies.mjs", ("web", "tooling")),
+    ("scripts/vendor_web_dependencies.ts", ("web", "tooling")),
     ("scripts/audit_video_endcards.py", ("media", "tooling")),
     ("scripts/setup_macos_port80.sh", ("sync", "tooling")),
     # 订阅源的解析与建壳验在 `test_feeds*.py`，两份都登记在 catalog：壳的边界是
@@ -392,6 +425,8 @@ AUTO_SCOPE_PREFIXES: tuple[tuple[str, str | tuple[str, ...]], ...] = (
     # 应用图标：页面站标（web）、托盘与菜单栏（sync）、安装包与 DMG（packaging），
     # `test_scripts.py` 读 `peach-logo.png`（tooling）。
     ("resources/setup/", ("web", "packaging")),
+    # 语言资源：前端（web）直接导入；后端渲染与资源对照测试在 tooling（ADR-0159）。
+    ("resources/locales/", ("web", "tooling")),
     ("resources/", ("sync", "tooling", "web", "packaging")),
     ("web/", "web"),
     ("frontend/", "web"),
@@ -622,16 +657,16 @@ def scopes_for_changes(paths: Iterable[str], *, contents: dict | None = None,
                          for scope in scopes_of_test_file(name)}
             scopes = tuple(scope for scope in SCOPES if scope in {*scopes, *consumers})
         if not scopes:
-            full_reasons.append(f"{path} 映射不到任何域")
+            full_reasons.append(t("test_runner.noDomain", path=path))
         elif "full" in scopes:
-            full_reasons.append(f"{path} 属于必须 full 的面")
+            full_reasons.append(t("test_runner.fullSurface", path=path))
         else:
             for scope in scopes:
                 picked.setdefault(scope, []).append(path)
     if full_reasons:
         return ("full",), "Peach auto scope: full <- " + "; ".join(full_reasons)
     if not picked:
-        return ("checks",), "Peach auto scope: checks <- 没有改动文件，检查公共门槛"
+        return ("checks",), "Peach auto scope: checks <- " + t("test_runner.noChanges")
     ordered = tuple(scope for scope in SCOPES if scope in picked)
     detail = "; ".join(f"{scope}: {', '.join(picked[scope])}" for scope in ordered)
     return ordered, f"Peach auto scope: {', '.join(ordered)} <- {detail}"
@@ -657,7 +692,7 @@ def resolve_auto_scope() -> tuple[tuple[str, ...], str]:
     try:
         paths = changed_files()
     except (OSError, subprocess.CalledProcessError) as error:
-        return ("full",), f"Peach auto scope: full <- git 不可用（{error}）"
+        return ("full",), "Peach auto scope: full <- " + t("test_runner.gitUnavailable", error=error)
     return scopes_for_changes(paths, contents=changed_contents(ROOT, "master", paths))
 
 
@@ -703,7 +738,8 @@ def build_suite(*scopes: str, shard_index: int = 0, shard_count: int = 1,
     else:
         assigned = {TESTS / name for name in assigned_names}
         if not assigned <= set(files):
-            raise ValueError(f"分片划分含本次范围以外的文件：{sorted(p.name for p in assigned - set(files))}")
+            raise ValueError(t("test_runner.shardOutsideScope",
+                               files=str(sorted(p.name for p in assigned - set(files)))))
     sys.path[:0] = [str(ROOT), str(TESTS)]
     try:
         for path in sorted(assigned):
@@ -863,9 +899,9 @@ def resolve_jobs(value: str) -> int:
     try:
         jobs = int(value)
     except ValueError:
-        raise argparse.ArgumentTypeError("--jobs 只接受正整数或 auto") from None
+        raise argparse.ArgumentTypeError(t("test_runner.jobsInvalid")) from None
     if jobs < 1:
-        raise argparse.ArgumentTypeError("--jobs 至少为 1")
+        raise argparse.ArgumentTypeError(t("test_runner.jobsTooLow"))
     return jobs
 
 
@@ -937,7 +973,7 @@ def run_shards(scopes: tuple[str, ...], *, jobs: int, shard_count: int,
         resume_path.write_text(json.dumps(resume_plan), encoding='utf8')
     if plan is not None:
         if len(plan) != shard_count:
-            raise ValueError("分片划分的片数与分片总数不符")
+            raise ValueError(t("test_runner.shardPlanMismatch"))
         plan_path = folder / "plan.json"
         plan_path.write_text(json.dumps(plan), encoding="utf-8")
     pending = list(range(shard_count))
@@ -984,16 +1020,20 @@ def run_shards(scopes: tuple[str, ...], *, jobs: int, shard_count: int,
                     measured.update(report.get("files", {}))
                 if outcomes is not None:
                     outcomes.extend(report.get("results", []))
-                print(f"分片 {index + 1}/{shard_count} {'通过' if ok else '失败'}"
-                      f"（{report.get('count', 0)} 个用例；退出码 {process.returncode}；"
-                      f"完成报告 {'有' if report.get('complete') else '无'}；"
-                      f"补验覆盖 {'完整' if complete else '未完整' if complete is False else '未请求'}）", flush=True)
+                coverage = ("coverageComplete" if complete else "coverageIncomplete" if complete is False
+                            else "coverageNotRequested")
+                print(t("test_runner.shardDone", index=index + 1, count=shard_count,
+                        status=t("test_runner.shardPassed" if ok else "test_runner.shardFailed"),
+                        cases=report.get('count', 0), code=process.returncode,
+                        report=t("test_runner.reportPresent" if report.get('complete') else "test_runner.reportMissing"),
+                        coverage=t(f"test_runner.{coverage}")), flush=True)
                 if not ok:
                     details = {'files': assigned, 'exit_code': process.returncode,
                                'forced_cleanup': index in forced, 'report_error': report.get('report_error'),
                                'reported_success': report.get('success'), 'coverage_complete': complete,
                                'reported_results': len(report.get('results', []))}
-                    print('分片失败明细：' + json.dumps(details, ensure_ascii=False), flush=True)
+                    print(t("test_runner.shardFailureDetails", details=json.dumps(details, ensure_ascii=False)),
+                          flush=True)
     finally:
         for process, log in running.values():
             if process.poll() is None:
@@ -1041,19 +1081,16 @@ def environment_preflight(scopes: tuple[str, ...], timings: Path | None = None,
     if not blocked:
         return
     if os.environ.get("PEACH_SKIP_PREFLIGHT") == "1":
-        print(f"跳过外部工具预检（PEACH_SKIP_PREFLIGHT=1）：{'、'.join(blocked)}", flush=True)
+        print(t("test_runner.preflightSkipped", tools=blocked), flush=True)
         return
     needed = tools_needed_by(scopes)
     fatal = tuple(name for name in blocked if name in needed)
     spared = tuple(name for name in blocked if name not in needed)
     if spared:
-        print(f"本次范围不需要这些启动受限的工具，只作提示：{'、'.join(spared)}", flush=True)
+        print(t("test_runner.toolsSpared", tools=spared), flush=True)
     if not fatal:
         return
-    print(f"Peach 测试环境无法启动 PATH 中的工具：{'、'.join(fatal)}。"
-          "Windows Codex 任务请让 scripts/test.ps1 通过受控提权在正常 PowerShell 权限下运行；"
-          "其他环境请先修复这些工具的执行权限。不要改单测或跳过用例。"
-          "确认本次无关时用 PEACH_SKIP_PREFLIGHT=1 跳过预检。", flush=True)
+    print(t("test_runner.toolsBlocked", tools=fatal), flush=True)
     if timings is not None:
         timings.write_text(json.dumps({"success": False, "count": 0, "timings": []}),
                            encoding="utf-8")
@@ -1110,15 +1147,31 @@ def rerun_failures(rows: list[dict], spawn=subprocess.run) -> bool:
     selectors = rerun_selectors(rows)
     if not selectors:
         return False
-    print(f"单独重跑失败的 {len(selectors)} 项，排除负载造成的偶发：{', '.join(selectors)}", flush=True)
+    print(t("test_runner.rerunning", count=len(selectors), tests=', '.join(selectors)), flush=True)
     command = [sys.executable, str(ROOT / "scripts" / "test_runner.py"),
                *(item for selector in selectors for item in ("--focus", selector))]
     if spawn(command, cwd=str(ROOT), check=False).returncode != 0:
-        print("单独重跑仍失败：按真实失败处理。", flush=True)
+        print(t("test_runner.rerunStillFailed"), flush=True)
         return False
     FLAKY[:] = selectors
-    print(f"偶发通过（全量失败、单独重跑通过，已写入测试记录）：{', '.join(selectors)}", flush=True)
+    print(t("test_runner.flakyPassed", tests=', '.join(selectors)), flush=True)
+    report_flaky(selectors)
     return True
+
+
+def report_flaky(selectors: list[str]) -> None:
+    """偶发写进测试历史供排行；在 GitHub Actions 上同时标成警告并写进作业摘要，PR 上看得见。"""
+    if test_history.nested():
+        return
+    test_history.append_flaky(ROOT, selectors)
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    print(f"::warning title={t('test_runner.flakyTitle')}::"
+          + t("test_runner.flakyWarning", tests=', '.join(selectors)), flush=True)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a", encoding="utf-8") as stream:
+            stream.write(f"### {t('test_runner.flakySummaryHeading')}\n\n"
+                         + "".join(f"- `{name}`\n" for name in selectors) + "\n")
 
 
 def local_batches(names, jobs):
@@ -1148,7 +1201,8 @@ def run_local_suite(scopes: tuple[str, ...], jobs: int, label: str | None = None
         rows: list[dict] = []
         passed, count, timings = True, 0, []
         for stage, plan, concurrency in local_batches([path.name for path in chosen], jobs):
-            print(f'{stage}：{len(plan)} 片、同时 {min(concurrency, len(plan))} 个子进程', flush=True)
+            print(t("test_runner.stageStart", stage=phase_label(stage), shards=len(plan),
+                    processes=min(concurrency, len(plan))), flush=True)
             with test_run_progress.phase(progress.phases if progress is not None else {}, stage):
                 if jobs == 1 and 'full' not in scopes:
                     assigned = {path for path in chosen if path.name in {name for group in plan for name in group}}
@@ -1158,7 +1212,7 @@ def run_local_suite(scopes: tuple[str, ...], jobs: int, label: str | None = None
                                                 plan=plan, outcomes=rows, **progress_args)
             passed, count, timings = passed and ok, count + more, [*timings, *slow]
             if not ok and stage == '快速门槛':
-                print("快速门槛未通过，其余测试本轮不跑。", flush=True)
+                print(t("test_runner.gatesFailed"), flush=True)
                 save_file_seconds(measured)
                 test_history.append(ROOT, scope=label or " ".join(scopes), rows=rows,
                                     files=[name.removesuffix(".py") for name in plan[0]])
@@ -1213,7 +1267,7 @@ def run_shard_child(args, requested, scopes, files) -> int:
         allowed.update(case for case in test_resume.CONTAINERS
                        if test_resume.owner('case:' + case) in {path.name for path in files})
         if not set(selection.get('case_universe', ())) <= allowed:
-            raise ValueError('恢复计划包含本次范围外的补充用例')
+            raise ValueError(t("test_runner.resumePlanOutside"))
     suite = build_suite(*scopes, shard_index=args.shard_index, shard_count=args.shard_count, **planned)
     if selection:
         suite = test_resume.filter_suite(suite, selection, set(planned.get('assigned_names', ())), unittest.TestSuite)
@@ -1234,6 +1288,9 @@ def run_shard_child(args, requested, scopes, files) -> int:
         test_history.append(ROOT, scope=f"{' '.join(requested)}:{' '.join(scopes)} "
                             f"shard {args.shard_index + 1}/{args.shard_count}",
                             rows=rows, files=[name.removesuffix(".py") for name in names])
+        # 独立分片同样先把失败文件单独重跑一次，不让一个负载偶发把整片判红、只能整片重跑。
+        if not success and rows:
+            success = rerun_failures(rows)
     return 0 if success else 1
 
 
@@ -1243,39 +1300,44 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", action="append", dest="scopes",
                         choices=("full", "auto", *SCOPES))
     reuse = parser.add_mutually_exclusive_group()
-    reuse.add_argument("--fresh", action="store_true", help="实际重跑，不复用本机记录")
-    reuse.add_argument("--resume", action="store_true", help="正式验证续跑，full 也复用有效的完成证明")
-    parser.add_argument("--focus", action="append", default=[], help="定向调试指定 Python/浏览器用例，不签发记录")
+    reuse.add_argument("--fresh", action="store_true", help=t("test_runner.helpFresh"))
+    reuse.add_argument("--resume", action="store_true", help=t("test_runner.helpResume"))
+    parser.add_argument("--focus", action="append", default=[], help=t("test_runner.helpFocus"))
+    parser.add_argument("--rerun-failures", action="store_true",
+                        help=t("test_runner.helpRerunFailures"))
+    parser.add_argument("--full-lock-held", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--lock-timeout", type=float, default=1800,
-                        help="全量锁等待秒数；0 表示锁忙时立即返回")
-    parser.add_argument("--base", default="master", help="CI 选测的已验证 Git 基线")
+                        help=t("test_runner.helpLockTimeout"))
+    parser.add_argument("--base", default="master", help=t("test_runner.helpBase"))
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--timings", type=Path, default=None,
-                        help="分片子进程把成败与逐用例耗时写到这个文件，供父进程汇总")
+                        help=t("test_runner.helpTimings"))
     parser.add_argument("--shard-plan", type=Path, default=None,
-                        help="父进程按耗时划好的逐片文件名；不给时按文件名轮转")
+                        help=t("test_runner.helpShardPlan"))
     parser.add_argument('--resume-plan', type=Path, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--jobs", type=resolve_jobs, default=1,
-                        help="本机同时跑几个分片子进程；auto 按核数定。默认串行，正式入口传 auto")
+                        help=t("test_runner.helpJobs"))
     parser.add_argument("--list-scopes", action="store_true")
     args = parser.parse_args(argv)
     if not 0 <= args.lock_timeout <= 1800:
-        parser.error("锁等待时间必须在 0～1800 秒之间")
+        parser.error(t("test_runner.lockTimeoutRange"))
     if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
-        parser.error("分片总数必须为正数，编号从 0 开始且小于总数")
+        parser.error(t("test_runner.shardRange"))
     if args.list_scopes:
         print("\n".join(("full", "auto", *SCOPES)))
         return 0
     if args.resume_plan is not None and args.shard_plan is None:
-        parser.error('恢复计划仅供正式父运行的分片使用')
+        parser.error(t("test_runner.resumePlanParentOnly"))
+    if args.rerun_failures and not args.focus:
+        parser.error(t("test_runner.rerunFailuresFocusOnly"))
     if args.focus:
         return run_focus(parser, args)
     if os.environ.get("PEACH_TEST_FOCUS") or os.environ.get("PEACH_E2E_FILES") or os.environ.get("PEACH_VITEST_FILES"):
-        parser.error("定向调试环境不能签发正式记录；请清除 PEACH_TEST_FOCUS、PEACH_E2E_FILES 与 PEACH_VITEST_FILES")
+        parser.error(t("test_runner.focusEnvironment"))
     requested: tuple[str, ...] = tuple(dict.fromkeys(args.scopes or ("auto",)))
     if "auto" in requested and len(requested) > 1:
-        parser.error("auto 不能与别的域同时指定")
+        parser.error(t("test_runner.autoAlone"))
     scopes = requested
     if requested == ("auto",):
         if args.base == "master":
@@ -1291,24 +1353,54 @@ def main(argv: list[str] | None = None) -> int:
         # CI 的每片独立 runner，或父进程派出的分片（含只有一片的快速门槛）；分片绝不签发本机记录。
         return run_shard_child(args, requested, scopes, files)
     if ci_frontend_delegated():
-        print("CI 前端工具检查由 web-bundle 验证；本次不签发本机测试记录。", flush=True)
+        print(t("test_runner.ciFrontendDelegated"), flush=True)
         success, count, _ = run_local_suite(scopes, args.jobs, f"{' '.join(requested)}:{' '.join(scopes)}")
         return 0 if success and count > 0 else 1
     try:
-        guard = test_evidence.held(test_evidence.evidence_dir(ROOT) / "full-suite.lock",
-                                  wait_seconds=args.lock_timeout,
-                                  scope=" ".join(scopes), root=str(ROOT)) \
-            if "full" in scopes else nullcontext()
-        with guard:
+        with full_suite_guard(parser, args, scopes):
             return verified_run(args, requested, scopes, files)
     except test_evidence.Timeout as error:
         return busy(error)
 
 
+def full_suite_guard(parser, args, scopes):
+    """全量验证取得仓库的全量锁。集成入口持锁补验时，由它派出的运行器沿用那把锁，
+    否则子进程会等父进程放锁、父进程等子进程结束，互等到超时。"""
+    if args.full_lock_held:
+        lock = test_evidence.evidence_dir(ROOT) / "full-suite.lock"
+        try:
+            holder = json.loads(test_evidence.holder_path(lock).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            holder = {}
+        if not _is_ancestor(holder.get("pid")):
+            parser.error(t("test_runner.fullLockHeldOnly"))
+        return nullcontext()
+    if "full" not in scopes:
+        return nullcontext()
+    return test_evidence.held(test_evidence.evidence_dir(ROOT) / "full-suite.lock", wait_seconds=args.lock_timeout,
+                              scope=" ".join(scopes), root=str(ROOT))
+
+
+def _is_ancestor(pid: object) -> bool:
+    """持锁的集成进程是否在本进程的祖先链上。
+
+    Windows 的 venv `python.exe` 是启动器，会再派出真正的解释器：直接父进程是那层启动器，
+    持锁的集成进程还在它上面。"""
+    if not isinstance(pid, int):
+        return False
+    if pid == os.getppid():
+        return True
+    import psutil
+    try:
+        return any(parent.pid == pid for parent in psutil.Process().parents())
+    except psutil.Error:
+        return False
+
+
 def run_focus(parser, args) -> int:
     """定向调试不签发记录，不取得机器级资源锁。"""
     if args.shard_count != 1:
-        parser.error("定向调试不能与分片一起使用")
+        parser.error(t("test_runner.focusWithShards"))
     from . import test_focus
     return test_focus.run(sys.modules[__name__], args)
 
@@ -1319,9 +1411,8 @@ HEAVY_FILES = frozenset({"test_web_e2e", "test_frontend_build"})
 
 def busy(error) -> int:
     lock = Path(error.lock_file)
-    what = {"full-suite.lock": "本仓库全量测试"}.get(
-        lock.name, "相同状态的验证")
-    print(f"{what}正在运行（{test_evidence.describe_holder(lock)}），请等待该次结果。", flush=True)
+    what = t("test_runner.busyFullSuite" if lock.name == "full-suite.lock" else "test_runner.busySameState")
+    print(t("test_runner.busy", what=what, holder=test_evidence.describe_holder(lock)), flush=True)
     return 2
 
 
@@ -1336,7 +1427,7 @@ def verified_run(args, requested, scopes, files) -> int:
     with test_evidence.run_lock(ROOT, state, scope=" ".join(scopes), root=str(ROOT)):
         if not force and test_evidence.covers(
                 test_evidence.read(ROOT, state), scopes):
-            print("复用本机测试记录：代码、依赖环境和范围匹配（24 小时内）。", flush=True)
+            print(t("test_runner.reused"), flush=True)
             return 0
         with test_run_progress.phase(phases, '历史记录'):
             previous = test_evidence.read(ROOT, state)
@@ -1350,9 +1441,11 @@ def verified_run(args, requested, scopes, files) -> int:
                 scopes = test_resume.choose_scopes(progress.pending, progress.requirements, choices)
         progress.phases = phases
         actual = len(progress.modules)
-        print(f"实际运行：{' '.join(scopes) or '无需补测'}（{actual} 个测试文件）", flush=True)
+        print(t("test_runner.actualRun", scopes=' '.join(scopes) or t("test_runner.nothingToRun"), count=actual),
+              flush=True)
         if records and not force:
-            print(f'单项覆盖：复用 {len(progress.required) - len(progress.pending)} 项，待验证 {len(progress.pending)} 项。', flush=True)
+            print(t("test_runner.coverage", reused=len(progress.required) - len(progress.pending),
+                    pending=len(progress.pending)), flush=True)
         progress.start()
         FLAKY.clear()
         with test_run_progress.phase(phases, '测试执行'):
@@ -1366,13 +1459,13 @@ def verified_run(args, requested, scopes, files) -> int:
         slowest = sorted(timings, reverse=True)[:20]
         progress.persist(final=True, success=success, elapsed=time.monotonic() - started,
                          slowest=slowest, count=count, flaky=FLAKY if success else None)
-        print('分阶段耗时（测试执行包含各测试阶段）：' + '；'.join(
-            f'{name} {seconds:.2f}s' for name, seconds in phases.items()), flush=True)
+        print(t("test_runner.phaseTimings", phases=t("common.clauseSeparator").join(
+            f'{phase_label(name)} {seconds:.2f}s' for name, seconds in phases.items())), flush=True)
         for seconds, name in slowest[:5]:
-            print(f"慢测试 {seconds:.3f}s：{name}", flush=True)
+            print(t("test_runner.slowTest", seconds=f"{seconds:.3f}", name=name), flush=True)
         if not stable:
             kept = progress.retain_current()
-            print(f'验证期间输入改变；保留 {kept} 项未受影响的结果，请运行 auto 补齐。', flush=True)
+            print(t("test_runner.inputsChanged", kept=kept), flush=True)
             return 4
         return 0 if success else 1
 
@@ -1434,6 +1527,11 @@ def isolated_temp(base: Path | None = None):
 if __name__ == "__main__":
     # 故障注入的默认错误日志属于当前测试进程，不能写进真实数据目录。
     os.environ["PEACH_REPORTING_TEST_MODE"] = "1"
+    # 命令行跟系统语言（ADR-0159 第三条）；测试按源语言断言，不随跑测试那台机器的语言变。
+    # 运行器自己的输出仍跟本机语言，先记下来再固定。
+    from peach.interface_text import local_language
+    OUTPUT_LANGUAGE = local_language()
+    os.environ["PEACH_LANGUAGE"] = "zh-CN"
     from peach import error_reporting, remote_reporting
     remote_reporting.disable_for_process()
     with isolated_temp(), tempfile.TemporaryDirectory(prefix='peach-test-errors-') as error_logs:

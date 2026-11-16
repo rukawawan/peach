@@ -1,21 +1,11 @@
-/* `markup.ts` 画出来的那几件小部件：Spinner、Loading Dots、徽标、进度条、空态、勾选框、项目横幅与圆环仪表。
-   Geist Spinner = 用户触发动作的即时反馈；Loading Dots = 后台任务仍在推进。 */
+/* `markup.ts` 画出来的那几件小部件：Spinner、徽标、空态、勾选框与项目横幅。
+   Geist Spinner = 用户触发动作的即时反馈；后台推进的语义动画在 `activity-motion.css`。 */
 @keyframes geist-spinner-opacity{0%{opacity:1}100%{opacity:.15}}
 .ui-geist-spinner{position:relative;display:inline-block;flex:none;width:16px;height:16px;color:currentColor}
 .ui-geist-spinner>i{position:absolute;top:1px;left:7px;width:2px;height:4px;border-radius:var(--pill-radius);
   background:currentColor;transform-origin:1px 7px;transform:rotate(var(--spinner-angle));
   animation:geist-spinner-opacity 1s linear var(--spinner-delay) infinite}
-@keyframes geist-loading-dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
-.ui-geist-loading{display:inline-flex;align-items:center;min-width:0;gap:8px;color:var(--muted)}
-.ui-geist-loading-dots{display:inline-flex;align-items:center;gap:3px;flex:none}
-.ui-geist-loading-dots>i{width:4px;height:4px;border-radius:50%;background:currentColor;
-  animation:geist-loading-dot 1.2s ease-in-out infinite}
-.ui-geist-loading-dots>i:nth-child(2){animation-delay:.15s}.ui-geist-loading-dots>i:nth-child(3){animation-delay:.3s}
 .ui-geist-badge{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;height:20px;padding:0 6px;border-radius:var(--badge-radius);background:var(--hover);color:var(--ink-2);font-size:var(--fs-xs);font-weight:500;line-height:1;white-space:nowrap}
-/* `progressHtml` 那一条进度条，颜色由调用方写进 `--progress-color`；刻度 `.ui-geist-progress-stop` 在下面仪表那一段。 */
-.ui-geist-progress{height:8px;margin-top:7px;overflow:hidden;border-radius:var(--pill-radius);background:var(--line-soft)}.ui-geist-progress i{display:block;width:var(--progress-value);height:100%;border-radius:inherit;background:var(--tungsten)}
-.ui-geist-progress{position:relative}.ui-geist-progress i{background:var(--progress-color,var(--feedback-success))}
-@media(prefers-reduced-motion:no-preference){.ui-geist-progress i{transition:width .2s ease-out,background-color .2s ease-out}}
 
 /* Geist Empty State（`emptyStateHtml`）：图标、标题与说明同处一个组件；外层容器只负责与上方工具条保持 16px。 */
 .ui-emptystate{grid-column:1/-1;display:grid;justify-items:center;align-content:center;gap:8px;box-sizing:border-box;width:100%;min-height:320px;padding:48px 24px;text-align:center;border:1px solid var(--line-soft);border-radius:var(--floating-radius);background:var(--ground)}
@@ -63,14 +53,14 @@ input[type=checkbox]:not([data-toggle]):not(.ui-pcheck input):not(.peach-react i
 @media(prefers-reduced-motion:reduce){
 .ui-pcheck input:checked+span svg{animation:none;stroke-dashoffset:0}}
 
-/* 项目横幅（`projectBannerHtml`）：通栏一条，语义色走 `--feedback-color`。 */
+/* 项目横幅（React 的更新横幅、断网横幅与播放墙的筛选提示）：通栏一条，语义色走 `--feedback-color`。 */
 .ui-project-banner{--feedback-color:var(--muted);display:flex;align-items:center;justify-content:center;gap:8px 16px;flex-wrap:wrap;padding:8px 24px;min-height:40px;border-block:1px solid color-mix(in srgb,var(--feedback-color) 30%,var(--ground));background:color-mix(in srgb,var(--feedback-color) 5%,var(--ground));color:var(--feedback-color);font-size:var(--fs-md);line-height:20px}
 .ui-project-banner>div{display:flex;align-items:center;gap:8px;min-width:0}
 .ui-project-banner p{margin:0;overflow-wrap:anywhere}
 /* 圆头端点是这枚字形的一部分：alert 与 info 圆圈里那个点是长度 .01 的路径，
    butt 端点会把它渲染成看不见的薄片，横幅上只剩上半截竖杠，警告读成了半个符号。
-   只认直接子元素：带进度时横幅里那一枚是 `.ui-geist-gauge` 的圆环，它的端点是弧的
-   两头而不是字形笔画，跟着一起圆掉就成了另一种控件的长相。 */
+   只认直接子元素的描边：带进度时那一枚小环形（`ProgressRing`）的端点本来就是圆头，语义动画
+   包在自己的节点里，不吃这条描边。 */
 .ui-project-banner>div>svg{width:var(--icon-inline);height:var(--icon-inline);flex:none;fill:none;stroke:currentColor;stroke-width:2;
   stroke-linecap:round;stroke-linejoin:round}
 .ui-project-banner>a{color:inherit;text-decoration:underline;text-underline-offset:5px;font-weight:500;flex:none}
@@ -80,17 +70,3 @@ input[type=checkbox]:not([data-toggle]):not(.ui-pcheck input):not(.peach-react i
 /* 窄屏上说明从左边起，动作靠右端：`auto` 而不是定值缩进，说明长短不一时那个链接才
    总在同一条竖线上，换行之后也还在这一横条的右端。 */
 @media(max-width:600px){.ui-project-banner{justify-content:flex-start}.ui-project-banner>a{margin-left:auto}}
-/* 圆环仪表（`gaugeHtml`）与进度条刻度（`progressHtml` 的 `stops`）。 */
-.ui-geist-gauge{display:inline-flex;width:32px;height:32px;flex:none;vertical-align:middle;margin-inline-end:8px}
-.ui-geist-gauge svg{width:100%;height:100%;fill:none;stroke-width:3}
-.ui-geist-gauge circle:first-child{stroke:var(--line-soft)}
-.ui-geist-gauge circle:last-child{stroke:var(--feedback-success);transform:rotate(-90deg);transform-origin:center}
-.ui-geist-progress-stop{position:absolute;top:0;bottom:0;width:2px;background:var(--ground);transform:translateX(-50%)}
-.ui-geist-gauge[data-level="warning"] circle:last-child{stroke:var(--meter)}
-.ui-geist-gauge[data-level="error"] circle:last-child{stroke:var(--drop)}
-.ui-gauge-status{margin-inline-end:8px;font-size:var(--fs-xs)}
-@media(prefers-reduced-motion:no-preference){.ui-geist-gauge circle:last-child{transition:stroke-dasharray .2s ease-out,stroke .2s ease-out}}
-/* 不定档：那一段弧绕圈转，转的是整枚 svg，弧自己的 -90° 起点不动。减少动态效果时停在原处，
-   旁边那句说明照样说清在等。 */
-@keyframes ui-gauge-spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:no-preference){.ui-geist-gauge[data-indeterminate] svg{animation:ui-gauge-spin .9s linear infinite}}

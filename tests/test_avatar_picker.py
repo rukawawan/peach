@@ -16,7 +16,7 @@ from unittest import mock
 
 from PIL import Image, ImageDraw
 
-from peach import avatar_online, avatar_picker, gfriends, http as peach_http, jav_poster_crop
+from peach import avatar_online, avatar_picker, gfriends, http as peach_http, interface_text, jav_poster_crop
 from peach.avatar_face import sidecar_path
 from peach.avatar_provider import AvatarCandidateCache, inspect_avatar, provenance_now
 from peach.http import HttpResponse
@@ -236,7 +236,7 @@ class IndexRefreshTests(unittest.TestCase):
         failures = [
             lambda: HttpResponse(503, {}, b"", gfriends.INDEX_URL),
             lambda: HttpResponse(200, {}, b"<html>", gfriends.INDEX_URL),
-            lambda: (_ for _ in ()).throw(OSError("连接被重置")),
+            lambda: (_ for _ in ()).throw(OSError("Connection reset by peer")),
         ]
         for reply in failures:
             with self.subTest(reply=reply):
@@ -421,6 +421,8 @@ class HistorySourceTests(PickerFixture):
                            {"provider": "history", "external_id": digest[:12], **crop_origin})
         choice = next(choice for choice in self.history() if choice.ref == f"sha256:{inspect_avatar(cut).sha256}")
         self.assertEqual(choice.label, "X @Example · 已裁剪")
+        self.assertEqual((choice.label_code, dict(choice.label_params), choice.user_cropped),
+                         ("labels.avatarPicker.named", {"name": "X @Example"}, True))
         self.assertEqual(choice.detail, "https://pbs.twimg.com/profile_images/1/avatar.jpg")
 
     def test_ambiguous_original_hashes_leave_the_crop_source_unrecorded(self):
@@ -436,6 +438,10 @@ class HistorySourceTests(PickerFixture):
                            {"provider": "history", "external_id": digest[:12], **crop_origin})
         choice = next(choice for choice in self.history() if choice.ref == f"sha256:{inspect_avatar(cut).sha256}")
         self.assertEqual(choice.label, "来源未记录 · 已裁剪")
+        self.assertEqual(choice.label_code, "labels.avatarPicker.sourceUnknown")
+        english = interface_text.text("server:labels.avatarPicker.cropped", {
+            "label": interface_text.text(f"server:{choice.label_code}", language="en")}, language="en")
+        self.assertEqual(english, "Source not recorded · Cropped")
         self.assertEqual(choice.detail, "")
 
     def test_another_entity_cannot_supply_a_history_source(self):
@@ -660,6 +666,9 @@ class AssetArtworkTests(PickerFixture):
                     avatar_picker.asset_artwork(self.connection, self.covers, 7792)]
 
         self.assertEqual(details(), ['代表作画面，非本人 · ABW-232 的标题'])
+        stand_in = avatar_picker.asset_artwork(self.connection, self.covers, 7792)[0].as_dict()
+        self.assertEqual((stand_in["detail_code"], stand_in["detail_params"]),
+                         ("labels.avatarPicker.standInWithTitle", {"title": "ABW-232 的标题"}))
         body, origin = avatar_picker.resolve('asset:11:cover', self.connection, self.providers,
                                              7792, transport_of(b''), artwork=self.artwork)
         self.assertEqual(body, self.cover.read_bytes())
@@ -1298,6 +1307,14 @@ class AvatarPickerRouteTests(unittest.TestCase):
                 self.app.state.database.read_connection() as connection, \
                 self.assertRaisesRegex(avatar_picker.PickerError, "X 资料页没有本人头像"):
             _picker_online(mock.Mock(app=self.app), connection, 7792)(ref)
+
+    def test_profile_avatar_failures_keep_a_code_when_they_agree(self):
+        from peach.routes_media import _avatar_failure
+        from peach.user_messages import UserFacingError
+        unavailable = UserFacingError("errors.routesMedia.avatarSourceUnavailable")
+        self.assertEqual(_avatar_failure([unavailable, UserFacingError(unavailable.code)]), {
+            "error": "头像来源暂不可用", "message_code": unavailable.code, "message_params": {}})
+        self.assertEqual(_avatar_failure([])["message_code"], "api.media.socialAvatarUnavailable")
 
     def test_online_domain_uses_the_injected_visible_media_and_cover(self):
         item_id = self._online_creator()

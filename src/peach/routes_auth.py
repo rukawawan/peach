@@ -15,7 +15,8 @@ from collections import OrderedDict
 import threading
 import time
 from urllib.parse import urlsplit
-from . import access, distribution, tunnel
+from . import access, distribution, interface_text, tunnel
+from .user_messages import message_fields
 from .web_entry import page_shell
 from .web_local_access import local_client
 from starlette.concurrency import run_in_threadpool
@@ -56,7 +57,7 @@ def _login_attempt(request: Request) -> None:
         attempts = [stamp for stamp in _ATTEMPTS.pop(peer, []) if now - stamp < 60]
         _ATTEMPTS[peer] = attempts
         if len(attempts) >= 10:
-            raise HTTPException(429, "尝试次数较多，请一分钟后重试", headers={"Retry-After": "60"})
+            raise HTTPException(429, message_fields("api.auth.tooManyAttempts"), headers={"Retry-After": "60"})
         attempts.append(now)
         while len(_ATTEMPTS) > 1024:
             _ATTEMPTS.popitem(last=False)
@@ -255,7 +256,7 @@ def same_origin(request: Request) -> None:
     声明一个可信地址。
     """
     if not origin_allowed(request, guard="same-origin"):
-        raise HTTPException(403, "请从 Peach 配置页提交")
+        raise HTTPException(403, message_fields("api.auth.submitFromSettings"))
 
 
 def require_auth(request: Request) -> dict[str, str]:
@@ -323,7 +324,7 @@ def set_auth_cookie(response: Response, request: Request, *, days: int = 30, log
 
 
 #: Docker 首次设置或访问设置的来源不满足时给的那句话；页面上的同一句写在页面包里。
-FIRST_ACCESS_DENIED = "请从部署 Peach 的机器或同一局域网打开 Peach 完成设置，或在启动容器时设置 PEACH_ACCESS_PASSWORD。"
+FIRST_ACCESS_DENIED_CODE = "setup.firstAccessDenied"
 
 
 def login_mode(request: Request) -> str:
@@ -341,8 +342,11 @@ def login_mode(request: Request) -> str:
     return "setup" if local_client(request) else "denied"
 
 
-def login_html(next_path: str, *, mode: str = "password", invalid: bool = False, error: str = "") -> str:
-    """登录页的薄壳：表单由页面包画，服务端只给净化过的 `next`、页面模式、口令是否错误与限流或参数错误的原因。"""
+def login_html(next_path: str, *, mode: str = "password", invalid: bool = False, error: str = "",
+               language: str = interface_text.SOURCE_LANGUAGE) -> str:
+    """登录页的薄壳：表单由页面包画，服务端只给净化过的 `next`、页面模式、口令是否错误与限流或参数错误的原因。
+
+    `error` 只收文字，由调用方按 `language`（请求的语言）渲染好；标题与 `<html lang>` 跟着同一种语言。"""
     data = {"next": next_path}
     if mode != "password":
         data["mode"] = mode
@@ -350,7 +354,22 @@ def login_html(next_path: str, *, mode: str = "password", invalid: bool = False,
         data["invalid"] = "true"
     if error:
         data["error"] = error
-    return page_shell("Peach · 访问设置" if mode == "setup" else "登录 Peach", "login", data)
+    title = "pages.login.accessSetupTitle" if mode == "setup" else "pages.login.title"
+    return page_shell(interface_text.text(f"server:{title}", None, language), "login", data, language=language)
+
+
+def _page_language(request: Request) -> str:
+    return interface_text.request_language(request.headers.get("accept-language"))
+
+
+def _page_error(detail: object, language: str) -> str:
+    """接口报错的明细按页面语言渲染成一句：带 `message_code` 的取译文，其余照原文。"""
+    if isinstance(detail, dict):
+        code = detail.get("message_code")
+        if isinstance(code, str) and code:
+            return interface_text.text(f"server:{code}", detail.get("message_params") or {}, language)
+        return str(detail.get("message", ""))
+    return str(detail)
 
 
 def safe_next(value: str) -> str:
@@ -369,7 +388,7 @@ def login(request: Request, next: str = "/"):
     if _authorized(request, request.app.state.settings.token,
                    _first_query_values(request)):
         return RedirectResponse(next_path, status_code=303)
-    return HTMLResponse(login_html(next_path, mode=login_mode(request)))
+    return HTMLResponse(login_html(next_path, mode=login_mode(request), language=_page_language(request)))
 
 
 @router.post("/login")
@@ -380,33 +399,36 @@ async def login_submit(request: Request):
     )
     next_path = safe_next((form.get("next") or ["/"])[0])
     mode = login_mode(request)
+    language = _page_language(request)
     try:
         _login_attempt(request)
     except HTTPException as exc:
         if not _wants_page(request):
             raise
-        return HTMLResponse(login_html(next_path, mode=mode, error=str(exc.detail)), status_code=exc.status_code,
-                            headers=exc.headers)
+        return HTMLResponse(login_html(next_path, mode=mode, error=_page_error(exc.detail, language), language=language),
+                            status_code=exc.status_code, headers=exc.headers)
     token = request.app.state.settings.token
     supplied = (form.get("token") or [""])[0]
     policy = access.load(request.app.state.settings.access_path)
     if token and policy["mode"] != "open" and not await run_in_threadpool(access.verify, policy, supplied, token):
-        return HTMLResponse(login_html(next_path, mode=mode, invalid=True), status_code=401)
+        return HTMLResponse(login_html(next_path, mode=mode, invalid=True, language=language), status_code=401)
     try:
         days = int((form.get("days") or ["0"])[0])
         if not 0 <= days <= 365:
             raise ValueError
     except ValueError:
-        message = "请选择有效的保持登录时间"
+        fields = message_fields("api.auth.invalidRememberDays")
         if _wants_page(request):
-            return HTMLResponse(login_html(next_path, mode=mode, error=message), status_code=400)
-        raise HTTPException(400, message) from None
+            return HTMLResponse(login_html(next_path, mode=mode, error=_page_error(fields, language), language=language),
+                                status_code=400)
+        raise HTTPException(400, fields) from None
     response = RedirectResponse(next_path, status_code=303)
     try:
         set_auth_cookie(response, request, days=days, login=True)
     except OSError:
-        message = "登录设备未能记下，请检查数据目录能否写入后重试"
+        fields = message_fields("api.auth.sessionNotSaved")
         if _wants_page(request):
-            return HTMLResponse(login_html(next_path, mode=mode, error=message), status_code=503)
-        raise HTTPException(503, message) from None
+            return HTMLResponse(login_html(next_path, mode=mode, error=_page_error(fields, language), language=language),
+                                status_code=503)
+        raise HTTPException(503, fields) from None
     return response

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from unittest.mock import patch
 from peach import desktop_installer, job_recovery, settings_file, update_tasks
 from peach.jobs import BackgroundJob
 from peach.task_runs import TaskRunStore, stamp
+from peach.user_messages import UserValueError
 from support.ledger import fresh_ledger
 
 
@@ -495,9 +497,95 @@ class UpdateTaskTests(unittest.TestCase):
         calls = []
         def fail(body):
             calls.append(body)
-            raise ValueError('影片已移出馆藏')
+            raise UserValueError('errors.libraryProcessing.notInLibrary')
         with self.assertLogs('peach.job_recovery', level='WARNING'):
             self.assertEqual(job_recovery.resume(self.db, {'library-processing': fail}), [])
         self.assertEqual(job_recovery.read(self.db, 'library-processing')['status'], 'blocked')
         self.assertEqual(job_recovery.resume(self.db, {'library-processing': fail}), [])
         self.assertEqual(len(calls), 1)
+
+
+class RecoveryServiceCadenceTests(unittest.TestCase):
+    """恢复服务有事才接回：安装中不接，预约撤下立即接，没人通知的情况由低频兜底接。"""
+
+    def setUp(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from peach import web_job_recovery
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.db = Path(temporary.name).resolve() / 'database/ledger.db'
+        self.db.parent.mkdir()
+        self.restored = []
+        patcher = patch.object(web_job_recovery, 'restore',
+                               side_effect=lambda contract, track=None: self.restored.append(time.monotonic()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.module = web_job_recovery
+        self.service = web_job_recovery.RecoveryService(
+            SimpleNamespace(db_path=self.db, followups=Mock()), available=True)
+        self.addCleanup(self.service.stop)
+
+    def wait_for(self, predicate, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(.02)
+        return predicate()
+
+    def test_an_idle_service_does_not_restore_between_events(self):
+        self.service.start()
+        time.sleep(.5)
+        self.assertEqual(self.restored, [])
+        self.assertEqual(self.module.FALLBACK_SECONDS, 30)
+
+    def test_installation_holds_recovery_and_its_release_restores_at_once(self):
+        token = update_tasks.reserve(self.db)
+        self.service.start()
+        self.service.tick()
+        self.assertEqual(self.restored, [])
+        released = time.monotonic()
+        update_tasks.release(self.db, token)
+        self.assertTrue(self.wait_for(lambda: self.restored, timeout=2))
+        self.assertLess(self.restored[0] - released, 1)
+        self.assertIsNone(self.service.scheduler.get_job(self.module.AWAIT_RELEASE_JOB))
+
+    def test_a_reservation_released_by_another_process_is_noticed_while_waiting_for_it(self):
+        path = update_tasks.state_for(self.db) / 'install.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'pid': os.getpid(), 'token': 'other'}), encoding='utf-8')
+        with patch.object(self.module, 'RELEASE_POLL_SECONDS', .1):
+            self.service.start()
+            self.assertIsNotNone(self.service.scheduler.get_job(self.module.AWAIT_RELEASE_JOB))
+            time.sleep(.3)
+            self.assertEqual(self.restored, [])
+            # 安装助手在另一个进程里撤下预约，本进程收不到事件。
+            path.unlink()
+            self.assertTrue(self.wait_for(lambda: self.restored, timeout=2))
+        self.assertIsNone(self.service.scheduler.get_job(self.module.AWAIT_RELEASE_JOB))
+
+    def test_a_dead_worker_is_resumed_by_the_fallback_without_any_event(self):
+        with patch.object(self.module, 'FALLBACK_SECONDS', .3):
+            self.service.start()
+            self.assertTrue(self.wait_for(lambda: len(self.restored) >= 2, timeout=3))
+
+    def test_events_during_a_running_recovery_cause_one_more_round(self):
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+
+        def slow(contract, track=None):
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(5)
+
+        with patch.object(self.module, 'restore', side_effect=slow):
+            worker = threading.Thread(target=self.service.tick)
+            worker.start()
+            self.assertTrue(entered.wait(5))
+            self.service.tick()
+            self.service.tick()
+            release.set()
+            worker.join(5)
+        self.assertEqual(len(calls), 2)

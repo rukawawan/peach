@@ -2,6 +2,7 @@ import { icon } from '@peach/legacy/core';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import './media-carousel.css';
 import { wireHorizontalScroller } from '../../ui-kit/scroll';
+import { t } from '../../i18n';
 
 export interface CarouselMedia { index: number; label?: string; video?: boolean }
 
@@ -62,20 +63,20 @@ export function MediaCarousel({ items, position, onSelect, below = false, render
   }, [items.length, position, below]);
   if (items.length < 2) return null;
   const step = (delta: number) => onSelect(items[(position + delta + items.length) % items.length]!.index);
-  const unit = mixed ? '项媒体' : '张图片';
+  const dotsLabel = t(mixed ? 'shell:mediaCarousel.mediaCount' : 'shell:mediaCarousel.imageCount', { count: items.length });
   const indicator = (item: CarouselMedia, index: number) => <button key={item.index} type="button" data-follow-image-item={item.index}
     data-carousel-video={item.video ? '' : undefined} aria-current={index === position ? 'true' : 'false'}
-    aria-label={item.label || `第 ${index + 1} 张，共 ${items.length} 张`} title={item.label || `第 ${index + 1} 张`}
+    aria-label={item.label || t('shell:mediaCarousel.positionOfTotal', { index: index + 1, total: items.length })} title={item.label || t('shell:mediaCarousel.position', { index: index + 1 })}
     onClick={() => onSelect(item.index)}>{item.video ? <span dangerouslySetInnerHTML={{ __html: icon('play') }} /> : null}</button>;
   return <div ref={root} data-media-carousel="" data-carousel-below={below ? '' : undefined}
     data-carousel-video-active={items[position]?.video ? '' : undefined}>
-    {!items[position]?.video ? <><button type="button" data-follow-image-step="-1" data-follow-image-arrow="prev" aria-label={mixed ? '上一项媒体' : '上一张图片'} title="上一张"
+    {!items[position]?.video ? <><button type="button" data-follow-image-step="-1" data-follow-image-arrow="prev" aria-label={mixed ? t('shell:mediaCarousel.previousItem') : t('shell:mediaCarousel.previousImage')} title={t('shell:mediaCarousel.previous')}
       onClick={() => step(-1)} dangerouslySetInnerHTML={{ __html: icon('chevron-left') }} />
-    <button type="button" data-follow-image-step="1" data-follow-image-arrow="next" aria-label={mixed ? '下一项媒体' : '下一张图片'} title="下一张"
+    <button type="button" data-follow-image-step="1" data-follow-image-arrow="next" aria-label={mixed ? t('shell:mediaCarousel.nextItem') : t('shell:mediaCarousel.nextImage')} title={t('shell:mediaCarousel.next')}
       onClick={() => step(1)} dangerouslySetInnerHTML={{ __html: icon('chevron-right') }} /></> : null}
-    {renderThumbnail ? <div data-media-thumbnails="" role="group" aria-label="媒体缩略图">{items.map((item, index) =>
+    {renderThumbnail ? <div data-media-thumbnails="" role="group" aria-label={t('shell:mediaCarousel.thumbnails')}>{items.map((item, index) =>
       <MediaThumbnail key={item.index} item={item} selected={index === position} onSelect={onSelect} render={renderThumbnail} />)}</div> : null}
-    <div data-media-indicator=""><div data-follow-image-dots="" role="group" aria-label={`${items.length} ${unit}`}>
+    <div data-media-indicator=""><div data-follow-image-dots="" role="group" aria-label={dotsLabel}>
       {items.map((item, index) => indicator(item, index))}
     </div></div>
   </div>;
@@ -96,7 +97,7 @@ function MediaThumbnail({ item, selected, onSelect, render }: {
     return () => observer.disconnect();
   }, [visible]);
   return <button ref={node} type="button" data-media-thumbnail={item.index} aria-current={selected ? 'true' : 'false'}
-    aria-label={`切换到${item.label || `第 ${item.index + 1} 张`}`} onClick={() => onSelect(item.index)}>
+    aria-label={item.label ? t('shell:mediaCarousel.switchToNamed', { name: item.label }) : t('shell:mediaCarousel.switchToPosition', { index: item.index + 1 })} onClick={() => onSelect(item.index)}>
     {visible ? render(item) : <span className="block h-full w-full skeleton-sheen" />}
     {item.video ? <span data-media-thumbnail-play="" aria-hidden dangerouslySetInnerHTML={{ __html: icon('play') }} /> : null}
   </button>;

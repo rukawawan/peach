@@ -5,12 +5,14 @@ import math
 from .catalog_rules import is_jav_code, normalise_code_key
 from .entities import male_performer_ids, normalize_entity_name
 from .error_reporting import redact
+from .genre_taxonomy import CONTENT_GENRES
 from .library_favorites import favorite_entities
 from .taste_evidence import era, length_band
 
 KINDS = ("performer", "creator", "studio", "series", "tag", "era", "length")
 COUNTS = {"collected", "liked", "disliked", "watched"}
 WORK_FIELDS = {"code", "rating", "liked", "feedback", "watch_later", "play_count", "watch_ratio", "manual_tags"}
+RESEARCH_TAGS = frozenset(CONTENT_GENRES.values())
 
 
 def number(value):
@@ -28,7 +30,8 @@ def project(connection):
     library, groups = _summarize(works)
     for favorite in favorite_entities(connection):
         kind, name = favorite["kind"], _text(favorite["name"])
-        if kind in groups and name and favorite["entity_id"] not in excluded:
+        if (kind in groups and name and favorite["entity_id"] not in excluded
+                and (kind != 'tag' or name in RESEARCH_TAGS)):
             groups[kind].setdefault(name, {"name": name})["favorite"] = True
     return {"library": sorted(library, key=lambda row: row["code"]),
             "preferences": {kind: sorted(rows.values(), key=lambda row: (-row.get("works", {}).get("collected", 0), row["name"]))
@@ -51,8 +54,8 @@ def _features(connection, excluded):
     hidden = {(aid, tag) for aid, tag in connection.execute(
         "SELECT asset_id,normalized_tag FROM asset_tag_preference WHERE profile_id='local-default' AND hidden=1")}
     for aid, tag in connection.execute("SELECT asset_id,tag FROM asset_tag WHERE source='web-user'"):
-        if (aid, normalize_entity_name(tag)) not in hidden and _text(tag):
-            links[aid]["tag"].add(_text(tag))
+        if (aid, normalize_entity_name(tag)) not in hidden and tag in RESEARCH_TAGS:
+            links[aid]["tag"].add(tag)
     return links
 
 
@@ -160,7 +163,7 @@ def _public(value):
     return isinstance(value, str) and bool(value.strip()) and redact(value) == value
 
 
-def valid_projection(payload):
+def valid_projection(payload, *, controlled_tags=False):
     """传输端使用同一白名单检查每份投影的值和内部计数关系。"""
     coverage = payload.get("coverage")
     if not isinstance(coverage, dict) or set(coverage) != {"active_files", "coded_files", "coded_works", "uncoded_items"}:
@@ -189,7 +192,9 @@ def valid_projection(payload):
             if not _valid_preference(row, kind, coverage) or row["name"] in seen:
                 return False
             seen.add(row["name"])
-    return True
+    return (not controlled_tags
+            or (all(tag in RESEARCH_TAGS for work in payload['library'] for tag in work.get('manual_tags', []))
+                and all(row['name'] in RESEARCH_TAGS for row in preferences['tag'])))
 
 
 def _valid_signals(work):

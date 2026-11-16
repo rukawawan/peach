@@ -248,7 +248,7 @@ it('浏览器画像的雷达、排行与浏览活跃热力图都按这一份数�
   const { host } = await open();
   const portrait = host.querySelector('section[aria-label="浏览器画像"]')!;
   expect(portrait.querySelector('div[role=img]')?.getAttribute('aria-label'))
-    .toBe('主要口味维度：维度甲，维度乙，维度丙');
+    .toBe('主要口味维度：维度甲、维度乙、维度丙');
   expect(portrait.querySelector('section[aria-label="口味维度排名"]')).not.toBeNull();
   const heats = [...host.querySelectorAll('svg[role=img]')].map((heat) => heat.getAttribute('aria-label'));
   expect(heats).toEqual(expect.arrayContaining(['浏览活跃时间', '每日活跃']));
@@ -277,6 +277,23 @@ it('后台重算时隔一会儿再问，算完换上新结果就停', async () =
   expect(host.textContent).not.toContain('正在更新口味分析');
   await tick(STALE_POLL_MS * 3);
   expect(tasteGets(fetcher)).toHaveLength(2);
+});
+
+it('一直读到旧的就把间隔拉长：2、4、8 秒，算完就停', async () => {
+  vi.useFakeTimers();
+  const stale = payload({ stale: true });
+  const { fetcher } = await open({ taste: [stale, stale, stale, payload()] });
+  expect(tasteGets(fetcher)).toHaveLength(1);
+  await tick(STALE_POLL_MS);
+  expect(tasteGets(fetcher)).toHaveLength(2);
+  await tick(STALE_POLL_MS * 2 - 1);
+  expect(tasteGets(fetcher), '第二次还是旧的，等四秒').toHaveLength(2);
+  await tick(1);
+  expect(tasteGets(fetcher)).toHaveLength(3);
+  await tick(STALE_POLL_MS * 4);
+  expect(tasteGets(fetcher)).toHaveLength(4);
+  await tick(60_000);
+  expect(tasteGets(fetcher)).toHaveLength(4);
 });
 
 it('重算失败时不再轮询，提示条说明更新失败，「立即重试」让服务端跳过等待再算一次', async () => {

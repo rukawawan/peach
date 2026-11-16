@@ -155,7 +155,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(result['workload']['video_files'],2)
 
     def test_unreadable_directory_reports_incomplete_counts(self):
-        with patch('peach.scan.os.scandir', side_effect=PermissionError('拒绝访问')):
+        with patch('peach.scan.os.scandir', side_effect=PermissionError('Access is denied')):
             result = preview(self.config, self.db, 'all', None)
         self.assertTrue(result['inventory']['complete'])
         self.assertEqual(result['inventory']['errors'], 1)

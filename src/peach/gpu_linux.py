@@ -5,6 +5,9 @@ from pathlib import Path
 import re
 import time
 
+from .gpu_usage import unavailable_reason
+from .user_messages import UserValueError, nested_message
+
 
 class LinuxGpuCounters:
     def __init__(self, *, proc=Path('/proc'), devices=Path('/dev/dri'), clock=time.monotonic):
@@ -17,7 +20,7 @@ class LinuxGpuCounters:
         self.now = self.clock()
         self.cache = {}
         self.previous = {key: value for key, value in self.previous.items() if self.now - value[0] < 60}
-        return None, 'sampling', '等待读取任务的 GPU 进程'
+        return None, 'sampling', unavailable_reason('waitingProcesses')
 
     def _read(self, pid):
         clients = {}
@@ -32,7 +35,7 @@ class LinuxGpuCounters:
                 continue
             client = fields.get('drm-client-id')
             if client is None or not client.isdigit():
-                raise ValueError('GPU 驱动未提供可去重的 DRM 客户端编号')
+                raise UserValueError('errors.gpuLinux.clientIdMissing')
             device = fields.get('drm-pdev', fields['drm-driver'])
             engines = {}
             for key, value in fields.items():
@@ -42,10 +45,10 @@ class LinuxGpuCounters:
                 match = re.fullmatch(r'(\d+)\s+ns', value)
                 capacity = fields.get(f'drm-engine-capacity-{name}', '1')
                 if match is None or not capacity.isdigit() or int(capacity) <= 0:
-                    raise ValueError('GPU 引擎时间或容量格式无效')
+                    raise UserValueError('errors.gpuLinux.engineFormatInvalid')
                 engines[f'{device}:{name}'] = (int(match[1]), int(capacity))
             if not engines:
-                raise ValueError('GPU 驱动未提供 DRM 引擎忙碌时间')
+                raise UserValueError('errors.gpuLinux.engineTimeMissing')
             clients[(device, client)] = engines
         return clients
 
@@ -79,20 +82,20 @@ class LinuxGpuCounters:
 
     def sample_processes(self, processes):
         if not self.devices.exists():
-            return None, 'unavailable', '未发现可读取的 DRM GPU 设备；容器需映射设备，驱动需支持逐进程计数'
+            return None, 'unavailable', unavailable_reason('noDrmDevice')
         result, clients, sampling = {}, set(), False
         try:
             for pid, created in processes.items():
                 values, pending, owned = self._process(pid, created)
                 if clients & owned:
-                    return None, 'unavailable', '多个进程共享 GPU 客户端，使用量无法准确归属'
+                    return None, 'unavailable', unavailable_reason('sharedClient')
                 clients.update(owned)
                 sampling |= pending
                 result[pid] = values
         except (OSError, ValueError) as error:
-            return None, 'unavailable', f'任务 GPU 计数器未取得：{error}'
+            return None, 'unavailable', unavailable_reason('taskCounter', error=nested_message(error))
         if sampling:
-            return None, 'sampling', '等待下一次 GPU 采样'
+            return None, 'sampling', unavailable_reason('waiting')
         return result, 'ready', ''
 
     def close(self):

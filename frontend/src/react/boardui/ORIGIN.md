@@ -67,7 +67,7 @@
 | 行内提示 | `../components/note.tsx` 的 `Note` 按语气取 `status-yellow`、`background-tertiary-error`、`notification-*` token 组合；正文与动作按内容宽度换行，`below` 将动作固定在下方 | 注册表里没有行内 Note 组件；`notification` 条目是带关闭键和动效的浮动通知 |
 | 进度条 | `../components/progress.tsx` 的 `Progress` 用 SVG 矩形画 | 注册表里没有进度组件 |
 | 空态 | `../components/empty-state.tsx` 用一圈 `separator-border` 框住图标、标题与说明 | 注册表里没有空态组件 |
-| 等待点 | `../components/loading-dots.tsx` 三颗点，错相由 `../styles.css` 的 `dot-wave-*` 给 | 注册表里没有等待态组件，没有总量时也不画进度条 |
+| 语义等待动画 | `../components/activity-motion.tsx` 插共享源码 `ui-kit/activity-motion.ts` 的 loading.dev 移植（Clock、Radar、LinearDots、Gather、Blocks），`../components/task-progress.tsx` 组合说明与横条 | 注册表里没有等待态组件，没有总量时也不画进度条；来源与改动见 `docs/REUSE.md`「加载态语义动画」 |
 | 分区标题与任务卡 | `../activity/activity-page.tsx` 自己用 `title-*` 字阶和 `separator-border` 的圆角框排，失败那张换成 `border-error-default` | 注册表里没有分区标题；卡片条目都带自己的头尾结构与操作区 |
 | 汇总行与卡片网格 | `../quality-goals/quality-goals-page.tsx` 的汇总一行用 `title-2-semibold` 配正文字阶排；网格取 `../styles.css` 的 `card-grid`，封面取 `w-card-cover` 与 `aspect-card-cover` | 注册表里没有列表页的汇总行；`auto-fill` 网格与定宽封面在工具类里没有对应档位，写成 `@utility` 与 `@theme` 而不是任意值 |
 | 折叠 | `../settings/section.tsx` 的 `Disclosure` 用原生 `details`，开合调共享源码 `ui-kit/collapse.ts` 的 `setCollapseOpen`，高度按共用 Collapse 的 `.ui-fcollapse` 过渡（`.2s ease-in-out`） | 注册表里没有折叠组件；原生 `details` 不过渡高度 |
@@ -78,7 +78,7 @@
 | 站点标识 | `../components/site-mark.tsx` 的 `SiteMark` 读取本站缓存与静态站标，失败时显示通用站点字形；来源凭据与诊断页共用 | `../settings/section.tsx` 的 `SourceMark` 只认雪碧图字形与内嵌 PNG，采集来源的图标是一条服务端地址 |
 | 主键带下拉 | `../library-processing/processing-actions.tsx` 的 `ProcessingActions`：扫描与缺图补全共用，触发键是一颗 `iconOnly` 的 `Button`，面板用 React Aria 的 `Popover` + `MenuDialog`，行的外观取 `components/base/dropdown/menu-styles.ts` | `dropdown` 条目的 `DropdownTrigger` 自己就是那颗按钮、外观全由 `className` 给，`@shadcn/lint` 的 `no-restyle` 只放行布局类，套不进 `Button` 的档位 |
 | 常驻处理任务 | `../library-processing/library-processing-notice.tsx` 与 `library-processing-dock.tsx` 组合进度、折叠正文、估时和直接控制，Sonner 按目标栈管理位置与持久停留 | 用户要求参考公开 Agent Progress 自行实现，任务由服务端真实阶段推进；取证与领域差异见 `docs/reference-snapshots/processing-task-controls.md` |
-| 进度环 | 同上的 `Gauge`：SVG 两圈，`pathLength={100}` 把一圈长度钉成 100，画出来的那一段就是当前阶段百分比 | 任务总量未知时使用静态任务图标，已知总量才绘制读数 |
+| 进度环 | `../components/progress-ring.tsx` 的 `ProgressRing`：SVG 两圈，`pathLength={100}` 把一圈长度钉成 100，画出来的那一段就是完成比例；更新横幅与扫描采集通知卡共用，尺寸默认 `--icon-inline` | 任务总量未知时改画那一阶段的语义动画，已知总量才绘制读数 |
 | 三档处理强度 | `../library-processing/processing-effort.tsx` 基于 React Aria Slider 和已登记的 Button、Popover 组合，最高档 SVG 流光读取强调色色阶 | 用户要求参考 Composer Panel Effort 公开演示重建，六档适配低占用、标准、全速；流光绘制为 Peach 重建方案 |
 | 模态弹层 | `../avatar-picker/avatar-picker-page.tsx` 用 React Aria 的 `ModalOverlay` + `Modal` + `Dialog` 组合，遮罩取 `../styles.css` 的 `--color-scrim`（同旧样式表 `.geist-modal::backdrop` 的黑 60%） | 注册表里没有模态弹层，也就没有它的遮罩底色 |
 | 候选网格 | 同上：一排四张 3:4 的候选，弹层宽度与格子比例取 `../styles.css` 的 `--container-avatar-picker` 与 `--aspect-avatar-choice` | 注册表里没有图片选择网格；这两档在工具类里没有对应档位，写成 `@theme` 而不是任意值 |

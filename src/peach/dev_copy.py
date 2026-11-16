@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 from string import Formatter
 
+from .user_messages import UserValueError
+
 
 def files(root: Path):
     yield root / "web/index.html"
@@ -22,7 +24,7 @@ def files(root: Path):
     yield from sorted((root / "frontend/src").rglob("*.tsx"))
     yield from sorted((root / "frontend/src").rglob("*.ts"))
     # 抽进语言资源的界面文案（ADR-0156）：源文只在 zh-CN，改的是这一份；其他语言经翻译流程跟上。
-    yield from sorted((root / "frontend/src/locales/zh-CN").glob("*.json"))
+    yield from sorted((root / "resources/locales/zh-CN").glob("*.json"))
 
 
 def _template_parts(node: ast.JoinedStr):
@@ -86,14 +88,14 @@ def _python_replacement(source: str, selected: dict, replacement: str):
                 rendered.append(literal)
             if name is not None:
                 if name not in fields or spec or conversion:
-                    raise ValueError("请保留原有占位符，只修改文字")
+                    raise ValueError("placeholder not in the original template")
                 used.append(name)
                 values.append(deepcopy(fields[name]))
                 rendered.append(selected["values"][name])
     except ValueError as error:
-        raise ValueError("请保留原有占位符，只修改文字；字面花括号写成 {{ 和 }}") from error
+        raise UserValueError("errors.devCopy.placeholdersChanged", {"open": "{{", "close": "}}"}) from error
     if Counter(used) != Counter(fields.keys()):
-        raise ValueError("请保留全部占位符，各出现一次")
+        raise UserValueError("errors.devCopy.placeholdersIncomplete")
     return ast.unparse(ast.JoinedStr(values)), "".join(rendered)
 
 
@@ -130,20 +132,20 @@ def _locale_replacement(selected: dict, replacement: str):
             rendered.append(literal)
             if name is not None:
                 if name not in selected["values"] or spec or conversion:
-                    raise ValueError("请保留原有占位符，只修改文字")
+                    raise ValueError("placeholder not in the original template")
                 used.append(name)
                 values.append("{{" + name + "}}")
                 rendered.append(selected["values"][name])
     except ValueError as error:
-        raise ValueError("请保留原有占位符，只修改文字；字面花括号写成 {{ 和 }}") from error
+        raise UserValueError("errors.devCopy.placeholdersChanged", {"open": "{{", "close": "}}"}) from error
     if Counter(used) != Counter(selected["values"].keys()):
-        raise ValueError("请保留全部占位符，各出现一次")
+        raise UserValueError("errors.devCopy.placeholdersIncomplete")
     return json.dumps("".join(values), ensure_ascii=False)[1:-1], "".join(rendered)
 
 
 def candidates(root: Path, original: str) -> list[dict]:
     if not isinstance(original, str) or not original.strip() or len(original) > 2000:
-        raise ValueError("请选择不超过 2000 字的文案")
+        raise UserValueError("errors.devCopy.textTooLong")
     found = []
     for path in files(root):
         if not path.is_file() or ".test." in path.name:
@@ -174,16 +176,16 @@ def candidates(root: Path, original: str) -> list[dict]:
 
 def save(root: Path, body: dict) -> dict:
     if not isinstance(body, dict):
-        raise ValueError("修改内容必须是对象")
+        raise ValueError("edit body must be an object")
     original, replacement = body.get("original", ""), body.get("replacement", "")
     if not isinstance(replacement, str) or len(replacement) > 2000:
-        raise ValueError("新文案必须是文字，且不能超过 2000 字")
+        raise UserValueError("errors.devCopy.replacementInvalid")
     selected = body.get("candidate")
     if selected not in candidates(root, original):
-        raise ValueError("源文件已变化，请重新选择文字")
+        raise UserValueError("errors.devCopy.sourceChanged")
     path = (root / selected["file"]).resolve()
     if path not in {p.resolve() for p in files(root)}:
-        raise ValueError("不能修改这个文件")
+        raise UserValueError("errors.devCopy.fileNotEditable")
     source = path.read_text(encoding="utf-8")
     quote = selected["quote"]
     text = replacement

@@ -29,6 +29,10 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
+
 from . import version_bump
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,11 +43,11 @@ UNRELEASED = "未发布"
 
 #: Release 页正文里跟在变更日志后面的安装提示。每一版都一样，所以只写在这里一处，
 #: 工作流不再自己抄一份。
-INSTALL_NOTE = ("Windows x64 提供安装包与免安装包，包内含 Python 与媒体工具；"
-                "macOS 提供 Apple Silicon 与 Intel DMG，媒体工具需另行准备。"
-                "macOS 测试包使用本地 ad-hoc 签名，未完成 Apple 公证。"
-                "安装与使用见 [Windows 使用说明](https://github.com/peach-mitao/peach/blob/master/docs/TESTING_DESKTOP.md)，"
-                "macOS 见 [macOS 使用说明](https://github.com/peach-mitao/peach/blob/master/docs/OPERATIONS.md)。")
+INSTALL_NOTE = ("Windows 安装包、免安装包和 macOS DMG 都内置 Python、FFmpeg、untrunc、cloudflared 和人脸模型，装好即可使用；"
+                "Docker 镜像适合 NAS 与 Linux 服务器。"
+                "安装与使用见 [Windows 使用说明](https://github.com/peach-mitao/peach/blob/master/docs/TESTING_DESKTOP.md)、"
+                "[macOS 使用说明](https://github.com/peach-mitao/peach/blob/master/docs/OPERATIONS.md#macos-独立测试包)"
+                "和 [Docker 部署](https://github.com/peach-mitao/peach/blob/master/docs/DOCKER.md)。")
 
 #: Conventional Commits 的主题形状：`type(scope)!: 描述`。
 SUBJECT = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]*)\))?(?P<bang>!)?:\s*(?P<text>.+)$")
@@ -120,12 +124,16 @@ class Commit:
 
 
 def read_commits(root: Path, spec: str) -> list[Commit]:
-    raw = version_bump.git(root, "log", "--no-merges", "--format=%s%x1f%b%x00", spec)
+    raw = version_bump.git(root, "log", "--no-merges", "--format=%H%x1f%s%x1f%b%x00", spec)
+    skipped = version_bump.recorded_only(root, spec)
     commits = []
     for record in raw.split("\0"):
         if not record.strip():
             continue
-        subject, _, body = record.strip("\n").partition("\x1f")
+        commit, _, rest = record.strip("\n").partition("\x1f")
+        if commit in skipped:
+            continue
+        subject, _, body = rest.partition("\x1f")
         commits.append(Commit(subject.strip(), body))
     return commits
 
@@ -203,12 +211,12 @@ def due(root: Path) -> dict:
     days = _waiting_days(root)
     why = []
     if entries and days >= DUE_DAYS:
-        why.append(f"距上一版 {days} 天，攒了 {entries} 条面向使用者的变化")
+        why.append(t("changelog.dueByDays", days=days, entries=entries))
     if entries >= DUE_ENTRIES:
-        why.append(f"{entries} 条已经超出一周的常量，不必等满周期")
+        why.append(t("changelog.dueByEntries", entries=entries))
     urgent = [group for group in URGENT if group in grouped]
     if urgent:
-        why.append("有" + "、".join(urgent) + "，这类不等周期")
+        why.append(t("changelog.dueUrgent", groups=list(urgent)))
     return {"entries": entries, "days": days, "due": bool(why), "why": why,
             "groups": {group: len(items) for group, items in grouped.items()}}
 
@@ -240,10 +248,10 @@ def require_labeled_entries(document: str, version: str) -> None:
     entries = [line for line in section_of(document, version).splitlines() if line.startswith("- ")]
     invalid = [line for line in entries if labeled.match(line) is None]
     if invalid:
-        preview = "；".join(invalid[:3])
-        remainder = f"（另有 {len(invalid) - 3} 条）" if len(invalid) > 3 else ""
-        raise version_bump.VersionError(
-            f"{CHANGELOG} 的 {version} 一节还有未归类条目：{preview}{remainder}")
+        preview = t("common.clauseSeparator").join(invalid[:3])
+        remainder = t("changelog.moreEntries", count=len(invalid) - 3) if len(invalid) > 3 else ""
+        raise version_bump.VersionError(t("changelog.unlabeledEntries", file=CHANGELOG, version=version,
+                                          preview=preview, remainder=remainder))
     # 按读到的字数算：标签与链接地址不算，链接只计显示的文字。
     label = re.compile(r"^- (?:\*\*[^*]+\*\*：)?")
     long = [(released, line)
@@ -252,10 +260,11 @@ def require_labeled_entries(document: str, version: str) -> None:
             if line.startswith("- ")
             and len(re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", label.sub("", line))) > ENTRY_LIMIT]
     if long:
-        preview = "；".join(f"{released}：{line[:40]}…" for released, line in long[:3])
-        remainder = f"（另有 {len(long) - 3} 条）" if len(long) > 3 else ""
-        raise version_bump.VersionError(
-            f"{CHANGELOG} 有条目超过 {ENTRY_LIMIT} 字，改成一句话：{preview}{remainder}")
+        preview = t("common.clauseSeparator").join(
+            t("changelog.longEntry", version=released, line=line[:40]) for released, line in long[:3])
+        remainder = t("changelog.moreEntries", count=len(long) - 3) if len(long) > 3 else ""
+        raise version_bump.VersionError(t("changelog.entriesTooLong", file=CHANGELOG, limit=ENTRY_LIMIT,
+                                          preview=preview, remainder=remainder))
 
 
 def notes(document: str, version: str) -> str:
@@ -266,10 +275,10 @@ def notes(document: str, version: str) -> str:
     """
     section = section_of(document, version)
     if not section:
-        raise version_bump.VersionError(f"{CHANGELOG} 里没有 {version} 这一节，Release 正文无从生成")
+        raise version_bump.VersionError(t("changelog.noSectionForNotes", file=CHANGELOG, version=version))
     link = re.search(rf"^\[{re.escape(version)}\]:\s*(\S+)\s*$", document, re.M)
     if link is None:
-        raise version_bump.VersionError(f"{CHANGELOG} 底部缺少 `[{version}]:` 链接，Release 正文无从附上完整变更")
+        raise version_bump.VersionError(t("changelog.noLinkForNotes", file=CHANGELOG, version=version))
     return f"{section}\n\n[Full Changelog / 完整变更]({link[1]})\n\n{INSTALL_NOTE}\n"
 
 
@@ -280,15 +289,15 @@ def promote(document: str, version: str, *, date: str, repo: str, previous: str 
     人在未发布节里润色过的措辞整段搬下去；那一节没有条目时才用 `fallback` 兜底。
     """
     if has_section(document, version):
-        raise version_bump.VersionError(f"{CHANGELOG} 里已经有 {version} 这一节")
+        raise version_bump.VersionError(t("changelog.sectionExists", file=CHANGELOG, version=version))
     match = UNRELEASED_BLOCK.search(document)
     if match is None:
-        raise version_bump.VersionError(f"{CHANGELOG} 缺少 `## [{UNRELEASED}]` 这一节")
+        raise version_bump.VersionError(t("changelog.noUnreleasedSection", file=CHANGELOG, unreleased=UNRELEASED))
     body = match["body"].strip("\n")
     if "- " not in body:
         body = fallback.strip("\n")
     if not body.strip():
-        raise version_bump.VersionError(f"{UNRELEASED}节是空的，这次发布没有可记录的变化")
+        raise version_bump.VersionError(t("changelog.unreleasedEmpty", unreleased=UNRELEASED))
     block = f"## [{UNRELEASED}]\n\n## [{version}] - {date}\n\n{body}\n\n"
     updated = document[:match.start()] + block + document[match.end():]
     return _relink(updated, repo=repo, version=version, previous=previous)
@@ -297,7 +306,7 @@ def promote(document: str, version: str, *, date: str, repo: str, previous: str 
 def _relink(document: str, *, repo: str, version: str, previous: str | None) -> str:
     tag = f"v{version}"
     if not UNRELEASED_LINK.search(document):
-        raise version_bump.VersionError(f"{CHANGELOG} 缺少 `[{UNRELEASED}]:` 那条链接")
+        raise version_bump.VersionError(t("changelog.noUnreleasedLink", file=CHANGELOG, unreleased=UNRELEASED))
     document = UNRELEASED_LINK.sub(f"[{UNRELEASED}]: {compare_link(repo, tag, 'HEAD')}",
                                    document, count=1)
     definition = f"[{version}]: {compare_link(repo, previous, tag)}"
@@ -315,14 +324,14 @@ def release(root: Path, version: str, *, repo: str, spec: str, today: str | None
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=t("changelog.description"),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default="peach-mitao/peach")
-    parser.add_argument("--range", dest="spec", help="提交区间，默认上一个版本标签到 HEAD")
-    parser.add_argument("--release", help=f"把{UNRELEASED}节定版成这个版本号")
-    parser.add_argument("--apply", action="store_true", help=f"写进 {CHANGELOG}")
-    parser.add_argument("--notes", metavar="VERSION", help="输出这一版的 Release 正文")
-    parser.add_argument("--to", metavar="PATH", help="把 --notes 的正文以 UTF-8 写进这个文件")
+    parser.add_argument("--range", dest="spec", help=t("changelog.helpRange"))
+    parser.add_argument("--release", help=t("changelog.helpRelease", unreleased=UNRELEASED))
+    parser.add_argument("--apply", action="store_true", help=t("changelog.helpApply", file=CHANGELOG))
+    parser.add_argument("--notes", metavar="VERSION", help=t("changelog.helpNotes"))
+    parser.add_argument("--to", metavar="PATH", help=t("changelog.helpTo"))
     args = parser.parse_args(argv)
     try:
         if args.notes:
@@ -335,18 +344,18 @@ def main(argv=None) -> int:
         spec = args.spec or version_bump.release_range(ROOT)
         if not args.apply:
             heading = args.release or UNRELEASED
-            body = draft(ROOT, spec) or "暂无面向使用者的变化。"
+            body = draft(ROOT, spec) or t("changelog.noUserFacingChanges")
             print(f"## [{heading}]\n\n{body}")
             return 0
         if not args.release:
-            raise version_bump.VersionError("--apply 必须同时给 --release")
+            raise version_bump.VersionError(t("changelog.applyNeedsRelease"))
         release(ROOT, args.release, repo=args.repo, spec=spec)
-        print(f"{CHANGELOG} 的{UNRELEASED}节已定版成 {args.release}，请核对措辞。")
+        print(t("changelog.released", file=CHANGELOG, unreleased=UNRELEASED, version=args.release))
         return 0
     except version_bump.VersionError as error:
         # 两条路各说自己没做成的事：起草或定版是「变更日志未更新」，--notes 是「Release 正文未生成」。
-        what = "Release 正文未生成" if args.notes else "变更日志未更新"
-        print(f"{what}：{error}")
+        what = t("changelog.notesNotGenerated") if args.notes else t("changelog.changelogNotUpdated")
+        print(t("changelog.failed", what=what, error=error))
         return 1
 
 

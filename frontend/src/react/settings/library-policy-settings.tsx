@@ -13,23 +13,24 @@ import { previewLibraryColor } from '../components/library-tint';
 import { overlayHost } from '../components/overlay-host';
 import { Disclosure, Help } from './section';
 import { POLICY_COLUMNS, POLICY_COVER_NOTE, POLICY_MATRIX, POLICY_SUMMARY } from './library-policy-copy';
+import { t } from '../../i18n';
 import '../components/glow-preset-grid.css';
 import './library-policy-settings.css';
 
 export type Preset = 'auto' | 'local' | 'custom';
 export const STAGES = [
-  ['probe', '读取视频信息'],
-  ['metadata', '联网补资料'],
-  ['cover', '联网补封面'],
-  ['people', '联网补人物图片'],
-  ['preview', '生成九宫格预览'],
+  ['probe', t('settings:libraryPolicy.stepProbe')],
+  ['metadata', t('settings:libraryPolicy.stepMetadata')],
+  ['cover', t('settings:libraryPolicy.stepCovers')],
+  ['people', t('settings:libraryPolicy.stepAvatars')],
+  ['preview', t('settings:libraryPolicy.stepContactSheet')],
 ] as const;
 export type Stage = (typeof STAGES)[number][0];
 export const AUTO_STAGES: readonly Stage[] = ['probe', 'metadata', 'cover', 'people', 'preview'];
 const PRESETS: readonly (readonly [Preset, string, string])[] = [
-  ['auto', '自动补全', '缺什么联网补什么'],
-  ['local', '仅使用本地资料', '不联网，只用本地 NFO 和图片'],
-  ['custom', '自定义', '逐项选择要做的步骤'],
+  ['auto', t('settings:libraryPolicy.auto'), t('settings:libraryPolicy.autoHint')],
+  ['local', t('settings:libraryPolicy.localOnly'), t('settings:libraryPolicy.localHint')],
+  ['custom', t('settings:shared.custom'), t('settings:libraryPolicy.customHint')],
 ];
 
 /** 三档处理方式的说明，分组上方只放一份：常显一句话，三档的差别收在可展开的对比表里。 */
@@ -37,13 +38,13 @@ export function PolicyLegend() {
   return (
     <div data-policy-legend="" className="flex flex-col gap-1">
       <Help>{POLICY_SUMMARY}</Help>
-      <Disclosure summary="三种处理方式对比">
+      <Disclosure summary={t('settings:libraryPolicy.compare')}>
         <table data-policy-matrix="" className="text-body-2-regular">
-          <thead><tr><th scope="col"><VisuallyHidden>步骤</VisuallyHidden></th>
+          <thead><tr><th scope="col"><VisuallyHidden>{t('settings:libraryPolicy.step')}</VisuallyHidden></th>
             {POLICY_COLUMNS.map(name => <th key={name} scope="col">{name}</th>)}</tr></thead>
           <tbody>{POLICY_MATRIX.map(([step, ...cells]) => <tr key={step}><th scope="row">{step}</th>
             {cells.map((cell, index) => <td key={POLICY_COLUMNS[index]} data-policy-cell={cell === '✓' ? 'on' : cell === '—' ? 'off' : 'choice'}>
-              {cell === '✓' ? <span aria-label="做">✓</span> : cell === '—' ? <span aria-label="不做">—</span> : cell}</td>)}</tr>)}</tbody>
+              {cell === '✓' ? <span aria-label={t('settings:libraryPolicy.included')}>✓</span> : cell === '—' ? <span aria-label={t('settings:libraryPolicy.notIncluded')}>—</span> : cell}</td>)}</tr>)}</tbody>
         </table>
         <Help>{POLICY_COVER_NOTE}</Help>
       </Disclosure>
@@ -54,7 +55,7 @@ export function PolicyLegend() {
 /** 标题行里的处理方式下拉：弹层顶部写明在选什么，每档带一句话；收起时只显示档名。 */
 export function PresetSelect({ name, value, onChange }: { name: string; value: Preset; onChange(value: Preset): void }) {
   return (
-    <Select data-guide-target="library-policy" className="w-full" aria-label={`${name} 处理方式`} selectedKey={value} prefix="处理方式"
+    <Select data-guide-target="library-policy" className="w-full" aria-label={t('settings:libraryPolicy.modeLabel', { name })} selectedKey={value} prefix={t('settings:libraryPolicy.mode')}
       renderValue={<span className="truncate">{PRESETS.find(([key]) => key === value)?.[1]}</span>}
       onSelectionChange={key => onChange(String(key) as Preset)}>
       {PRESETS.map(([key, label, hint]) => (
@@ -71,8 +72,8 @@ export function PresetSelect({ name, value, onChange }: { name: string; value: P
 
 export function StageChooser({ name, value, onChange }: { name: string; value: readonly Stage[]; onChange(value: readonly Stage[]): void }) {
   return (
-    <Disclosure defaultOpen summary={`${name} 的处理步骤（${value.length}/${STAGES.length}）`}>
-      <div className="flex flex-wrap gap-x-6 gap-y-2" role="group" aria-label={`${name} 处理步骤`}>
+    <Disclosure defaultOpen summary={t('settings:libraryPolicy.stepsSummary', { name, selected: value.length, total: STAGES.length })}>
+      <div className="flex flex-wrap gap-x-6 gap-y-2" role="group" aria-label={t('settings:libraryPolicy.stepsLabel', { name })}>
         {STAGES.map(([key, label]) => (
           <Checkbox key={key} isSelected={value.includes(key)}
             onChange={(on) => onChange(on ? [...value, key] : value.filter(stage => stage !== key))}>
@@ -90,12 +91,12 @@ export function LibraryColorPicker({ id, name, value: color, onChange }: {
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const label = ACCENT_CHOICES.find(([key]) => key === color)?.[1] || '无颜色';
+  const label = ACCENT_CHOICES.find(([key]) => key === color)?.[1] || t('settings:libraryColor.none');
   const choose = (next: string) => { onChange(next); previewLibraryColor(id, next); setOpen(false) };
   return <>
     <button ref={trigger} type="button" className="text-body-medium" data-glow-chip="" data-library-color-trigger="" aria-haspopup="dialog"
-      aria-expanded={open} aria-label={`${name || '未命名媒体库'} 来源色：${label}`} title={label} onClick={() => setOpen(true)}>
-      <span aria-hidden className="text-text-tertiary">来源色</span>
+      aria-expanded={open} aria-label={t('settings:libraryColor.triggerLabel', { name: name || t('settings:mediaLibraries.untitled'), color: label })} title={label} onClick={() => setOpen(true)}>
+      <span aria-hidden className="text-text-tertiary">{t('settings:libraryColor.label')}</span>
       {color
         ? <span data-glow-ball="" aria-hidden="true" data-accent-ball={color} />
         : <span data-glow-ball="" data-library-none="" aria-hidden="true" />}
@@ -104,10 +105,10 @@ export function LibraryColorPicker({ id, name, value: color, onChange }: {
     <UNSAFE_PortalProvider getContainer={() => overlayHost(trigger.current)}>
       <Popover triggerRef={trigger} isOpen={open} onOpenChange={setOpen} placement="bottom start" offset={8}
         containerPadding={12} className={MENU_POPOVER_SURFACE}>
-        <Dialog aria-label={`${name || '未命名媒体库'} 来源色`} className="outline-none">
-          <p className="px-1 pb-2 text-body-medium text-text-primary">选择来源色</p>
+        <Dialog aria-label={t('settings:libraryColor.dialogLabel', { name: name || t('settings:mediaLibraries.untitled') })} className="outline-none">
+          <p className="px-1 pb-2 text-body-medium text-text-primary">{t('settings:libraryColor.choose')}</p>
           <div data-accent-grid="" data-library-colors="" role="group">
-            <button type="button" data-glow-chip="" aria-pressed={!color} title="无颜色" aria-label="无颜色"
+            <button type="button" data-glow-chip="" aria-pressed={!color} title={t('settings:libraryColor.none')} aria-label={t('settings:libraryColor.none')}
               onClick={() => choose('')}>
               <span data-glow-ball="" data-library-none="" aria-hidden="true" />
             </button>

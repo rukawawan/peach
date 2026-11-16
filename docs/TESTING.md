@@ -140,7 +140,7 @@ Windows 的路径、挂载、托盘、证书、进程编码、更新、认证及
 
 纯 HTTP 请求契约可使用 `tests/support/web.py` 的 `route_client`：请求经过真实路由、中间件和依赖，不启动后台服务；调用方仍须准备完整临时账本。服务启动、恢复与关闭语义使用正常 lifespan，由集成测试覆盖。
 
-浏览器入口通过 `PEACH_E2E_NET_LOG_DIR` 保存 Chromium 网络事件日志；模式为 `HeavilyRedacted`，文件位于 `build/agent-verification/browser/network/`，CI 与 TAP 一起上传。网络请求失败仍使测试失败；排查 `ERR_NO_BUFFER_SPACE` 时同时核对 TAP 与该次浏览器的网络事件，不根据错误字样推断机器资源状态，也不添加放行重试。
+浏览器入口通过 `PEACH_E2E_NET_LOG_DIR` 保存 Chromium 网络事件日志；模式为 `HeavilyRedacted`，文件位于 `build/agent-verification/browser/network/`，CI 与 TAP 一起上传。文件通过后删掉自己的网络事件日志，只留失败文件的。网络请求失败仍使测试失败；排查 `ERR_NO_BUFFER_SPACE` 时同时核对 TAP 与该次浏览器的网络事件，不根据错误字样推断机器资源状态，也不添加放行重试。
 
 [Chromium 572515601](https://issuetracker.google.com/issues/572515601) 的 Windows 回环建连缺陷由 Playwright 默认禁用的 `TcpPortRandomizationWin` 规避，隔离 E2E 浏览器不另传 `--disable-features`：同名开关的最后一个值会覆盖整串默认值。`browser-launch.test.ts` 用真实 Chrome 启动参数与原生 Playwright 对照，确认默认列表保留且包含该项。生产浏览器、页面断言、请求失败判据及机器网络配置不变；独立的启动超时不能据此标为已修复。
 
@@ -204,13 +204,15 @@ macOS 按影响域验证：
 
 全量先单独跑一片秒级检查（`test_runner.GATE_TESTS`：仓库策略、编码、文案终态、上下文预算、源码断言棘轮、复杂度、Python lint、外发代理、仓库整洁与依赖清单，合计约 1 分钟），有一项不过就不起其余分片。
 
-全量失败后，入口从逐条结果里取出失败的 Python 用例、e2e 文件与 vitest 文件，不超过 6 个文件时用定向入口逐个单独重跑一次。单独重跑通过的，记录照样签为通过，名字写进记录的 `flaky` 字段并打印出来；单独重跑仍失败、失败面更大、或浏览器容器整个没起来的，按真实失败处理。同一用例反复出现在 `flaky` 里，说明它的等待写法或时限需要修。
+全量失败后，入口从逐条结果里取出失败的 Python 用例、e2e 文件与 vitest 文件，不超过 6 个文件时用定向入口逐个单独重跑一次。单独重跑通过的，记录照样签为通过，名字写进记录的 `flaky` 字段并打印出来；单独重跑仍失败、失败面更大、或浏览器容器整个没起来的，按真实失败处理。CI 的独立 Python 分片同样处理；浏览器分片走定向入口，由 `-RerunFailures`（macOS/Linux 为 `--rerun-failures`）开启同一处理。偶发通过时写进测试结果历史；在 GitHub Actions 上另标为警告并写进作业摘要，PR 上可见。同一文件反复偶发，说明它的等待写法或时限需要修；`python scripts/test_history.py flaky` 按次数排行，`--folder` 可另读下载的 CI 历史制品。
 
 本机全量验证与代码集成共用 `full-suite.lock`，从取得代码和环境快照一直持有到记录写入完成。仅修改两份 README 或 `docs/` 下 Markdown 的集成只取得 `integration.lock`，仍核对工作树、验证记录与冲突，不等待无关全量测试。
 锁忙时按到达先后排队：等待者在锁旁的 `full-suite.lock.queue/` 放一张以纳秒时刻开头的票，
 前面没有活票时才去抢锁，拿到即撤票；提示里打印持有者与前面排队的个数。票主进程退出后，
 它的票由后来者清掉。最长等 30 分钟；超时撤票退出，不执行测试或合并。集成事务本身仍由
 `integration.lock` 串行保护。部分域验证与 CI 分片不签发独立的本机全量记录。
+
+代码集成排队期间目标分支前进时，`integrate` 拿到两把锁后在工作树里把分支 rebase 到目标上，按统一入口的步骤补验 `auto`，用 `--force-with-lease` 推送工作者分支，等 PR 头跟上新提交再合入；回执的 `refreshed` 记下 rebase 前后的提交。补验由集成进程直接派出工作树解释器，以 `--full-lock-held` 沿用集成进程持有的全量锁，运行器核对锁的持有者在自己的祖先链上（Windows venv 的 `python.exe` 是启动器，中间多一层进程）。两边改了同一文件时不自动 rebase，照旧拒收并要求复核；rebase 冲突时撤回；补验未通过时不推送、不合入，日志在工作树 `build/integrate-verify.log`。补验期间一直持锁，后面排队的任务按 30 分钟上限等待。文档集成不持全量锁，目标前进时仍要求在工作树 rebase 后重新验证。
 
 锁旁的持有者信息用独立文件锁保护读写和清理；主锁仍负责验证与集成互斥。等锁线程关闭记录文件后，持有者才删除记录，避免 Windows 文件共享冲突。
 
@@ -376,6 +378,8 @@ PowerShell 里解析到 `Git\cmd\git.exe`、在 Git Bash 里解析到 `Git\mingw
 | `files`、`count` | 本次跑到的测试文件模块名与用例总数 |
 
 之后逐条写 `type` 为 `test` 的行：`run`、`id`、`outcome`（`pass`、`fail`、`error`、`skip`）与 `seconds`，失败与报错另有 `message`，取最后一行异常，遮掉 `token=`、`password=` 一类的值，截断到 200 字。Python 用例名为 `模块.类.方法`，vitest 为 `vitest:文件 > 分组 > 标题`，浏览器用例为 `e2e:文件 > 分组 > 标题`。
+
+偶发另写一行 `type` 为 `flaky`：`time`、`head`、`branch`、`worktree`、`ci` 与单独重跑通过的 `selectors`。
 
 为控制体积，只逐条写非通过的用例与耗时不少于 5 秒的通过用例。一次全量约一万条结果，全部逐条写约 2.4 MB；按这个口径约 250 行、75 KB。某条用例跑了几次，用运行头的 `files` 推算：文件在场、没被记成 `skip` 的用例都跑过；逐文件耗时另见 `test-timings.json`。
 

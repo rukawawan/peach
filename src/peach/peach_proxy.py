@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from .follow_secrets import CredentialStore
 from .fsutil import atomic_write_text
+from .user_messages import UserOSError, UserValueError
 
 
 def values(root: Path) -> dict:
@@ -36,13 +37,13 @@ def describe(root: Path) -> dict:
 def validate(root: Path, body: object) -> dict:
     """校验连接方式与地址；凭据只留在返回给保存流程的值中。"""
     if not isinstance(body, dict):
-        raise ValueError("请选择 Peach 代理的连接方式")
+        raise UserValueError("errors.peachProxy.modeRequired")
     mode = body.get("mode")
     if not isinstance(mode, str) or mode not in {"environment", "direct", "proxy"}:
-        raise ValueError("请选择 Peach 代理的连接方式")
+        raise UserValueError("errors.peachProxy.modeRequired")
     address = body.get("proxy") or values(root).get("proxy", "")
     if not isinstance(address, str):
-        raise ValueError("代理地址必须是文字")
+        raise ValueError("proxy address must be a string")
     address = address.strip()
     if mode == "proxy":
         try:
@@ -52,7 +53,7 @@ def validate(root: Path, body: object) -> dict:
         except ValueError:
             valid = False
         if not valid or any(char.isspace() for char in address):
-            raise ValueError("请填写带端口的 HTTP 或 SOCKS 代理地址")
+            raise UserValueError("errors.peachProxy.addressInvalid")
     return {"mode": mode, "proxy": address if mode == "proxy" else ""}
 
 
@@ -72,7 +73,7 @@ def client_options(root: Path | None = None) -> dict:
     root = secrets_root() if root is None else root
     saved = values(root)
     if saved.get("conflict"):
-        raise ValueError("来源代理设置不同，请先在配置页选择 Peach 代理")
+        raise UserValueError("errors.peachProxy.conflict")
     mode = saved.get("mode", "environment")
     if mode == "proxy":
         return {"trust_env": False, "proxy": saved["proxy"]}
@@ -105,4 +106,4 @@ def read_url(url: str, *, timeout: float = 60, headers=None, max_bytes: int | No
             return response.read() if max_bytes is None else _bounded_body(response.iter_bytes(), max_bytes)
     except httpx.HTTPError as error:
         kind = f"HTTP {error.response.status_code}" if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
-        raise OSError(f"外部请求未取得（{kind}）") from error
+        raise UserOSError("errors.peachProxy.requestFailed", {"kind": kind}) from error

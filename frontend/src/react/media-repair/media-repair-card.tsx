@@ -14,15 +14,16 @@ import { REPAIR_CARD_TEXT } from '../../management';
 import { useBackgroundJob } from '../background-job';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
+import { LibraryLabel } from '../components/library-label';
 import { useOrderedLibraries } from '../components/library-order';
 import { Progress } from '../components/progress';
 import { queryClient } from '../query';
-import { SourceMark } from '../settings/section';
 import { busyProps, useAction } from '../settings/use-action';
 import {
   fetchMediaRepair, fetchRepairLibraries, IDLE_REPAIR, MEDIA_REPAIR_KEY, MEDIA_REPAIR_URL,
   missingToolText, REPAIR_LIBRARIES_KEY, statusLine, type MediaRepairState,
 } from './media-repair';
+import { jobText } from '../../core/server-text';
 import { t } from '../../i18n';
 
 const libraryMark = (icon: string) => MEDIA_SOURCE_ICONS[icon] || icon;
@@ -66,7 +67,7 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
 
   const outcome = repair.outcome;
   const line = statusLine(running ? state : outcome ?? IDLE_REPAIR);
-  const problem = action.error || outcome?.error || (repair.query.error ? t('cleanup:mediaRepair.statusUnavailable') : '');
+  const problem = action.error || jobText(outcome, 'error') || (repair.query.error ? t('cleanup:mediaRepair.statusUnavailable') : '');
   return (
     <div className="flex flex-col gap-4">
       <Fieldset layout="split" label={t('cleanup:tools.mediaRepair')} footer={
@@ -76,7 +77,7 @@ export function MediaRepairCard({ toast = () => {} }: { toast?(message: string):
             onSelectionChange={(key) => { if (key !== null) setChosen(String(key)); }}>
             {libraries.map((row) => (
               <SelectItem key={row.id} id={row.id} textValue={row.name}>
-                <SourceMark mark={libraryMark(row.icon)} />{row.name}
+                <LibraryLabel library={{ id: row.id, name: row.name, icon: libraryMark(row.icon) }} />
               </SelectItem>
             ))}
           </Select>

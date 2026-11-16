@@ -85,7 +85,7 @@ export function DataCleanupPage({ toast, open, navigate }: DataCleanupProps) {
       </div>
     </section>
     <div id="libraryProcessing" className="scroll-mt-20">
-      <LibraryProcessingCard toast={message => toast(message)} monitor onComplete={refreshReadings} />
+      <LibraryProcessingCard toast={message => toast(message)} onComplete={refreshReadings} />
     </div>
     <section aria-labelledby="cleanup-maintenance" className="flex flex-col gap-4">
       <SectionHeading id="cleanup-maintenance">{t('cleanup:overview.maintenanceSection')}</SectionHeading>

@@ -26,6 +26,10 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
+
 from . import changelog, github_release_candidate, version_bump
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,9 +93,9 @@ def latest_run(runs: list[dict], sha: str) -> dict | None:
 def require_success(runs: list[dict], sha: str) -> dict:
     latest = latest_run(runs, sha)
     if latest is None:
-        raise ValueError("此提交没有 master 的 Test 工作流记录")
+        raise ValueError(t("release_tag.noTestRun"))
     if latest.get("status") != "completed" or latest.get("conclusion") != "success":
-        raise ValueError(f"此提交最新 Test 尚未通过：{latest.get('html_url', '')}")
+        raise ValueError(t("release_tag.testNotPassed", url=latest.get('html_url', '')))
     return latest
 
 
@@ -140,14 +144,11 @@ def _stalled(queued: list[dict], first_seen: dict, now: float) -> list[str]:
     for job in queued:
         seen = first_seen.setdefault(job["id"], now)
         waited = max(job.get("queued") or 0.0, now - seen)
-        tags = "、".join(job["tags"]) or "无"
+        tags = list(job["tags"]) or t("release_tag.noTags")
         if job["runners"] == "offline":
-            lines.append(f"{job['name']}（tags：{tags}）排队 {waited / 60:.0f} 分钟未开始，"
-                         "带这些 tags 的 runner 都不在线或已暂停")
+            lines.append(t("release_tag.jobStalledOffline", job=job['name'], tags=tags, minutes=f"{waited / 60:.0f}"))
         elif waited >= STALL_SECONDS:
-            lines.append(f"{job['name']}（tags：{tags}）排队 {waited / 60:.0f} 分钟未开始；"
-                         "确认不了有没有带这些 tags 的在线 runner（列表要维护者权限，"
-                         "共享 runner 也未必列出），runner 不在线或一直被占着都会这样")
+            lines.append(t("release_tag.jobStalledUnknown", job=job['name'], tags=tags, minutes=f"{waited / 60:.0f}"))
     return lines
 
 
@@ -169,29 +170,20 @@ def await_test(repo: str, sha: str, *, timeout: float = TEST_TIMEOUT, poll: floa
         now = clock()
         if latest is None:
             if now - start >= STALL_SECONDS:
-                raise ValueError(
-                    f"推送后 {(now - start) / 60:.0f} 分钟仍没有 {sha[:8]} 的 master Test 记录，"
-                    "CI 没有被触发；检查流水线触发规则与项目的 CI 开关，"
-                    "Test 跑起来后再跑一次 --ship --apply")
+                raise ValueError(t("release_tag.noTestRunAfterPush", minutes=f"{(now - start) / 60:.0f}", sha=sha[:8]))
         elif latest.get("status") == "completed":
             return require_success(runs, sha)
         else:
             url = latest.get("html_url", "")
             if latest.get("failed_jobs"):
-                raise ValueError(
-                    f"{sha[:8]} 的 Test 必需任务已失败：{'、'.join(latest['failed_jobs'])}，"
-                    f"整条流水线不会转绿：{url}；版本提交已在 master 上，"
-                    "修好或重试这些任务、Test 转绿后再跑一次 --ship --apply")
+                raise ValueError(t("release_tag.requiredJobsFailed", sha=sha[:8],
+                                   jobs=list(latest['failed_jobs']), url=url))
             stalled = _stalled(latest.get("queued_jobs") or [], first_seen, now)
             if stalled:
-                raise ValueError(
-                    f"已等 {(now - start) / 60:.0f} 分钟，{sha[:8]} 的 Test 等不到结果：{'；'.join(stalled)}。"
-                    f"{url}\n版本提交已在 master 上：启动对应 runner（或等它空出来）、"
-                    "这些任务开始运行后，再跑一次 --ship --apply")
+                raise ValueError(t("release_tag.testStalled", minutes=f"{(now - start) / 60:.0f}", sha=sha[:8],
+                                   jobs=t("common.clauseSeparator").join(stalled), url=url))
         if now >= deadline:
-            raise ValueError(
-                f"等了 {timeout / 60:.0f} 分钟，{sha[:8]} 的 Test 还没有结果；"
-                "版本提交已在 master 上，等它跑完再跑一次 --ship --apply")
+            raise ValueError(t("release_tag.testTimedOut", minutes=f"{timeout / 60:.0f}", sha=sha[:8]))
         sleep(poll)
 
 
@@ -212,14 +204,12 @@ def require_rehearsal(repo: str, sha: str, checked: dict, *, timeout: float = TE
         now = clock()
         if latest is not None and latest.get("status") == "completed":
             if latest.get("conclusion") != "success":
-                raise ValueError(f"版本提交的发布演练没有通过，不打标签：{latest.get('html_url', '')}")
+                raise ValueError(t("release_tag.rehearsalFailed", url=latest.get('html_url', '')))
             return
         if latest is None and now - start >= STALL_SECONDS:
-            raise ValueError(f"推送后 {(now - start) / 60:.0f} 分钟仍没有 {sha[:8]} 的 Release 演练记录；"
-                             "检查 release.yml 的触发条件，演练跑起来后再跑一次 --ship --apply")
+            raise ValueError(t("release_tag.noRehearsalAfterPush", minutes=f"{(now - start) / 60:.0f}", sha=sha[:8]))
         if now - start >= timeout:
-            raise ValueError(f"等了 {timeout / 60:.0f} 分钟，{sha[:8]} 的发布演练还没有结果；"
-                             "版本提交已在 master 上，演练跑完后再跑一次 --ship --apply")
+            raise ValueError(t("release_tag.rehearsalTimedOut", minutes=f"{timeout / 60:.0f}", sha=sha[:8]))
         sleep(poll)
 
 
@@ -229,16 +219,16 @@ def verify(repo: str, sha: str) -> dict:
     else:
         comparison = api(repo, f"compare/master...{sha}")
         if comparison["status"] not in {"identical", "behind"}:
-            raise ValueError("发布提交不属于远端 master 历史")
+            raise ValueError(t("release_tag.notOnMaster"))
     checked = require_success(test_runs(repo, sha), sha)
     return {"sha": sha, "test": checked["html_url"]}
 
 
 def _require_clean_master() -> None:
     if command("git", "status", "--porcelain"):
-        raise ValueError("工作区不干净")
+        raise ValueError(t("release_tag.dirty"))
     if command("git", "branch", "--show-current") != "master":
-        raise ValueError("请从 master 主检出执行")
+        raise ValueError(t("release_tag.runFromMaster"))
 
 
 def _require_free_tag(repo: str, tag: str) -> None:
@@ -247,7 +237,7 @@ def _require_free_tag(repo: str, tag: str) -> None:
         return
     # matching-refs 返回空列表代表不存在；网络或权限错误不能被当成空列表。
     if any(ref["ref"] == f"refs/tags/{tag}" for ref in api(repo, f"git/matching-refs/tags/{tag}")):
-        raise ValueError(f"{tag} 已存在，不覆盖；发布新版本请先推进 __version__")
+        raise ValueError(t("release_tag.tagExists", tag=tag))
 
 
 def require_clean_dependencies(root: Path = None) -> None:
@@ -258,7 +248,7 @@ def require_clean_dependencies(root: Path = None) -> None:
     failed = [str(project.relative_to(root)) or "." for project in (root, root / "frontend")
               if npm_audit.audit(project) != 0]
     if failed:
-        raise ValueError("依赖审计发现高危漏洞（" + "、".join(failed) + "）；先升级依赖再发布")
+        raise ValueError(t("release_tag.auditFailed", projects=list(failed)))
 
 
 def require_release_notice(root: Path, version: str, part: str) -> None:
@@ -273,7 +263,7 @@ def require_release_notice(root: Path, version: str, part: str) -> None:
                    if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "NOTICES")
     if version not in notices:
         raise version_bump.VersionError(
-            f"{version} 还没有更新公告：先在 src/peach/release_notices.py 写好这一版的新入口与自动进行的事")
+            t("release_tag.noticeMissing", version=version))
 
 
 def prepare(repo: str, part: str, *, apply: bool,
@@ -303,15 +293,15 @@ def prepare(repo: str, part: str, *, apply: bool,
     result["section"] = changelog.section_of(
         (ROOT / changelog.CHANGELOG).read_text(encoding="utf-8"), version)
     result["next"] = [
-        f"核对上面 {version} 那一节的措辞，它是使用者唯一读到的说明",
-        "确认后跑 --ship --apply：提交、推送、等 Test 转绿、打标签一次做完",
+        t("release_tag.nextReview", version=version),
+        t("release_tag.nextShip"),
     ]
     return result
 
 
 def _require_master() -> None:
     if command("git", "branch", "--show-current") != "master":
-        raise ValueError("请从 master 主检出执行")
+        raise ValueError(t("release_tag.runFromMaster"))
 
 
 def _pending_files() -> list[str]:
@@ -333,14 +323,14 @@ def _staged_release(repo: str) -> tuple[str, str, list[str]]:
     tag = "v" + version
     document = (ROOT / changelog.CHANGELOG).read_text(encoding="utf-8")
     if not changelog.has_section(document, version):
-        raise ValueError(f"{changelog.CHANGELOG} 缺少 {version} 一节；先用 --bump 起草再润色")
+        raise ValueError(t("release_tag.sectionMissing", file=changelog.CHANGELOG, version=version))
     changelog.require_labeled_entries(document, version)
     _require_free_tag(repo, tag)
     if command("git", "tag", "--list", tag):
-        raise ValueError(f"本地 {tag} 已存在，请先检查它的归属")
+        raise ValueError(t("release_tag.localTagExists", tag=tag))
     pending = _pending_files()
     if pending and pending != sorted(RELEASE_FILES):
-        raise ValueError("工作区除了版本号与变更日志还有别的改动：" + "、".join(pending))
+        raise ValueError(t("release_tag.extraChanges", files=list(pending)))
     return version, tag, pending
 
 
@@ -398,18 +388,18 @@ def point_readme(repo: str, *, apply: bool, timeout: float = TEST_TIMEOUT, poll:
     tag = "v" + version
     pending = _pending_files()
     if not set(pending) <= set(version_bump.README_FILES):
-        raise ValueError("工作区除了 README 还有别的改动：" + "、".join(pending))
+        raise ValueError(t("release_tag.extraReadmeChanges", files=list(pending)))
     names = version_bump.readme_assets(ROOT, version)
     if not names:
-        raise ValueError("README 里没有 Release 下载直链")
+        raise ValueError(t("release_tag.noReadmeLinks"))
     result = {"version": version, "tag": tag, "assets": names, "applied": apply, "readme": []}
     if not apply:
         return result
     start = clock()
     while missing := sorted(set(names) - release_assets(repo, tag)):
         if clock() - start >= timeout:
-            raise ValueError(f"等了 {timeout / 60:.0f} 分钟，{tag} 的 Release 仍缺 {'、'.join(missing)}；"
-                             "README 仍指向上一版，制品齐了以后跑 --point-readme --apply")
+            raise ValueError(t("release_tag.assetsMissing", minutes=f"{timeout / 60:.0f}", tag=tag,
+                               assets=list(missing)))
         sleep(poll)
     changed = version_bump.point_readmes(ROOT, version)
     subject = README_SUBJECT.format(tag=tag)
@@ -427,15 +417,15 @@ def plan(repo: str) -> dict:
     _require_clean_master()
     sha = command("git", "rev-parse", "HEAD")
     if master_sha(repo) != sha:
-        raise ValueError("本地 HEAD 与发布平台 master 不一致，请先完成同步")
+        raise ValueError(t("release_tag.headMismatch"))
     version = version_bump.read_version(ROOT)
     tag = "v" + version
     document = (ROOT / changelog.CHANGELOG).read_text(encoding="utf-8")
     if not changelog.has_section(document, version):
-        raise ValueError(f"{changelog.CHANGELOG} 缺少 {version} 一节；先用 --bump 起草再润色")
+        raise ValueError(t("release_tag.sectionMissing", file=changelog.CHANGELOG, version=version))
     _require_free_tag(repo, tag)
     if command("git", "tag", "--list", tag):
-        raise ValueError(f"本地 {tag} 已存在，请先检查它的归属")
+        raise ValueError(t("release_tag.localTagExists", tag=tag))
     return {**verify(repo, sha), "tag": tag, "repo": repo}
 
 
@@ -443,22 +433,22 @@ def plan_commit(repo: str, sha: str) -> dict:
     """发布明确选定的主线提交，版本与说明均取自这个提交。"""
     _require_clean_master()
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError("--release-sha 必须是完整的 40 位提交 SHA")
+        raise ValueError(t("release_tag.releaseShaFormat"))
     if command("git", "rev-parse", f"{sha}^{{commit}}") != sha:
-        raise ValueError("--release-sha 必须指向提交对象")
+        raise ValueError(t("release_tag.releaseShaCommit"))
     text = command("git", "show", f"{sha}:{version_bump.VERSION_FILE}")
     match = version_bump.VERSION_PATTERN.search(text)
     if match is None:
-        raise ValueError("选定提交没有有效的 __version__")
+        raise ValueError(t("release_tag.noVersion"))
     version = ".".join(match.group(index) for index in (2, 3, 4))
     document = command("git", "show", f"{sha}:{changelog.CHANGELOG}")
     if not changelog.has_section(document, version):
-        raise ValueError(f"选定提交的 {changelog.CHANGELOG} 缺少 {version} 一节")
+        raise ValueError(t("release_tag.selectedSectionMissing", file=changelog.CHANGELOG, version=version))
     changelog.require_labeled_entries(document, version)
     tag = f"v{version}"
     _require_free_tag(repo, tag)
     if command("git", "tag", "--list", tag):
-        raise ValueError(f"本地 {tag} 已存在，请先检查它的归属")
+        raise ValueError(t("release_tag.localTagExists", tag=tag))
     return {**verify(repo, sha), **require_candidate(repo, sha), "tag": tag, "version": version,
             "repo": repo, "section": changelog.section_of(document, version)}
 
@@ -473,32 +463,31 @@ def require_candidate(repo: str, sha: str) -> dict:
 
 def main(argv=None) -> int:
     global GITLAB
-    parser = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=t("release_tag.description"),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default="peach-mitao/peach")
-    parser.add_argument("--gitlab-host", help="使用此 GitLab 主机发布，例如 gitgud.io；默认使用 GitHub")
+    parser.add_argument("--gitlab-host", help=t("release_tag.helpGitlabHost"))
     parser.add_argument("--reference-evidence", action="append", default=[], metavar="SOURCE=FILE",
-                        help="为 --bump 明确提供本次参考正文，报告保留用户取证渠道")
+                        help=t("release_tag.helpReferenceEvidence"))
     parser.add_argument("--apply", action="store_true",
-                        help="真的动手：带 --bump 时写版本号与变更日志，带 --ship 时走完发布，"
-                             "都不带时创建并推送标签")
+                        help=t("release_tag.helpApply"))
     parser.add_argument("--timeout", type=float, default=TEST_TIMEOUT,
-                        help=f"--ship 等 Test 工作流的秒数上限，默认 {TEST_TIMEOUT:.0f}")
+                        help=t("release_tag.helpTimeout", seconds=f"{TEST_TIMEOUT:.0f}"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--bump", choices=("auto", "patch", "minor", "major"),
-                      help="推进 __version__ 并起草变更日志，为下一次发布做准备")
+                      help=t("release_tag.helpBump"))
     mode.add_argument("--ship", action="store_true",
-                      help="把定好版的工作区送到标签：提交、推送、等 Test 转绿、打标签")
+                      help=t("release_tag.helpShip"))
     mode.add_argument("--point-readme", action="store_true",
-                      help="当前版本的 Release 制品齐了以后，把 README 下载直链换过去并推送 master")
-    mode.add_argument("--verify-sha", help="仅核对指定提交的主线归属与 CI，供 Release 工作流使用")
-    mode.add_argument("--release-sha", help="为完整 SHA 指定的已通过 CI 的主线提交补打标签")
+                      help=t("release_tag.helpPointReadme"))
+    mode.add_argument("--verify-sha", help=t("release_tag.helpVerifySha"))
+    mode.add_argument("--release-sha", help=t("release_tag.helpReleaseSha"))
     args = parser.parse_args(argv)
     try:
         from .release_forge import GitLabForge
         GITLAB = GitLabForge(args.gitlab_host, command) if args.gitlab_host else None
         if args.reference_evidence and not args.bump:
-            raise ValueError("--reference-evidence 仅用于 --bump 的参考检查")
+            raise ValueError(t("release_tag.referenceEvidenceBumpOnly"))
         if args.verify_sha:
             print(json.dumps(verify(args.repo, args.verify_sha), ensure_ascii=False, indent=2))
             return 0
@@ -524,17 +513,17 @@ def main(argv=None) -> int:
             if args.release_sha is not None:
                 result = plan_commit(args.repo, args.release_sha)
             elif master_sha(args.repo) != result["sha"]:
-                raise ValueError("检查期间 master 已更新，请重新执行")
+                raise ValueError(t("release_tag.masterMoved"))
             command("git", "tag", "-a", result["tag"], result["sha"],
                     "-m", f"Peach {result['tag']} Windows 测试版")
             command("git", "push", remote_url(args.repo),
                     f"refs/tags/{result['tag']}")
-            result["next"] = "Release 制品上传完以后跑 --point-readme --apply，把 README 下载直链换到这一版"
+            result["next"] = t("release_tag.nextPointReadme")
         print(json.dumps({**result, "applied": args.apply}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, version_bump.VersionError, subprocess.CalledProcessError) as exc:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        print(f"发布检查未通过：{detail}")
+        print(t("release_tag.checkFailed", detail=detail))
         return 1
     finally:
         GITLAB = None

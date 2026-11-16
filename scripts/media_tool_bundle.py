@@ -7,7 +7,14 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import sys
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
 
 REQUIRED_FILES = {"bin/ffmpeg.exe", "bin/ffprobe.exe", "LICENSE.txt", "NOTICE.md", "buildconf.txt"}
 POLICIES = {
@@ -26,10 +33,10 @@ def digest(path: Path) -> str:
 def checked_file(root: Path, name: str, expected: str) -> Path:
     relative = PurePosixPath(name)
     if not name or "\\" in name or relative.is_absolute() or ".." in relative.parts or ":" in name:
-        raise ValueError(f"FFmpeg 制品路径无效：{name}")
+        raise ValueError(t("media_tool_bundle.invalidPath", name=name))
     target = root.joinpath(*relative.parts)
     if not target.resolve().is_relative_to(root.resolve()) or target.is_symlink() or not target.is_file():
-        raise ValueError(f"FFmpeg 制品文件缺失或越界：{name}")
+        raise ValueError(t("media_tool_bundle.fileMissing", name=name))
     if not re.fullmatch(r"[0-9a-f]{64}", expected) or digest(target) != expected:
         raise ValueError(f"FFmpeg SHA-256 mismatch: {name}")
     return target
@@ -42,29 +49,29 @@ def validate(root: Path, tool: str = "ffmpeg", *, architecture: str | None = Non
     archive_name = f"{tool}-corresponding-source.zip"
     if architecture is not None:
         if architecture not in {"arm64", "x86_64"} or manifest.get("platform") != "darwin" or manifest.get("architecture") != architecture:
-            raise ValueError("macOS 媒体工具平台或架构不符")
+            raise ValueError(t("media_tool_bundle.platformMismatch"))
         required = {name.removesuffix(".exe") for name in required}
         archive_name = f"{tool}-macos-{architecture}-corresponding-source.zip"
     if manifest.get("license") != license_name or not manifest.get("version"):
-        raise ValueError("FFmpeg 清单缺少版本或 GPL 许可证声明")
+        raise ValueError(t("media_tool_bundle.licenseMissing"))
     files = manifest.get("files", {})
     if not required.issubset(files):
-        raise ValueError("FFmpeg 清单缺少工具或分发材料")
+        raise ValueError(t("media_tool_bundle.toolsMissing"))
     actual = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     if actual != set(files) | {"manifest.json"}:
-        raise ValueError("FFmpeg 目录与清单文件不一致")
+        raise ValueError(t("media_tool_bundle.filesMismatch"))
     for name, expected in files.items():
         checked_file(root, name, expected)
     sources = manifest.get("sources", [])
     if {source.get("name") for source in sources} != source_names:
-        raise ValueError("FFmpeg 清单缺少完整源码来源")
+        raise ValueError(t("media_tool_bundle.sourcesMissing"))
     for source in sources:
         if (not source.get("revision") or not source.get("url", "").startswith("https://")
                 or not re.fullmatch(r"[0-9a-f]{64}", source.get("sha256", ""))):
-            raise ValueError("FFmpeg 源码来源缺少固定版本或哈希")
+            raise ValueError(t("media_tool_bundle.sourceUnpinned"))
     archive = manifest["source_archive"]
     if archive["name"] != archive_name:
-        raise ValueError("媒体工具对应源码归档名称不符")
+        raise ValueError(t("media_tool_bundle.archiveNameMismatch"))
     source_path = checked_file(root.parent, archive["name"], archive["sha256"])
     return manifest, source_path
 
@@ -72,7 +79,7 @@ def validate(root: Path, tool: str = "ffmpeg", *, architecture: str | None = Non
 def package(root: Path, destination: Path, tool: str = "ffmpeg") -> dict:
     manifest, source_path = validate(root, tool)
     if destination.exists():
-        raise ValueError(f"FFmpeg 目标目录必须不存在：{destination}")
+        raise ValueError(t("media_tool_bundle.destinationExists", path=destination))
     shutil.copytree(root, destination)
     output = destination.parents[2] / source_path.name
     if output.resolve() != source_path.resolve():
@@ -81,7 +88,7 @@ def package(root: Path, destination: Path, tool: str = "ffmpeg") -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("media_tool_bundle.description"))
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--validate-only", action="store_true")

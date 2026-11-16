@@ -53,7 +53,11 @@ from . import minnano_av
 from .entities import (is_short_single_name, merge_entity, name_chain, name_rank,
                        normalize_entity_name)
 from .followups import Attempts, Followup, FollowupType, attempts_root, register
+from .task_outcomes import is_outcome, outcome_parts, part, said
+from .task_runs import item_progress, task_label
 from .kanji import fold_glyphs
+from . import interface_text
+from .metadata import RelayableError, relay_args, relayed
 from .metadata_alias_resolve import is_descriptive, is_planning_alias
 from .migrations import sqlite_backup
 from .scripting import HostLimiter
@@ -62,7 +66,7 @@ from .sources.base import challenge_page
 
 #: 这类后继在任务中心的身份，也是活动页上那一行的名字来源。
 TASK_KEY = "performer-alias"
-TASK_LABEL = "补女优别名"
+TASK_LABEL = task_label(TASK_KEY)
 
 #: 这条后继写下的别名都以它开头，后面接 `@<任务行 id>`；撤回按它认。
 SOURCE = "auto:performer-alias"
@@ -103,19 +107,28 @@ _LISTING_HINT = re.compile(r"名前[（(]女優名[）)]")
 _BRACKETS = re.compile(r"[（(【\[][^（()）【】\[\]]*[）)】\]]")
 _UNCERTAIN = re.compile(r"[?？▲�]|不明|未確認")
 
-WRITE, HAVE, TAKEN, STALE, GONE, SKIP = "写入", "已有", "占用", "已变", "查无此人", "不收"
-MERGE = "合并"
+def _said(name: str, /, **params) -> str:
+    """站点结论与复核产物的说明，按 zh-CN 资源渲染（`server:labels.performerAliasFollowup.<名字>`）。
+
+    这几样写进复核 CSV（`REVIEW_FILE`）的 `detail` 列与结果摘要的 `sites`，那里只存一句原文。"""
+    return interface_text.text(f"server:labels.performerAliasFollowup.{name}", params)
+
+
+#: 复核 CSV `action` 列的取值（ADR-0162 的英文 id）：同一轮里按它分拣；文件只在换掉这位的旧行时读回，不比对动作。
+WRITE, HAVE, TAKEN, STALE, GONE, SKIP, MERGE = "write", "have", "taken", "stale", "gone", "skip", "merge"
+#: 站点结论开头的那个词：没命中的那一站第二圈再搜（`_visit`）。
+MISSED = _said("site.missed")
 #: 名字栏能当合并证据的站：这两站的人物页由编辑维护，一页一个人。
 MERGE_SITES = (MINNANO, AV_NEME)
 REVIEW_FILE = "performer-alias-landing.csv"
 FIELDS = ("entity_id", "canonical_name", "alias", "site", "page", "action", "detail", "batch")
 
 
-class Blocked(RuntimeError):
+class Blocked(RelayableError, RuntimeError):
     """这一站拒绝了请求或还在冷却：本轮不再问它。"""
 
 
-class Unavailable(RuntimeError):
+class Unavailable(RelayableError, RuntimeError):
     """这一页没取到（网络、非 200、本条请求数用完）。"""
 
 
@@ -140,18 +153,22 @@ def clean(raw: str) -> str:
 def rejection(name: str) -> str:
     """这个写法不收的原因；收得下返回空串。"""
     if not name:
-        return "空名"
+        return _said("reject.empty")
     if _UNCERTAIN.search(name):
-        return "带不确定标记"
+        return _said("reject.uncertain")
     if name_rank(name) >= 3:
-        return "罗马字写法"
+        return ROMAJI
     if is_short_single_name(name):
-        return "短单名，会命中别人"
+        return _said("reject.shortSingle")
     if is_planning_alias(name):
-        return "一次性称呼"
+        return _said("reject.oneOff")
     if is_descriptive(name):
-        return "描述性称呼"
+        return _said("reject.descriptive")
     return ""
+
+
+#: 「罗马字写法」：允许罗马字的来源按 `latin_rejection` 再判一次。
+ROMAJI = _said("reject.romaji")
 
 
 def latin_rejection(name: str, primary: str) -> str:
@@ -162,11 +179,11 @@ def latin_rejection(name: str, primary: str) -> str:
     罗马字的名与姓之间就是空格，不适用；描述性称呼照旧不收。
     """
     if len(name.split()) < 2 and match_key(name) != match_key(primary):
-        return "罗马字单名，会命中别人"
+        return _said("reject.romajiSingle")
     if len(match_key(name)) < 4:
-        return "短单名，会命中别人"
+        return _said("reject.shortSingle")
     if is_descriptive(name):
-        return "描述性称呼"
+        return _said("reject.descriptive")
     return ""
 
 
@@ -186,7 +203,7 @@ def parse_key(key: str) -> int:
     """把后继 key 拆回女优 id。形状不对就抛——那说明排队的行不是这个版本写的。"""
     prefix, _, raw = str(key).partition(":")
     if prefix != TASK_KEY or not raw.isdigit():
-        raise ValueError(f"认不出这条补别名后继：{key}")
+        raise ValueError(f"unrecognized performer alias followup key: {key}")
     return int(raw)
 
 
@@ -283,8 +300,8 @@ def _stock_facts(connection: sqlite3.Connection):
     return aliases, refs, fc2
 
 
-def _label(name: str) -> str:
-    return f"{TASK_LABEL}：{name}" if name else TASK_LABEL
+def _label(name: str) -> dict:
+    return item_progress(TASK_KEY, name)
 
 
 def plan(connection: sqlite3.Connection, *, since_entity_id: int) -> list[Followup]:
@@ -296,7 +313,7 @@ def plan(connection: sqlite3.Connection, *, since_entity_id: int) -> list[Follow
         (int(since_entity_id),)).fetchall()
     found = sorted(((int(row[2] or 0), int(row[0]), str(row[1] or "")) for row in rows
                     if has_entry(connection, int(row[0]))), key=lambda item: (-item[0], item[1]))
-    return [Followup(key=followup_key(entity_id), task_key=TASK_KEY, label=_label(name))
+    return [Followup.coded(followup_key(entity_id), TASK_KEY, _label(name))
             for _assets, entity_id, name in found]
 
 
@@ -331,7 +348,7 @@ def stock(connection: sqlite3.Connection, attempts, *, limit: int, skip=(),
         others = [alias for alias, source in written if not _ours(source)]
         if attempts.settled(key, _fingerprint((canonical, others), numbers, has_fc2)):
             continue
-        found.append(Followup(key=key, task_key=TASK_KEY, label=_label(canonical)))
+        found.append(Followup.coded(key, TASK_KEY, _label(canonical)))
         if len(found) >= limit:
             break
     return found
@@ -381,28 +398,28 @@ class MinnanoPages:
         except (OSError, ValueError, KeyError, TypeError):
             pass
         if paused_until(self.cooldown_root, self.source):
-            raise Blocked("来源正在冷却")
+            raise Blocked("errors.performerAliasFollowup.coolingDown")
         if self.requests >= self.max_requests:
-            raise Unavailable("这一条的请求数用完了")
+            raise Unavailable("errors.performerAliasFollowup.requestsUsedUp")
         self.limiter.wait(url)
         self.requests += 1
         try:
             response = self.transport(HttpRequest("GET", url, {"Accept": "text/html"}),
                                       TIMEOUT, 4 << 20)
         except SourcePaused as error:
-            raise Blocked(str(error)) from None
+            raise Blocked(*relay_args(error)) from None
         except Exception as error:  # noqa: BLE001 - 网络层失败都是「这一页没取到」
-            raise Unavailable(f"网络请求失败：{type(error).__name__}") from None
+            raise Unavailable("errors.performerAliasFollowup.networkFailed", {"type": type(error).__name__}) from None
         body = response.body.decode("utf-8", "replace")
         if response.status == 429:
             self._hold(refused=False)
-            raise Blocked("来源限流（429）")
+            raise Blocked("errors.performerAliasFollowup.rateLimited")
         if response.status == 403 or challenge_page(body):
             self._hold(refused=True)
-            raise Blocked("来源拒绝访问或要求机器人验证")
+            raise Blocked("errors.performerAliasFollowup.refused")
         if response.status != 200:
             # avbase 女优页按名字拼地址，站上没有这个名字回 404：那是「问过、没有」，不是没取到。
-            raise (Missing if response.status == 404 else Unavailable)(f"HTTP {response.status}")
+            raise (Missing if response.status == 404 else Unavailable)(*relayed(f"HTTP {response.status}"))
         final_url = response.url or url
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"url": url, "final_url": final_url, "body": body},
@@ -458,10 +475,10 @@ class WikiSitePages:
         from .scraping_access import pause_source, paused_until
 
         if paused_until(self.cooldown_root, self.site):
-            raise Blocked("来源正在冷却")
+            raise Blocked("errors.performerAliasFollowup.coolingDown")
         missing = self._missing()
         if time.time() - float(missing.get(url, 0)) < self.MISSING_TTL:
-            raise Missing("站上没有这一页")
+            raise Missing("errors.performerAliasFollowup.pageMissing")
         try:
             return self.pages.get(url)
         except MetadataProviderError as error:
@@ -470,11 +487,12 @@ class WikiSitePages:
                     missing[url] = time.time()
                     self.missing_path.parent.mkdir(parents=True, exist_ok=True)
                     self.missing_path.write_text(json.dumps(missing), encoding="utf-8")
-                    raise Missing(str(error)) from None
-                raise Unavailable(str(error)) from None
+                    raise Missing(*relay_args(error)) from None
+                raise Unavailable(*relay_args(error)) from None
             limited = error.status_code == 429
             pause_source(self.cooldown_root, self.site, refused=not limited)
-            raise Blocked("来源限流（429）" if limited else "来源拒绝访问或要求机器人验证") from None
+            raise Blocked("errors.performerAliasFollowup.rateLimited" if limited
+                          else "errors.performerAliasFollowup.refused") from None
 
     def close(self) -> None:
         self.pages.close()
@@ -517,28 +535,28 @@ class Fc2cmadbPages:
         from .scraping_access import SourcePaused, pause_source, paused_until
 
         if paused_until(self.cooldown_root, FC2CMADB):
-            raise Blocked("来源正在冷却")
+            raise Blocked("errors.performerAliasFollowup.coolingDown")
         if self.requests >= self.max_requests:
-            raise Unavailable("这一条的请求数用完了")
+            raise Unavailable("errors.performerAliasFollowup.requestsUsedUp")
         self.limiter.wait(url)
         self.requests += 1
         try:
             response = self.transport(HttpRequest("GET", url, headers), TIMEOUT, 4 << 20)
         except SourcePaused as error:
-            raise Blocked(str(error)) from None
+            raise Blocked(*relay_args(error)) from None
         except Exception as error:  # noqa: BLE001 - 网络层失败都是「这一页没取到」
-            raise Unavailable(f"网络请求失败：{type(error).__name__}") from None
+            raise Unavailable("errors.performerAliasFollowup.networkFailed", {"type": type(error).__name__}) from None
         text = response.body[:4096].decode("utf-8", "replace")
         if response.status == 429:
             pause_source(self.cooldown_root, FC2CMADB)
-            raise Blocked("来源限流（429）")
+            raise Blocked("errors.performerAliasFollowup.rateLimited")
         if response.status == 403 or challenge_page(text):
             pause_source(self.cooldown_root, FC2CMADB, refused=True)
-            raise Blocked("来源拒绝访问或要求机器人验证")
+            raise Blocked("errors.performerAliasFollowup.refused")
         if response.status == 404:
             return None
         if response.status != 200:
-            raise Unavailable(f"HTTP {response.status}")
+            raise Unavailable(*relayed(f"HTTP {response.status}"))
         return response.body
 
     def close(self) -> None:
@@ -596,8 +614,8 @@ def minnano_profile_pages(pages: MinnanoPages, keys: list[str],
         if len(hits) == 1:
             profiles = [pages.get(f"{minnano_av.SITE}actress{hits.pop()}.html")]
             break
-        notes.append(f"「{key}」{'对上多个人' if hits else '检索未命中'}")
-    return profiles, "；".join(notes)
+        notes.append(_said("note.manyPeople" if hits else "note.searchMissed", key=key))
+    return profiles, _said("note.separator").join(notes)
 
 
 def search_order(hits: list[tuple[str, str, str]]) -> list[str]:
@@ -656,7 +674,7 @@ def av_neme_page(pages, keys: list[str], mine: set[str]) -> tuple[list, str]:
         try:
             encoded = quote(key.encode("euc_jp"))
         except UnicodeEncodeError:
-            notes.append(f"「{key}」写不成站上的编码")
+            notes.append(_said("note.unencodable", key=key))
             continue
         named = _page_named(pages, key, mine)
         if named is not None:
@@ -671,10 +689,11 @@ def av_neme_page(pages, keys: list[str], mine: set[str]) -> tuple[list, str]:
                 matched.append((url, names))
         if len(matched) == 1:
             return matched, ""
-        notes.append(f"「{key}」{'有 %d 张人物页都列着' % len(matched) if matched else '没有人物页列着'}")
+        notes.append(_said("note.manyPages", key=key, count=len(matched)) if matched
+                     else _said("note.noPage", key=key))
         if matched:
             break
-    return [], "；".join(notes)
+    return [], _said("note.separator").join(notes)
 
 
 def fc2cmadb_page(pages: Fc2cmadbPages, codes: list[str], mine: set[str]) -> tuple[list, str]:
@@ -707,11 +726,15 @@ def fc2cmadb_page(pages: Fc2cmadbPages, codes: list[str], mine: set[str]) -> tup
         if matched:
             # 一部就够：同一个人在站上只有一页，再翻别的作品只是多花两次请求。
             break
-        shown = "、".join(str(one.get("japanese_name") or "") for one in listed)
-        notes.append(f"{code} 的女优栏{'是 ' + shown if shown else '是空的'}")
+        shown = _LIST.join(str(one.get("japanese_name") or "") for one in listed)
+        notes.append(_said("note.castIs", code=code, cast=shown) if shown else _said("note.castEmpty", code=code))
     if len(found) > 1:
-        return [], "女优栏里不止一位列着她：" + "、".join(url for url, _name in found.values())
-    return [(url, [name]) for url, name in found.values()], "；".join(notes)
+        return [], _said("note.castMany", pages=_LIST.join(url for url, _name in found.values()))
+    return [(url, [name]) for url, name in found.values()], _said("note.separator").join(notes)
+
+
+#: 说明里并列几项（名字、地址）的分隔符。
+_LIST = _said("note.list")
 
 
 # -- 落库 --------------------------------------------------------------------
@@ -742,29 +765,29 @@ def land(connection: sqlite3.Connection, entity_id: int, expected_name: str, sit
             "page": url, "batch": ""}
     current = _names(connection, entity_id, allow_creator=allow_creator)
     if current is None:
-        return [{**base, "alias": name, "action": GONE, "detail": "实体不在或不是女优"}
+        return [{**base, "alias": name, "action": GONE, "detail": _said("detail.gone")}
                 for name in names]
     if normalize_entity_name(current[0]) != normalize_entity_name(expected_name):
         return [{**base, "alias": name, "action": STALE,
-                 "detail": f"数据库里这条实体现在叫 {current[0]}"} for name in names]
+                 "detail": _said("detail.renamed", name=current[0])} for name in names]
     have = {normalize_entity_name(name) for name in [current[0], *current[1]]}
     owners, rows = _owners(connection, allow_creator=allow_creator), []
     for name in dict.fromkeys(names):
         reason = rejection(name)
-        if allow_latin and reason == "罗马字写法":
+        if allow_latin and reason == ROMAJI:
             reason = latin_rejection(name, names[0])
         others = sorted(owners.get(match_key(name), set()) - {entity_id})
         if reason:
             rows.append({**base, "alias": name, "action": SKIP, "detail": reason})
         elif normalize_entity_name(name) in have:
-            rows.append({**base, "alias": name, "action": HAVE, "detail": "已经有这个写法"})
+            rows.append({**base, "alias": name, "action": HAVE, "detail": _said("detail.have")})
         elif others:
             owner = connection.execute("SELECT canonical_name FROM entity WHERE id=?",
                                        (others[0],)).fetchone()
             # `owner` 与 `listed` 给合并判定看，不进复核产物：占用者恰好一条才算得清是哪一对，
             # `listed` 为 0 说明这个写法是页上的主名。
             rows.append({**base, "alias": name, "action": TAKEN,
-                         "detail": f"{owner[0] if owner else ''}（实体 {others[0]}）已经用着这个写法",
+                         "detail": _said("detail.taken", owner=owner[0] if owner else "", entity=others[0]),
                          "owner": others[0] if len(others) == 1 else 0,
                          "listed": names.index(name)})
         else:
@@ -775,7 +798,7 @@ def land(connection: sqlite3.Connection, entity_id: int, expected_name: str, sit
             have.add(normalize_entity_name(name))
             owners.setdefault(match_key(name), set()).add(entity_id)
             rows.append({**base, "alias": name, "action": WRITE, "batch": batch,
-                         "detail": f"{site} 页面列着数据库里她的名字"})
+                         "detail": _said("detail.listed", site=site)})
     return rows
 
 
@@ -834,13 +857,13 @@ def merge_one_person(contract, entity_id: int, rows: list[dict], batch: str) -> 
         broken = [row for row in connection.execute("PRAGMA foreign_key_check")
                   if tuple(row) not in existing]
         if broken:
-            raise RuntimeError(f"合并实体 {source_id} 进 {target_id} 后外键校验有 {len(broken)} 条违规")
+            raise RuntimeError(f"foreign key check found {len(broken)} violations after merging entity {source_id} into {target_id}")
     contract.cache_bust()
-    sites = "、".join(dict.fromkeys(row["site"] for row in taken))
+    sites = _LIST.join(dict.fromkeys(row["site"] for row in taken))
     for row in taken:
         row.update(action=MERGE, batch=batch,
-                   detail=f"{sites} 名字栏把两条实体列成同一个人：{absorbed}（实体 {source_id}）"
-                          f"并入 {kept}（实体 {target_id}），迁 {moved['assets']} 部作品")
+                   detail=_said("detail.merged", sites=sites, absorbed=absorbed, source=source_id, kept=kept,
+                                target=target_id, assets=moved['assets']))
     return {"into": target_id, "from": source_id, "kept": kept, "absorbed": absorbed,
             "assets": moved["assets"], "backup": backup.name}
 
@@ -853,9 +876,9 @@ def run(contract, key: str, handle) -> dict:
     summary = _run(contract, key, handle)
     with contract.database.read_connection() as connection:
         current = fingerprint(connection, parse_key(key))
-    outcome = str(summary.get("outcome", ""))
     Attempts(attempts_root(contract.candidate_root)).record(
-        key, current, outcome, retry_after=RETRY_UNFETCHED if outcome == "未取得" else None)
+        key, current, outcome_parts(summary),
+        retry_after=RETRY_UNFETCHED if is_outcome(summary, "unfetched") else None)
     return summary
 
 
@@ -867,15 +890,17 @@ def _run(contract, key: str, handle) -> dict:
         refs = _refs(connection, entity_id)
         codes = fc2_codes(connection, entity_id)
     if names is None:
-        return {"outcome": "档案已不存在"}
+        return said("gone")
     canonical = names[0]
     if handle is not None:
-        handle.progress(label=_label(canonical), throttle=0)
+        handle.progress(**_label(canonical), throttle=0)
     sites = open_sites(contract)
     try:
         reports: dict[str, str] = {}
-        rows = _visit_fc2cmadb(contract, sites, entity_id, canonical, codes, batch, reports)
-        more_reports, more_rows = _visit(contract, sites, entity_id, canonical, refs, batch)
+        #: 结论是「未取得」（`Blocked`／`Unavailable`）的站；一站一旦没取到，这一轮不再回头问它。
+        unfetched: set[str] = set()
+        rows = _visit_fc2cmadb(contract, sites, entity_id, canonical, codes, batch, reports, unfetched)
+        more_reports, more_rows = _visit(contract, sites, entity_id, canonical, refs, batch, unfetched)
         reports.update(more_reports)
         rows += more_rows
     finally:
@@ -889,16 +914,16 @@ def _run(contract, key: str, handle) -> dict:
         _record_review(contract.candidate_root, entity_id, rows)
     taken = sum(1 for row in rows if row["action"] == TAKEN)
     if merged:
-        outcome = f"{merged['absorbed']} 并入 {merged['kept']}"
+        outcome = part("merged", absorbed=merged['absorbed'], kept=merged['kept'])
     elif written:
-        outcome = f"登记 {len(written)} 个别名"
+        outcome = part("aliasesAdded", count=len(written))
     elif rows:
-        outcome = "没有新写法"
-    elif any(report.startswith("未取得") for report in reports.values()):
-        outcome = "未取得"
+        outcome = part("noNewAliases")
+    elif unfetched:
+        outcome = part("unfetched")
     else:
-        outcome = f"{'三' if codes else '两'}站都没对上她"
-    summary = {"name": canonical, "outcome": outcome, "sites": reports}
+        outcome = part("noMatchThree" if codes else "noMatchTwo")
+    summary = {"name": canonical, **said(outcome), "sites": reports}
     if written:
         summary["aliases"] = written[:12]
     if taken:
@@ -909,35 +934,37 @@ def _run(contract, key: str, handle) -> dict:
 
 
 def _visit_fc2cmadb(contract, sites: dict, entity_id: int, canonical: str, codes: list[str],
-                    batch: str, reports: dict[str, str]) -> list[dict]:
-    """先问 fc2cmadb：站上主名登记之后，另外两站这一轮就能拿它去搜。没有 FC2 作品就不问。"""
+                    batch: str, reports: dict[str, str], unfetched: set[str]) -> list[dict]:
+    """先问 fc2cmadb：站上主名登记之后，另外两站这一轮就能拿它去搜。没有 FC2 作品就不问。
+    没取到时站名记进 `unfetched`。"""
     if not codes or FC2CMADB not in sites:
         return []
     with contract.database.read_connection() as connection:
         current = _names(connection, entity_id)
     if current is None:
-        reports[FC2CMADB] = "未命中：档案已不存在"
+        reports[FC2CMADB] = _said("site.gone")
         return []
     mine = {match_key(name) for name in [current[0], *current[1]] if name}
     try:
         pages, note = fc2cmadb_page(sites[FC2CMADB], codes, mine)
     except (Blocked, Unavailable) as error:
-        reports[FC2CMADB] = f"未取得：{error}"
+        reports[FC2CMADB] = _said("site.failed", error=str(error))
+        unfetched.add(FC2CMADB)
         return []
     if not pages:
-        reports[FC2CMADB] = f"未命中：{note or '女优栏里没有她'}"
+        reports[FC2CMADB] = _said("site.missedBecause", note=note or _said("site.notInCast"))
         return []
     rows: list[dict] = []
     for url, found in pages:
         with contract.database.write_transaction() as connection:
             rows.extend(land(connection, entity_id, canonical, FC2CMADB, url, found, batch))
-    reports[FC2CMADB] = "命中 " + "、".join(url for url, _found in pages)
+    reports[FC2CMADB] = _said("site.hit", pages=_LIST.join(url for url, _found in pages))
     return rows
 
 
 def _visit(contract, sites: dict, entity_id: int, canonical: str, refs: list[str],
-           batch: str) -> tuple[dict[str, str], list[dict]]:
-    """两站各找她那一页，找到就当场落库。返回（每站一句结论, 每个写法一行判词）。
+           batch: str, unfetched: set[str]) -> tuple[dict[str, str], list[dict]]:
+    """两站各找她那一页，找到就当场落库。返回（每站一句结论, 每个写法一行判词）；没取到的站名记进 `unfetched`。
 
     走两圈：第一圈用账本里现有的名字；某一站没命中、而另一站登记了新写法时，第二圈拿新写法
     再搜那一站——`神山ももか` 在 av_neme 上搜得到 `雲母そら` 那一页，登记之后 minnano-av 才搜得到。
@@ -949,18 +976,18 @@ def _visit(contract, sites: dict, entity_id: int, canonical: str, refs: list[str
     for turn in range(2):
         wrote = False
         for site in (MINNANO, AV_NEME):
-            if turn and not reports.get(site, "").startswith("未命中"):
+            if turn and not reports.get(site, "").startswith(MISSED):
                 continue
             with contract.database.read_connection() as connection:
                 current = _names(connection, entity_id)
             if current is None:
-                reports[site] = "未命中：档案已不存在"
+                reports[site] = _said("site.gone")
                 continue
             mine = {match_key(name) for name in [current[0], *current[1]] if not rejection(name)}
             keys = [name for name in search_keys(*current) if name not in tried[site]][:MAX_KEYS]
             entry_refs = refs if site == MINNANO and not turn else []
             if not keys and not entry_refs:
-                reports.setdefault(site, "未命中：没有能拿去检索的名字")
+                reports.setdefault(site, _said("site.noSearchName"))
                 continue
             if not entry_refs:
                 tried[site].update(keys)
@@ -970,12 +997,13 @@ def _visit(contract, sites: dict, entity_id: int, canonical: str, refs: list[str
                 else:
                     pages, note = av_neme_page(sites[site], keys, mine)
             except (Blocked, Unavailable) as error:
-                reports[site] = f"未取得：{error}"
+                reports[site] = _said("site.failed", error=str(error))
+                unfetched.add(site)
                 continue
             pages = [(url, found) for url, found in pages
                      if url not in visited and _anchored(found, mine)]
             if not pages:
-                reports[site] = f"未命中：{note or '页面上没有数据库里她的名字'}"
+                reports[site] = _said("site.missedBecause", note=note or _said("site.nameNotOnPage"))
                 continue
             for url, found in pages:
                 visited.add(url)
@@ -983,7 +1011,7 @@ def _visit(contract, sites: dict, entity_id: int, canonical: str, refs: list[str
                     landed = land(connection, entity_id, canonical, site, url, found, batch)
                 rows.extend(landed)
                 wrote = wrote or any(row["action"] == WRITE for row in landed)
-            reports[site] = "命中 " + "、".join(url for url, _found in pages)
+            reports[site] = _said("site.hit", pages=_LIST.join(url for url, _found in pages))
         if not wrote:
             break
     return reports, rows

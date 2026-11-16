@@ -21,6 +21,7 @@ import { immerseApi, settingsPanelApi, stageApi } from '../react/application-res
 import { openDrawer } from './layout.js';
 import { setSelectMode } from './selection.js';
 import { clickPlayerControl, seekVideoBy, toggleVideoPlayback } from './../player/index';
+import { t } from '../i18n';
 export const searchState = { searchControl: undefined, searchActions: undefined, searchHelpers: undefined, searchMorph: undefined, searchMorphViewport: undefined };
 
 export function hideSearchMenu(){searchState.searchControl?.close()}
@@ -29,7 +30,7 @@ export function searchCoverImage(card){
   const kind=card?javImageKind({...card,is_jav:!!card.code},preferencesState.appSettings.javImage):'';
   return kind==='cover'?coverImage(card,'big')
     :kind?`<img class="poster still" src="/poster?id=${card.id}&c=4" width="640" height="360" alt="" loading="lazy" data-drop="self">`
-    :'<span class="nopic">无预览</span>';
+    :`<span class="nopic">${esc(t('shell:artworkGap.noPreview'))}</span>`;
 }
 
 export function finishSearchMorph(){

@@ -23,7 +23,8 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .fanbox import FanboxContentError, normalize_fanbox_post
-from . import follow_providers
+from . import follow_providers, interface_text
+from .coded_text import Said
 from .follow import (
     DEFAULT_MAX_BYTES, FollowHistoryEnd, FollowSourceError, FollowSourceRateLimited,
     plain_text, stable_id,
@@ -66,6 +67,17 @@ _LINK_RE = re.compile(r"https?://[^\s\"'<>)\]]+", re.IGNORECASE)
 #: URL 看起来指向一张图片。不只 f95 在用：归档站推导旧行缩略图时也要这个判据。
 _IMAGE_URL_RE = re.compile(
     r"\.(?:avif|bmp|gif|jpe?g|png|webp)(?:$|[?#])", re.IGNORECASE)
+
+
+def _status_text_pattern() -> re.Pattern[str]:
+    """`<provider> 返回 HTTP <status>` 那句（按 zh-CN 渲染、已落盘的旧错误文本）的正则，由资源模板反推。"""
+    template = interface_text.template("server:errors.followSources.httpStatus")
+    head, _, rest = template.partition("{{provider}}")
+    middle, _, tail = rest.partition("{{status}}")
+    return re.compile(re.escape(head) + ".+" + re.escape(middle) + r"(\d{3})" + re.escape(tail), re.IGNORECASE)
+
+
+_HTTP_STATUS_TEXT = _status_text_pattern()
 
 
 def resource_links(text: str | None) -> list[str]:
@@ -387,7 +399,7 @@ class ParsedSource:
 
     @property
     def evidence(self) -> str:
-        return "链接直接指明"
+        return Said("labels.followSources.linkEvidence")
 
 
 #: 站点主机 → 来源键。粘进来的链接靠它认出属于哪个站，不再是一串 if/elif。
@@ -430,7 +442,7 @@ class _BaseConnector:
         """条目语义来自登记表；没登记的（只有测试里的探针）按 work。"""
         spec = follow_providers.PROVIDERS.get(self.provider)
         return spec.semantics if spec else "work"
-    #: 站点被机器人验证挡住时的说明；非空表示该连接器不可用。
+    #: 站点被机器人验证挡住时的说明，写成语言资源里的 `errors.*` code；非空表示该连接器不可用。
     blocked_reason = ""
     #: 往回翻页时代表「没有更早的了」的上游状态码。声明在类上而不是每次调用
     #: `_request` 时传参，因为 `is_history_end_error` 要用同一份声明去认旧行。
@@ -518,15 +530,17 @@ class _BaseConnector:
             except (OSError, httpx.TransportError) as exc:
                 if attempt < len(delays):
                     continue
-                raise FollowSourceError(
-                    f"{self.provider} 请求失败（已尝试 {attempt} 次）：{_exc_summary(exc)}") from exc
+                raise FollowSourceError("errors.followSources.requestFailedAfterRetries", {
+                    "provider": self.provider, "attempts": attempt,
+                    "detail": _exc_summary(exc)}) from exc
             except httpx.HTTPError as exc:
-                raise FollowSourceError(
-                    f"{self.provider} 请求失败：{_exc_summary(exc)}") from exc
+                raise FollowSourceError("errors.followSources.requestFailed", {
+                    "provider": self.provider, "detail": _exc_summary(exc)}) from exc
             if response.status not in {408, 500, 502, 503, 504} or attempt == len(delays):
                 break
         if len(response.body) > self.max_bytes:
-            raise FollowSourceError(f"{self.provider} 响应超出大小上限")
+            raise FollowSourceError("errors.followSources.responseTooLarge",
+                                    {"provider": self.provider})
         return response
 
     def _get(self, url: str, *, headers: Mapping[str, str] | None = None,
@@ -556,12 +570,12 @@ class _BaseConnector:
 
     def _check_status(self, response: HttpResponse) -> None:
         if response.status in (401, 403):
-            raise FollowSourceError(
-                f"{self.provider} 拒绝访问（HTTP {response.status}）：需要有效凭据，"
-                "或站点已加机器人验证")
+            raise FollowSourceError("errors.followSources.accessDenied",
+                                    {"provider": self.provider, "status": response.status})
         self._raise_if_rate_limited(response)
         if response.status != 200:
-            raise FollowSourceError(f"{self.provider} 返回 HTTP {response.status}")
+            raise FollowSourceError("errors.followSources.httpStatus",
+                                    {"provider": self.provider, "status": response.status})
 
     def _raise_if_rate_limited(self, response: HttpResponse) -> None:
         """HTTP 429 抛 `FollowSourceRateLimited`。
@@ -576,8 +590,8 @@ class _BaseConnector:
             retry_after = float(headers.get("retry-after", ""))
         except ValueError:
             retry_after = None
-        raise FollowSourceRateLimited(
-            f"{self.provider} 返回 HTTP 429：请求过于频繁，稍后再试", retry_after)
+        raise FollowSourceRateLimited("errors.followSources.rateLimited",
+                                      {"provider": self.provider}, retry_after=retry_after)
 
     #: 上游限流页的固定句式（2026-08-29 实测 rule34.xxx）：HTTP 200 + 文本正文
     #: "You currently have a limit of 60 requests every 60 second(s)"。不识别的话
@@ -592,8 +606,9 @@ class _BaseConnector:
         if matched:
             count, seconds = matched.group(1), matched.group(2)
             return FollowSourceRateLimited(
-                f"{self.provider} 触发频率限制：每 {seconds} 秒最多 {count} 次请求，请稍后再试",
-                float(seconds))
+                "errors.followSources.rateLimitBody",
+                {"provider": self.provider, "seconds": seconds, "count": count},
+                retry_after=float(seconds))
         return None
 
     @staticmethod
@@ -610,9 +625,11 @@ class _BaseConnector:
             if reason:
                 raise reason from exc
             snippet = self._body_snippet(response)
-            detail = f"：{snippet}" if snippet else ""
-            raise FollowSourceError(
-                f"{self.provider} 返回的不是合法 JSON{detail}") from exc
+            if snippet:
+                raise FollowSourceError("errors.followSources.notJsonWithSnippet",
+                                        {"provider": self.provider, "snippet": snippet}) from exc
+            raise FollowSourceError("errors.followSources.notJson",
+                                    {"provider": self.provider}) from exc
 
     def _request(self, url: str, *, ref: str, etag: str | None = None,
                  last_modified: str | None = None, page: int = 0,
@@ -642,7 +659,7 @@ class _BaseConnector:
         if response.status == 304:
             return common, None
         if page and response.status in self.HISTORY_END_STATUSES:
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         self._check_status(response)
         return common, response
 
@@ -718,7 +735,7 @@ class _BaseConnector:
         小写且去掉了 `www.`；这里只管「这个站的 URL 里哪一截是 ref」。纯解析，
         不联网；认不出就抛 `FollowSourceError` 并说清楚该长什么样。
         """
-        raise FollowSourceError(f"{cls.provider} 暂不支持从链接登记")
+        raise FollowSourceError("errors.followSources.urlNotSupported", {"provider": cls.provider})
 
     @classmethod
     def profile_handle(cls, ref: str) -> str:
@@ -739,8 +756,7 @@ class _BaseConnector:
         声明的 `HISTORY_END_STATUSES`——放在 Web 层照站点名硬编码中文串比较的话，
         新增来源时没人会想到还要改那一处。
         """
-        matched = re.fullmatch(r".+ 返回 HTTP (\d{3})",
-                               str(message or "").strip(), re.IGNORECASE)
+        matched = _HTTP_STATUS_TEXT.fullmatch(str(message or "").strip())
         return bool(matched) and int(matched.group(1)) in cls.HISTORY_END_STATUSES
 
     def probe(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpResponse:
@@ -789,7 +805,7 @@ class IwaraConnector(_BaseConnector):
         matched = re.fullmatch(r"/profile/([A-Za-z0-9_-]{1,80})(?:/videos)?/?",
                                parsed.path)
         if host not in {"iwara.tv", "ecchi.iwara.tv"} or not matched:
-            raise FollowSourceError("Iwara 请粘贴作者主页，例如 https://www.iwara.tv/profile/username")
+            raise FollowSourceError("errors.followSources.iwaraUrlShape")
         ref = matched.group(1).casefold()
         return ParsedSource(provider, ref, f"https://www.iwara.tv/profile/{ref}", ref)
 
@@ -808,37 +824,37 @@ class IwaraConnector(_BaseConnector):
 
     def _check_status(self, response):
         if response.status in (401, 403):
-            raise FollowSourceError(
-                f"Iwara 拒绝访问（HTTP {response.status}）：登录凭据可能已过期，"
-                "或站点要求浏览器验证，请核对来源与订阅设置")
+            raise FollowSourceError("errors.followSources.iwaraAccessDenied",
+                                    {"status": response.status})
         if response.status == 404:
-            raise FollowSourceError("Iwara 作者或视频未取得：可能已删除或需要有访问权的账号")
+            raise FollowSourceError("errors.followSources.iwaraNotFound")
         super()._check_status(response)
 
     def _object(self, response):
         payload = self.parse_json(response)
         if not isinstance(payload, dict):
-            raise FollowSourceError("Iwara 接口响应格式不符")
+            raise FollowSourceError("errors.followSources.iwaraResponseMalformed")
         if payload.get("message"):
-            code = str(payload["message"])
-            if code in {"errors.privateVideo", "errors.notFound", "errors.unauthorized"}:
-                raise FollowSourceError("Iwara 内容未取得：请确认账号有访问权并更新登录凭据")
-            raise FollowSourceError("Iwara 接口拒绝请求，请在来源页面核对内容状态")
+            # Iwara 接口自己的错误码，形如 `errors.notFound`，不是 Peach 语言资源里的键。
+            scope, _, name = str(payload["message"]).partition(".")
+            if scope == "errors" and name in {"privateVideo", "notFound", "unauthorized"}:
+                raise FollowSourceError("errors.followSources.iwaraContentUnavailable")
+            raise FollowSourceError("errors.followSources.iwaraRequestRejected")
         return payload
 
     def fetch(self, ref, *, etag=None, last_modified=None, page=0):
         handle = self.profile_handle(ref).casefold()
         if not handle:
-            raise FollowSourceError("Iwara 的 ref 必须是作者用户名")
+            raise FollowSourceError("errors.followSources.iwaraRefInvalid")
         if int(page) < 0:
-            raise FollowSourceError("Iwara 页码不能小于 0")
+            raise FollowSourceError("errors.followSources.iwaraNegativePage")
         profile = self.fetch_json(f"{self.API_ROOT}/profile/{handle}")
         if not isinstance(profile, dict) or not isinstance(profile.get("user"), dict):
-            raise FollowSourceError("Iwara 作者资料格式不符")
+            raise FollowSourceError("errors.followSources.iwaraProfileMalformed")
         user = profile["user"]
         user_id = str(user.get("id") or "")
         if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", user_id):
-            raise FollowSourceError("Iwara 作者 ID 未取得")
+            raise FollowSourceError("errors.followSources.iwaraUserIdUnavailable")
         url = self.API_ROOT + "/videos?" + urllib.parse.urlencode({
             "user": user_id, "page": int(page), "limit": self.PAGE_SIZE,
             "sort": "date", "rating": "all"})
@@ -849,9 +865,9 @@ class IwaraConnector(_BaseConnector):
         payload = self._object(response)
         rows = payload.get("results")
         if not isinstance(rows, list):
-            raise FollowSourceError("Iwara 视频列表格式不符")
+            raise FollowSourceError("errors.followSources.iwaraVideoListMalformed")
         if page and not rows:
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         candidates = []
         seen = set()
         for row in rows[:self.max_items]:
@@ -865,7 +881,7 @@ class IwaraConnector(_BaseConnector):
     def _candidate(self, row, user, handle):
         """把列表字段映射为稳定 DTO，不保存短效文件地址。"""
         if not isinstance(row, dict) or not self._VIDEO_ID_RE.fullmatch(str(row.get("id") or "")):
-            raise FollowSourceError("Iwara 视频条目缺少有效 ID")
+            raise FollowSourceError("errors.followSources.iwaraVideoEntryNoId")
         video_id = row["id"]
         file = row.get("file") if isinstance(row.get("file"), dict) else {}
         file_id = str(file.get("id") or "")
@@ -875,7 +891,7 @@ class IwaraConnector(_BaseConnector):
         url = f"https://www.iwara.tv/video/{video_id}"
         extra = {"media_kind": "video", **self._tag_metadata(row.get("tags"))}
         if row.get("embedUrl"):
-            extra["media_error"] = "Iwara 此条目使用外部播放器，请打开来源页面观看"
+            extra["media_error"] = Said("labels.followSources.iwaraExternalPlayer")
         return FollowCandidate(
             provider=self.provider, external_id=video_id,
             title=plain_text(str(row.get("title") or "")) or video_id,
@@ -919,19 +935,19 @@ class IwaraConnector(_BaseConnector):
     def playback_formats(self, video_id):
         """播放时取得短效格式清单；凭据只发送到固定 API。"""
         if not self._VIDEO_ID_RE.fullmatch(str(video_id or "")):
-            raise FollowSourceError("Iwara 视频 ID 无效")
+            raise FollowSourceError("errors.followSources.iwaraVideoIdInvalid")
         response = self._get(f"{self.API_ROOT}/video/{video_id}")
         self._check_status(response)
         detail = self._object(response)
         file_url = str(detail.get("fileUrl") or "")
         if not file_url:
-            raise FollowSourceError("Iwara 正片地址未取得，请打开来源页面核对访问权")
+            raise FollowSourceError("errors.followSources.iwaraFileUrlUnavailable")
         if not self.media_url_allowed(file_url):
-            raise FollowSourceError("Iwara 返回了不受信任的文件接口地址")
+            raise FollowSourceError("errors.followSources.iwaraUntrustedFileUrl")
         parsed = urllib.parse.urlsplit(file_url)
         expires = urllib.parse.parse_qs(parsed.query).get("expires", [""])[0]
         if not expires.isdecimal():
-            raise FollowSourceError("Iwara 文件接口缺少有效期限")
+            raise FollowSourceError("errors.followSources.iwaraFileNoExpiry")
         # yt-dlp IwaraIE 的公开文件接口签名，固定 revision 见 docs/REUSE.md。
         key = "_".join((parsed.path.rstrip("/").rsplit("/", 1)[-1], expires,
                         "mSvL05GfEmeEmsEYfGCnVpEjYgTJraJN"))
@@ -940,7 +956,7 @@ class IwaraConnector(_BaseConnector):
         self._check_status(response)
         rows = self.parse_json(response)
         if not isinstance(rows, list):
-            raise FollowSourceError("Iwara 播放格式清单不符")
+            raise FollowSourceError("errors.followSources.iwaraFormatListMalformed")
         formats = []
         file = detail.get("file") if isinstance(detail.get("file"), dict) else {}
         source_height = file.get("height")
@@ -956,7 +972,7 @@ class IwaraConnector(_BaseConnector):
                 int(source_height) if name == "Source" and str(source_height).isdecimal() else 0)
             formats.append((level, value, name == "Source"))
         if not formats:
-            raise FollowSourceError("Iwara 正片格式未取得")
+            raise FollowSourceError("errors.followSources.iwaraNoFormats")
         return tuple((level, value) for level, value, _ in sorted(
             formats, key=lambda entry: (entry[2], entry[0]), reverse=True))
 
@@ -1029,9 +1045,7 @@ class KemonoConnector(_BaseConnector):
                   host: str) -> "ParsedSource":
         matched = _KEMONO_PATH_RE.match(parsed.path or "/")
         if not matched:
-            raise FollowSourceError(
-                f"{host} 的链接要指向某个创作者，形如 "
-                f"https://{host}/fanbox/user/30917150")
+            raise FollowSourceError("errors.followSources.kemonoUrlShape", {"host": host})
         service, user = matched.group(1), matched.group(2)
         return ParsedSource(provider, f"{service}/{user}",
                             f"https://{host}/{service}/user/{user}",
@@ -1040,7 +1054,7 @@ class KemonoConnector(_BaseConnector):
     def __init__(self, provider: str = "kemono", *,
                  max_probes: int = DEFAULT_MAX_PROBES, **kwargs):
         if provider not in self.HOSTS:
-            raise FollowSourceError(f"未知的 kemono 系来源：{provider}")
+            raise FollowSourceError("errors.followSources.kemonoUnknownProvider", {"provider": provider})
         super().__init__(**kwargs)
         self.provider = provider
         self.host = self.HOSTS[provider]
@@ -1054,8 +1068,8 @@ class KemonoConnector(_BaseConnector):
     def _split_ref(self, ref: str) -> tuple[str, str]:
         service, _, user = (ref or "").strip().strip("/").partition("/")
         if not self._SERVICE_RE.match(service) or not self._USER_RE.match(user):
-            raise FollowSourceError(
-                f"{self.provider} 的 ref 必须形如 `service/user_id`，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.kemonoRefInvalid",
+                                    {"provider": self.provider, "ref": repr(ref)})
         return service, user
 
     def fetch(self, ref: str, *, etag: str | None = None,
@@ -1073,9 +1087,9 @@ class KemonoConnector(_BaseConnector):
         # kemono 回 {"posts": [...]}，pawchive 直接回列表；两种都要吃。
         posts = payload.get("posts", []) if isinstance(payload, dict) else payload
         if not isinstance(posts, list):
-            raise FollowSourceError(f"{self.provider} 的帖子列表格式不符")
+            raise FollowSourceError("errors.followSources.postListMalformed", {"provider": self.provider})
         if page and not posts:
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         kept, skipped, probed = [], 0, 0
         for post in posts[: self.max_items]:
             if not isinstance(post, dict):
@@ -1358,9 +1372,7 @@ class Rule34VideoConnector(_BaseConnector):
                   host: str) -> "ParsedSource":
         matched = _R34V_PATH_RE.match(parsed.path or "/")
         if not matched:
-            raise FollowSourceError(
-                "rule34video 的链接要指向作者页，形如 "
-                "https://rule34video.com/models/lazyprocrastinator/")
+            raise FollowSourceError("errors.followSources.rule34videoUrlShape")
         slug = matched.group(1)
         return ParsedSource("rule34video", slug,
                             f"https://rule34video.com/models/{slug}/",
@@ -1376,7 +1388,7 @@ class Rule34VideoConnector(_BaseConnector):
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         slug = (ref or "").strip().strip("/").lower()
         if not self._SLUG_RE.match(slug):
-            raise FollowSourceError(f"rule34video 的 ref 必须是作者 slug，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.rule34videoRefInvalid", {"ref": repr(ref)})
         url = f"https://rule34video.com/models/{slug}/"
         if page:
             # KVS 的分页是异步块请求，`from` 是 1 起的两位页码（`from:02`）。
@@ -1403,10 +1415,8 @@ class Rule34VideoConnector(_BaseConnector):
                 break
         if not listed:
             if page:
-                raise FollowHistoryEnd("没有更多历史内容")
-            raise FollowSourceError(
-                "rule34video 创作者页没有解析出任何作品：页面结构可能已变，"
-                "或该 slug 不存在")
+                raise FollowHistoryEnd()
+            raise FollowSourceError("errors.followSources.rule34videoNoWorks")
         candidates: list[FollowCandidate] = []
         skipped_compilations = probed = 0
         for candidate in listed:
@@ -1588,9 +1598,7 @@ class Rule34XxxConnector(_BaseConnector):
         tags = canonical_source_ref(
             "rule34xxx", urllib.parse.parse_qs(parsed.query).get("tags", [""])[0])
         if not tags:
-            raise FollowSourceError(
-                "rule34.xxx 的链接要带标签，形如 "
-                "https://rule34.xxx/index.php?page=post&s=list&tags=lazyprocrastinator")
+            raise FollowSourceError("errors.followSources.rule34xxxUrlShape")
         return ParsedSource("rule34xxx", tags,
                             "https://rule34.xxx/index.php?page=post&s=list"
                             f"&tags={urllib.parse.quote(tags)}",
@@ -1624,9 +1632,7 @@ class Rule34XxxConnector(_BaseConnector):
     def _dapi_url(self, **parameters: str) -> str:
         """带凭据的 dapi 地址。查询串里有 api_key，只能拿去发请求，不能落进日志或证据。"""
         if self.credential is None:
-            raise CredentialError(
-                "rule34xxx 需要 user_id 与 api_key；请把它们写进 "
-                "peach-data/secrets/follow/rule34xxx.json")
+            raise CredentialError("errors.followSources.rule34xxxCredentialsRequired")
         user_id, api_key = self.credential.require("user_id", "api_key")
         query = urllib.parse.urlencode({"page": "dapi", **parameters,
                                         "user_id": user_id, "api_key": api_key})
@@ -1766,13 +1772,13 @@ class Rule34XxxConnector(_BaseConnector):
         """一次 dapi 响应里的帖子。"""
         body = response.body.decode("utf-8", errors="replace").strip()
         if body.startswith('"') and "authentication" in body.lower():
-            raise CredentialError("rule34xxx 拒绝了 user_id/api_key")
+            raise CredentialError("errors.followSources.rule34xxxCredentialsRejected")
         # rule34.xxx 在标签没有任何帖子时返回 HTTP 200 + 空正文，不是 JSON `[]`。
         # 这只代表零命中；非空但无法解析的响应仍按结构异常报告，避免吞掉站点改版。
         payload = [] if not body else self.parse_json(response)
         posts = payload.get("post", []) if isinstance(payload, dict) else payload
         if not isinstance(posts, list):
-            raise FollowSourceError("rule34xxx 的帖子列表格式不符")
+            raise FollowSourceError("errors.followSources.postListMalformed", {"provider": "rule34xxx"})
         return [post for post in posts if isinstance(post, dict)]
 
     def search(self, tags: str, *, limit: int = 8) -> tuple[FollowCandidate, ...]:
@@ -1797,7 +1803,7 @@ class Rule34XxxConnector(_BaseConnector):
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         tag = (ref or "").strip()
         if not self._TAG_RE.match(tag):
-            raise FollowSourceError(f"rule34xxx 的 ref 必须是单个标签，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.rule34xxxRefInvalid", {"ref": repr(ref)})
         common, response = self._dapi(tag, limit=self.max_items, page=page,
                                       etag=etag, last_modified=last_modified,
                                       tag_info=True)
@@ -1811,7 +1817,7 @@ class Rule34XxxConnector(_BaseConnector):
         self._uploaded = self._upload_times(tags=tag, page=page) if wanted else {}
         candidates, probed = self.enrich(listed)
         if page and not candidates:
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         return SourceFetch(candidates=candidates, probed=probed,
                            raw_body=response.body, **common)
 
@@ -1875,7 +1881,7 @@ class Rule34XxxConnector(_BaseConnector):
         self._check_status(response)
         payload = self.parse_json(response)
         if not isinstance(payload, list):
-            raise FollowSourceError("rule34xxx 的标签补全格式不符")
+            raise FollowSourceError("errors.followSources.rule34xxxAutocompleteMalformed")
         rows = []
         for row in payload:
             if not isinstance(row, dict):
@@ -1915,7 +1921,7 @@ class Rule34XxxConnector(_BaseConnector):
         self._check_status(response)
         body = response.body.decode("utf-8", errors="replace")
         if body.lstrip().startswith('"') and "authentication" in body.lower():
-            raise CredentialError("rule34xxx 拒绝了 user_id/api_key")
+            raise CredentialError("errors.followSources.rule34xxxCredentialsRejected")
         for code, _count, found in self._TAG_ROW_RE.findall(body):
             if html.unescape(found).strip().casefold() == tag.casefold():
                 return self._TAG_TYPE_NAMES.get(int(code), "")
@@ -2063,9 +2069,7 @@ class Rule34PahealConnector(_BaseConnector):
             tag = urllib.parse.unquote(matched.group(1)) if matched else ""
         tag = canonical_source_ref("rule34paheal", tag)
         if not tag:
-            raise FollowSourceError(
-                "rule34.paheal 的链接要带搜索标签，形如 "
-                "https://rule34.paheal.net/post/view/7428820#search=InitialA")
+            raise FollowSourceError("errors.followSources.pahealUrlShape")
         encoded = urllib.parse.quote(tag, safe="()_")
         return ParsedSource("rule34paheal", tag,
                             f"https://rule34.paheal.net/post/list/{encoded}/1",
@@ -2078,7 +2082,7 @@ class Rule34PahealConnector(_BaseConnector):
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         tag = str(ref or "").strip()
         if not self._TAG_RE.fullmatch(tag):
-            raise FollowSourceError(f"rule34.paheal 的 ref 必须是单个标签，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.pahealRefInvalid", {"ref": repr(ref)})
         page_number = page + 1
         encoded = urllib.parse.quote(tag, safe="()_")
         url = f"https://rule34.paheal.net/post/list/{encoded}/{page_number}"
@@ -2098,8 +2102,8 @@ class Rule34PahealConnector(_BaseConnector):
         candidates, probed = self.enrich(listed)
         if not candidates:
             if page:
-                raise FollowHistoryEnd("没有更多历史内容")
-            raise FollowSourceError("rule34.paheal 标签页没有解析出任何作品")
+                raise FollowHistoryEnd()
+            raise FollowSourceError("errors.followSources.pahealNoWorks")
         return SourceFetch(candidates=candidates, probed=probed,
                            raw_body=response.body, **common)
 
@@ -2122,7 +2126,7 @@ class Rule34PahealConnector(_BaseConnector):
         return FollowCandidate(
             provider=self.provider,
             external_id=post_id,
-            title=self._tag_label(tags, tag) or f"Paheal 帖子 {post_id}",
+            title=self._tag_label(tags, tag) or Said("labels.followSources.postTitle", site="Paheal", post=post_id),
             url=urllib.parse.urljoin(
                 "https://rule34.paheal.net",
                 str(link.get("href") if link else f"/post/view/{post_id}")),
@@ -2273,8 +2277,8 @@ def _xenforo_search_threads(connector: "_BaseConnector", host: str, query: str, 
     connector._check_status(form)
     matched = _XENFORO_TOKEN_RE.search(form.body)
     if matched is None:
-        raise FollowSourceError(
-            f"{connector.provider} 搜索表单里没有 _xfToken：cookie 可能已失效")
+        raise FollowSourceError("errors.followSources.xenforoNoToken",
+                                {"provider": connector.provider})
     body = urllib.parse.urlencode({
         "keywords": query, "c[title_only]": "1" if title_only else "0",
         "order": "relevance", "search_type": "post",
@@ -2429,26 +2433,24 @@ class F95ZoneConnector(_BaseConnector):
         path = parsed.path or "/"
         matched = _THREAD_PATH_RE.match(path)
         if not matched:
-            raise FollowSourceError(
-                "f95zone 的链接要指向一个线程，形如 "
-                "https://f95zone.to/threads/xxx.50685/")
+            raise FollowSourceError("errors.followSources.f95UrlShape")
         thread = matched.group(1)
         slug = path.split("/threads/", 1)[1].rsplit(".", 1)[0] if "." in path else ""
         return ParsedSource("f95zone", thread,
                             f"https://f95zone.to/threads/{thread}/",
-                            _slug_label(slug) or f"线程 {thread}")
+                            _slug_label(slug) or Said("labels.followDiscovery.threadTitle", thread=thread))
 
     def fetch(self, ref: str, *, etag: str | None = None,
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         thread = (ref or "").strip()
         if not self._THREAD_RE.match(thread):
-            raise FollowSourceError(f"f95zone 的 ref 必须是线程 id，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.f95RefInvalid", {"ref": repr(ref)})
         if page:
             # `/latest` 是站点自己渲染的「最近回复」聚合视图，没有 page-N 变体，
             # 这个连接器因此只有一页可读。`page` 不能静默丢掉：丢了往回翻页会
             # 重新抓同一页、报成一次成功的检查，表现就是「点了没反应」。报到底
             # 比假装成功好：调用方据此显示历史已尽。
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         url = f"https://f95zone.to/threads/{thread}/latest"
         headers = {"Accept": "text/html"}
         if self.credential and self.credential.values.get("cookie"):
@@ -2462,8 +2464,7 @@ class F95ZoneConnector(_BaseConnector):
         candidates, parsed, skipped = self._replies(
             soup, thread, title or f"thread {thread}")
         if not parsed:
-            raise FollowSourceError(
-                "f95zone 线程页没有解析出任何回复：可能需要登录，或页面结构已变")
+            raise FollowSourceError("errors.followSources.f95NoReplies")
         enriched = []
         for candidate in candidates:
             if not self.within_history(candidate):
@@ -2609,7 +2610,7 @@ class F95ZoneConnector(_BaseConnector):
     def thread_index(self, category: str, query: str) -> tuple[dict, ...]:
         """在 `latest_data.php` 里按名字查线程；用于登记订阅时确认 id 与版本。"""
         if category not in self.CATEGORIES:
-            raise FollowSourceError(f"未知的 f95zone 分类：{category}")
+            raise FollowSourceError("errors.followSources.f95UnknownCategory", {"category": category})
         params = urllib.parse.urlencode({
             "cmd": "list", "cat": category, "page": "1",
             "search": query, "rows": "30",
@@ -2631,9 +2632,7 @@ class F95ZoneConnector(_BaseConnector):
         """
         cookie = self.credential.values.get("cookie") if self.credential else None
         if not cookie:
-            raise CredentialError(
-                "f95zone 站内搜索需要登录 cookie；请把它写进 "
-                "peach-data/secrets/follow/f95zone.json")
+            raise CredentialError("errors.followSources.f95SearchNeedsCookie")
         return _xenforo_search_threads(self, "f95zone.to", query,
                                        cookie=cookie, title_only=title_only)
 
@@ -2651,12 +2650,10 @@ class F95ZoneConnector(_BaseConnector):
         """
         thread = (thread or "").strip()
         if not self._THREAD_RE.match(thread):
-            raise FollowSourceError(f"f95zone 的 ref 必须是线程 id，收到：{thread!r}")
+            raise FollowSourceError("errors.followSources.f95RefInvalid", {"ref": repr(thread)})
         cookie = self.credential.values.get("cookie") if self.credential else None
         if not cookie:
-            raise CredentialError(
-                "读 f95zone 首楼的作者主页链接需要登录 cookie；请把它写进 "
-                "peach-data/secrets/follow/f95zone.json")
+            raise CredentialError("errors.followSources.f95ProfileNeedsCookie")
         response = self._get(f"https://f95zone.to/threads/{thread}/",
                              headers={"Accept": "text/html", "Cookie": cookie})
         self._check_status(response)
@@ -2693,8 +2690,7 @@ class FanboxConnector(_BaseConnector):
             matched = _FANBOX_AT_RE.match(parsed.path or "/")
             creator = matched.group(1) if matched else ""
         if not creator:
-            raise FollowSourceError(
-                "FANBOX 的链接要指向创作者主页，形如 https://creator.fanbox.cc/")
+            raise FollowSourceError("errors.followSources.fanboxUrlShape")
         return ParsedSource("fanbox", creator, f"https://{creator}.fanbox.cc/",
                             creator)
 
@@ -2730,7 +2726,7 @@ class FanboxConnector(_BaseConnector):
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         creator = str(ref or "").strip()
         if not self._CREATOR_RE.fullmatch(creator):
-            raise FollowSourceError(f"fanbox 的 ref 必须是创作者 id，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.fanboxRefInvalid", {"ref": repr(ref)})
         # 2026-08-27 实测公开接口单页为 10 条；不要把本地通用上限 100 原样塞给站点。
         query = urllib.parse.urlencode({"creatorId": creator,
                                         "limit": min(self.max_items, 10)})
@@ -2747,9 +2743,9 @@ class FanboxConnector(_BaseConnector):
         payload = self.parse_json(response)
         posts = ((payload or {}).get("body") or {}).get("posts")
         if not isinstance(posts, list):
-            raise FollowSourceError("fanbox 返回的帖子列表格式不符")
+            raise FollowSourceError("errors.followSources.fanboxPostListMalformed")
         if page and not posts:
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         listed, skipped = [], 0
         for post in posts[:self.max_items]:
             if not isinstance(post, dict) or not str(post.get("id") or "").isdigit():
@@ -2775,13 +2771,13 @@ class FanboxConnector(_BaseConnector):
             "https://api.fanbox.cc/post.paginateCreator?"
             + urllib.parse.urlencode({"creatorId": creator}), ref=creator)
         if response is None:
-            raise FollowSourceError("fanbox 历史页清单意外返回 304")
+            raise FollowSourceError("errors.followSources.fanboxPageListNotModified")
         payload = self.parse_json(response)
         pages = ((payload or {}).get("body") or {}).get("pageUrls")
         if not isinstance(pages, list) or not pages:
-            raise FollowSourceError("fanbox 的历史页清单格式不符")
+            raise FollowSourceError("errors.followSources.fanboxPageListMalformed")
         if not 0 < page <= len(pages):
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         return str(pages[page - 1])
 
     def _listed(self, post: dict, creator: str) -> FollowCandidate:
@@ -2796,7 +2792,8 @@ class FanboxConnector(_BaseConnector):
         return FollowCandidate(
             provider=self.provider,
             external_id=post_id,
-            title=plain_text(str(post.get("title") or "")) or f"FANBOX 帖子 {post_id}",
+            title=plain_text(str(post.get("title") or "")) or Said("labels.followSources.postTitle", site="FANBOX",
+                                                                   post=post_id),
             url=f"https://{creator}.fanbox.cc/posts/{post_id}",
             thumb_url=str(cover.get("url")) if cover.get("url") else None,
             published_at=_iso_from_text(post.get("publishedDatetime")),
@@ -2854,23 +2851,24 @@ class FanboxConnector(_BaseConnector):
             response = self.detail_transport(
                 HttpRequest("GET", url, headers), self.timeout, self.max_bytes)
         except (OSError, httpx.HTTPError) as exc:
-            raise FollowSourceError("fanbox 请求失败") from exc
+            raise FollowSourceError("errors.followSources.fanboxRequestFailed") from exc
         if len(response.body) > self.max_bytes:
-            raise FollowSourceError("fanbox 响应超出大小上限")
+            raise FollowSourceError("errors.followSources.responseTooLarge", {"provider": "fanbox"})
         self._check_status(response)
         payload = self.parse_json(response)
         if isinstance(payload, dict) and payload.get("error"):
-            raise FollowSourceError(f"fanbox 帖子详情返回错误：{payload['error']}")
+            raise FollowSourceError("errors.followSources.fanboxPostError",
+                                    {"error": payload["error"]})
         body = (payload or {}).get("body") if isinstance(payload, dict) else None
         post = body.get("post") if isinstance(body, dict) else None
         if not isinstance(post, dict):
-            raise FollowSourceError("fanbox 帖子详情格式不符")
+            raise FollowSourceError("errors.followSources.fanboxPostMalformed")
         if post.get("isRestricted") or int(post.get("feeRequired") or 0) > 0:
-            raise FollowSourceError("fanbox 帖子详情不是公开免费正文")
+            raise FollowSourceError("errors.followSources.fanboxPostNotPublic")
         try:
             content = normalize_fanbox_post(post)
         except FanboxContentError as exc:
-            raise FollowSourceError(str(exc)) from exc
+            raise FollowSourceError(exc.code, exc.params) from exc
         links = resource_links("\n".join((content.summary, *content.links)))
         return {
             "summary": plain_text(content.summary),
@@ -2903,9 +2901,7 @@ class SubscribeStarConnector(_BaseConnector):
                   host: str) -> "ParsedSource":
         matched = _DIRECT_CREATOR_RE.match(parsed.path or "/")
         if not matched or matched.group(1) in cls._RESERVED:
-            raise FollowSourceError(
-                "SubscribeStar 的链接要指向创作者主页，形如 "
-                "https://subscribestar.adult/creator")
+            raise FollowSourceError("errors.followSources.subscribestarUrlShape")
         slug = matched.group(1)
         # ref 带上主机名：`.adult` 与 `.com` 是两个站，同名创作者不一定是一个人。
         return ParsedSource("subscribestar", f"{host}/{slug}",
@@ -2920,15 +2916,14 @@ class SubscribeStarConnector(_BaseConnector):
     def _split_ref(cls, ref: str) -> tuple[str, str]:
         host, _, slug = str(ref or "").strip().partition("/")
         if host not in cls.HOSTS or not cls._SLUG_RE.fullmatch(slug):
-            raise FollowSourceError(
-                "subscribestar 的 ref 必须形如 subscribestar.adult/creator")
+            raise FollowSourceError("errors.followSources.subscribestarRefInvalid")
         return host, slug
 
     def fetch(self, ref: str, *, etag: str | None = None,
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         host, slug = self._split_ref(ref)
         if page:
-            raise FollowSourceError("SubscribeStar 官方来源暂不支持向前翻页")
+            raise FollowSourceError("errors.followSources.subscribestarNoBackfill")
         url = f"https://{host}/{slug}"
         common, response = self._request(url, ref=ref, etag=etag,
                                          last_modified=last_modified,
@@ -2938,7 +2933,8 @@ class SubscribeStarConnector(_BaseConnector):
         try:
             soup = BeautifulSoup(response.body.decode("utf-8"), "html.parser")
         except UnicodeDecodeError as exc:
-            raise FollowSourceError("subscribestar 返回的页面不是 UTF-8") from exc
+            raise FollowSourceError("errors.followSources.pageNotUtf8",
+                                    {"provider": "subscribestar"}) from exc
         candidates = []
         for post in soup.select("div.post[data-id]")[:self.max_items]:
             post_id = str(post.get("data-id") or "")
@@ -2959,7 +2955,7 @@ class SubscribeStarConnector(_BaseConnector):
             candidates.append(FollowCandidate(
                 provider=self.provider,
                 external_id=post_id,
-                title=title or f"SubscribeStar 帖子 {post_id}",
+                title=title or Said("labels.followSources.postTitle", site="SubscribeStar", post=post_id),
                 url=f"https://{host}/posts/{post_id}",
                 thumb_url=_visible_post_image(post.select_one(".post-uploads")),
                 published_at=published,
@@ -3000,8 +2996,7 @@ class PatreonConnector(_BaseConnector):
         if parts and parts[0] == "cw":
             parts = parts[1:]
         if not parts or parts[0].lower() in cls._RESERVED:
-            raise FollowSourceError(
-                "Patreon 的链接要指向创作者主页，形如 https://patreon.com/cw/creator")
+            raise FollowSourceError("errors.followSources.patreonUrlShape")
         vanity = parts[0]
         return ParsedSource("patreon", vanity,
                             f"https://www.patreon.com/cw/{vanity}", vanity)
@@ -3019,13 +3014,13 @@ class PatreonConnector(_BaseConnector):
         if value.startswith("user/") and value[5:].isdigit():
             return f"https://www.patreon.com/user?u={value[5:]}"
         if not self._VANITY_RE.fullmatch(value):
-            raise FollowSourceError(f"patreon 的 ref 必须是创作者短名，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.patreonRefInvalid", {"ref": repr(ref)})
         return f"https://www.patreon.com/cw/{value}"
 
     def fetch(self, ref: str, *, etag: str | None = None,
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         if page:
-            raise FollowSourceError("Patreon 官方来源暂不支持向前翻页")
+            raise FollowSourceError("errors.followSources.patreonNoBackfill")
         url = self._url(ref)
         common, response = self._request(url, ref=ref, etag=etag,
                                          last_modified=last_modified,
@@ -3035,7 +3030,8 @@ class PatreonConnector(_BaseConnector):
         try:
             soup = BeautifulSoup(response.body.decode("utf-8"), "html.parser")
         except UnicodeDecodeError as exc:
-            raise FollowSourceError("patreon 返回的页面不是 UTF-8") from exc
+            raise FollowSourceError("errors.followSources.pageNotUtf8",
+                                    {"provider": "patreon"}) from exc
         candidates, seen = [], set()
         for anchor in soup.select("a[href*='/posts/']"):
             href = str(anchor.get("href") or "")
@@ -3059,7 +3055,7 @@ class PatreonConnector(_BaseConnector):
             candidates.append(FollowCandidate(
                 provider=self.provider,
                 external_id=post_id,
-                title=title or f"Patreon 帖子 {post_id}",
+                title=title or Said("labels.followSources.postTitle", site="Patreon", post=post_id),
                 url=urllib.parse.urljoin("https://www.patreon.com", href),
                 thumb_url=_visible_post_image(node),
                 published_at=_iso_from_relative(relative.group(0)) if relative else None,
@@ -3101,28 +3097,22 @@ class SimpCityConnector(_BaseConnector):
         path = parsed.path or "/"
         matched = _THREAD_PATH_RE.match(path)
         if not matched:
-            raise FollowSourceError(
-                "simpcity 的链接要指向一个线程，形如 "
-                "https://simpcity.cr/threads/xxx.21229/")
+            raise FollowSourceError("errors.followSources.simpcityUrlShape")
         thread = matched.group(1)
         segment = path.split("/threads/", 1)[1].split("/", 1)[0]
         slug = segment.rsplit(".", 1)[0] if "." in segment else ""
         return ParsedSource("simpcity", thread,
                             f"https://{cls.HOST}/threads/{thread}/",
-                            _slug_label(slug) or f"线程 {thread}")
+                            _slug_label(slug) or Said("labels.followDiscovery.threadTitle", thread=thread))
 
     def _cookie(self) -> str:
         if self.credential is None:
-            raise CredentialError(
-                "simpcity 需要登录 cookie：站点不让游客读帖。登录后把浏览器里 "
-                "simpcity.cr 的整条 Cookie 请求头写进凭据文件的 cookie 字段。")
+            raise CredentialError("errors.followSources.simpcityNeedsCookie")
         return self.credential.require("cookie")[0]
 
     def _check_status(self, response: HttpResponse) -> None:
         if response.status == 403:
-            raise FollowSourceError(
-                "simpcity 拒绝访问（HTTP 403）：站点不让游客读帖，cookie 可能已过期或"
-                "不完整，请重新登录后更新凭据文件")
+            raise FollowSourceError("errors.followSources.simpcityAccessDenied")
         super()._check_status(response)
 
     def search_threads(self, query: str, *, title_only: bool = True) -> tuple[dict, ...]:
@@ -3140,7 +3130,7 @@ class SimpCityConnector(_BaseConnector):
               last_modified: str | None = None, page: int = 0) -> SourceFetch:
         thread = (ref or "").strip()
         if not self._THREAD_RE.match(thread):
-            raise FollowSourceError(f"simpcity 的 ref 必须是线程 id，收到：{ref!r}")
+            raise FollowSourceError("errors.followSources.simpcityRefInvalid", {"ref": repr(ref)})
         headers = {"Accept": "text/html", "Cookie": self._cookie()}
         base = f"https://{self.HOST}/threads/{thread}/"
         # 第一页不带条件请求头：新回复长在末页，第一页没变不代表线程没更新。
@@ -3148,7 +3138,7 @@ class SimpCityConnector(_BaseConnector):
         soup = self._page(response)
         target = self._last_page(soup) - int(page or 0)
         if target < 1:
-            raise FollowHistoryEnd("没有更多历史内容")
+            raise FollowHistoryEnd()
         if target != 1:
             common, response = self._request(
                 f"{base}page-{target}", ref=thread, etag=etag,
@@ -3159,7 +3149,7 @@ class SimpCityConnector(_BaseConnector):
         title = _xenforo_thread_title(soup) or f"thread {thread}"
         candidates, parsed, skipped = self._posts(soup, thread, title, target)
         if not parsed:
-            raise FollowSourceError("simpcity 线程页没有解析出任何楼层：页面结构可能已变")
+            raise FollowSourceError("errors.followSources.simpcityNoPosts")
         return SourceFetch(candidates=tuple(candidates), skipped=skipped,
                            raw_body=response.body, **common)
 
@@ -3174,9 +3164,7 @@ class SimpCityConnector(_BaseConnector):
         soup = BeautifulSoup(response.body, "html.parser")
         root = soup.find("html")
         if root is not None and str(root.get("data-logged-in") or "").lower() == "false":
-            raise FollowSourceError(
-                "simpcity 没有认出这份 cookie（页面仍是游客态）：请重新登录后复制整条 "
-                "Cookie 请求头")
+            raise FollowSourceError("errors.followSources.simpcityCookieNotRecognized")
         return soup
 
     @classmethod
@@ -3310,24 +3298,24 @@ def parse_source_url(raw_url: str) -> ParsedSource:
     """
     text = (raw_url or "").strip()
     if not text:
-        raise FollowSourceError("请先粘贴一条来源链接")
+        raise FollowSourceError("errors.followSources.urlRequired")
     if "://" not in text:
         text = "https://" + text
     try:
         parsed = urllib.parse.urlsplit(text)
     except ValueError as exc:
-        raise FollowSourceError("这不是一条合法链接") from exc
+        raise FollowSourceError("errors.followSources.urlInvalid") from exc
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise FollowSourceError("只接受 http(s) 链接")
+        raise FollowSourceError("errors.followSources.urlSchemeUnsupported")
     if parsed.username is not None or parsed.password is not None:
-        raise FollowSourceError("链接里不能带账号密码")
+        raise FollowSourceError("errors.followSources.urlHasCredentials")
     host = parsed.hostname.lower().removeprefix("www.")
 
     provider = follow_providers.provider_for_host(host)
     factory = CONNECTORS.get(provider)
     if factory is None:
-        raise FollowSourceError(
-            f"不认识 {host}。当前支持 " + "、".join(sorted(_URL_HOSTS)) + "。")
+        raise FollowSourceError("errors.followSources.hostUnknown",
+                                {"host": host, "hosts": sorted(_URL_HOSTS)})
     return factory.parse_url(provider, parsed, host)
 
 
@@ -3396,7 +3384,7 @@ def official_profile_handle(provider: str, ref: str) -> str:
 def build_connector(provider: str, **kwargs) -> _BaseConnector:
     factory = CONNECTORS.get(provider)
     if factory is None:
-        raise FollowSourceError(f"未知的追更来源：{provider}")
+        raise FollowSourceError("errors.followSources.unknownProvider", {"provider": provider})
     # 服务多个来源键的连接器（kemono 系）必须知道自己这次代表哪个站。
     if len(factory.provider_keys()) > 1:
         return factory(provider=provider, **kwargs)

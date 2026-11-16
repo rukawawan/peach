@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach.config import REVIEW_DIR, SECRETS_DIR, STATE_DIR   # noqa: E402
 from peach.entities import agency_key, name_chain, rejected_agencies   # noqa: E402
 from peach.http import HttpRequest   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
 from peach.minnano_av import actress_id, profile_text, search_url   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
@@ -38,16 +39,17 @@ from peach.scripting import (   # noqa: E402
 
 FIELDS = ("entity_id", "performer", "current_agency", "site_agency", "verdict", "evidence")
 
-MOVED, SAME, GONE, MISSING = "移籍", "未变", "站上没有事务所", "未取得"
+#: 复核 CSV `verdict` 列：移籍、未变、站上没有事务所、资料表没取到。
+MOVED, SAME, GONE, MISSING = "moved", "unchanged", "no-agency-on-site", "missed"
 #: 站上写的是这个人驳回过的那一家（`peach.entities.AGENCY_REJECTED`），不当移籍写回。
-REJECTED = "已驳回"
+REJECTED = "rejected"
 
 #: 这一行是从哪儿来的。和 `repair_link_labels.py` 写的那一条同源，所以两条路径
 #: 采到的同一件事在账本里长得一样。
 AGENCY_SOURCE = "minnano-av 资料表「所属事務所」"
 
 EXTRA_COUNTS = {
-    "有事务所的女优": (
+    t("resync_performer_agency.performersWithAgency"): (
         "SELECT count(*) FROM entity WHERE kind='performer'"
         " AND json_extract(metadata_json,'$.agency.name') IS NOT NULL"),
 }
@@ -103,24 +105,24 @@ def ask(http, name: str, timeout: float,
     写出来的那一行和「站点查不到这个人」长得一模一样，而它只是这一秒没连上。回了
     HTTP 状态或者检索页没重定向则不重试：那两种再问一遍还是同一个答案。
     """
-    note = "未取得：一次都没问出去"
+    note = t("resync_performer_agency.neverAsked")
     for attempt in range(max(1, tries)):
         try:
             response = http(HttpRequest("GET", search_url(name), {"User-Agent": USER_AGENT}),
                             timeout, 4 << 20)
         except SourcePaused as error:
             # 站在冷却：再问一遍还是同一个答案，不当抖动重试。
-            return "", "", f"未取得：{error}"
+            return "", "", t("resync_performer_agency.notFound", reason=error)
         except Exception as error:   # noqa: BLE001  传输层什么都可能抛，一律当抖动
-            note = f"未取得：{type(error).__name__}"
+            note = t("resync_performer_agency.notFound", reason=type(error).__name__)
             if attempt + 1 < max(1, tries):
                 time.sleep(pause)
             continue
         if response.status != 200:
-            return "", "", f"未取得：HTTP {response.status}"
+            return "", "", t("resync_performer_agency.notFound", reason=f"HTTP {response.status}")
         found_id = actress_id(response.url or "")
         if not found_id:
-            return "", "", "未取得：检索页未唯一命中，需人工消歧"
+            return "", "", t("resync_performer_agency.ambiguous")
         html = response.body.decode("utf-8", "replace")
         return (profile_text(html, "所属事務所"), found_id,
                 f"minnano-av actress{found_id} 资料表「所属事務所」")
@@ -130,7 +132,7 @@ def ask(http, name: str, timeout: float,
 def plan(connection, http, args) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     people = targets(connection, args.agency, args.only)
-    print(f"待问 {len(people)} 位 performer")
+    print(t("resync_performer_agency.toAsk", count=len(people)))
     last = 0.0
 
     def paced(name: str) -> tuple[str, str, str]:
@@ -143,7 +145,7 @@ def plan(connection, http, args) -> list[dict[str, object]]:
         return ask(http, name, args.timeout)
 
     for person in people:
-        shown, note = "", "未取得：没有可检索的名字"
+        shown, note = "", t("resync_performer_agency.noSearchableName")
         for candidate in person["chain"]:
             shown, _, note = paced(candidate)
             if note.startswith("minnano-av"):
@@ -172,7 +174,7 @@ def apply_rows(connection, rows: list[dict[str, object]], stamp: str) -> dict[st
     在页面上长得一模一样，而清空是不可逆的一半——归属表跟着 `install_agencies.py`
     走，这里一清那边就没有依据了。要清由人单独决定。
     """
-    done = {"事务所": 0}
+    done = {"agencies": 0}
     for row in rows:
         if row["verdict"] != MOVED:
             continue
@@ -188,19 +190,19 @@ def apply_rows(connection, rows: list[dict[str, object]], stamp: str) -> dict[st
         connection.execute(
             "UPDATE entity SET metadata_json=?,updated_at=? WHERE id=?",
             (json.dumps(metadata, ensure_ascii=False), stamp, int(row["entity_id"])))
-        done["事务所"] += 1
+        done["agencies"] += 1
     return done
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("resync_performer_agency.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--output", type=Path,
                         default=REVIEW_DIR / "performer-agency-resync.csv")
     parser.add_argument("--agency", nargs="*", default=[],
-                        help="把这几家现在的成员全部再问一遍，按 canonical_name 给")
+                        help=t("resync_performer_agency.agencyHelp"))
     parser.add_argument("--only", nargs="*", default=[],
-                        help="再问这几位，按 performer 的 canonical_name 给")
+                        help=t("resync_performer_agency.onlyHelp"))
     parser.add_argument("--interval", type=float, default=1.5)
     parser.add_argument("--timeout", type=float, default=25.0)
     parser.add_argument("--lock", type=Path, default=STATE_DIR / ".performer-agency.lock")
@@ -209,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args) -> int:
     if not args.agency and not args.only:
-        raise SystemExit("要问谁：--agency 给事务所，--only 给人名，至少给一个")
+        raise SystemExit(t("resync_performer_agency.needTargets"))
     connection = open_for_write(args)
     # 与补别名后继同一个入口：冷却记录共用，HTTP 客户端被拦时由本机浏览器验证（`browser_fallback`）。
     http = SourceTransport(SECRETS_DIR)
@@ -219,16 +221,16 @@ def run(args) -> int:
         write_rows(args.output, FIELDS, rows, atomic=True, fill_missing=True)
         stats = {verdict: sum(1 for row in rows if row["verdict"] == verdict)
                  for verdict in (MOVED, SAME, GONE, MISSING)}
-        print({"复核行": len(rows), **stats, "output": str(args.output)})
+        print({t("resync_performer_agency.reviewRows"): len(rows), **stats, "output": str(args.output)})
         if not args.apply:
-            print("dry-run：没有写入。加 --apply --backup <路径> 才真的写。")
+            print(t("resync_performer_agency.dryRun"))
             return 0
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         done = apply_rows(connection, rows, stamp)
         connection.commit()
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print("写入：" + "，".join(f"{key} {value}" for key, value in done.items()))
+        print(t("resync_performer_agency.written", count=done["agencies"]))
         for key in sorted(before):
             print(f"  {key}: {before[key]} -> {after[key]}")
         print(f"integrity_check={integrity} foreign_key_check={violations}")

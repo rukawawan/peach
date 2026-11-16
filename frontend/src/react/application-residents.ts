@@ -8,6 +8,7 @@ export { mountToaster } from '../react/toaster';
 import { connectManagedRoutes, openManagedRoute } from '../history';
 import type * as Bundle from '../react/bundle';
 import type { ShellActions } from '../react/router/shell-actions';
+import { t } from '../i18n';
 
 let publish: ((actions: ShellActions) => void) | null = null;
 let publishedActions: ShellActions | null = null;
@@ -36,7 +37,7 @@ async function openApplicationResident(name: string, container: HTMLElement,
     container, resident: true, isCurrent: () => !!publish && epoch === residentEpoch,
     place: () => place(container),
   });
-  if (!opened || epoch !== residentEpoch || !publish) throw new DOMException('应用已卸载', 'AbortError');
+  if (!opened || epoch !== residentEpoch || !publish) throw new DOMException(t('shell:errorReport.appUnmounted'), 'AbortError');
 }
 
 export function disposeApplicationResidents(): void {

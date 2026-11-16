@@ -195,6 +195,22 @@ class UnregisteredWorktreeTests(unittest.TestCase):
             )
 
 
+class ScriptExtensionTests(unittest.TestCase):
+    """Node 脚本与测试只用 `.ts` 或 `.js`，不新建 `.mjs`、`.cjs`。
+
+    Node 24 直接运行 `.ts`，前端测试与类型检查也按 `.ts` 读；`.mjs` 既绕过类型检查，
+    又让新脚本照着邻近的旧文件继续用旧扩展名。用户脚本仓库有同一条门槛。
+    """
+
+    def test_no_mjs_or_cjs_files_are_tracked(self):
+        done = subprocess.run(["git", "ls-files", "-z", "*.mjs", "*.cjs"], cwd=REPO, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", check=False)
+        if done.returncode != 0:
+            self.skipTest(f"git 不可用或不是仓库：{done.stderr.strip()}")
+        self.assertEqual([name for name in done.stdout.split("\0") if name], [],
+                         "改成 .ts，由 Node 直接运行；导入写完整文件名")
+
+
 class BundledImageTests(unittest.TestCase):
     """图像二进制只许出现在 `resources/` 下。
 

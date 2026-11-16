@@ -168,12 +168,12 @@ def directory_reason(url: str, deeper_paths: Iterable[str] = ()) -> str:
     segments = _meaningful_segments(url)
     base = parts.path.rstrip("/")
     if not segments and not parts.query:
-        return "站点根"
+        return "site root"
     if any(other.rstrip("/") != base and other.rstrip("/").startswith(base + "/")
            for other in deeper_paths):
-        return "同站另有更深的链接挂在它下面"
+        return "a deeper link on the same site sits under it"
     if not parts.query and segments[-1] in DIRECTORY_SEGMENTS:
-        return "路径末段是目录词"
+        return "last path segment is a directory word"
     return ""
 
 

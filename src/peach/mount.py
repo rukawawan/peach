@@ -71,7 +71,7 @@ def share_credentials_present(
         result = run(share_credentials_command(host, user),
                      capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        LOGGER.warning("查钥匙串失败：%s", exc)
+        LOGGER.warning("Keychain lookup failed: %s", exc)
         return False
     return result.returncode == 0
 
@@ -93,16 +93,16 @@ def mount_share(
     if command is None:
         return False
     if user and not share_credentials_present(host, user, run=run):
-        LOGGER.warning("钥匙串里没有 %s@%s 的 SMB 记录，不去弹认证框", user, host)
+        LOGGER.warning("No SMB keychain entry for %s@%s; not prompting for credentials", user, host)
         return False
     try:
         result = run(command, capture_output=True, text=True,
                      timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        LOGGER.warning("挂载 //%s/%s 失败：%s", host, share, exc)
+        LOGGER.warning("Failed to mount //%s/%s: %s", host, share, exc)
         return False
     if result.returncode:
-        LOGGER.warning("挂载 //%s/%s 失败：%s", host, share,
+        LOGGER.warning("Failed to mount //%s/%s: %s", host, share,
                        (result.stderr or result.stdout or "").strip())
         return False
     return True

@@ -14,14 +14,15 @@ from urllib.parse import urlsplit
 from . import avatar_picker
 from .entities import canonicalize_entity_name, normalize_entity_name, resolve_entity
 from .http import HttpxTransport
-from .library_processing import describe_failure
+from .library_processing import describe_failure, phrase
+from .task_stages import stage as stage_fields
 from .scraping_access import SourcePaused
 
 LOGGER = logging.getLogger(__name__)
 
 
-#: 补头像这一段在页面上的阶段名。它每张都要联网，和前面按资产计数的几段不是一回事。
-PROFILE_STAGE = "补齐女优资料"
+#: 补头像这一段在页面上的阶段（`task_stages`）。它每张都要联网，和前面按资产计数的几段不是一回事。
+PROFILE_STAGE = "library.fillPerformerProfiles"
 PROFILE_ALIAS_SOURCE = "r18dev:performer-profile"
 OFFICIAL_AVATAR_HOST = "pics.dmm.co.jp"
 OFFICIAL_AVATAR_PREFIX = "/mono/actjpgs/"
@@ -203,11 +204,12 @@ def enrich_performer_profiles(database, groups, avatar_root: Path,
                 reason = describe_failure(error)
                 LOGGER.warning("performer avatar failed: entity=%s url=%s: %s",
                                entity_id, profile["avatar_url"], reason, exc_info=True)
-                issue(profile["asset_id"], f'{profile["name"]} 的头像未取得：{reason}')
+                issue(profile["asset_id"], phrase("errors.metadataPerformerProfiles.avatarUnfetched",
+                                                  {"name": profile["name"], "reason": reason}))
                 if isinstance(error, SourcePaused) or isinstance(error.__cause__, SourcePaused):
                     break
             # 每张之后上报一次：这一段每张都要联网，不报进度就会被判成「长时间没有进展」。
-            progress(stage=PROFILE_STAGE, performer_avatars=result["avatars"],
+            progress(**stage_fields(PROFILE_STAGE), performer_avatars=result["avatars"],
                      performer_profile_failed=result["failed"])
     finally:
         close = getattr(transport, "close", None)

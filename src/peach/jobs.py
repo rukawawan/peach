@@ -14,6 +14,9 @@ from pathlib import Path
 
 from .media_sources import SOURCE_COSTS, cost_for, cost_sql
 from .repository import in_background
+from .task_stages import stage as stage_fields, stage_progress
+from . import interface_text
+from .user_messages import UserFacingError, message_fields
 
 DEFAULT_METERED_LOCATIONS = frozenset(location for location, cost in SOURCE_COSTS.items()
                                     if cost == 'metered') | {'online'}
@@ -23,15 +26,34 @@ class JobPolicyError(RuntimeError):
     exit_code = 1
 
 
-class MeteredSourceDenied(JobPolicyError):
+class MeteredSourceDenied(UserFacingError, JobPolicyError):
     exit_code = 2
 
 
-class DiskSpaceDenied(JobPolicyError):
+def _closing(code: str) -> dict:
+    """写进任务行的固定原因（ADR-0159）：`error` 是 zh-CN 原文，旁边带 code。"""
+    return {"error": interface_text.text(f"server:{code}"), "error_code": code, "error_params": {}}
+
+
+class DiskSpaceDenied(UserFacingError, JobPolicyError):
     exit_code = 3
 
 
-class JobPaused(JobPolicyError):
+def _with_stage_code(fields: dict) -> dict:
+    """只改了原文、没给 code 的那一次把旧 code 清掉，界面不会把这一句译成上一句。
+
+    `stage` 配 `stage_code`；`message`、`error` 配 `<名>_code` 与 `<名>_params`
+    （`user_messages.message_fields`、`failure_fields` 展开进来的就带着）。"""
+    cleared = {}
+    if "stage" in fields and "stage_code" not in fields:
+        cleared["stage_code"] = ""
+    for key in ("message", "error"):
+        if key in fields and f"{key}_code" not in fields:
+            cleared.update({f"{key}_code": "", f"{key}_params": {}})
+    return {**fields, **cleared} if cleared else fields
+
+
+class JobPaused(UserFacingError, JobPolicyError):
     """安装期间在任务检查点暂停，原参数保留用于恢复。"""
     exit_code = 3
 
@@ -43,11 +65,18 @@ class JobDeferred(RuntimeError):
         return True
 
 
-class JobCancelled(InterruptedError):
+class JobCancelled(UserFacingError, InterruptedError):
     """用户停止任务；已保存结果保留，不再自动恢复。"""
 
 
-class JobAlreadyRunning(JobPolicyError):
+class TaskRunMissing(UserFacingError, KeyError):
+    """要的那一轮任务不在了。仍是 `KeyError`：接口层按它回 404，带上 code。
+    放在这一层：任务控制（`task_control`）与任务接口（`web_tasks`）都抛它，非 web 模块不能依赖 web 层。"""
+
+    status_code = 404
+
+
+class JobAlreadyRunning(UserFacingError, JobPolicyError):
     exit_code = 0
 
 
@@ -63,7 +92,7 @@ class TaskRunConflict(JobAlreadyRunning):
     """
 
     def __init__(self, task_key: str, blocking_run_id: int | None):
-        super().__init__(f"{task_key} 已有一轮在进行")
+        super().__init__("errors.jobs.runInProgress", {"task": task_key})
         self.task_key = task_key
         self.blocking_run_id = blocking_run_id
 
@@ -97,9 +126,7 @@ class SourceAccessPolicy:
     ) -> tuple[str, tuple[str, ...]]:
         """返回参数化 location 条件；显式计费授权是唯一放行入口。"""
         if location and not allow_metered and self.requires_budget(location):
-            raise MeteredSourceDenied(
-                f"{location} 的目录已开启代理流量保护；确认预算后显式加 --allow-metered"
-            )
+            raise MeteredSourceDenied("errors.jobs.meteredSourceDenied", {"location": location})
 
         clauses: list[str] = []
         parameters: list[str] = []
@@ -127,11 +154,10 @@ def require_free_space(path: Path | str, minimum_gb: float) -> float:
     try:
         free_gb = shutil.disk_usage(path).free / 1024**3
     except OSError as exc:
-        raise DiskSpaceDenied(f"无法读取 {path} 的磁盘余量") from exc
+        raise DiskSpaceDenied("errors.jobs.freeSpaceUnreadable", {"path": str(path)}) from exc
     if free_gb < minimum_gb:
-        raise DiskSpaceDenied(
-            f"{path} 仅剩 {free_gb:.1f} GiB（阈值 {minimum_gb:.1f} GiB）"
-        )
+        raise DiskSpaceDenied("errors.jobs.freeSpaceLow",
+                              {"path": str(path), "free": f"{free_gb:.1f}", "minimum": f"{minimum_gb:.1f}"})
     return free_gb
 
 
@@ -167,12 +193,11 @@ class DiskGuard:
         try:
             free_gb = self.free_gb()
         except OSError as exc:
-            raise DiskSpaceDenied(f"无法读取 {self.path} 的磁盘余量") from exc
+            raise DiskSpaceDenied("errors.jobs.freeSpaceUnreadable", {"path": str(self.path)}) from exc
         if free_gb < self.minimum_gb:
-            raise DiskSpaceDenied(
-                f"运行中 {self.path} 仅剩 {free_gb:.1f} GiB（阈值 {self.minimum_gb:.1f} GiB）；"
-                "已停止任务。检查第三方缓存目录，本任务的产物目录未必是消耗方"
-            )
+            raise DiskSpaceDenied("errors.jobs.freeSpaceLowWhileRunning",
+                                  {"path": str(self.path), "free": f"{free_gb:.1f}",
+                                   "minimum": f"{self.minimum_gb:.1f}"})
         return free_gb
 
 
@@ -280,7 +305,7 @@ class PidFileLock:
             except (OSError, ValueError):
                 old_pid = 0
             if old_pid and self._running(old_pid):
-                raise JobAlreadyRunning(f"已有实例在跑（PID {old_pid}）")
+                raise JobAlreadyRunning("errors.jobs.alreadyRunning", {"pid": old_pid})
             try:
                 self.path.unlink()
             except FileNotFoundError:
@@ -390,7 +415,7 @@ class BackgroundJob:
         with self.editing(job_id) as state:
             if state is None:
                 return False
-            state.update(fields)
+            state.update(_with_stage_code(fields))
             return True
 
     def checkpoint(self, job_id: str, **fields: object) -> bool:
@@ -440,27 +465,44 @@ class BackgroundJob:
         total = state.get("total")
         counts = (int(current) if isinstance(current, (int, float)) else None,
                   int(total) if isinstance(total, (int, float)) else None)
-        label = self._progress_label(state) or None
-        if counts == (None, None) and label is None:
+        label = self._progress_label(state)
+        if counts == (None, None) and not label["label"]:
             # 这一次改的是别的字段（`run_id` 本身就是一例），没有进度可报。不往下走：
             # 空写一次会白占掉节流窗口，真正的第一份计数要等两秒才进得去表。
             return
-        self.runs.progress(run_id, current=counts[0], total=counts[1], label=label)
+        if not label["label"]:
+            label = {"label": None, "code": None, "params": None}
+        self.runs.progress(run_id, current=counts[0], total=counts[1], **label)
 
     @staticmethod
-    def _progress_label(state: dict) -> str:
-        """一行「此刻在做什么」。域各有各的字段名，这里按可读性从具体到笼统取第一个。"""
+    def _progress_label(state: dict) -> dict:
+        """一行「此刻在做什么」：`label`、`code`、`params`。域各有各的字段名，这里按可读性从具体到笼统取第一个。
+
+        阶段名与带 `message_code` 的 `message` 带 code；当前条目（`current` 的名字或来源）是内容，
+        `step` 与没给 code 的 `message` 照原文。暂停时任务卡显示的是控制状态，这一句只留在库里。
+        """
+        def plain(text: object) -> dict:
+            return {"label": str(text)[:120], "code": None, "params": {}}
         if state.get('status') in ('paused', 'pausing'):
-            return ('已暂停' if state['status'] == 'paused' else '正在暂停') + ' · ' + str(state.get('stage') or '')
+            from .task_runs import run_progress
+            from .task_stages import stage_code
+            # `run_progress` 的 `stage` 参数收阶段 code；没有认得出的阶段就只说暂停。
+            code = stage_code(state) if state.get('stage') else ""
+            return run_progress(state['status'], stage=code) if code else run_progress(f"{state['status']}Only")
         current = state.get("current")
         if isinstance(current, dict):
             for key in ("label", "provider"):
                 if current.get(key):
-                    return str(current[key])[:120]
-        for key in ("stage", "message", "step"):
+                    return plain(current[key])
+        if state.get("stage"):
+            return stage_progress(state)
+        if state.get("message") and state.get("message_code"):
+            return {"label": str(state["message"])[:120], "code": state["message_code"],
+                    "params": dict(state.get("message_params") or {})}
+        for key in ("message", "step"):
             if state.get(key):
-                return str(state[key])[:120]
-        return ""
+                return plain(state[key])
+        return plain("")
 
     def _summary(self, state: dict) -> dict:
         """结算摘要保留标量与领域定义的问题清单。"""
@@ -499,9 +541,9 @@ class BackgroundJob:
             if existing.get('status') != 'active':
                 save(db, self.task_key, job_id, recovery, waiting=True)
             self.state = {self.id_key: job_id, 'status': 'running', 'run_id': None,
-                          **(initial or {}), 'waiting_for_update': True,
-                          'stage': '等待安装完成后继续', 'error': '',
-                          'message': '任务将在安装完成后自动继续。'}
+                          **_with_stage_code(initial or {}), 'waiting_for_update': True,
+                          **stage_fields('job.waitingForUpdate'), 'error': '',
+                          **message_fields('taskRun.progress.resumesAfterUpdate')}
             return copy.deepcopy(self.state)
 
     def _start(self, fn: Callable[[str], None], *, initial: dict | None = None,
@@ -527,7 +569,7 @@ class BackgroundJob:
                 from .job_recovery import current_job_id
                 job_id = current_job_id.get() or uuid.uuid4().hex
                 state = {self.id_key: job_id, "status": "running", "run_id": None,
-                         "started_at": time.time(), "error": "", **(initial or {})}
+                         "started_at": time.time(), "error": "", **_with_stage_code(initial or {})}
                 state.update(self._resuming_fields(job_id, initial))
                 self.state = state
                 thread = threading.Thread(target=in_background(self._run), args=(fn, job_id),
@@ -559,7 +601,7 @@ class BackgroundJob:
                     from .job_recovery import checkpoint
                     checkpoint(db, self.task_key, job_id, self.snapshot() or snapshot)
         except Exception:
-            self._close_run(job_id, 'failed', error='任务未能启动')
+            self._close_run(job_id, 'failed', **_closing('errors.jobs.startFailed'))
             activity = self._activity_files.pop(job_id, None)
             if activity is not None:
                 activity.unlink(missing_ok=True)
@@ -598,7 +640,7 @@ class BackgroundJob:
             self.task_key, trigger=trigger, mutex_key=self.mutex_key,
             conflict="raise" if trigger == "manual" else "skip",
             total=int(total) if isinstance(total, (int, float)) else None,
-            label=self._progress_label(state), summary=subject)
+            **self._progress_label(state), summary=subject)
         if run is None:
             return
         self._run_ids[job_id] = run.id
@@ -614,12 +656,14 @@ class BackgroundJob:
         self.update(job_id, run_id=run.id)
 
     def _close_run(self, job_id: str, status: str, *, error: str = "",
-                   summary: dict | None = None) -> None:
+                   summary: dict | None = None, error_code: str | None = None,
+                   error_params: dict | None = None) -> None:
         with self._close_lock:
             run_id = self._run_ids.pop(job_id, None)
             if self.runs is None or run_id is None:
                 return
-            self.runs.finish(run_id, status, summary=summary, error=error)
+            self.runs.finish(run_id, status, summary=summary, error=error, error_code=error_code,
+                             error_params=error_params)
         self.runs.prune(self.task_key)
 
     def stop(self, timeout: float | None = 2.0, *, resume: bool = True) -> None:
@@ -670,12 +714,13 @@ class BackgroundJob:
             if self.runs is not None and run_id is not None:
                 self._suspend_run(job_id, run_id)
             return
-        self._close_run(job_id, 'cancelled', error='服务关停，这一轮没有跑完')
+        self._close_run(job_id, 'cancelled', **_closing('errors.jobs.serviceStopped'))
 
     def _suspend_run(self, job_id, run_id):
         from .processing_control import user_paused
         if self.task_key == 'library-processing' and user_paused(self._database_path(), job_id):
-            self.runs.suspend(run_id, label='已暂停，等待继续')
+            from .task_runs import run_progress
+            self.runs.suspend(run_id, **run_progress('pausedWaiting'))
         else:
             self.runs.suspend(run_id)
 
@@ -686,7 +731,7 @@ class BackgroundJob:
             if not result.get('ok', True):
                 from .error_reporting import event
                 event('background-result', job_id=job_id, task_key=self.task_key,
-                      message=result.get('error') or result.get('message') or '任务失败')
+                      message=result.get('error') or result.get('message') or 'task failed')
             self.update(job_id, **result, status=(
                 "complete" if result.get("ok", True) else "failed"),
                 completed_at=time.time())
@@ -714,8 +759,8 @@ class BackgroundJob:
         except JobPaused:
             with self.lock:
                 if self.state is not None and self.state.get(self.id_key) == job_id:
-                    self.state.update(waiting_for_update=True, stage='等待安装完成后继续', error='',
-                                      message='任务已暂停，安装完成后自动继续。')
+                    self.state.update(waiting_for_update=True, **stage_fields('job.waitingForUpdate'), error='',
+                                      **message_fields('jobMessage.jobs.pausedForInstall'))
         except JobCancelled:
             with self.lock:
                 if self.state is not None and self.state.get(self.id_key) == job_id:
@@ -728,7 +773,8 @@ class BackgroundJob:
             # 抛出来就是没跑完：途中声明过的后继作废，结算时一条都不派。
             with self.lock:
                 if self.state is not None and self.state.get(self.id_key) == job_id:
-                    self.state.update(status='failed', error=f'{type(error).__name__}: {error}',
+                    from .user_messages import failure_fields
+                    self.state.update(status='failed', **failure_fields(error),
                                       followups=[], completed_at=time.time())
         finally:
             try:
@@ -783,7 +829,7 @@ class BackgroundJob:
             return
         if state.get(self.id_key) != job_id:
             # 已经被 `start` 在顶替的那一刻收过尾了，这里再收一次是空操作。
-            self._close_run(job_id, "cancelled", error="这一轮已被新的任务顶替")
+            self._close_run(job_id, "cancelled", **_closing("errors.jobs.superseded"))
             return
         self._settle_from(job_id, state)
 
@@ -801,13 +847,15 @@ class BackgroundJob:
         if status == "failed":
             # 声明了后继就是结算到了底，只是留下了要人处理的项（ADR-0053）：后继照派。
             # 中途抛异常的那一轮走不到声明那一步，一条都不派。
-            self._close_run(job_id, "failed", error=str(state.get("error") or "任务失败"),
+            reason = ({"error": str(state["error"]), "error_code": state.get("error_code"),
+                       "error_params": state.get("error_params")} if state.get("error") else _closing("errors.jobs.failed"))
+            self._close_run(job_id, "failed", **reason,
                             summary={**self._summary(state),
                                      **self._dispatch_followups(job_id, state)})
             return
         if superseded and status == "running":
             # 还在跑就被顶掉：它的结果没人要了，记成取消而不是成功。
-            self._close_run(job_id, "cancelled", error="这一轮已被新的任务顶替")
+            self._close_run(job_id, "cancelled", **_closing("errors.jobs.superseded"))
             return
         # `fn` 正常返回就是跑完了。域没有把状态推到 `complete` 只说明它不靠状态报结果
         # （`w_links` 这类直接返回 payload），不代表这一轮失败。
@@ -876,5 +924,6 @@ def _run_batch_with_updates(db, label, run, args):
                 return result
         except (JobPaused, UpdateBusy):
             pass
-        print('[pause] 任务进度已保留，安装完成后自动继续。')
+        print('[pause] ' + interface_text.text('server:jobMessage.jobs.progressKept', None,
+                                               interface_text.local_language()))
         wait_for_installation(db)

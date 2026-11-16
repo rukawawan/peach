@@ -1,5 +1,6 @@
 /* 热力图的数据形状与折算。统计页的播放时间与口味页的浏览时间是同一个形状，
  * 服务端分别由 `web_stats.q_stats` 的 `play_activity` 与口味分析的 `activity` 给出。 */
+import { t } from '../../i18n';
 
 /** 按天与按「星期 × 钟点」的计数。`weekday` 0 是周一，`timezone` 形如 `UTC+08:00`。 */
 export interface ActivityCounts {
@@ -11,7 +12,7 @@ export interface ActivityCounts {
 /** 热力图里的一格。`share` 是这一格相对最忙那一格的浓度，0 到 1。 */
 export interface HeatCell { key: string; label: string; count: number; share: number }
 
-export const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+export const WEEKDAYS = [t('manage:heatChart.monday'), t('manage:heatChart.tuesday'), t('manage:heatChart.wednesday'), t('manage:heatChart.thursday'), t('manage:heatChart.friday'), t('manage:heatChart.saturday'), t('manage:heatChart.sunday')];
 
 /** 有计数的格子至少留一成浓度：一次和一次都没有必须看得出差别。 */
 const shareOf = (count: number, max: number) => (count ? Math.max(0.12, count / max) : 0);

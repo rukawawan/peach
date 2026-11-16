@@ -17,7 +17,7 @@ const measured: StorageState = {
     measured_at: 1_790_000_000, total_bytes: 6 * 2 ** 30, total_files: 300,
     categories: [
       category('database', '数据库', 2 ** 30, 0, false, 'Peach 的全部资料都在这里'),
-      category('backups', '数据库备份', 2 ** 30, 2 ** 29, true, '更早的无法再恢复'),
+      category('backups', '数据库备份', 2 ** 30, 2 ** 29, true, '每处保留最近一份，更早的无法再恢复'),
       category('playback', '播放缓存', 2 ** 30, 2 ** 30, true, '再次播放时重新转码'),
       category('previews', '预览图', 2 ** 30, 0, false, '重建要重新读取整部影片'),
       category('logs', '日志', 2 ** 20, 0, true, '只清理已归档的日志'),
@@ -98,7 +98,7 @@ it('不能清理的勾选框禁用并写明原因，勾几类一起清，全部�
   await settle();
   // 备份在里面时确认框是危险样式；正文逐类写清理后会怎样。
   expect(seen[1]!.danger).toBe(true);
-  expect(String(seen[1]!.body)).toContain('数据库备份 512 MB（清理后更早的无法再恢复）');
+  expect(String(seen[1]!.body)).toContain('数据库备份 512 MB（清理后每处保留最近一份，更早的无法再恢复）');
   expect(sentBody(all)).toEqual({ categories: ['backups', 'playback'] });
 });
 
@@ -110,7 +110,7 @@ it('统计中按上次的文件数画进度，读数是已走过的文件与大�
   const host = await mount(<StorageSettings initial={measuring} receipt={vi.fn()} />);
   const bar = host.querySelector('[role="progressbar"]')!;
   expect([bar.getAttribute('aria-valuenow'), bar.getAttribute('aria-valuemax')]).toEqual(['120', '300']);
-  expect(host.textContent).toContain('已统计 120 个文件 · 1.0 GB，上次共 300 个');
+  expect(host.textContent).toContain('已统计 120 个文件 · 1.0 GB，按上次的 300 个估算进度');
   expect(buttonNamed('全部清理', host)!.disabled).toBe(true);
 });
 
@@ -181,4 +181,18 @@ it('空目录自动读取 CloudDrive，填入表单后由保存写入设置', as
   await submit(host.querySelector('#storageBudgetSettings'));
   await settle();
   expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({ ...policy, external_cache_path: '/detected-cache' });
+});
+
+it('服务端迁移选择数据目录，确认前不提交迁移', async () => {
+  const seen = confirmWith(false);
+  const fetcher = fetchMock(200, { mode: 'manual', path: '/data', editable: true, container: false });
+  vi.stubGlobal('fetch', fetcher);
+  const host = await mount(<StorageSettings initial={measured} receipt={vi.fn()} />);
+  await click(buttonNamed('更改位置', host));
+  expect(sentBody(fetcher)).toEqual({ initial: measured.data_root, purpose: 'data', start: true });
+  await type(document.querySelector<HTMLInputElement>('input[aria-label="服务端数据目录"]'), '/srv/peach-data');
+  await click(buttonNamed('使用此目录'));
+  await settle();
+  expect(String(seen[0]!.body)).toContain('/srv/peach-data');
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

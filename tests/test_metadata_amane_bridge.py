@@ -361,7 +361,8 @@ class RuntimePackagingTests(unittest.TestCase):
                 mock.patch.object(smoke_docker, "request", return_value=json.dumps(description)):
             smoke_docker.amane_checks("fixture")
         self.assertEqual(docker.call_args_list[1], mock.call(
-            "exec", "fixture", "/app/amane-runtime/.venv/bin/python", "-X", "utf8",
+            "exec", "--user", "1000:1000", "fixture",
+            "/app/amane-runtime/.venv/bin/python", "-X", "utf8",
             "/app/tools/amane-bridge/bridge.py", "--self-check"))
 
     def test_windows_application_and_lite_payloads_keep_the_complete_bridge(self):

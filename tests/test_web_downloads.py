@@ -19,6 +19,7 @@ from peach import downloads_clouddrive, web_downloads
 from peach.api import create_app
 from peach.config import PeachSettings
 from peach.push_discovery import CloudPrefix, PushDiscoveryConfig
+from peach.user_messages import UserValueError
 from support.ledger import fresh_ledger
 
 HASH = "c9e15763f722f23e98a29decdfae341b98d53056"
@@ -61,7 +62,7 @@ class FakeBrowserLogin:
 
     def start(self):
         if not self.is_available:
-            raise ValueError("这台电脑上没有找到 Chrome 或 Edge，用不了浏览器登录")
+            raise UserValueError("errors.downloadsPikpakBrowser.browserMissing")
         self.started += 1
         self.state = {"state": "waiting", "message": "浏览器窗口已打开，在里面登录 PikPak"}
         return self.status()
@@ -278,6 +279,8 @@ class SettingsBlockTests(_App):
         self.assertEqual(state["config"], raw)
         self.assertTrue(state["token_set"])
         self.assertTrue(any("端口" in problem for problem in state["problems"]))
+        self.assertEqual(len(state["problem_codes"]), len(state["problems"]))
+        self.assertIn("errors.downloads.addressPortInvalidIpv6", [item["code"] for item in state["problem_codes"]])
         self.assertEqual(state["providers"], [])
         self.assertNotIn("test-only-token", response.text)
         self.assertEqual(self.service.settings.path.read_bytes(), before)
@@ -439,6 +442,7 @@ class SettingsBlockTests(_App):
             transport=httpx.MockTransport(handler))
         self.assertEqual((result["ok"], result["captcha_url"]),
                          (False, "https://user.mypikpak.com/captcha"))
+        self.assertEqual(result["message_code"], "errors.downloadsPikpak.captchaRequired")
         self.assertFalse(result["settings"]["pikpak"]["logged_in"])
         self.assertNotIn("pw", self.secrets().get("download-pikpak.json", ""))
 
@@ -525,12 +529,15 @@ class ResourceIndexerRoutes(_App):
         Indexers(self.service.credentials).save({"indexers": [{
             "key": "one", "name": "测试源", "url": "http://indexer.test/api", "enabled": True}]})
         with mock.patch("peach.web_resource_search.direct_search", return_value={
-                "items": [], "warnings": [], "trace": [],
-                "next_sources": [], "reference_only": []}) as direct, \
+                "items": [], "warnings": ["JavDB：未取得"], "trace": [], "unfetched_sources": ["JavDB"],
+                "retry_after": 900.0, "next_sources": [], "reference_only": []}) as direct, \
              mock.patch("peach.web_resource_search._SEARCH.run", return_value={
                 "ok": True, "state": "ready", "items": [], "warnings": [], "error": ""}) as search:
             response = self.client.get("/api/resources/search?code=ABC-123&goal=chinese")
         self.assertEqual(response.status_code, 200, response.text)
+        # 索引器答复了，整体仍是 ready；没查成的直连来源单独列出，供浏览器添加等来源恢复。
+        body = response.json()
+        self.assertEqual((body["state"], body["unfetched_sources"], body["retry_after"]), ("ready", ["JavDB"], 900.0))
         args = search.call_args.args
         self.assertEqual((args[0][0]["key"], args[1], args[2].goal), ("one", "ABC-123", "chinese"))
         self.assertEqual(direct.call_args.kwargs["goal"], "chinese")

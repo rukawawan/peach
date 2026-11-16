@@ -36,10 +36,6 @@
 .fwarn>span{min-width:0}
 .fwarn p{margin:0}
 
-/* 进度面板（`frontend/src/jobs.ts`）：发丝边 --field-ring 配 primary 的白面，和 CheckboxCard 同一档，
-   躺在分区的 --ground 灰面上是一张白卡。 */
-.followtask{border:1px solid var(--field-ring);border-radius:var(--surface-radius);background:var(--color-background-primary-default);margin-bottom:16px}
-.followtask>.geist-fieldset-content{padding:20px;min-width:0;overflow-wrap:anywhere}
 .favatar{width:28px;height:28px;flex:none;border-radius:var(--pill-radius);object-fit:cover;
   background:var(--overlay-5);outline:1px solid oklch(1 0 0 / 0.1);outline-offset:-1px}
 /* 取不到头像时是一个明确的空位，不是首字母——首字母会让「未取得」看着像取到了。 */

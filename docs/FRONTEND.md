@@ -408,7 +408,15 @@ const job = useQuery({
 首屏要不要吃缓存看路由表：`/quality-goals` 是 `refresh:'reopen'`，刷新就是重新进这一页，
 所以它的 `prefetch` 不给 `staleTime`，每次进来都重取。要按节律更新的页面写
 `refetchInterval`（活动页 2 秒／10 秒），不另起 `setInterval`：轮询跟着组件走，
-换页时壳在 `claimSurface` 卸根，它自己就停了。
+换页时壳在 `claimSurface` 卸根，它自己就停了。间隔用 `src/polling.ts` 的 `withBackoff` 包一层，
+读失败按 4、8、16、30 秒退避，成功一次回到常规间隔；Query 在页面隐藏时本来就不发轮询请求。
+平时全站只留 `result-updates.tsx` 那一处常驻检查，它带回的 `running_tasks` 由
+`src/react/running-tasks.ts` 只读缓存：页面闲着不轮询自己的任务状态，用 `useRefetchOnTask`
+（或 `useBackgroundJob` 的 `taskKey`）在对应任务开跑时重取一次，再按 `running` 接上节律。
+同一个键只由一处驱动轮询，其余读者不写 `refetchInterval`。手写的状态循环用 `pollUntil`，
+它自带退避、页面隐藏时暂停与上限。`/api/client-updates` 那份更新快照同理：顶部横幅、设置里的
+「检查更新」与「升级补修」都读 `client-updates.tsx` 的 `useClientUpdates`，模块里只有一个检查在跑，
+本页发起更新或补修后调 `checkClientUpdates()` 立即查一次。
 
 统计页（`src/react/stats/`）是这条判据的另一端：整页只有 `STATS_KEY` 这一个键，读的是账本
 此刻的样子，没有后台任务也不轮询。一屏里的四个读数和下面三个面板分开取的话，就会出现这一格
@@ -421,7 +429,9 @@ BoardUI 的 `chart-*` 档。点一个内容标签是「回目录并按它筛选�
 就是换键，上一份靠 `placeholderData: keepPreviousData` 留在屏幕上。范围是组件状态而不是 URL：
 它不进路由表，壳只按 `/taste` 一条路由挂岛，刷新回到默认的「全部」。服务端的 `_get_taste` 自己
 按 `taste:{window}` 缓存，演示库上一趟往返十几毫秒，所以这一页不设 `staleTime`。后台重算是另
-一个键 `['taste','refresh']`，`running` 时两秒问一次、闲时十秒，终态按下面第 2 条的判据认。
+一个键 `['taste','refresh']`，`running` 时两秒问一次、闲时不问（`taskKey: 'taste-refresh'` 由全站
+那一处报出它在跑时接上），终态按下面第 2 条的判据认。看板读到 `stale` 时按 2、4、8、16 秒拉长、
+封顶 30 秒地重问。
 雷达、名次条、活动热力和创作者桑基都是 React 组件，几何落在 SVG 属性上，颜色只取 BoardUI 的
 `chart-*` 档。
 

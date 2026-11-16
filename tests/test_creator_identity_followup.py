@@ -23,6 +23,7 @@ from peach.repository import LedgerDatabase
 from peach.scraping_access import paused_until
 from peach.sources.seesaa import AV_NEME, SEESAA
 from support.ledger import fresh_ledger
+from support.outcomes import told
 
 ROOT = Path(__file__).resolve().parents[1]
 STAMP = "2026-10-09T00:00:00.000Z"
@@ -132,13 +133,13 @@ class LandingTests(Case):
         creator = self.series_creator()
         self.transport.pages[page_url("sougouwiki", "こすっち")] = (200, work_table(*CAST))
         summary = self.run_followup(creator)
-        self.assertEqual(summary["outcome"], "是厂牌或系列")
+        self.assertEqual(told(summary)["outcome"], "是厂牌或系列")
         self.assertEqual(self.claims(creator), {("release", "observed", f"{followup.SOURCE}@7")})
         self.assertEqual(self.busted, [1])
         self.assertIn(page_url("sougouwiki", "Scotch Amateur"), self.transport.calls)
         # 有了可信身份，存量补派与再跑都不再问站。
         asked = len(self.transport.calls)
-        self.assertEqual(self.run_followup(creator)["outcome"], "已有身份")
+        self.assertEqual(told(self.run_followup(creator))["outcome"], "已有创作者分类")
         self.assertEqual(len(self.transport.calls), asked)
         with self.database.read_connection() as connection:
             self.assertEqual(followup.stock(connection, Attempts(self.root / "attempts"), limit=5), [])
@@ -146,7 +147,7 @@ class LandingTests(Case):
     def test_missing_pages_write_nothing_and_are_not_asked_again(self):
         creator = self.entity("lucky")
         summary = self.run_followup(creator)
-        self.assertEqual(summary["outcome"], "两站都没有作品一览")
+        self.assertEqual(told(summary)["outcome"], "两个来源均未提供作品列表")
         self.assertIn("sougouwiki「lucky」（页不存在）", summary["asked"])
         self.assertEqual(self.claims(creator), set())
         asked = len(self.transport.calls)
@@ -159,7 +160,7 @@ class LandingTests(Case):
     def test_a_refused_site_is_unfetched_cools_down_and_retries_later(self):
         creator = self.entity("lucky")
         self.transport.pages[page_url("sougouwiki", "lucky")] = (403, b"")
-        self.assertEqual(self.run_followup(creator)["outcome"], "未取得")
+        self.assertEqual(told(self.run_followup(creator))["outcome"], "未取得")
         self.assertEqual(self.claims(creator), set())
         self.assertTrue(paused_until(self.cooldown, SEESAA.name))
         self.assertFalse(paused_until(self.cooldown, AV_NEME.name))
@@ -178,9 +179,9 @@ class LandingTests(Case):
         with self.database.read_connection() as connection:
             self.assertEqual([item.key for item in followup.plan(connection, since_entity_id=0)],
                              [followup.followup_key(fresh)])
-        self.assertEqual(self.run_followup(reviewed)["outcome"], "已有身份")
+        self.assertEqual(told(self.run_followup(reviewed))["outcome"], "已有创作者分类")
         self.assertEqual(self.transport.calls, [])
-        self.assertEqual(self.run_followup(999), {"outcome": "档案已不存在"})
+        self.assertEqual(told(self.run_followup(999)), {"outcome": "资料记录已不存在"})
 
 
 class RevertTests(Case):

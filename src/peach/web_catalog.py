@@ -17,8 +17,11 @@ import time
 from collections.abc import Callable
 from functools import lru_cache
 
-from . import entities, media_libraries, sample_images, settings_file
+from . import entities, interface_text, media_libraries, sample_images, settings_file
 
+from .catalog_vocabulary import (CENSORED, EDITION_ORDER, FC2_BONUS_PREFIX, FC2_MAIN_PART, PERFORMER_TAG_PREFIX,
+                                 PORTRAIT, current_length_band, current_orientation, current_tag, is_performer_marker)
+from .coded_text import Said, coded
 from .catalog_rules import (
     LENGTH_TAGS,
     canonical_tag_name,
@@ -35,14 +38,15 @@ from .catalog_rules import (
     tag_cat,
 )
 from .entities import normalize_entity_name, resolve_entity, upsert_asset_entity
-from .catalog_versions import foldable_versions, partition_versions, version_labels
+from .catalog_versions import foldable_versions, label_text, partition_versions, version_label_parts
 from .field_owners import parse_owners
 from .metadata_policy import SOURCE_SPECS
 from .media_sources import cost_for
-from .regions import infer_region, normalize_region, region_label
+from .regions import UNKNOWN_LABEL_CODE, infer_region, normalize_region, region_label, region_label_code
 from .web_activity import DEFAULT_PROFILE_ID
 from .web_state import WebContract
 from .western_artwork import artwork_key
+from .user_messages import UserValueError
 
 
 GROUP_TABLES = ('asset', 'asset_entity', 'entity')
@@ -138,6 +142,7 @@ def attach_jav_display_fields(row: dict, tags=(), entity_kinds=(), source_names=
         region = infer_region(code, row.get("name"))
     row["region"] = region
     row["region_label"] = region_label(region)
+    row["region_label_code"] = region_label_code(region)
     # 详情页要能分开「这条是你定的」和「这是按番号猜的」，后者才需要请人确认。
     row["region_settled"] = bool(stored)
     row["is_jav"] = is_jav_asset(
@@ -240,10 +245,14 @@ def region_facet_rows(rows) -> list[dict]:
     """产地筛选项，连未判定那一档一起给。
 
     判产地是人一条条过的活，看不见还剩多少就没人会去过。未判定在筛选参数里写作
-    `none`，空串到不了查询串里。
+    `none`，空串到不了查询串里。`label` 是 zh-CN 原文，前端按 `label_code` 取当前语言。
     """
-    return [{**dict(row), "k": row["k"] or "none",
-             "label": region_label(row["k"]) or "未判定"} for row in rows]
+    out = []
+    for row in rows:
+        code = region_label_code(row["k"]) or UNKNOWN_LABEL_CODE
+        out.append({**dict(row), "k": row["k"] or "none",
+                    "label": interface_text.text(f"server:{code}"), "label_code": code})
+    return out
 
 
 def _entity_asset_filter(connection, kind: str, name: str) -> tuple[str, list[int]]:
@@ -279,7 +288,7 @@ def release_year_filter(value, *, trash=False):
         return [], []
     years = sorted(set(str(value).split(',')))
     if any(year != 'none' and (not re.fullmatch(r'[1-9][0-9]{3}', year)) for year in years):
-        raise ValueError('发行年份须为四位年份或未知年份')
+        raise UserValueError('api.catalog.invalidReleaseYear')
     return [RELEASE_YEAR_SQL + ' IN (' + ','.join('?' for _ in years) + ')'], [
         '' if year == 'none' else year for year in years]
 
@@ -315,7 +324,8 @@ def catalog_filter(contract: WebContract, args):
     if args.get("owner") == "none":
         where.append(UNOWNED_ASSET_CLAUSE)
     if args.get("tag"):
-        tags = [x for x in args["tag"].split(",") if x]
+        # 旧书签里的出演者标记还是旧前缀，先换成现在的写法（ADR-0162）。
+        tags = [current_tag(x) for x in args["tag"].split(",") if x]
         tags = _canonical_tag_names(contract, tags)
         tag_clause = (
             "(a.id IN (SELECT ae.asset_id FROM asset_entity ae JOIN entity e ON e.id=ae.entity_id "
@@ -335,15 +345,16 @@ def catalog_filter(contract: WebContract, args):
     # 回收站是跨类型恢复入口。首页遗留的「只看有缩略图」、时长、画幅和 JAV
     # 条件只对视频成立，带进这里会再次把图片、网址快捷方式等资源藏起来。
     if not trash and args.get("len"):
-        where.append("a.ctx_length = ?"); par.append(args["len"])
+        where.append("a.ctx_length = ?"); par.append(current_length_band(args["len"]))
     if not trash and args.get("dur_min"):
         where.append("a.duration >= ?"); par.append(max(0, float(args["dur_min"])))
     if not trash and args.get("dur_max"):
         where.append("a.duration <= ?"); par.append(max(0, float(args["dur_max"])))
     if not trash and args.get("orient"):
-        where.append("a.ctx_orient = ?"); par.append(args["orient"])
+        # 旧书签与历史地址里的 `orient=竖屏` 长期照认（ADR-0162）。
+        where.append("a.ctx_orient = ?"); par.append(current_orientation(args["orient"]))
     elif not trash and args.get("exclude_vertical") == "1":
-        where.append("(a.ctx_orient IS NULL OR a.ctx_orient <> '竖屏')")
+        where.append("(a.ctx_orient IS NULL OR a.ctx_orient <> ?)"); par.append(PORTRAIT)
     region_where, region_par = region_filter(args.get("region"), trash)
     where += region_where
     par += region_par
@@ -409,10 +420,10 @@ def orientation_member(args) -> Callable[[dict], bool] | None:
     if args.get("state") == "trash":
         return None
     if args.get("orient"):
-        orient = args["orient"]
+        orient = current_orientation(args["orient"])
         return lambda member: member.get("ctx_orient") == orient
     if args.get("exclude_vertical") == "1":
-        return lambda member: member.get("ctx_orient") != "竖屏"
+        return lambda member: member.get("ctx_orient") != PORTRAIT
     return None
 
 
@@ -519,11 +530,11 @@ def q_items(contract: WebContract, args):
             canonical_tags = canonical.get("tag", [])
             canonical_performers = canonical.get("performer", [])
             all_performers = canonical_performers or [
-                tag[3:] for tag in ts if tag.startswith("演员:")
+                tag.removeprefix(PERFORMER_TAG_PREFIX) for tag in ts if tag.startswith(PERFORMER_TAG_PREFIX)
             ]
             performers = all_performers[:CARD_PERFORMERS]
             performer_names = {normalize_entity_name(name) for name in all_performers}
-            visible_tags = canonical_tags or [t for t in ts if not t.startswith("演员:")]
+            visible_tags = canonical_tags or [t for t in ts if not t.startswith(PERFORMER_TAG_PREFIX)]
             r["tags"] = [
                 tag for tag in visible_tags
                 if tag_cat(tag) in (
@@ -575,8 +586,8 @@ def visible_identity_data(connection, canonical, legacy, *, tag_column=0):
         f'SELECT alias FROM entity_alias WHERE entity_id IN ({marks})', (*excluded, *excluded))
     hidden = {normalize_entity_name(row[0]) for row in names}
     canonical = [row for row in canonical if row[0] not in excluded]
-    legacy = [row for row in legacy if not row[tag_column].startswith('演员:')
-              or normalize_entity_name(row[tag_column][3:]) not in hidden]
+    legacy = [row for row in legacy if not row[tag_column].startswith(PERFORMER_TAG_PREFIX)
+              or normalize_entity_name(row[tag_column].removeprefix(PERFORMER_TAG_PREFIX)) not in hidden]
     return canonical, legacy
 
 
@@ -738,13 +749,10 @@ def attach_saved_follow_cards(contract: WebContract, rows):
         row["follow_tags"] = _item_tags(item)
 
 
-#: 版次的展示次序：正片在前，处理过的在后。这不是偏好排序，只是要一个稳定的
-#: 锚点——卡片标题取第一个，次序一变卡片就换名字。
-EDITION_ORDER = ("有码", "中字", "无码", "无码流出", "无码破解")
 
 
 def _edition_label(row: dict, tags: tuple[str, ...] = (), source_names: tuple[str, ...] = ()) -> str:
-    """这一份是哪个版次。
+    """这一份是哪个版次（`catalog_vocabulary` 的版次 id）。
 
     判据只有 `jav_edition_badges` 一份。自己按文件名再写一套「像不像无码」的判断，
     会和卡片上已经显示的徽章各说各话——同一个文件，角标写着无码、分组却当它是正片。
@@ -756,7 +764,15 @@ def _edition_label(row: dict, tags: tuple[str, ...] = (), source_names: tuple[st
 def _edition_badge(name, code, tags: tuple[str, ...], source_names: tuple[str, ...]) -> str:
     # 分组快照每次重算都要判一遍；判据只看这四样，按它们记住。
     badges = jav_edition_badges(name, code, tags, source_names)
-    return str(badges[0]) if badges else "有码"
+    return str(badges[0]) if badges else CENSORED
+
+
+def _group_title(code: str, row: dict, fallback: str) -> dict:
+    """聚合卡片的标题：规范番号；一个番号都取不到时用固定说法，`title_code` 给前端取当前语言。"""
+    title = code or str(row.get("code") or "")
+    if title:
+        return {"title": title}
+    return {"title": interface_text.text(f"server:{fallback}"), "title_code": fallback}
 
 
 def _edition_rows(contract: WebContract, codes) -> list[dict]:
@@ -823,10 +839,10 @@ def _derive_edition_groups(contract: WebContract) -> dict[str, list[dict]]:
         versions.sort(key=lambda version: (
             EDITION_ORDER.index(version['signature'][0])
             if version['signature'][0] in EDITION_ORDER else len(EDITION_ORDER), version['id']))
-        labels = version_labels(versions)
-        groups[code] = [dict(row, version_id=version['id'], version_label=label,
-                             version_multipart=version['multipart'])
-                        for version, label in zip(versions, labels) for row in version['items']]
+        labels = version_label_parts(versions)
+        groups[code] = [dict(row, version_id=version['id'], version_label=label_text(parts),
+                             version_label_parts=parts, version_multipart=version['multipart'])
+                        for version, parts in zip(versions, labels) for row in version['items']]
     return groups
 
 
@@ -849,13 +865,15 @@ def attach_edition_groups(contract: WebContract, rows,
             continue
         members = [item for item in group if shown(item)] if shown else group
         members = members or group
+        # 版本名按 zh-CN 渲染的原文在 `editions`，同序的 `editions_parts` 是按段的写法，界面按语言拼。
+        labels = {item['version_label']: item['version_label_parts'] for item in members}
         row["edition_group"] = {
             "key": code,
-            "title": code or str(row.get("code") or "多版本作品"),
+            **_group_title(code, row, "labels.webCatalog.editionGroup"),
             "count": len({item['version_id'] for item in members}),
             "seed_id": group[0]["id"],
             "item_ids": [item["id"] for item in members],
-            "editions": list(dict.fromkeys(item['version_label'] for item in members)),
+            "editions": list(labels), "editions_parts": list(labels.values()),
         }
 
 
@@ -877,11 +895,12 @@ def q_editions(contract: WebContract, args):
     items = []
     for row in group:
         item = q_item(contract, row["id"])
-        item["edition_label"] = row['version_label']
-        item['version_id'] = row['version_id']
+        # `edition_label` 是 zh-CN 原文，`edition_label_parts` 按段给界面按语言拼，`edition` 是版次 id（配色用）。
+        item.update(edition_label=row['version_label'], edition_label_parts=row['version_label_parts'],
+                    edition=row['edition'], version_id=row['version_id'])
         parts = [member for member in group if member['version_id'] == row['version_id']]
         if row['version_multipart']:
-            item['part_label'] = _part_labels(parts)[row['id']]
+            item.update(_part_labels(parts)[row['id']])
         items.append(item)
     return {"title": code or str(seed["code"]),
             "count": len({row['version_id'] for row in group}), "items": items}
@@ -959,7 +978,7 @@ def attach_multipart_groups(contract: WebContract, rows,
         members = members or group
         row["part_group"] = {
             "key": key,
-            "title": code or str(row.get("code") or "分卷作品"),
+            **_group_title(code, row, "labels.webCatalog.partGroup"),
             "count": len(members),
             "seed_id": group[0]["id"],
             "item_ids": [item["id"] for item in members],
@@ -990,7 +1009,7 @@ def q_parts(contract: WebContract, args):
         if row['id'] not in live:
             continue
         item = q_item(contract, row['id'])
-        item['part_label'] = labels[row['id']]
+        item.update(labels[row['id']])
         items.append(item)
     return {"title": code or str(seed["code"]), "count": len(items), "items": items}
 
@@ -1000,19 +1019,34 @@ def _parts_by_asset(contract: WebContract) -> dict[int, tuple[str, list[dict]]]:
         int(row['id']): (key, group) for key, group in multipart_groups(contract).items() for row in group})
 
 
-def _part_labels(group: list[dict]) -> dict[int, str]:
+#: FC2 合集本篇与特典那一卷的卷标。
+FC2_MAIN_PART_CODE = 'labels.catalogParts.main'
+FC2_BONUS_PART_CODE = 'labels.catalogParts.bonus'
+
+
+def _part_label(label: str) -> dict:
+    """卷标字段 `part_label`：数字、字母卷标原样给，界面自己按语言写「第 N 卷」；FC2 的本篇与特典
+    另带 `part_label_code`，原字段是 zh-CN 原文。"""
+    if label == FC2_MAIN_PART:
+        return coded('part_label', Said(FC2_MAIN_PART_CODE))
+    if label.startswith(FC2_BONUS_PREFIX):
+        return coded('part_label', Said(FC2_BONUS_PART_CODE, number=int(label[len(FC2_BONUS_PREFIX):])))
+    return {'part_label': label}
+
+
+def _part_labels(group: list[dict]) -> dict[int, dict]:
     # 卷号后面还挂着版次或修复标记时（`PPT-018-1-uncensored.mp4`），剥掉组内共有的
     # 那段尾缀才取得到卷标；这一步和分组用的是同一个判据。卷标按整套算，进了回收站
     # 的那一卷只是不进队列，后面几卷的卷标不跟着前移。
     stripped = names_without_shared_part_tail(group) or [""] * len(group)
-    has_bonus = any(fc2_collection_label(row).startswith("特典 ") for row in group)
+    has_bonus = any(fc2_collection_label(row).startswith(FC2_BONUS_PREFIX) for row in group)
     labels = {}
     for position, (row, bare) in enumerate(zip(group, stripped), 1):
         marker = part_marker(bare) or part_marker(str(row.get("name") or ""))
         # 裸名首卷没有标记，卷标按队列位置给；有标记时沿用文件名里的写法。
         label = fc2_collection_label(row)
-        labels[row['id']] = (label if has_bonus and label else
-                              (marker.upper() if marker.isalpha() else marker) or str(position))
+        labels[row['id']] = _part_label(label if has_bonus and label else
+                                        (marker.upper() if marker.isalpha() else marker) or str(position))
     return labels
 
 def label_makers(contract: WebContract, c, aid) -> dict[int, dict]:
@@ -1153,13 +1187,13 @@ def q_item(contract: WebContract, aid):
         for _, kind, name in canonical if kind == "creator"
     }
     performers = canonical_performers or [
-        tag[3:] for tag in legacy
-        if tag.startswith("演员:")
-        and normalize_entity_name(tag[3:]) not in canonical_creators
+        tag.removeprefix(PERFORMER_TAG_PREFIX) for tag in legacy
+        if tag.startswith(PERFORMER_TAG_PREFIX)
+        and normalize_entity_name(tag.removeprefix(PERFORMER_TAG_PREFIX)) not in canonical_creators
     ]
     performer_names = {normalize_entity_name(name) for name in performers}
     tags = [tag for tag in (canonical_tags or [
-        tag for tag in legacy if not tag.startswith("演员:")
+        tag for tag in legacy if not tag.startswith(PERFORMER_TAG_PREFIX)
     ]) if normalize_entity_name(tag) not in performer_names]
     d["tags"] = [
         {
@@ -1240,7 +1274,7 @@ def _name_shared_tags(contract: WebContract, aid, picked, related_tags) -> None:
 
     只留两边都看得见的标签：排序用的是实体关联，被用户隐藏的标签也在里面。一个都不剩时
     照旧写「标签接近」。"""
-    from peach.related import TAG_REASON
+    from peach.related import TAG_REASON_CODE, reason_text
 
     ids = sorted({tag for row in picked for tag in row.get("shared_tags", ())})
     names: dict[int, str] = {}
@@ -1256,7 +1290,9 @@ def _name_shared_tags(contract: WebContract, aid, picked, related_tags) -> None:
         shared = [names[tag] for tag in row.pop("shared_tags", ()) if names.get(tag) in visible]
         if shared:
             row["why_tags"] = shared[:6]
-            row["why"] = " · ".join(reason for reason in row["why"].split(" · ") if reason != TAG_REASON)
+            codes = [code for code in row.get("why_codes", ()) if code != TAG_REASON_CODE]
+            row["why_codes"] = codes
+            row["why"] = " · ".join(map(reason_text, codes))
 
 
 def q_related(contract: WebContract, aid, limit=24):
@@ -1518,7 +1554,9 @@ def _release_year_facets(contract, connection, scope, values, state, filters, as
         conditions, parameters = catalog_filter(contract, {**filters, 'state':state, 'year':''})
         scope += 'AND ' + ' AND '.join(conditions) + ' '
         values = [*values, *parameters]
-    return [dict(k=row['k'] or 'none', label=row['k'] or '未知年份', n=row['n'])
+    unknown = {'label': interface_text.text('server:labels.webCatalog.unknownYear'),
+               'label_code': 'labels.webCatalog.unknownYear'}
+    return [dict(k=row['k'] or 'none', **({'label': row['k']} if row['k'] else unknown), n=row['n'])
             for row in connection.execute('SELECT '+RELEASE_YEAR_SQL+' AS k,count(*) AS n FROM asset a '
                 "WHERE a.medium='video' "+scope+' GROUP BY k ORDER BY k DESC', values)]
 
@@ -1582,7 +1620,7 @@ def q_facets(
             "FROM asset_entity ae JOIN entity e ON e.id=ae.entity_id "
             "WHERE e.kind='creator' AND ae.asset_id IN (" + facet_assets + ") "
             "GROUP BY e.id,e.canonical_name ORDER BY n DESC LIMIT 60", scope_params)]
-        # 标签要分层 —— 一锅端会让「演员:一个ren」和「1080P」「足交」混在一起。
+        # 标签要分层 —— 一锅端会让「performer:一个ren」和「1080P」「足交」混在一起。
         # 三类分开：技术规格（画质/时长/画幅，筛选价值低）、内容维度（真正有用的）、演员（另立一栏）。
         rows = [dict(r) for r in c.execute(
             "SELECT e.canonical_name AS k, count(DISTINCT ae.asset_id) AS n "
@@ -1639,12 +1677,12 @@ def w_item_tag(contract: WebContract, body):
     tag = str(body.get("tag", "")).strip()
     if operation not in {"add", "remove"}:
         raise ValueError("operation must be add or remove")
-    if not tag or len(tag) > 80 or tag.startswith("演员:"):
+    if not tag or len(tag) > 80 or is_performer_marker(tag):
         raise ValueError("tag must be 1 to 80 characters and cannot be a performer marker")
     if operation == "add":
         canonical = current_tags([tag])
         if not canonical:
-            raise ValueError("该标签不在当前词表中")
+            raise UserValueError("api.catalog.tagNotInVocabulary")
         tag = canonical[0]
     normalized = normalize_entity_name(tag)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

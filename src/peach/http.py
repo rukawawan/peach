@@ -200,7 +200,7 @@ class HttpxTransport:
     def client(self):
         with self._client_lock:
             if self._closed and self._client is None:
-                raise RuntimeError("HTTP 客户端已关闭")
+                raise RuntimeError("HTTP client is closed")
             if self._client is None:
                 self._client = httpx.Client(
                     **peach_proxy.client_options(),
@@ -256,7 +256,7 @@ class HttpxTransport:
                 headers = _without(headers, ("content-length", "content-type"))
             url = target
         raise httpx.TooManyRedirects(
-            f"超过 {self.MAX_REDIRECTS} 次重定向", request=response.request)
+            f"exceeded {self.MAX_REDIRECTS} redirects", request=response.request)
 
     def close(self) -> None:
         if self._owns_client:
@@ -313,7 +313,7 @@ class CurlCffiTransport:
     def session(self):
         with self._session_lock:
             if self._closed and self._session is None:
-                raise RuntimeError("浏览器指纹客户端已关闭")
+                raise RuntimeError("browser fingerprint client is closed")
             if self._session is None:
                 self._session = curl_requests.Session(impersonate=self._impersonate,
                                                       **peach_proxy.curl_options())
@@ -329,7 +329,7 @@ class CurlCffiTransport:
         from .processing_control import checkpoint as processing_checkpoint
         processing_checkpoint('network')
         from .processing_traffic import unobserved
-        unobserved('浏览器指纹传输流量未观测')
+        unobserved('labels.taskResources.network.fingerprint')
         chunks: list[bytes] = []
         total = 0
         try:

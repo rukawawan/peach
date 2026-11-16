@@ -147,7 +147,8 @@ class ReplayTransportTests(OfflineTestCase):
         transport = RecordingTransport(inner, Cassette(source="javbus", code="ABC-123"))
         with self.assertRaises(SourceFailure):
             with JavBusSource().holding(Session(transport)):
-                raise SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, "验证页")
+                raise SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE, "errors.base.cloudflareUpdateCookie",
+                                    {"label": "JavBus"})
         inner.hold.assert_called_once_with("javbus", "blocked")
 
     def test_recording_stores_responses_but_no_request_headers(self):

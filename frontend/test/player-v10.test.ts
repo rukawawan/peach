@@ -112,6 +112,22 @@ describe('Video.js 10 播放会话', () => {
     video.dispatchEvent(new Event('play')); expect(played).toHaveBeenCalledOnce();
     expect(document.querySelector('.video-js')).toBeNull();
   });
+
+  it('等待后播放时间往前走就收起转圈，缓冲还够时的 stalled 不显示转圈', () => {
+    const { video, player } = mounted(), root = player.el();
+    let time = 10, ready = 4;
+    Object.defineProperty(video, 'currentTime', { get: () => time, configurable: true });
+    Object.defineProperty(video, 'readyState', { get: () => ready, configurable: true });
+    video.dispatchEvent(new Event('stalled'));
+    expect(root.classList.contains('vjs-waiting')).toBe(false);
+    ready = 2; video.dispatchEvent(new Event('waiting'));
+    expect(root.classList.contains('vjs-waiting')).toBe(true);
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(root.classList.contains('vjs-waiting')).toBe(true);
+    time = 10.25; ready = 4; video.dispatchEvent(new Event('timeupdate'));
+    expect(root.classList.contains('vjs-waiting')).toBe(false);
+    player.dispose();
+  });
 });
 
 function videoMetadata(root: HTMLElement) { root.querySelector('video')!.dispatchEvent(new Event('loadedmetadata')) }

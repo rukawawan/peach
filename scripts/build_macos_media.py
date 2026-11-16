@@ -11,6 +11,9 @@ import subprocess
 import sys
 import zipfile
 
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 from fetch_ffmpeg_sources import digest, load_sources, prepare
 from fetch_untrunc_sources import load_sources as untrunc_sources
 
@@ -29,7 +32,7 @@ def audit_binary(path: Path, architecture: str) -> None:
     for line in output.splitlines()[1:]:
         dependency = line.strip().split(" (", 1)[0]
         if not dependency.startswith(("/usr/lib/", "/System/Library/")):
-            raise ValueError(f"媒体工具依赖非系统动态库：{dependency}")
+            raise ValueError(t("build_macos_media.nonSystemLibrary", library=dependency))
     subprocess.run(["codesign", "--verify", "--strict", str(path)], check=True)
 
 
@@ -56,7 +59,7 @@ def finish(output: Path, lock: dict, tool: str, architecture: str) -> dict:
         for source in lock["sources"]:
             path = output / "sources" / source["archive"]
             if digest(path) != source["sha256"]:
-                raise ValueError(f"源码 SHA-256 不符：{path.name}")
+                raise ValueError(t("build_macos_media.sourceMismatch", name=path.name))
             package.write(path, f"sources/{path.name}")
         for name in ("build_macos_media.py", "fetch_ffmpeg_sources.py", "fetch_untrunc_sources.py",
                      "setup_macos_media_tools.py", "ffmpeg-sources.json", "untrunc-sources.json"):
@@ -88,7 +91,7 @@ def finish(output: Path, lock: dict, tool: str, architecture: str) -> dict:
 
 def build(output: Path, tool: str, architecture: str) -> None:
     if sys.platform != "darwin":
-        raise ValueError("必须在 macOS 上编译")
+        raise ValueError(t("build_macos_media.macosOnly"))
     output = output.resolve()
     lock = load_sources() if tool == "ffmpeg" else untrunc_sources()
     if not (output / "work").exists():
@@ -96,7 +99,7 @@ def build(output: Path, tool: str, architecture: str) -> None:
     else:
         for source in lock["sources"]:
             if digest(output / "sources" / source["archive"]) != source["sha256"]:
-                raise ValueError("缓存源码 SHA-256 不符")
+                raise ValueError(t("build_macos_media.cachedSourceMismatch"))
     prefix, work = output / "prefix", output / "work"
     prefix.mkdir(exist_ok=True)
     env = {**os.environ, "MACOSX_DEPLOYMENT_TARGET": "11.0", "PKG_CONFIG_PATH": "",
@@ -170,7 +173,7 @@ def build(output: Path, tool: str, architecture: str) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("build_macos_media.description"))
     parser.add_argument("--tool", choices=("ffmpeg", "untrunc"), required=True)
     parser.add_argument("--arch", choices=("arm64", "x86_64"), required=True)
     parser.add_argument("--output", type=Path, required=True)

@@ -10,6 +10,10 @@ from peach.avatar_face import (
     FaceProbe, drop_sidecar, face_px_width, face_share, read_sidecar,
     sidecar_path, write_sidecar,
 )
+from peach.face_detect import FaceModelUnavailable
+
+#: 模型取不到时 `FaceDetector` 抛的那一个：联网下载模型失败（`face_detect.ensure_model`）。
+MODEL_UNAVAILABLE = FaceModelUnavailable("errors.faceDetect.faceModelFetchFailed", {"error": "network is unreachable"})
 
 
 def record(width=640, height=960, face_w=0.105):
@@ -93,9 +97,9 @@ class FaceProbeTests(unittest.TestCase):
         """取不到模型会把「今天没网」变成「所有人都没有头像」，所以只记原因。"""
         probe = FaceProbe()
         with unittest.mock.patch("peach.avatar_face.FaceDetector",
-                                 side_effect=RuntimeError("模型未取得")):
+                                 side_effect=MODEL_UNAVAILABLE):
             self.assertIsNone(probe(Path("/tmp/a.img")))
-        self.assertEqual(probe.unavailable, "模型未取得")
+        self.assertEqual(probe.unavailable, "取人脸模型失败：network is unreachable")
 
     def test_a_failed_model_load_waits_out_the_retry_window_then_recovers(self):
         """服务启动时恰好没网，联网后圆标要自己恢复取景；窗口内不在请求线程里反复重下。"""
@@ -105,10 +109,10 @@ class FaceProbeTests(unittest.TestCase):
         probe = FaceProbe(clock=lambda: now[0])
         with unittest.mock.patch(
                 "peach.avatar_face.FaceDetector",
-                side_effect=[RuntimeError("模型未取得"), unittest.mock.MagicMock()]) as detector, \
+                side_effect=[MODEL_UNAVAILABLE, unittest.mock.MagicMock()]) as detector, \
                 unittest.mock.patch("peach.avatar_face.face_record", return_value=record()):
             self.assertIsNone(probe(Path("/tmp/a.img")))
-            self.assertEqual(probe.unavailable, "模型未取得")
+            self.assertEqual(probe.unavailable, "取人脸模型失败：network is unreachable")
             now[0] += avatar_face.RETRY_SECONDS - 1
             self.assertIsNone(probe(Path("/tmp/a.img")))
             self.assertEqual(detector.call_count, 1)
@@ -124,7 +128,7 @@ class FaceProbeTests(unittest.TestCase):
         probe = FaceProbe(clock=lambda: 1000.0)
         with unittest.mock.patch(
                 "peach.avatar_face.FaceDetector",
-                side_effect=[RuntimeError("模型未取得"), unittest.mock.MagicMock()]) as detector, \
+                side_effect=[MODEL_UNAVAILABLE, unittest.mock.MagicMock()]) as detector, \
                 unittest.mock.patch("peach.avatar_face.face_record", return_value=record()):
             self.assertIsNone(probe(Path("/tmp/a.img")))
             self.assertIsNone(probe(Path("/tmp/a.img")))
@@ -137,7 +141,7 @@ class FaceProbeTests(unittest.TestCase):
         probe = FaceProbe()
         with unittest.mock.patch("peach.avatar_face.FaceDetector"):
             with unittest.mock.patch("peach.avatar_face.face_record",
-                                     side_effect=ValueError("解不开")):
+                                     side_effect=ValueError("cannot decode image")):
                 self.assertIsNone(probe(Path("/tmp/a.img")))
         self.assertEqual(probe.unavailable, "")
 
@@ -166,9 +170,9 @@ class FaceProbeTests(unittest.TestCase):
     def test_without_a_model_bytes_get_no_record_either(self):
         probe = FaceProbe()
         with unittest.mock.patch("peach.avatar_face.FaceDetector",
-                                 side_effect=RuntimeError("模型未取得")):
+                                 side_effect=MODEL_UNAVAILABLE):
             self.assertIsNone(probe.on_bytes(b"\xff\xd8\xff"))
-        self.assertEqual(probe.unavailable, "模型未取得")
+        self.assertEqual(probe.unavailable, "取人脸模型失败：network is unreachable")
 
 
 if __name__ == "__main__":

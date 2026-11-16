@@ -12,6 +12,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from peach.interface_text import dev as t
 from peach.catalog_rules import (
     is_jav_asset,
     is_jav_code,
@@ -26,6 +27,10 @@ FIELDS = (
     "asset_id", "name", "raw_code", "display_code", "display_title",
     "edition_badges", "is_jav", "issues",
 )
+#: `issues` 列，几项之间用空格分开：缺连字符但有发行证据、番号需规范显示、推广域名残留、版本语义改徽章、
+#: 非 JAV 或缺发行证据；一项都没有记 `ok`。
+MISSING_HYPHEN, CODE_DISPLAY, PROMO_DOMAIN = "missing-hyphen", "code-needs-display-form", "promo-domain"
+EDITION_BADGE, NOT_JAV, NORMAL = "edition-as-badge", "not-jav", "ok"
 DOMAIN = re.compile(
     r"(?:www\.)?[a-z0-9][a-z0-9-]{1,30}\."
     r"(?:com|net|la|xyz|cc|me|top|vip|club|info|org|tv|app|co|pw|gg|cn)",
@@ -60,15 +65,15 @@ def audit(database: Path) -> list[dict[str, object]]:
         display = jav_display_metadata(row["name"], row["code"], tags)
         issues = []
         if jav and not is_jav_code(row["code"]):
-            issues.append("缺连字符但有发行证据")
+            issues.append(MISSING_HYPHEN)
         if jav and str(row["code"] or "").strip().upper() != display["display_code"]:
-            issues.append("番号需规范显示")
+            issues.append(CODE_DISPLAY)
         if DOMAIN.search(str(row["name"] or "")):
-            issues.append("推广域名残留")
+            issues.append(PROMO_DOMAIN)
         if display["edition_badges"]:
-            issues.append("版本语义改徽章")
+            issues.append(EDITION_BADGE)
         if not jav:
-            issues.append("非JAV或缺发行证据")
+            issues.append(NOT_JAV)
         output.append({
             "asset_id": row["id"],
             "name": row["name"],
@@ -77,13 +82,13 @@ def audit(database: Path) -> list[dict[str, object]]:
             "display_title": display["display_title"] if jav else "",
             "edition_badges": " ".join(display["edition_badges"]) if jav else "",
             "is_jav": int(jav),
-            "issues": "；".join(issues) if issues else "正常",
+            "issues": " ".join(issues) if issues else NORMAL,
         })
     return output
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_jav_display.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument(
         "--out", type=Path, default=GENERATED_DIR / "jav-display-audit.csv",
@@ -91,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     rows = audit(args.db)
     write_rows(args.out, FIELDS, rows)
-    issue_count = sum(row["issues"] != "正常" for row in rows)
+    issue_count = sum(row["issues"] != NORMAL for row in rows)
     jav_count = sum(int(row["is_jav"]) for row in rows)
     print({
         "database_mode": "ro", "rows": len(rows), "jav": jav_count,

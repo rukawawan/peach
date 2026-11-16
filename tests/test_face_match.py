@@ -108,7 +108,7 @@ class MatcherTests(unittest.TestCase):
 
         def broken():
             built.append(1)
-            raise FaceModelUnavailable("缺少人脸比对模型：sface.onnx")
+            raise FaceModelUnavailable("errors.faceDetect.matchModelMissing", {"path": "sface.onnx"})
 
         with patch.object(face_match, "FaceEmbedder", side_effect=broken):
             matcher = face_match.FaceMatcher()

@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from audit_cover_artwork import read, snapshots
 from peach.cover_artwork import install_cover
 from peach.fsutil import atomic_write_text
+from peach.interface_text import dev as t
 from peach.images import measure_image_file
 from peach.jav_cover_fetch import (HostLimitedTransport, NotFound, Unavailable, _download_best,
                                    _measure, _no_usable_official, _usable_candidates, best_cover)
@@ -75,13 +76,13 @@ def failure_result(code, error, transport):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t('upgrade_audited_covers.description'))
     parser.add_argument('--data-root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--code', action='append', default=[])
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--retry-failures', action='store_true')
-    parser.add_argument('--live', action='store_true', help='通过现有官方链在线补查，无需已有快照')
+    parser.add_argument('--live', action='store_true', help=t('upgrade_audited_covers.liveHelp'))
     args = parser.parse_args()
     root = args.data_root / 'generated/covers'
     paths = [root / (code + '.jpg') for code in args.code] if args.code else sorted(root.glob('*.jpg'))

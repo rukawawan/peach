@@ -9,7 +9,7 @@
 FC2 链是发行方商品页 → fc2cmadb → JavArchive。下架作品在 fc2cmadb 也常常没有，JavArchive 只给标题与转存封面，
 演员一栏整条链只有 fc2cmadb 一处。用户给了两站：fc2ppv-db.com（旧 fc2ppvdb.com 关站后新起的 FC2 元数据库）与
 javten.com（fc2hub.com 的后继，OpenAver issue #186 的 FC2 刮削经验点名它），要求「研究下怎么抓取，需要 cookie
-的话就在来源里加 cookie」。同时评估的 bigboobs.pink 不按 FC2 号索引、只按女优聚合文章，本轮不接。
+的话就在来源里加 cookie」。同时评估的 bigboobs.pink 不按 FC2 号索引、只按女优聚合文章，本 ADR 不接。
 
 ## 实测（2026-09-24）
 

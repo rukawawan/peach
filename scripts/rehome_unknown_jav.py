@@ -23,6 +23,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.scripting import open_readonly
 from peach.entities import upsert_asset_entity
 from peach.migrations import sqlite_backup
@@ -78,7 +79,7 @@ def read_mappings(path: Path) -> list[Mapping]:
         required = {"code", "studio", "source", "confidence"}
         missing = required.difference(reader.fieldnames or ())
         if missing:
-            raise ValueError(f"映射 CSV 缺列：{sorted(missing)}")
+            raise ValueError(t("rehome_unknown_jav.missingColumns", columns=str(sorted(missing))))
         mappings: list[Mapping] = []
         seen: set[str] = set()
         for number, row in enumerate(reader, 2):
@@ -86,18 +87,18 @@ def read_mappings(path: Path) -> list[Mapping]:
             studio = str(row.get("studio") or "").strip()
             source = str(row.get("source") or "").strip()
             if not code or not studio or not source:
-                raise ValueError(f"映射 CSV 第 {number} 行有空值")
+                raise ValueError(t("rehome_unknown_jav.emptyValue", row=number))
             if any(char in INVALID_WINDOWS_NAME for char in studio) or studio in {".", ".."}:
-                raise ValueError(f"厂牌不能作为 Windows 目录名：{studio}")
+                raise ValueError(t("rehome_unknown_jav.invalidStudioName", studio=studio))
             if code in seen:
-                raise ValueError(f"映射 CSV 重复番号：{code}")
+                raise ValueError(t("rehome_unknown_jav.duplicateCode", code=code))
             seen.add(code)
             try:
                 confidence = float(row.get("confidence") or "")
             except ValueError as exc:
-                raise ValueError(f"映射 CSV 第 {number} 行置信度无效") from exc
+                raise ValueError(t("rehome_unknown_jav.invalidConfidence", row=number)) from exc
             if not 0 <= confidence <= 1:
-                raise ValueError(f"映射 CSV 第 {number} 行置信度越界")
+                raise ValueError(t("rehome_unknown_jav.confidenceOutOfRange", row=number))
             mappings.append(Mapping(
                 code=code, studio=studio, source=source, confidence=confidence,
                 evidence_url=str(row.get("evidence_url") or "").strip(),
@@ -139,19 +140,19 @@ def build_plan(
         source_dir = physical_unknown_root / mapping.code
         target_dir = physical_unknown_root.parent / mapping.studio / mapping.code
         if not source_dir.is_dir():
-            plan.errors.append(f"来源目录不存在：{source_dir}")
+            plan.errors.append(t("rehome_unknown_jav.sourceMissing", path=source_dir))
             continue
         files = sorted((path for path in source_dir.rglob("*") if path.is_file()),
                        key=lambda item: _path_key(item))
         if not files:
-            plan.errors.append(f"番号目录没有文件：{source_dir}")
+            plan.errors.append(t("rehome_unknown_jav.codeDirectoryEmpty", path=source_dir))
             continue
         by_leaf: dict[str, Path] = {}
         for source in files:
             key = source.name.casefold()
             if key in by_leaf:
                 plan.errors.append(
-                    f"扁平化后文件名冲突：{by_leaf[key]} / {source}"
+                    t("rehome_unknown_jav.flattenClash", first=by_leaf[key], second=source)
                 )
                 continue
             by_leaf[key] = source
@@ -159,7 +160,7 @@ def build_plan(
         for key, source in by_leaf.items():
             target = target_dir / source.name
             if key in existing and _path_key(existing[key]) != _path_key(source):
-                plan.errors.append(f"目标文件已存在：{existing[key]}")
+                plan.errors.append(t("rehome_unknown_jav.targetExists", path=existing[key]))
                 continue
             plan.moves.append(Move(
                 code=mapping.code, studio=mapping.studio,
@@ -175,12 +176,12 @@ def build_plan(
             old_studio = str(asset["studio"] or "").strip()
             if physical is None:
                 plan.errors.append(
-                    f"账本文件在目录中未找到：asset {asset['id']} {asset['path']}"
+                    t("rehome_unknown_jav.ledgerFileMissing", id=asset['id'], path=asset['path'])
                 )
                 continue
             if old_studio and old_studio != mapping.studio:
                 plan.errors.append(
-                    f"厂牌冲突：asset {asset['id']} 是 {old_studio}，映射要求 {mapping.studio}"
+                    t("rehome_unknown_jav.studioConflict", id=asset['id'], current=old_studio, wanted=mapping.studio)
                 )
                 continue
             new_path = _ledger_child(ledger_studio_root, mapping.studio, mapping.code,
@@ -218,10 +219,10 @@ def build_plan(
 def _check_database(connection: sqlite3.Connection) -> None:
     integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
     if integrity != "ok":
-        raise RuntimeError(f"ledger integrity_check 失败：{integrity}")
+        raise RuntimeError(t("rehome_unknown_jav.integrityFailed", result=integrity))
     foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
     if foreign_keys:
-        raise RuntimeError(f"ledger 外键违规：{len(foreign_keys)}")
+        raise RuntimeError(t("rehome_unknown_jav.foreignKeys", count=len(foreign_keys)))
 
 
 def _rollback_moves(done: list[Move]) -> None:
@@ -257,9 +258,9 @@ def apply_plan(
     physical_unknown_root: Path,
 ) -> dict[str, int]:
     if plan.errors:
-        raise ValueError("计划含阻塞项，拒绝执行")
+        raise ValueError(t("rehome_unknown_jav.planBlocked"))
     if backup.exists():
-        raise FileExistsError(f"备份已存在，拒绝覆盖：{backup}")
+        raise FileExistsError(t("rehome_unknown_jav.backupExists", path=backup))
     _check_database(connection)
     before_assets = connection.execute("SELECT count(*) FROM asset").fetchone()[0]
     sqlite_backup(Path(connection.execute("PRAGMA database_list").fetchone()[2]), backup)
@@ -267,7 +268,7 @@ def apply_plan(
     try:
         _check_database(saved)
         if saved.execute("SELECT count(*) FROM asset").fetchone()[0] != before_assets:
-            raise RuntimeError("备份资产计数不一致")
+            raise RuntimeError(t("rehome_unknown_jav.backupCountMismatch"))
     finally:
         saved.close()
 
@@ -290,7 +291,7 @@ def apply_plan(
                      update.studio, update.asset_id, update.old_path),
                 ).rowcount
                 if changed != 1:
-                    raise RuntimeError(f"asset {update.asset_id} 路径并发变化，拒绝提交")
+                    raise RuntimeError(t("rehome_unknown_jav.pathChanged", id=update.asset_id))
                 if not update.old_studio:
                     upsert_asset_entity(
                         connection, kind="studio", name=update.studio,
@@ -306,13 +307,13 @@ def apply_plan(
             _check_database(connection)
             after_assets = connection.execute("SELECT count(*) FROM asset").fetchone()[0]
             if after_assets != before_assets:
-                raise RuntimeError(f"资产计数变化：{before_assets} -> {after_assets}")
+                raise RuntimeError(t("rehome_unknown_jav.assetCountChanged", before=before_assets, after=after_assets))
             for update in plan.updates:
                 row = connection.execute(
                     "SELECT path,studio FROM asset WHERE id=?", (update.asset_id,)
                 ).fetchone()
                 if row is None or row[0] != update.new_path or row[1] != update.studio:
-                    raise RuntimeError(f"asset {update.asset_id} 更新后校验失败")
+                    raise RuntimeError(t("rehome_unknown_jav.verifyFailed", id=update.asset_id))
         return {
             "files_moved": len(done), "assets_updated": len(plan.updates),
             "studio_fields_filled": sum(not update.old_studio for update in plan.updates),
@@ -324,13 +325,13 @@ def apply_plan(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="按人工确认映射移出 _未知厂牌，并扁平化番号内目录"
+        description=t("rehome_unknown_jav.description")
     )
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--mappings", type=Path, required=True)
     parser.add_argument("--physical-unknown-root", type=Path, required=True)
     parser.add_argument("--ledger-unknown-root", required=True,
-                        help="未知厂牌目录的账本路径，使用 Windows 绝对路径")
+                        help=t("rehome_unknown_jav.ledgerUnknownRootHelp"))
     parser.add_argument("--plan", type=Path,
                         default=GENERATED_DIR / "rehome-unknown-jav-plan.csv")
     parser.add_argument("--apply", action="store_true")
@@ -341,7 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.apply and args.backup is None:
-        raise SystemExit("--apply 必须同时给 --backup")
+        raise SystemExit(t("rehome_unknown_jav.applyNeedsBackup"))
     mappings = read_mappings(args.mappings)
     connection = sqlite3.connect(args.db)
     try:
@@ -351,16 +352,14 @@ def main(argv: list[str] | None = None) -> int:
             ledger_unknown_root=args.ledger_unknown_root,
         )
         write_rows(args.plan, PLAN_FIELDS, plan.rows, atomic=True)
-        print(
-            f"映射 {len(mappings)} 个番号；文件 {len(plan.moves)} 个；"
-            f"账本路径 {len(plan.updates)} 条；计划：{args.plan}"
-        )
+        print(t("rehome_unknown_jav.planned", codes=len(mappings), files=len(plan.moves),
+                paths=len(plan.updates), plan=args.plan))
         if plan.errors:
             for error in plan.errors:
-                print(f"  阻塞：{error}")
+                print(t("rehome_unknown_jav.blocked", error=error))
             return 1
         if not args.apply:
-            print("  dry-run：未移动文件，未写 ledger")
+            print(t("rehome_unknown_jav.dryRun"))
             return 0
         result = apply_plan(
             connection, plan=plan, backup=args.backup,
@@ -370,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
             row["status"] = "done"
         write_rows(args.plan, PLAN_FIELDS, plan.rows, atomic=True)
         print(json.dumps(result, ensure_ascii=False))
-        print(f"  备份：{args.backup}")
+        print(t("rehome_unknown_jav.backup", path=args.backup))
         return 0
     finally:
         connection.close()

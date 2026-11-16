@@ -275,7 +275,7 @@ it('画中画入口保持占位，媒体就绪后启用，浏览器不支持时�
 });
 
 describe('播放器清晰度', () => {
-  function menu(entries: QualityLevel[], selectedIndex = 0) {
+  function menu(entries: QualityLevel[], selectedIndex = 0, size: { width?: number; height?: number } = { width: 3840, height: 2160 }) {
     configurePlayer(host());
     const root = document.createElement('div'), bar = document.createElement('div'), video = document.createElement('video');
     bar.className = 'vjs-control-bar';
@@ -289,7 +289,7 @@ describe('播放器清晰度', () => {
     } }) as QualityLevelList;
     Object.assign(player, { el: () => root, qualityLevels: () => levels,
       paused: () => true, ended: () => false, isFullscreen: () => false, muted: () => false, volume: () => 1, trigger: () => {} });
-    mountPlayerQualityControl(player, video, 2160);
+    mountPlayerQualityControl(player, video, size);
     const open = () => {
       bar.querySelector<HTMLButtonElement>('.vjs-peach-settings-toggle')!.click();
       bar.querySelector<HTMLButtonElement>('[data-player-quality-view]')!.click();
@@ -385,6 +385,31 @@ describe('播放器清晰度', () => {
     } finally { view.close() }
   });
 
+  it('视频还没读到尺寸时按账本宽高的短边写档位，竖屏不写成 1920p', () => {
+    const view = menu([], 0, { width: 1080, height: 1920 });
+    try {
+      view.open();
+      expect(view.labels()).toEqual(['1080p']);
+    } finally { view.close() }
+  });
+
+  it('点进清晰度时菜单按填好档位的面板高度过渡，不先缩成只剩标题栏', async () => {
+    const view = menu([{ width: 640, height: 360, enabled: true }, { width: 1920, height: 1080, enabled: true }]);
+    // 原型链上 Element 那一层的 scrollHeight 不动，这里只在 HTMLElement 上遮一层，用完删掉。一行 40px：标题栏一行，再加面板里此刻已有的每一档。
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get(this: HTMLElement) {
+      return 40 * (this.querySelectorAll('.vjs-peach-panel-header').length + this.querySelectorAll('[data-player-quality-option]').length);
+    } });
+    try {
+      view.open();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(view.labels()).toEqual(['自动', '360p', '1080p']);
+      expect(view.bar.querySelector<HTMLElement>('.vjs-peach-settings-menu')!.style.height).toBe('160px');
+    } finally {
+      delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      view.close();
+    }
+  });
+
   it('主菜单开着时尺寸变化只改清晰度那一行的读数', () => {
     const view = menu([{ id: 'private-stream-url', enabled: true }]);
     try {
@@ -428,7 +453,7 @@ describe('画中画的快进快退', () => {
 });
 
 describe('外挂字幕', () => {
-  it('能播的轨全挂上，一条都不预先打开', async () => {
+  it('能播的轨全挂上，一条都不预先打开；认出语言的按语言码说语言名', async () => {
     stubFetch(() => ({ subtitles: [
       { id: 'sidecar:1', playable: true, src: '/sub/1.vtt', language: 'zh', label: '简体' },
       { id: 'sidecar:2', playable: false, src: '/sub/2.ass', language: 'ja', label: '日语' },
@@ -438,7 +463,8 @@ describe('外挂字幕', () => {
     mountPlayerSubtitles(player, 21);
     await flush(); await flush();
     expect(raw.addRemoteTextTrack.mock.calls).toEqual([
-      [{ id: 'sidecar:1', kind: 'subtitles', src: '/sub/1.vtt', srclang: 'zh', label: '简体', default: false }, true],
+      [{ id: 'sidecar:1', kind: 'subtitles', src: '/sub/1.vtt', srclang: 'zh',
+        label: new Intl.DisplayNames(['zh-CN'], { type: 'language' }).of('zh'), default: false }, true],
       [{ id: 'sidecar:3', kind: 'subtitles', src: '/sub/3.vtt', srclang: '', label: '繁体', default: false }, true],
     ]);
   });

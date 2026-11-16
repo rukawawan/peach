@@ -30,11 +30,11 @@ class DevCopyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             for language, text in (('zh-CN', '首页'), ('en', 'Home')):
-                (root / 'frontend/src/locales' / language).mkdir(parents=True)
-                (root / 'frontend/src/locales' / language / 'navigation.json').write_text(
+                (root / 'resources/locales' / language).mkdir(parents=True)
+                (root / 'resources/locales' / language / 'navigation.json').write_text(
                     '{\n  "sidebar": { "home": "%s" }\n}\n' % text, encoding='utf-8')
             candidate, = dev_copy.candidates(root, '首页')
-            self.assertEqual(candidate['file'], 'frontend/src/locales/zh-CN/navigation.json')
+            self.assertEqual(candidate['file'], 'resources/locales/zh-CN/navigation.json')
             self.assertEqual(dev_copy.candidates(root, 'Home'), [])
             dev_copy.save(root, {'original': '首页', 'replacement': '主页 "精选"', 'candidate': candidate})
             saved = json.loads((root / candidate['file']).read_text(encoding='utf-8'))
@@ -43,8 +43,8 @@ class DevCopyTests(unittest.TestCase):
     def test_interpolated_locale_copy_is_found_by_its_rendered_text_and_keeps_placeholders(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
-            (root / 'frontend/src/locales/zh-CN').mkdir(parents=True)
-            path = root / 'frontend/src/locales/zh-CN/cleanup.json'
+            (root / 'resources/locales/zh-CN').mkdir(parents=True)
+            path = root / 'resources/locales/zh-CN/cleanup.json'
             path.write_text('{\n  "trash": { "count": "{{count}} 项在回收站" }\n}\n', encoding='utf-8')
             candidate, = dev_copy.candidates(root, '12 项在回收站')
             self.assertEqual(candidate['template'], '{count} 项在回收站')
@@ -139,7 +139,7 @@ class DevCopyTests(unittest.TestCase):
                     self._wait_for_state(runtime, root, 'error' if blocked else 'ready')
                 self.assertEqual(tray.manager.restart.call_count, 0 if blocked else 1)
                 if not blocked:
-                    tray.manager.restart.assert_called_once_with(reason='源码改字构建完成，重载服务')
+                    tray.manager.restart.assert_called_once_with(reason='source copy edit built, reloading services')
                 # 终态写盘时托盘动作锁已经释放，看到终态的调用方不会抢在释放之前。
                 self.assertEqual(locked_at_terminal, [False])
                 self.assertFalse(tray._action_lock.locked())

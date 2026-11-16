@@ -13,6 +13,10 @@ from urllib.request import Request
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
+
 from . import check_reference_updates as references
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +27,8 @@ def run(args: list[str], root: Path, *, allowed: tuple[int, ...] = (0,)) -> str:
                             capture_output=True, text=True, encoding="utf-8",
                             errors="replace", timeout=180)
     if result.returncode not in allowed:
-        raise RuntimeError(f"{' '.join(args)}：{result.stderr.strip() or result.stdout.strip()}")
+        raise RuntimeError(t("release_review.commandFailed", command=' '.join(args),
+                               detail=result.stderr.strip() or result.stdout.strip()))
     return result.stdout.strip()
 
 
@@ -43,7 +48,7 @@ def public_dependabot(repo: str) -> list[dict]:
                      for item in batch if item.get("user", {}).get("login") == "dependabot[bot]")
         if len(batch) < 100:
             return found
-    raise ValueError("公开上游 PR 超过可核对上限，检查未完成")
+    raise ValueError(t("release_review.tooManyPullRequests"))
 
 
 def local_reference_files(values: list[str]) -> dict[str, Path]:
@@ -52,7 +57,7 @@ def local_reference_files(values: list[str]) -> dict[str, Path]:
     for value in values:
         source, separator, filename = value.partition("=")
         if not separator or not source or not filename or source in files:
-            raise ValueError("参考正文须为不重复的 SOURCE=FILE")
+            raise ValueError(t("release_review.evidenceFormat"))
         files[source] = Path(filename).resolve(strict=True)
     return files
 
@@ -62,17 +67,17 @@ def collect(root: Path, repo: str, *, public_github: bool = False,
     registry = references.load_registry(root / "docs/reference-sources.json")
     problems = references.validate_registry(root, registry)
     if problems:
-        raise ValueError("；".join(problems))
+        raise ValueError(t("common.clauseSeparator").join(problems))
     evidence = reference_evidence or {}
     sources = references.selected_sources(registry, None)
     if unknown := evidence.keys() - {source["id"] for source in sources}:
-        raise ValueError("参考正文未对应本次检查来源：" + "、".join(sorted(unknown)))
+        raise ValueError(t("release_review.unknownEvidence", sources=sorted(unknown)))
     report = {"checked_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "commit": run(["git", "rev-parse", "HEAD"], root),
               "checks": [], "complete": True}
 
     def check(label, action):
-        print(f"检查：{label}", flush=True)
+        print(t("release_review.checking", label=label), flush=True)
         try:
             report["checks"].append({"id": label, "status": "已取得", "result": action()})
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
@@ -131,7 +136,7 @@ def collect(root: Path, repo: str, *, public_github: bool = False,
             else:
                 content = supplied.read_bytes()
                 if not content.strip():
-                    raise ValueError("用户提供的参考正文为空")
+                    raise ValueError(t("release_review.evidenceEmpty"))
                 result = references.inspect_source(root, source, revision_resolver=resolve,
                                                    fetcher=lambda _url: content)
                 result["provenance"] = {"channel": "用户手动提供", "url": source["url"],
@@ -152,17 +157,17 @@ def review(root: Path, repo: str, *, public_github: bool = False,
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if not report["complete"]:
         missing = [item["id"] for item in report["checks"] if item["status"] == "未取得"]
-        raise ValueError(f"发版检查未取得：{'、'.join(missing)}；证据见 {path}")
+        raise ValueError(t("release_review.incomplete", checks=list(missing), path=path))
     return {"report": str(path), "checks": len(report["checks"]), "complete": True}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("release_review.description"))
     parser.add_argument("--repo", default="peach-mitao/peach")
     parser.add_argument("--public-github", action="store_true",
-                        help="通过匿名官方 API 读取 GitHub 元数据，不调用 GitHub CLI")
+                        help=t("release_review.helpPublicGithub"))
     parser.add_argument("--reference-evidence", action="append", default=[], metavar="SOURCE=FILE",
-                        help="本次检查使用用户手动提供的正文，报告保留取证渠道")
+                        help=t("release_review.helpReferenceEvidence"))
     args = parser.parse_args()
     try:
         options = {"public_github": True} if args.public_github else {}

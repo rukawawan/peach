@@ -29,7 +29,7 @@ export async function mockJavDetail(page: Page) {
     checked_at: '2026-10-12T00:00:00Z', items: Array.from({ length: 6 }, (_, index) => ({
       id: `example:${index}`, protocol: 'magnet', info_hash: String(index).repeat(40),
       uri: `magnet:?xt=urn:btih:${String(index).repeat(40)}`, name: `EXM-001 示例资源 ${index + 1}` + (index === 0 ? ' · MIDA-361-UC.高清资源.very-long-filename.torrent' : ''),
-      size: '3 GB', files: '2', date: '2026-10-12', attributes: ['高清'], source: 'JavDB',
+      size: '3 GB', files: '2', date: '2026-10-12', attributes: ['high-definition'], source: 'JavDB',
       source_url: 'https://javdb.com/v/example', origins: ['JavDB'],
     })) } }));
   await page.route(/\/api\/downloads\?/, route => route.fulfill({ json: { available: false, providers: [], tasks: [] } }));

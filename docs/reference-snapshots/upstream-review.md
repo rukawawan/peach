@@ -4,6 +4,12 @@
 
 ## amane 桥
 
+### 稳定版 v0.27.1 暂不采用
+
+2026-11-14 复核官方 [v0.27.1](https://github.com/sqzw-x/amane/releases/tag/v0.27.1)，提交 `028cdc6eb45ce1a47d85a38abb43fc059e965479`。[相对 v0.26.0 的差集](https://github.com/sqzw-x/amane/compare/v0.26.0...v0.27.1)含 25 个提交。桥消费的站点类中，上文记为只在 main 分支头的修复已进入稳定版：makers（`official`）补剧情、导演、剧照与单图封面回退，mgstage 前导数字番号按尾号反查；javbus 改了无码海报，Peach 的 JavBus 走自有来源。运行依赖与 v0.26.0 相同，numpy、onnxruntime（macOS 以外）、tokenizers 与 macOS CoreML 仍为强制依赖，watchdog 仍为 `<7`。
+
+继续固定 v0.22.1，恢复条件同 v0.26.0。本次在约束内更新桥锁：fastapi 0.162.7、anthropic 2.8.0、openai 3.51.0、pydantic-ai-slim 与 pydantic-graph 2.68.0、genai-prices 0.2.3、logfire-api 5.6.0、regex 2026.11.9、pydantic-settings 2.16.3、sqlmodel 0.0.50、annotated-doc 0.0.6；croniter 升到 7.0.0（MIT）。croniter 7 的大版本改的是调度表达式语义，只有 amane 调度器使用，桥自检路径不导入 croniter、watchdog、anthropic 或 openai。watchdog 保持 6.0.0。Windows 上按新锁构建独立可执行文件，清空 PATH 后离线自检载入全部 20 个站点类；macOS 与 Docker 制品未在本机构建。
+
 ### 稳定版 v0.26.0 暂不采用
 
 2026-11-09 复核官方 [v0.26.0](https://github.com/sqzw-x/amane/releases/tag/v0.26.0)，提交 `faa389707325a80e13ce85fe149be94eb0cb61bb`。[相对现固定提交的差集](https://github.com/sqzw-x/amane/compare/fd9294fbe5b4aa88ce1df84d534f6816ad9460d5...faa389707325a80e13ce85fe149be94eb0cb61bb)含 71 个提交，其中 v0.25.0 之后 20 个。v0.25.0 之后桥消费的站点类只有 makers（`official`）一处提交：旧图片目录按 `-pl.jpg` → `-ps.jpg` 推导竖版海报，属于字段增强。发版审阅报告的 `1177fc57ee75a35032b4c0306f617cc255862bb3` 是 main 分支头，没有任何标签包含它；官网剧情、导演、剧照与单图封面回退，mgstage 前导数字番号按尾号反查，jav321、giga、xcity 的字段补全都只在该分支头，不在稳定版里。运行依赖与 v0.25.0 相同：numpy、onnxruntime（macOS 以外）、tokenizers 与 macOS CoreML 仍为强制依赖，watchdog 限制为 `<7`，zhconv 改为随包字典。
@@ -76,6 +82,22 @@ Motion 14.0.0 的大版本删除内部兼容 API。Peach 只通过 `motion` 公�
 
 轮播箭头几何用例在图片就绪后等待渲染阶段，再读位置；`ResizeObserver` 的异步测量不能由图片 `complete` 代替。位置、尺寸、黑边中心和桌面／手机断言保持完整。
 
+## 依赖与参考来源判断（2026-11-14）
+
+本次发版前审阅覆盖 weekly、monthly、quarterly，两份 npm 高危审计为零。Dependabot #520（Watchtower 1.24.0）保留原提交接管；对照两版源码，更新接口仍是 `POST /v1/update?async=true` 回 202，处理器只改内部包名，Peach 用到的四项设置不受新版启动校验影响。
+
+Python 侧 fastapi 0.162.7（取消请求时的依赖清理修复）、filelock 4.2.10（含 GitLab CI 三处 `--with`）、sentry-sdk 2.75.0（新增 Bedrock 集成，锁内没有 boto3）、ruff 0.17.5，锁内 soupsieve 4.1、annotated-doc 0.0.6、pyinstaller-hooks-contrib 2026.10、urllib3-future 2.25.906 跟随。前端 Video.js 10.4.0（新增文本轨与进度条标记，修正跨包占位识别）、Lucide 1.72.0（所用 127 个图形字节不变）、driver.js 1.14.0、i18next 27.1.1、Motion 14.14.0、Vite 8.3.8、Oxlint 1.93.0、oxc-parser 0.158.0、Sentry Vite 插件 11.12.0、Playwright Core 1.65.1。driver.js 1.12.1 起新弹层默认聚焦「下一步」，Enter 不再结束引导。amane 桥见上文 v0.27.1。
+
+| 来源 | 实测变化 | Peach 判断 |
+| --- | --- | --- |
+| amane 内容路由 | JavBus 封面与海报按根一一对应，跨根拼出的地址是另一部作品；厂牌官网竖版另有 `_2` → `_1` 推导 | 接受原文。Peach 的 JavBus 来源只取 `/pics/cover/` 封面，不做跨根海报推导 |
+| BoardUI 主题 | 新增 `--color-kbd-subtle-background` | 接受原文。Peach 只取 `border-button-active`，该档未变 |
+| Immich README | 标志图包一层链接并改 alt | 接受原文，无运行影响 |
+| SakuraMedia README | 要求前后端同步升到 v0.15.0；macOS 安装包改为固定自签名证书 | 同类产品信息，接受原文 |
+| Atlas README | v1.7.0 改为馆藏优先检索、标签推荐与单 Worker 部署 | 同类产品信息，接受原文 |
+
+OpenAver 从 `32134b0ced66b4dbd8bf9da614a49900f73b7442` 前移到 `0079767e8dd2e33cb533ef91b7b1e42497544531`，62 个提交；相似推荐改为排除同一作品的其他版本并按作品去重，IDF 标签排除来源的 4K 标记。Peach 的相关推荐已由 `_one_card_per_release` 排除源作品番号并按发行合并，这次复核不改代码。PixivUtil2 仍停在 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
+
 ## 依赖与参考来源判断（2026-11-09）
 
 0.57.0 发版前审阅覆盖 weekly、monthly、quarterly。依赖按约束内最新稳定版更新：Python 侧 fastapi 0.162.2、pydantic 2.14.3（pydantic-core 2.50.4）、sentry-sdk 2.74.0、watchdog 7.1.0、zeroconf 0.154.0、filelock 4.2.9（含 GitLab CI 三处 `--with`）、ruff 0.17.4，锁内 click 8.5.1、pycryptodome 4.4.0 跟随。watchdog 7.1.0 的修正集中在 inotify 与 fsevents，`BaseObserver` 改用 `on_thread_start()`；推送发现只实例化 `Observer()`，不继承。filelock 4.2.9 只收紧读写锁的 `blocking` 参数类型，Peach 不用读写锁。pycryptodome 只经 maintenance-115 进入。前端 Lucide 1.70.0（所用 127 个图形字节不变）、Tailwind CSS 4.3.5（产物样式除版本头外不变）、TanStack Query 5.107.1、Motion 14.10.1、Vite 8.3.6、Oxlint 1.92.0、Playwright Core 1.65.0、Sentry Vite 插件 11.11.0。amane 桥见上文 v0.26.0。
@@ -88,7 +110,7 @@ Motion 14.0.0 的大版本删除内部兼容 API。Peach 只通过 `motion` 公�
 | JavBoss README | 下载链接升到 v2.1.5，新增应用内检查更新 | 同类产品信息，接受原文 |
 | Atlas README | v1.6.0 新增统一通知中心、帮助中心与邮件队列，工作区改用 npm | 同类产品信息，接受原文 |
 
-OpenAver 从 `67c410ca4465d4d107f940d9f0a9ece8395f0ad8` 前移到 `32134b0ced66b4dbd8bf9da614a49900f73b7442`，95 个提交；`core/similar/` 没有变化，相似推荐只有前端 `showcase/state-similar.js` 在隐藏未连线硬盘时保留另一份可用副本，Peach 没有这个概念，本批不改代码。PixivUtil2 仍停在 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
+OpenAver 从 `67c410ca4465d4d107f940d9f0a9ece8395f0ad8` 前移到 `32134b0ced66b4dbd8bf9da614a49900f73b7442`，95 个提交；`core/similar/` 没有变化，相似推荐只有前端 `showcase/state-similar.js` 在隐藏未连线硬盘时保留另一份可用副本，Peach 没有这个概念，这次复核不改代码。PixivUtil2 仍停在 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
 
 ## 依赖与参考来源判断（2026-11-05）
 
@@ -102,7 +124,7 @@ Dependabot #400（Docker 镜像内 uv 0.13.7）与 #401（watchdog 7.0.0）按�
 | Atlas README | 原 `v3` 分支已删，改跟默认分支 `main`；版本号由 v4.x 重排为 v1.x，能力描述不变；`jav-utils.ts` 移到 `backend/src/services/` | 更新登记的分支与文件路径后接受原文 |
 | JAVM README | 仓库 `ddmoyu/javm` 整个返回 404（删除或转为私有） | 保留 2026-11-04 的最后快照，档位改为 `manual`，只在点名时检查 |
 
-OpenAver 从 `118f19330c49414a6b9dfa94581e3f731e4f8e5f` 前移到 `67c410ca4465d4d107f940d9f0a9ece8395f0ad8`，32 个提交；相关推荐的变化只在 `core/ai_services/` 的向量索引与设置页，Peach 没有向量路，本批不改代码。PixivUtil2 停在上次复核的 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
+OpenAver 从 `118f19330c49414a6b9dfa94581e3f731e4f8e5f` 前移到 `67c410ca4465d4d107f940d9f0a9ece8395f0ad8`，32 个提交；相关推荐的变化只在 `core/ai_services/` 的向量索引与设置页，Peach 没有向量路，这次复核不改代码。PixivUtil2 停在上次复核的 `46bb910cd60c213c9199d939859670a044450239`。FANBOX、OpenAver 两份人工笔记照旧不执行 `accept`。
 
 ## 参考来源判断（2026-11-04）
 
@@ -125,17 +147,17 @@ OpenAver 从 `118f19330c49414a6b9dfa94581e3f731e4f8e5f` 前移到 `67c410ca4465d
 
 PixivUtil2 自上次复核的 `22b5fdc9fc83a976d8f4f6f6acbb4d2d3d542f21` 前移到 `46bb910cd60c213c9199d939859670a044450239`，五个提交为依赖更新与动态 GIF 头像，`PixivBrowserFactory.py` 没有变化；FANBOX 传输边界不变。
 
-OpenAver 从 `502278a3e09c7520838ffb00b2ff080323a4cdcb` 前移到 `118f19330c49414a6b9dfa94581e3f731e4f8e5f`。相关推荐源码有变化：`3230465ce1` 在开关开启且有向量时，用 RRF 融合规则前 100 与向量前 30 后再做 MMR；`0347ac95e0`、`20f148dafe` 让 IDF 与倒排索引计入用户标签，并跳过非字符串标签。Peach 的 `related.py` 按账本中作品的标签实体计算 IDF，不区分来源标签与用户标签，也没有向量路；向量融合是否值得引入留作后续单独评估，本批不改代码。
+OpenAver 从 `502278a3e09c7520838ffb00b2ff080323a4cdcb` 前移到 `118f19330c49414a6b9dfa94581e3f731e4f8e5f`。相关推荐源码有变化：`3230465ce1` 在开关开启且有向量时，用 RRF 融合规则前 100 与向量前 30 后再做 MMR；`0347ac95e0`、`20f148dafe` 让 IDF 与倒排索引计入用户标签，并跳过非字符串标签。Peach 的 `related.py` 按账本中作品的标签实体计算 IDF，不区分来源标签与用户标签，也没有向量路；向量融合是否值得引入留作后续单独评估，这次复核不改代码。
 
-## 参考来源判断
+## 参考来源判断（2026-10-13）
 
-运行项目 `check_reference_updates.py check --diff`，覆盖 weekly、monthly、quarterly；manual 不在本轮范围。47 个来源中 28 个未变化，19 个报告漂移，另有 amane 运行依赖前移。14 份原文按完整 SHA-256 与 Git revision 接受；5 份人工笔记保留。
+运行项目 `check_reference_updates.py check --diff`，覆盖 weekly、monthly、quarterly；manual 不在这次复核范围。47 个来源中 28 个未变化，19 个报告漂移，另有 amane 运行依赖前移。14 份原文按完整 SHA-256 与 Git revision 接受；5 份人工笔记保留。
 
 | 来源 | 实测变化 | Peach 判断 |
 | --- | --- | --- |
 | Fluid springs、tabs | 名称与 import 从 Framer Motion 改为 Motion；弹簧参数未变 | 接受原文，Peach 已用 `motion` |
 | Vercel report-design | 增加 Vercel 官方 Logo 下载说明 | 上游品牌专属，不采用其 Logo |
-| Vercel web-interface-guidelines | 增加细指针设备页面 overscroll 建议与混合输入限制 | 保留现有滚动行为，本轮不扩展为界面改动 |
+| Vercel web-interface-guidelines | 增加细指针设备页面 overscroll 建议与混合输入限制 | 保留现有滚动行为，这次复核不扩展为界面改动 |
 | Bruno README | 增加 Hindi 翻译链接 | 接受原文，无运行影响 |
 | amane 路由与 README | kin8 欧美归类、giga 会话与 Referer、欧美日期号年份形态及称呼 | 锁定证据，Peach 仅使用已接入来源 |
 | OpenAver README | 女优排行 Top 25 | 原文接受，不改 Peach 排行数量 |

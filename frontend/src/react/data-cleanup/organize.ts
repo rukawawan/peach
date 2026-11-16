@@ -6,8 +6,10 @@
  * 来源与模板原样留着。执行与回滚是真实 ledger 写入，调用方必须先过确认弹层。 */
 import { apiGet, apiSend } from '../../api';
 import { queryClient } from '../query';
-import { t } from '../../i18n';
+import { interfaceLanguage, t } from '../../i18n';
+import { serverLabel } from '../../core/server-text';
 import { PICK_FOLDER_URL } from '../../configuration-endpoints';
+import { pickServerFolder, type FolderReply } from '../components/server-path-dialog';
 /* 模板跟着数据库走（`SYNCED_SETTING_KEYS` 里的 `organizeTemplates`），写的是设置面板同一个端点。 */
 import { SETTINGS_URL } from '../settings-panel/settings-data';
 
@@ -21,7 +23,8 @@ export const ORGANIZE_EXAMPLE_URL = '/api/organize/example';
 
 export interface OrganizeExample { ok: boolean; example?: string; error?: string; field?: 'file' | 'dir' }
 export const fetchOrganizeExample = (file: string, dir: string, signal?: AbortSignal) =>
-  apiGet<OrganizeExample>(`${ORGANIZE_EXAMPLE_URL}?${new URLSearchParams({ file_template: file, dir_template: dir })}`, signal);
+  apiGet<OrganizeExample>(`${ORGANIZE_EXAMPLE_URL}?${new URLSearchParams({
+    file_template: file, dir_template: dir, language: interfaceLanguage })}`, signal);
 
 export interface OrganizeTemplate { file: string; dir: string }
 
@@ -29,6 +32,7 @@ export interface OrganizeJob {
   status: 'idle' | 'running' | 'complete' | 'failed';
   job_id?: string;
   stage?: string;
+  stage_code?: string;
   message?: string;
   checked?: number;
   total?: number;
@@ -42,7 +46,8 @@ export interface OrganizeJob {
 export interface OrganizeData extends OrganizeJob {
   locations: { location: string; roots: string[] }[];
   templates: Record<string, OrganizeTemplate>;
-  presets: ({ label: string; example?: string } & OrganizeTemplate)[];
+  /** `label_code` 是显示名的 code（`server:labels.organize.preset.<id>`），`label` 是 zh-CN 原文。 */
+  presets: ({ id?: string; label: string; label_code?: string; example?: string } & OrganizeTemplate)[];
   placeholders: { key: string; label: string }[];
   last_batch: string;
 }
@@ -53,6 +58,8 @@ export interface OrganizePlan {
   path?: string;
   counts: { change?: number; unchanged?: number; [key: string]: number | undefined };
   reasons: Record<string, number>;
+  /** 跳过原因原文 → code（`server:labels.organize.skip.<id>`）；没有的照原文显示。 */
+  reason_codes?: Record<string, string>;
   rows: OrganizePlanRow[];
   truncated: boolean;
   plan_csv?: string;
@@ -64,7 +71,8 @@ export interface OrganizeRequest { location: string; file_template: string; dir_
 /** 执行还是回滚。两条都起同一个后台任务，结果落在同一格里。 */
 export type OrganizeCommand = { kind: 'apply'; request: OrganizeRequest } | { kind: 'rollback' };
 
-export const fetchOrganize = (signal?: AbortSignal) => apiGet<OrganizeData>(ORGANIZE_URL, signal);
+export const fetchOrganize = (signal?: AbortSignal) =>
+  apiGet<OrganizeData>(`${ORGANIZE_URL}?${new URLSearchParams({ language: interfaceLanguage })}`, signal);
 
 export async function prefetchOrganize(signal: AbortSignal): Promise<void> {
   await queryClient.fetchQuery({ queryKey: ORGANIZE_KEY, queryFn: () => fetchOrganize(signal) });
@@ -73,7 +81,8 @@ export async function prefetchOrganize(signal: AbortSignal): Promise<void> {
 export const previewOrganize = (request: OrganizeRequest) =>
   apiSend<OrganizePlan>(ORGANIZE_PREVIEW_URL, request);
 
-export const pickOrganizeFolder = (initial: string) => apiSend<{ path: string | null }>(PICK_FOLDER_URL, { initial });
+export const pickOrganizeFolder = async (initial: string) => ({ path: await pickServerFolder(initial,
+  body => apiSend<FolderReply>(PICK_FOLDER_URL, body)) });
 
 export const startOrganize = (command: OrganizeCommand) => command.kind === 'apply'
   ? apiSend<OrganizeJob>(ORGANIZE_APPLY_URL, { ...command.request, confirm: true })
@@ -108,7 +117,7 @@ const count = (value: number | undefined) => Number(value || 0).toLocaleString()
 /** 预览结果那一句。只列会变的行：库里几万行里改不到的那部分是背景，不是结果。 */
 export function planSummary(plan: OrganizePlan): string {
   const skipped = Object.entries(plan.reasons || {}).sort((a, b) => b[1] - a[1])
-    .map(([reason, value]) => `${reason} ${count(value)}`).join(' · ');
+    .map(([reason, value]) => `${serverLabel(plan.reason_codes?.[reason] ?? '', reason)} ${count(value)}`).join(' · ');
   if (!Number(plan.counts?.change || 0)) {
     return [t('cleanup:organize.planNothing'), ...(skipped ? [t('cleanup:organize.planSkipped', { reasons: skipped })] : [])]
       .join(t('cleanup:shared.sentenceGap'));

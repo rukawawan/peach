@@ -17,14 +17,14 @@ r"""从 javdb 资料页取女优的中文写法，产出可喂给 `localize_perf
 三条闸：
 
 1. **账本的名字必须出现在「现名」那一栏。** 只出现在旧艺名里说明站上已经改了名，
-   用哪个名字当规范名是人要决定的事（`京香じゅりあ` 那页现名是 `JULIA`），记 `旧名`。
+   用哪个名字当规范名是人要决定的事（`京香じゅりあ` 那页现名是 `JULIA`），记 `former-name`。
 2. **中文写法只认整名汉字、无假名无拉丁的那一个。** 有两个就是站上把别的名字也并进
-   了同一栏，记 `多义`，不猜。
+   了同一栏，记 `ambiguous`，不猜。
 3. **搜索命中多页时全部记下来**，不取第一个——取第一个是默默替用户挑了一位。
 
 现名栏里并排的两个值不一定是同一个名字的两种写法，也可能是两个艺名
-（`一之瀨亞美莉, 美空あやか`）。姓对不上就不是一对，判 `不同名`；账本规范名压根不在
-现名栏、只靠别名对上的，判 `改艺名`——换规范名是人要决定的事。
+（`一之瀨亞美莉, 美空あやか`）。姓对不上就不是一对，判 `unrelated-names`；账本规范名压根不在
+现名栏、只靠别名对上的，判 `renamed`——换规范名是人要决定的事。
 
 `?locale=zh-CN` 只切界面语言，女优名是数据不跟着变（2026-09-04 实测：简体界面下
 `愛音麻里亞` 仍是繁体）。所以不带这个参数——带上只会让缓存键变一套、把已经取回的
@@ -63,6 +63,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach import javdb   # noqa: E402
 from peach.config import STATE_DIR   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.kanji import fold_glyphs   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
@@ -74,19 +75,21 @@ KANA = re.compile(r"[぀-ヿ]")
 HAN = re.compile(r"[㐀-䶿一-鿿]")
 LATIN = re.compile(r"[A-Za-z]")
 
+#: 复核 CSV 的 `verdict`，`localize_performer_names.py` 与 `apply_alias_candidates.py` 按 `--accept` 读：
+#: 对上了、只在旧艺名栏、中文写法不止一个、站上只有日文名、要登录、搜不到、取页失败。
 OK, FORMER, AMBIGUOUS, SAME_SHAPE, LOGIN, MISSING, FAILED = (
-    "ok", "旧名", "多义", "同形（站上只有日文名）", "要登录", "未取得", "取页失败")
+    "ok", "former-name", "ambiguous", "japanese-only", "login-required", "missed", "fetch-failed")
 #: 靠别名对上的页，现名栏写的是另一个艺名。换规范名是人要决定的事。
-RENAMED = "改艺名（现名栏是另一个艺名）"
-#: 现名栏并排的两个名字不是同一个名字的两种写法。
-UNRELATED = "不同名（两栏姓氏对不上）"
+RENAMED = "renamed"
+#: 现名栏并排的两个名字不是同一个名字的两种写法（两栏姓氏对不上）。
+UNRELATED = "unrelated-names"
 
 #: 名字开头那一串汉字。日本艺名的姓写汉字、名写假名，中文写法保留同一个姓，
 #: 所以这一串是中日两栏能不能配成一对的判据。
 KANJI_HEAD = re.compile(r"[㐀-䶿一-鿿]+")
 
 #: `adopt` 是这一行建议采用的规范名。`ok` 行就是查到的中文写法；站上已经改了名的
-#: （`改艺名`、`旧名`）填站上的现名——有中文写法用中文写法，没有就用现名本身。
+#: （`renamed`、`former-name`）填站上的现名——有中文写法用中文写法，没有就用现名本身。
 #: 采不采用是落库那一步按 `--accept` 决定的，这里只把候选摆出来。
 FIELDS = ("entity_id", "current_name", "assets", "actor_id", "url",
           "jp", "zh_cn", "zh_tw", "adopt", "keywords", "verdict", "evidence")
@@ -100,14 +103,14 @@ ALIAS_FIELDS = ("entity_id", "current_name", "assets", "actor_id", "url",
 #: 现名底下那一栏站上没给标签，放的是这个人的其他叫法：旧艺名、昵称都在里面
 #: （`RJM8` 是 `橋本ありな、上乃木まな、岩谷志季、橋本有菜`，`KxPb` 只有一个爱称 `傻梦`）。
 #: 站上不给这一栏任何标签，解析层照样不给：判它是不是艺名要靠人认得这个人。
-CURRENT_ROW, OTHER_ROW = "现名栏", "别名栏"
+CURRENT_ROW, OTHER_ROW = "current-names", "other-names"
 #: 搜到两页同名的人。规范名那一份把两页都记下来让人挑，别名这一份一个都不产：
 #: 别名进的是身份，配错了人比缺一个写法更难查回来。
-CROWDED = "多页（同名两位，分不清是哪一页）"
+CROWDED = "several-pages"
 #: 这个写法已经挂在另一条实体名下。那是两条实体该不该合并的问题，不是补别名。
-TAKEN = "占用（另一条实体已有这个名字）"
+TAKEN = "taken"
 #: 页面上的中文写法账本都有了。这一行留着是为了证明这个人查过。
-NOTHING = "无新写法"
+NOTHING = "nothing-new"
 
 
 @lru_cache(maxsize=1)
@@ -116,7 +119,7 @@ def _simplify():
     try:
         import opencc
     except ImportError as exc:   # pragma: no cover - 取决于安装方式
-        raise SystemExit("需要 opencc：pip install -e .[naming]") from exc
+        raise SystemExit(t("harvest_javdb_cn_names.needOpencc")) from exc
     return opencc.OpenCC("t2s").convert
 
 
@@ -239,19 +242,19 @@ def judge(record: dict, html: str, url: str) -> dict:
     """一页资料页对一位账本女优的判定。"""
     current = javdb.current_names(html)
     wanted = {key(value) for value in record["chain"]}
+    shown = current or t("harvest_javdb_cn_names.noNames")
     row = {"entity_id": record["entity_id"], "current_name": record["name"],
            "assets": record["assets"], "actor_id": javdb.actor_id(html), "url": url,
            "jp": "", "zh_cn": "", "zh_tw": "", "adopt": "",
            "keywords": "|".join(current),
-           "verdict": "", "evidence": f"现名 {'、'.join(current) or '未取得'}"}
+           "verdict": "", "evidence": t("harvest_javdb_cn_names.currentNames", names=shown)}
     if not wanted & {key(value) for value in current}:
         row.update(verdict=FORMER, jp=record["name"], adopt=adopted_name(current),
-                   evidence=f"账本名只出现在旧艺名里；站上现名 {'、'.join(current) or '未取得'}")
+                   evidence=t("harvest_javdb_cn_names.onlyFormerName", names=shown))
         return row
     if key(record["name"]) not in {key(value) for value in current}:
         row.update(verdict=RENAMED, jp=record["name"], adopt=adopted_name(current),
-                   evidence=(f"靠别名对上的页；账本规范名 {record['name']} 不在现名栏，"
-                             f"站上现名 {'、'.join(current)}"))
+                   evidence=t("harvest_javdb_cn_names.matchedByAlias", name=record["name"], names=current))
         return row
     zh_tw, why = chinese_name(current)
     if not zh_tw:
@@ -260,10 +263,10 @@ def judge(record: dict, html: str, url: str) -> dict:
     jp = next((value for value in current if KANA.search(value)), record["name"])
     if not same_person(zh_tw, jp):
         row["verdict"] = UNRELATED
-        row["evidence"] = f"现名栏并排的 {zh_tw} 与 {jp} 姓氏对不上，不是同一个名字"
+        row["evidence"] = t("harvest_javdb_cn_names.surnamesDiffer", zhTw=zh_tw, jp=jp)
         return row
     row.update(jp=jp, zh_tw=zh_tw, adopt=zh_tw, verdict=OK,
-               evidence=f"资料页现名一栏同时写着 {zh_tw} 与 {jp}")
+               evidence=t("harvest_javdb_cn_names.bothWritten", zhTw=zh_tw, jp=jp))
     return row
 
 
@@ -301,16 +304,18 @@ def alias_candidates(record: dict, html: str, url: str,
             row = {"entity_id": record["entity_id"], "current_name": record["name"],
                    "assets": record["assets"], "actor_id": actor, "url": url,
                    "alias": convert(written), "alias_zh_tw": written, "origin": origin,
-                   "verdict": OK, "evidence": f"资料页{origin}写着 {written}"}
+                   "verdict": OK,
+                   "evidence": t("harvest_javdb_cn_names.writtenInCurrentRow" if origin == CURRENT_ROW
+                                 else "harvest_javdb_cn_names.writtenInOtherRow", written=written)}
             owner = owners.get(folded)
             if owner and owner[0] != record["entity_id"]:
                 row.update(verdict=TAKEN,
-                           evidence=f"{owner[1]}（实体 {owner[0]}）已经用着这个写法")
+                           evidence=t("harvest_javdb_cn_names.writingTaken", name=owner[1], entityId=owner[0]))
             rows.append(row)
     if not rows:
         row = _note(record, url, NOTHING,
-                    f"页面上的写法 {'、'.join(javdb.all_names(html)) or '未取得'}，"
-                    "没有一个是账本以外的中文写法")
+                    t("harvest_javdb_cn_names.noNewWriting",
+                      names=javdb.all_names(html) or t("harvest_javdb_cn_names.noNames")))
         row["actor_id"] = actor
         rows.append(row)
     return rows
@@ -353,14 +358,14 @@ def harvest(connection: sqlite3.Connection, site, limit: int,
             continue
         if not hits:
             note(record, search, MISSING,
-                 f"搜过名字链的 {len(record['chain'])} 个写法，站上没有这个人")
+                 t("harvest_javdb_cn_names.noMatch", count=len(record["chain"])))
             continue
         crowded = len(hits) > 1
         if crowded and not KANA.search(record["name"]):
             # 这一位只为别名候选而来，而别名候选在多页时一个都不产。那就别把这几页
             # 取回来了——每页 5 秒，取回来也只是再写一遍同一句「分不清是哪一页」。
             alias_rows.append(_note(record, search, CROWDED,
-                                    f"搜到 {len(hits)} 页同名的人"))
+                                    t("harvest_javdb_cn_names.samePages", count=len(hits))))
             continue
         for path in hits:
             url = urljoin(javdb.BASE, path)
@@ -370,13 +375,13 @@ def harvest(connection: sqlite3.Connection, site, limit: int,
                 note(record, url, FAILED, f"{type(exc).__name__}: {exc}")
                 continue
             if javdb.LOGIN.search(html):
-                note(record, url, LOGIN, "这一页要登录才给，不注册账号")
+                note(record, url, LOGIN, t("harvest_javdb_cn_names.loginWall"))
                 continue
             if KANA.search(record["name"]):
                 rows.append(judge(record, html, url))
             if crowded:
                 alias_rows.append(_note(record, url, CROWDED,
-                                        f"搜到 {len(hits)} 页同名的人"))
+                                        t("harvest_javdb_cn_names.samePages", count=len(hits))))
                 continue
             alias_rows.extend(alias_candidates(record, html, url, owners))
     return rows, alias_rows
@@ -397,16 +402,15 @@ def localize(rows: list[dict]) -> list[dict]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="从 javdb 资料页取女优中文名，产出映射 CSV")
+    parser = argparse.ArgumentParser(description=t("harvest_javdb_cn_names.description"))
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--aliases", type=Path,
-                        help="别名候选 CSV：页面上账本还没有的中文写法")
+                        help=t("harvest_javdb_cn_names.aliasesHelp"))
     parser.add_argument("--scope", choices=("kana", "all"), default="kana",
-                        help="kana 只查规范名还带假名的人；all 查全部有发行来源的人")
+                        help=t("harvest_javdb_cn_names.scopeHelp"))
     parser.add_argument("--only", action="append", default=[],
-                        help="只查点名的这几位：实体 id 或她名字链上的任一写法，"
-                             "逗号分隔，可重复给；给了就不受 --scope 限制")
+                        help=t("harvest_javdb_cn_names.onlyHelp"))
     parser.add_argument("--limit", type=int, default=0)
     # javdb 按出口 IP 自己封速率。5 秒是 `harvest_directory_links.SOURCE_INTERVAL`
     # 定下的那一档，两处必须一致：换个脚本就换个速度等于没有速度约束。
@@ -422,7 +426,7 @@ def run(args: argparse.Namespace) -> int:
     from peach.page_cache import Site
 
     if args.scope == "all" and not args.aliases:
-        raise SystemExit("--scope all 放开的是别名候选的范围，请一并给 --aliases <路径>")
+        raise SystemExit(t("harvest_javdb_cn_names.scopeNeedsAliases"))
     only = [part.strip() for value in args.only for part in str(value).split(",")
             if part.strip()]
     site = Site(args.cache_dir / "javdb", max(args.interval, 5.0), args.timeout,
@@ -435,8 +439,8 @@ def run(args: argparse.Namespace) -> int:
         connection.close()
     write_rows(args.out, FIELDS, rows, fill_missing=True)
     counts = Counter(str(row.get("verdict")) for row in rows)
-    print(f"javdb 中文名 {len(rows)} 行，映射 CSV：{args.out}")
-    print("  判定分布：", dict(counts))
+    print(t("harvest_javdb_cn_names.namesWritten", count=len(rows), out=args.out))
+    print(t("harvest_javdb_cn_names.verdicts"), dict(counts))
     for row in rows:
         if row.get("adopt"):
             print(f"    [{row['verdict']}] {row['current_name']} -> {row['adopt']}"
@@ -444,9 +448,8 @@ def run(args: argparse.Namespace) -> int:
     if args.aliases:
         write_rows(args.aliases, ALIAS_FIELDS, alias_rows, fill_missing=True)
         fresh = [row for row in alias_rows if row.get("verdict") == OK]
-        print(f"javdb 别名候选 {len(alias_rows)} 行（新写法 {len(fresh)} 个），"
-              f"CSV：{args.aliases}")
-        print("  判定分布：", dict(Counter(str(row.get("verdict")) for row in alias_rows)))
+        print(t("harvest_javdb_cn_names.aliasesWritten", count=len(alias_rows), fresh=len(fresh), aliases=args.aliases))
+        print(t("harvest_javdb_cn_names.verdicts"), dict(Counter(str(row.get("verdict")) for row in alias_rows)))
         for row in fresh:
             print(f"    [{row['origin']}] {row['current_name']} + {row['alias']}"
                   f"  ({row['url']})")

@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 from .catalog_rules import release_code_from_filename, release_code_from_text, same_release_code
 from .scan import VIDEO
+from .user_messages import UserValueError
 
 
 def directory_files(directory: Path) -> dict[str, Path]:
@@ -99,10 +100,10 @@ def read_nfo(path: Path):
     # XML 的 UTF-16/32 编码包含零字节；声明检查同样覆盖这些编码。
     declarations = raw.replace(b'\x00', b'').upper()
     if len(raw) > 1024 * 1024 or b'<!DOCTYPE' in declarations or b'<!ENTITY' in declarations:
-        raise ValueError('NFO 文件过大或包含实体声明')
+        raise UserValueError('errors.libraryNfo.tooLargeOrEntities')
     root = ET.fromstring(raw)
     if root.tag not in {'movie', 'episodedetails', 'musicvideo'}:
-        raise ValueError('NFO 不是影片或单集资料')
+        raise UserValueError('errors.libraryNfo.notVideo')
     def text(*keys):
         return next(((root.findtext(key) or '').strip() for key in keys
                      if (root.findtext(key) or '').strip()), '')
@@ -115,7 +116,7 @@ def read_nfo(path: Path):
             identifiers.append(value)
     codes = {code for value in identifiers if (code := release_code_from_text(value or ''))}
     if len(codes) > 1:
-        raise ValueError('NFO 包含多个不同番号')
+        raise UserValueError('errors.libraryNfo.multipleCodes')
     genres = list(dict.fromkeys(node.text.strip() for key in ('genre', 'tag')
                   for node in root.findall(key) if node.text and node.text.strip()))
     payload = dict(id=next(iter(codes), ''), title=text('title', 'localtitle', 'name'),

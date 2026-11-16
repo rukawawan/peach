@@ -4,8 +4,11 @@
  * 轮询也由 Query 合成一份，进度、失败与完成状态由服务端统一提供。
  * 端点在 `frontend/src` 里只在这里声明一次（`tests/test_frontend_build.py` 盯着）。 */
 import { apiGet } from '../../api';
+import { withBackoff } from '../../polling';
 import { elapsedText, progressText } from '../activity/tasks';
 import { queryClient } from '../query';
+import { joinList, quoted, t } from '../../i18n';
+import { codedText, serverLabel, stageText } from '../../core/server-text';
 
 export const LIBRARY_PROCESSING_URL = '/api/library-processing';
 
@@ -18,6 +21,9 @@ export interface LibraryProcessingIssue {
   title?: string;
   path?: string;
   message: string;
+  /** `message` 的 code 与参数；有译文时显示译文，没有 code 的（异常原文、文件名）照原文。 */
+  message_code?: string;
+  message_params?: Record<string, unknown>;
   /** `paused` 是来源限流没轮到这一项，等来源放开再跑就有；`error` 是它自己出的事。 */
   severity?: 'info' | 'error' | 'paused';
 }
@@ -40,11 +46,14 @@ export interface LibraryProcessingData {
   eta_seconds_max?: number | null;
   eta_kind?: 'historical' | 'measured' | 'estimating';
   eta_scope?: string;
+  eta_scope_code?: string;
   eta_initial?: boolean;
   job_id?: string;
   stage?: string;
+  stage_code?: string;
   requested_stage?: string;
-  steps?: { id: string; label: string; status: 'pending' | 'current' | 'complete' }[];
+  /** `label` 是 zh-CN 原文，`label_code` 有译文时显示译文。 */
+  steps?: { id: string; label: string; label_code?: string; status: 'pending' | 'current' | 'complete' }[];
   checked?: number;
   total?: number;
   scanned?: number;
@@ -60,6 +69,9 @@ export interface LibraryProcessingData {
   performer_profile_conflicts?: number;
   performer_profile_failed?: number;
   error?: string;
+  /** `error` 的 code 与参数；有译文时显示译文。 */
+  error_code?: string;
+  error_params?: Record<string, unknown>;
   issue_count?: number;
   /** `issue_count` 里卡在来源限流上的那些，等来源放开再跑一次就有。 */
   paused_count?: number;
@@ -139,7 +151,7 @@ export type ProcessingControlCommand =
 
 /** 单部影片问外部来源超过这么久，就把跳过与改走代理摆出来。 */
 export const SLOW_ITEM_SECONDS = 120;
-const SLOW_ACTIONS: Record<string, string> = { fetching_cover: '封面', querying_metadata: '资料' };
+const SLOW_ACTIONS: Record<string, string> = { fetching_cover: t('manage:scanFetch.slowWhatCover'), querying_metadata: t('manage:scanFetch.slowWhatMetadata') };
 
 export interface SlowItem { what: string; source?: LibraryProcessingData['current_source'] }
 
@@ -152,8 +164,9 @@ export function slowItem(state?: LibraryProcessingData): SlowItem | null {
 }
 
 export function slowItemText({ what, source }: SlowItem): string {
-  const who = `${source?.label ? `${source.label} ` : '外部来源'}迟迟没有返回${what}`;
-  return `${who}。可以先跳过这部，任务结束后再重试。`;
+  return source?.label
+    ? t('manage:scanFetch.slowItemFrom', { source: source.label, what })
+    : t('manage:scanFetch.slowItemExternal', { what });
 }
 
 /** 暂停中的任务仍占用同一份处理范围，可继续并持续读取状态。 */
@@ -163,28 +176,28 @@ export const processingActive = (state?: LibraryProcessingData) =>
 export const processingHasPartialResult = (state?: LibraryProcessingData) =>
   state?.status === 'failed' && state.outcome === 'partial';
 
-export const PARTIAL_RESULT_TEXT = '已入库的视频可在全部内容中浏览，未完成项可单独重试。';
+export const PARTIAL_RESULT_TEXT = t('manage:scanFetch.partialResult');
 export const ALL_CONTENT_URL = '/?loc=&thumb=0';
 
 /** 时间向分钟取整；区间两端始终使用同一单位。 */
 export function remainingTime(state: LibraryProcessingData): string {
   if (!processingActive(state)) return '';
-  if (state.status === 'stopping') return '正在取消，等待当前步骤退出；已取得的结果会保留';
-  if (state.status === 'paused') return '已暂停，继续后更新预估';
-  if (state.status === 'pausing') return '正在暂停，当前步骤结束后暂停';
-  if (state.stalled) return '等待当前文件响应，剩余时间待更新';
+  if (state.status === 'stopping') return t('manage:scanFetch.stopping');
+  if (state.status === 'paused') return t('manage:scanFetch.pausedEta');
+  if (state.status === 'pausing') return t('manage:scanFetch.pausingEta');
+  if (state.stalled) return t('manage:scanFetch.stalledEta');
   const low = state.eta_seconds_min, high = state.eta_seconds_max;
   if (low == null || high == null || !Number.isFinite(low) || !Number.isFinite(high) || low < 0 || high < low)
-    return '正在估算剩余时间…';
-  if (high < 60) return '预计剩余不到 1 分钟';
+    return t('manage:scanFetch.estimatingEta');
+  if (high < 60) return t('manage:scanFetch.underMinute');
   const unit = high >= 86400 ? 86400 : high >= 3600 ? 3600 : 60;
-  const label = unit === 86400 ? '天' : unit === 3600 ? '小时' : '分钟';
   const precision = unit === 60 ? 1 : 10;
   const start = Math.max(1 / precision, Math.floor(low / unit * precision) / precision);
   const end = Math.max(start, Math.ceil(high / unit * precision) / precision);
   const span = start === end ? `${end}` : `${start}–${end}`;
-  const rough = state.eta_initial || state.eta_kind !== 'measured' ? '（粗估）' : '';
-  return `预计剩余约 ${span} ${label}${rough}${state.eta_scope ? ` · ${state.eta_scope}` : ''}`;
+  const rough = state.eta_initial || state.eta_kind !== 'measured' ? t('manage:scanFetch.roughEstimate') : '';
+  const key = unit === 86400 ? 'manage:scanFetch.etaDays' : unit === 3600 ? 'manage:scanFetch.etaHours' : 'manage:scanFetch.etaMinutes';
+  return t(key, { count: end, span, rough, scope: state.eta_scope ? ` · ${serverLabel(state.eta_scope_code ?? '', state.eta_scope)}` : '' });
 }
 
 export const fetchLibraryProcessing = (signal?: AbortSignal) =>
@@ -198,83 +211,83 @@ export async function prefetchLibraryProcessing(signal: AbortSignal): Promise<vo
   });
 }
 
-/** 在跑的时候两秒问一次，和别的后台任务同一个节律。 */
+/** 在跑的时候两秒问一次，和别的后台任务同一个节律。闲着不问：后台自己起的那一趟由全站那一处
+ *  读到的 `running_tasks` 带来（`LIBRARY_PROCESSING_TASK`），停靠栏据此重取一次再接上。 */
 export const RUNNING_POLL_MS = 2000;
-/** 闲着时也接着问：任务由后台自己起，两个读者都要认出「现在跑起来了」。 */
-export const IDLE_POLL_MS = 10_000;
+/** 任务中心登记这一种任务用的 `task_key`。 */
+export const LIBRARY_PROCESSING_TASK = 'library-processing';
 
 /** 读失败时页面上留的那句话。上一份数据不撤，下一轮轮询自己会接上。 */
-export const DISCONNECTED_TEXT = '连接中断，正在重新读取处理进度';
+export const DISCONNECTED_TEXT = t('manage:scanFetch.disconnected');
 
 /** 任务的发起方式写进句子里用的说法；`TRIGGER_LABELS` 是任务中心列表的短标签，放进句子读不通。 */
 const TRIGGER_PHRASES: Record<string, string> = {
-  manual: '在网页发起', scheduled: '定时发起', startup: '服务启动时自动发起', cli: '由命令行或托盘发起',
+  manual: t('manage:scanFetch.originManual'), scheduled: t('manage:scanFetch.originScheduled'), startup: t('manage:scanFetch.originStartup'), cli: t('manage:scanFetch.originCli'),
 };
 
 /** 保存媒体库设置会重启 Peach：在跑的这一轮会怎样，按它跑在哪个进程、是否已暂停分开说。
  * 命令行与托盘起的是独立的 `peach process` 进程，重载只停服务；服务内的任务由启动恢复接着跑，
  * 用户暂停的那一轮恢复时跳过。勾了「保存后扫描」的那一趟要等全库处理锁，排在后面。 */
 export function restartEffectText(state: LibraryProcessingData, scanAfterSave: boolean): string {
-  const effect = state.trigger === 'cli' ? '这个任务由命令行或托盘发起，在独立进程里运行，不受重启影响。'
-    : state.status === 'paused' ? '已暂停的任务会保持暂停，重启后点继续即可接着处理。'
-    : '正在进行的任务会随重启中断，重启后从中断处继续。';
-  return `保存后 Peach 会重新启动。${effect}${scanAfterSave ? '勾选的「保存后扫描并补全资料」会排在当前任务之后。' : ''}`;
+  const effect = state.trigger === 'cli' ? t('manage:scanFetch.restartCli')
+    : state.status === 'paused' ? t('manage:scanFetch.restartPaused')
+    : t('manage:scanFetch.restartRunning');
+  const queued = scanAfterSave
+    ? t('manage:scanFetch.restartQueuedScan', { option: quoted(t('settings:mediaLibraries.scanAfterSave')) }) : '';
+  return [t('manage:scanFetch.restartLead'), effect, queued].filter(Boolean).join(t('shell:format.sentenceGap'));
 }
 
 /** 已有任务在跑时点同步的回执，写明这一轮是怎么发起的。 */
 export function busyText(state: LibraryProcessingData): string {
   const origin = TRIGGER_PHRASES[state.trigger || ''];
-  return `当前的扫描与采集任务${origin ? `（${origin}）` : ''}还没结束，等它完成或取消后再开始新的同步`;
+  return origin ? t('manage:scanFetch.busyOrigin', { origin }) : t('manage:scanFetch.busy');
 }
 
-export function pollInterval(
-  data: LibraryProcessingData | undefined, watching: boolean,
-): number | false {
-  if (processingActive(data)) return RUNNING_POLL_MS;
-  return watching ? IDLE_POLL_MS : false;
-}
+/** 同一个键只由停靠栏一处驱动轮询，卡片与补全提示只读缓存。在跑两秒一次，失败退避，闲着不问。 */
+export const pollInterval = withBackoff<LibraryProcessingData>((data) =>
+  (processingActive(data) ? RUNNING_POLL_MS : false));
 
 const ACTION_LABELS: Record<string, string> = {
-  scanning_files: '扫描文件',
-  reading_local: '检查配套文件',
-  reading_local_cover: '读取配套图片',
-  querying_metadata: '查询外部资料',
-  fetching_cover: '采集缺失封面',
-  skipped: '已跳过',
-  generating_preview: '生成视频预览',
-  writing_candidates: '保存待确认资料',
+  scanning_files: t('manage:scanFetch.actionScanning'),
+  reading_local: t('manage:scanFetch.actionReadingLocal'),
+  reading_local_cover: t('manage:scanFetch.actionReadingCover'),
+  querying_metadata: t('manage:scanFetch.actionQuerying'),
+  fetching_cover: t('manage:scanFetch.actionFetchingCover'),
+  skipped: t('manage:taskSummary.skipped'),
+  generating_preview: t('manage:scanFetch.actionPreviews'),
+  writing_candidates: t('manage:scanFetch.actionCandidates'),
 };
 
 /* 来源说「没有」按类型报一个数，不进问题清单：馆藏里大量独立资源和创作者作品
    任何目录站都收不到，它们不是待办。键与 `library_processing.MISS_MESSAGES` 同源。 */
 const NOTE_LABELS: Record<string, string> = {
-  querying_metadata: '没有资料',
-  fetching_cover: '没有封面',
+  querying_metadata: t('manage:scanFetch.missNoMetadata'),
+  fetching_cover: t('manage:scanFetch.missNoCover'),
 };
 
 export function notesLine(notes: Record<string, number>): string {
   const parts = Object.entries(notes)
     .filter(([key, count]) => NOTE_LABELS[key] && count > 0)
-    .map(([key, count]) => `${NOTE_LABELS[key]} ${count.toLocaleString()} 部`);
-  return parts.length ? `外部来源${parts.join('、')}，7 天内不再问。` : '';
+    .map(([key, count]) => t('manage:scanFetch.missCount', { label: NOTE_LABELS[key], count: count }));
+  return parts.length ? t('manage:scanFetch.missNotes', { parts: joinList(parts) }) : '';
 }
 
 /** 此刻在做什么：哪个文件、哪一步、等了多久。 */
 export function currentLine(state: LibraryProcessingData): string {
-  if (state.status === 'paused') return '已暂停';
-  if (state.status === 'pausing') return '正在暂停';
-  const action = ACTION_LABELS[state.current_action || ''] || state.stage || '正在处理';
-  const waited = state.waited_seconds ? ` · 已等待 ${elapsedText(state.waited_seconds)}` : '';
+  if (state.status === 'paused') return t('manage:taskStatus.paused');
+  if (state.status === 'pausing') return t('manage:taskStatus.pausing');
+  const action = ACTION_LABELS[state.current_action || ''] || stageText(state) || t('manage:scanFetch.processing');
+  const waited = state.waited_seconds ? t('manage:scanFetch.waited', { elapsed: elapsedText(state.waited_seconds) }) : '';
   return state.current_asset_name
-    ? `当前：${state.current_asset_name} · ${action}${waited}`
+    ? t('manage:scanFetch.currentLine', { file: state.current_asset_name, action, waited })
     : action + waited;
 }
 
 /** 已知总量显示实际完成数；扫描目录期间显示持续发现的文件数。 */
 export function processingLine(state: LibraryProcessingData): string {
-  const count = state.total ? `${progressText(state.checked, state.total)} 项`
-    : state.current_action === 'scanning_files' || state.stage === '扫描文件'
-      ? `已发现 ${(state.scanned || 0).toLocaleString()} 个${state.checked ? '新' : ''}文件`
+  const count = state.total ? t('manage:scanFetch.progressCount', { progress: progressText(state.checked, state.total) })
+    : state.current_action === 'scanning_files' || state.stage_code === 'library.scanFiles'
+      ? t('manage:scanFetch.filesFound', { count: state.scanned || 0 })
         + (state.checked ? ` · 已核对 ${state.checked.toLocaleString()} 个已有文件` : '') : '';
   return currentLine(state) + (count ? ` · ${count}` : '');
 }
@@ -292,13 +305,13 @@ export function issueDetails(state: LibraryProcessingData): IssueDetails | null 
   if (!issues.length) return null;
   return {
     label: state.issues_truncated
-      ? `问题清单：共 ${state.issue_count || 0} 项，展开查看前 ${issues.length} 项`
-      : `问题清单：共 ${state.issue_count || 0} 项`,
+      ? t('manage:scanFetch.issuesTruncated', { count: state.issue_count || 0, shown: issues.length })
+      : t('manage:scanFetch.issuesTotal', { count: state.issue_count || 0 }),
     items: issues.map((issue, at) => ({
       key: `${issue.asset_id ?? 'source'}-${at}`,
-      label: issue.title || (issue.asset_id ? `视频 ${issue.asset_id}` : '媒体来源'),
+      label: issue.title || (issue.asset_id ? t('manage:scanFetch.issueVideo', { id: issue.asset_id }) : t('manage:shared.storage')),
       href: issue.asset_id ? `/assets/${issue.asset_id}` : '',
-      note: issue.message,
+      note: codedText(issue, 'message'),
       hint: issue.path || '',
     })),
     log: state.issues_log || '',
@@ -326,10 +339,9 @@ export function announceCompletion(
     if (state.job_id) localStorage.setItem(ANNOUNCED_KEY, state.job_id);
   } catch { /* 存储不可用时照常提示，最多重复一次 */ }
   if (state.requested_stage === 'previews') {
-    toast(`视频预览已生成：${state.previews || 0} 部`);
+    toast(t('manage:scanFetch.previewsToast', { count: state.previews || 0 }));
     return;
   }
-  toast(`扫描与资料采集已完成：识别 ${state.identified || 0} 个番号，`
-    + `取得 ${state.candidates || 0} 组作品资料，自动保存 ${state.auto_applied || 0} 条`
-    + (state.previews ? `，生成 ${state.previews} 部视频预览` : ''));
+  toast(t('manage:scanFetch.doneToast', { count: state.identified || 0, candidates: state.candidates || 0, autoApplied: state.auto_applied || 0 })
+    + (state.previews ? t('manage:scanFetch.toastPreviewsTail', { count: state.previews }) : ''));
 }

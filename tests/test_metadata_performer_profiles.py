@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 from peach.http import HttpResponse
+from peach.library_processing import phrase_text
 from peach.metadata_performer_profiles import enrich_performer_profiles
 from peach.repository import LedgerDatabase
 from support.ledger import fresh_ledger
@@ -87,7 +88,7 @@ class ImportedPerformerProfileTests(unittest.TestCase):
             connection.execute("INSERT INTO asset_entity(asset_id,entity_id,role,source) VALUES(1,9,'performer','test')")
         people[0]["value"].append({"name": "八乃つばさ", "external_id": "1041234", "profile_source": "r18dev", "thumb_url": "https://pics.dmm.co.jp/mono/actjpgs/hachino_tsubasa.jpg"})
         group["candidates_json"] = json.dumps(people, ensure_ascii=False)
-        transport = Mock(side_effect=SourcePaused("本趟采集时间已用完，再跑一次接着采；已有图片保留"))
+        transport = Mock(side_effect=SourcePaused("errors.scrapingAccess.timeBudgetSpent"))
         with self.assertLogs("peach.metadata_performer_profiles", "WARNING"):
             result = enrich_performer_profiles(self.database, [group], self.root / "avatars", self.root / "providers", transport_factory=lambda: transport)
         self.assertEqual(result["failed"], 1)
@@ -99,7 +100,7 @@ class ImportedPerformerProfileTests(unittest.TestCase):
         from peach.scraping_access import SourcePaused
 
         remote = Mock()
-        remote.provider.return_value.transport.side_effect = SourcePaused("本趟采集时间已用完")
+        remote.provider.return_value.transport.side_effect = SourcePaused("errors.scrapingAccess.timeBudgetSpent")
         transport = Mock(return_value=HttpResponse(200, {"content-type": "image/jpeg"}, picture(), self.group()["candidates_json"]))
         config = SimpleNamespace(directory=lambda key: self.root / key)
         groups = {"asset:1:performers": self.group()}
@@ -190,7 +191,8 @@ class ImportedPerformerProfileTests(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["avatars"], 0)
         self.assertEqual([asset_id for asset_id, _message in issues], [1])
-        self.assertIn("头像未取得", issues[0][1])
+        self.assertIn("头像未取得", phrase_text(issues[0][1]))
+        self.assertEqual(issues[0][1]["code"], "errors.metadataPerformerProfiles.avatarUnfetched")
         self.assertFalse((self.root / "avatars" / "performer-7.img").exists())
 
     def test_an_external_id_held_by_another_entity_counts_as_a_conflict(self):

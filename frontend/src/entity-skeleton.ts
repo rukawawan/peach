@@ -5,13 +5,16 @@
  * 中间一道缝、四个角各一道弧。骨架是一段字符串，所以自己把外框和两个槽位的标记写全，
  * 几何与岛的浮层一一对齐，接管时不跳。
  */
+import { t } from './i18n';
+
 export function entitySkeletonHtml(kind: string, head: string, body: string, top = '') {
   const square = kind === 'studio' || kind === 'agency';
   const params = new URLSearchParams(location.search);
   const folders = params.get('browse') === 'folders' || !!params.get('folder');
   const content = folders ? `<div class="peach-react entity-folder-workspace" data-folder-workspace data-folder-browse><aside data-folder-tree-host><div class="flex flex-col gap-3"><span class="skeleton ui-configuration-skeleton-input"></span>${'<span class="skeleton" style="width:75%;height:32px"></span>'.repeat(8)}</div></aside><div class="min-w-0"><div data-folder-header-host><span class="skeleton" style="width:160px;height:32px"></span></div>${body}</div></div>` : body;
-  return `<section data-skeleton="entity/${kind}" role="status" aria-label="正在读取资料">
-    <span class="sr-only">正在读取资料</span><div aria-hidden="true" inert><div class="peach-react contents">
+  const loading = t('catalog:entityPageSkeleton.loading');
+  return `<section data-skeleton="entity/${kind}" role="status" aria-label="${loading}">
+    <span class="sr-only">${loading}</span><div aria-hidden="true" inert><div class="peach-react contents">
     <section class="entityhero" data-entity-card><div class="entityprofile" data-entity-profile><div data-entity-portrait-wrap><div class="entityportrait ${square ? 'square ' : ''}skeleton" data-entity-portrait="${square ? 'square' : 'round'}"></div></div>
       <div class="ui-entityidentity entityskeletontext" data-entity-identity><div class="entitytitle" data-entity-title><h2 class="skeleton">&nbsp;</h2></div>
       <div class="alias" data-entity-alias><span class="skeleton"></span></div>

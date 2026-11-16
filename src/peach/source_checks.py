@@ -3,73 +3,87 @@ import io
 import time
 import httpx
 from PIL import Image
+from . import interface_text
+from .coded_text import Said, coded
 from .http import HttpRequest
 from .scraping_access import SOURCES, SourcePaused, SourceRefused, SourceTransport, record_source_check
 
-MOBILE_BROADBAND_HINT = "中国移动宽带直连 DMM 图片主机常在握手后被断开，请把 DMM / FANZA 的连接方式设成 Peach 代理。"
+MOBILE_BROADBAND_HINT_CODE = "labels.sourceChecks.mobileBroadbandHint"
+#: 那句提示按 zh-CN 渲染的原文，封面比较的报错与测试按它核对。
+MOBILE_BROADBAND_HINT = interface_text.text(f"server:{MOBILE_BROADBAND_HINT_CODE}")
+#: 一次检查查哪几跳：来源页面本身，以及 DMM 另有的高清图片地址。`label` 由 `target` 取说法。
+PAGE, CDN = "page", "cdn"
+TARGET_LABELS = {PAGE: "labels.sourceChecks.target.page", CDN: "labels.sourceChecks.target.cdn"}
 
 
-def _connection_failure(exc, label):
+def _connection_failure(exc, target):
     """来源连接异常对应可操作的诊断说明。"""
     if isinstance(exc, SourceRefused):
-        # 地区限制与出口封禁：原话里写着要换出口，不只是「稍后重试」。
+        # 地区限制与出口封禁：原话里写着要换出口，不只是「稍后重试」。`message` 是给不认 code 的
+        # 调用方的 zh-CN 兜底句，界面按 `message_code` 与参数取当前语言的那一句。
         return {"ok": False, "kind": "auth", "reason": exc.reason,
-                "message": f"{exc}。", "error_type": type(exc).__name__}
+                "message": f"{exc.message}。", "message_code": exc.code, "message_params": dict(exc.params),
+                "error_type": type(exc).__name__}
     if isinstance(exc, SourcePaused):
-        detail, message = "cooldown", "来源正在冷却，请稍后重试。"
+        detail, message = "cooldown", Said("labels.sourceChecks.cooldown")
     elif isinstance(exc, httpx.ProxyError):
-        detail, message = "proxy", "代理连接失败，请检查 Peach 代理。"
+        detail, message = "proxy", Said("labels.sourceChecks.proxy")
     elif isinstance(exc, httpx.TimeoutException):
-        detail, message = "timeout", "来源连接超时，请稍后重试或检查连接方式。"
+        detail, message = "timeout", Said("labels.sourceChecks.timeout")
     else:
         detail = "network"
-        message = (f"连接未取得；{MOBILE_BROADBAND_HINT}" if label == "高清图片 CDN"
-                   else "连接未取得；此来源可能需要代理，请检查来源连接方式。")
+        message = (Said("labels.sourceChecks.cdnUnreachable", hint=Said(MOBILE_BROADBAND_HINT_CODE)) if target == CDN
+                   else Said("labels.sourceChecks.unreachable"))
     return {"ok": False, "kind": "unavailable", "reason": detail,
-            "message": message, "error_type": type(exc).__name__}
+            **coded("message", message), "error_type": type(exc).__name__}
 
 
 def _connection_message(detail, reason):
-    """来源响应的失败原因决定用户下一步操作。"""
+    """来源响应的失败原因决定用户下一步操作。`reason` 是 `metadata.auth_wall` 那一句或 `None`。"""
     from .metadata import reason_blames_credentials
 
     if detail == "cloudflare_challenge":
-        return "来源返回人机验证页，请检查来源验证状态或更换出口。"
+        return Said("labels.sourceChecks.challenge")
     if detail == "rate_limited":
-        return "来源正在限流，请稍后重试。"
+        return Said("labels.sourceChecks.rateLimited")
     if detail == "not_found":
-        return "来源检查地址不存在，请核对站点地址。"
+        return Said("labels.sourceChecks.notFound")
     if reason_blames_credentials(reason):
-        return "来源要求登录或验证，请在官网完成登录后重试。"
-    return f"{reason}。" if reason else "来源暂不可用，请稍后重试。"
+        return Said("labels.sourceChecks.signIn")
+    return Said("labels.sourceChecks.reason", reason=reason) if reason else Said("labels.sourceChecks.unavailable")
+
+
+def _target(target):
+    """一跳的身份与说法：`target` 是 `page` 或 `cdn`，`label` 是 zh-CN 原文，`label_code` 给界面取译文。"""
+    return {"target": target, **coded("label", Said(TARGET_LABELS[target]))}
 
 
 def check_source(secrets_root, source, *, preflight=False):
     """复用来源连接与图片 CDN 判据；安装检查只使用有界 HTTP 请求。"""
-    from .metadata import auth_wall_reason
+    from .metadata import auth_wall
     if source not in SOURCES:
-        raise ValueError("未知采集来源")
+        raise ValueError("unknown scraping source")
     if not SOURCES[source]["login"]:
-        return {"ok": True, "results": [{"label": "来源页面", "ok": False, "kind": "unavailable",
-                "reason": "needs_code", "message": "片商官网按番号选择，请输入馆藏番号检查高清封面。"}],
+        return {"ok": True, "results": [{**_target(PAGE), "ok": False, "kind": "unavailable",
+                "reason": "needs_code", **coded("message", Said("labels.sourceChecks.needsCode"))}],
                 "session_verified": False}
-    targets = [("来源页面", SOURCES[source]["login"])]
+    targets = [(PAGE, SOURCES[source]["login"])]
     if source == "dmm":
-        targets.append(("高清图片 CDN", "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/gyan00017/gyan00017pl.jpg"))
+        targets.append((CDN, "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/gyan00017/gyan00017pl.jpg"))
     results = []
     transport = (SourceTransport(secrets_root, max_requests=12, max_bytes=12 * 65536,
                                  max_seconds=15, allow_browser=False)
                  if preflight else SourceTransport(secrets_root))
     try:
-        for label, url in targets:
-            result = {"label": label, "ok": False}
+        for target, url in targets:
+            result = {**_target(target), "ok": False}
             started = time.monotonic()
             try:
                 response = transport(HttpRequest("GET", url, {"Range": "bytes=0-65535"}), 10, 65536)
                 # 鉴权失败与「站点挂了」是两件事，页面上要分得开：前者要人去官网登录
                 # 或换一份 Cookie，后者只要等。判据和元数据来源共用一份；重定向终点
                 # 只在真的跳转过时才算数，否则配置里本身就指向登录页的来源会自判失败。
-                reason = auth_wall_reason(
+                reason = auth_wall(
                     status_code=response.status, body=response.body,
                     final_url=response.url if response.url and response.url != url else "")
                 result.update(status=response.status, bytes=len(response.body),
@@ -86,18 +100,18 @@ def check_source(secrets_root, source, *, preflight=False):
                 result["reason"] = detail
                 if challenge:
                     result.update(ok=False, kind="auth")
-                if label == "高清图片 CDN" and result["ok"]:
+                if target == CDN and result["ok"]:
                     with Image.open(io.BytesIO(response.body)) as image:
                         result["width"], result["height"] = image.size
                 if not result["ok"]:
                     # 成因锁死在凭据上才让人去登录。只剩状态码可看的 403 直接把
                     # `auth_wall_reason` 那句原样给用户：出口 IP 被封时登录是白做，
                     # 页面上再手写一份「请去登录」等于把人引去做错事。
-                    result["message"] = _connection_message(detail, reason)
+                    result.update(coded("message", _connection_message(detail, reason)))
             except Exception as exc:
-                result.update(_connection_failure(exc, label))
+                result.update(_connection_failure(exc, target))
             result.update(checked_at=time.time(), elapsed_s=round(time.monotonic() - started, 2))
-            if label == "来源页面":
+            if target == PAGE:
                 record_source_check(secrets_root, source, "connection", result)
             results.append(result)
     finally:

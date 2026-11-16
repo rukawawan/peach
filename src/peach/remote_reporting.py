@@ -15,14 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import interface_text
 from .reporting_identity import event_metadata, machine_facts
 from .diagnostic_exceptions import media_details
+from .user_messages import UserFacingError, UserValueError
 
-FIELDS = {
-    "usage": "Peach 版本、分发方式（Windows／macOS 应用、Docker、wheel 或源码）、操作系统类型与版本、CPU 架构与核数、内存档位、Python 版本、运行环境与公开构建编号；每天最多一条活跃日志和一条会话汇总，不含安装标识。连续运行时也按 UTC 日统计，代表运行中的实例，不代表人数或当天有人操作。",
-    "errors": "诊断补充：故障环节、异常链、Peach 与白名单框架的代码文件名/函数名/行号、结构化错误码、媒体工具故障类别、浏览器白名单异常类型与正式脚本构建映射、HTTP 方法/路由模板/关联错误编号、同类故障次数与统计日期；同一版本的同类故障只上传一次完整诊断，每天最多 5 条，之后的次数每 6 小时或退出时合并为计数日志。",
-}
-NOTICE = "发送至 Sentry。不上报错误原文、完整日志、诊断 ZIP、媒体名称、路径、网址、观看记录或凭据。接收服务会接触连接 IP；关闭后停止新发送，已发送的信息无法撤回。"
+#: 两类上报，各自的「上传哪些字段」说明是 `labels.remoteReporting.field.<类>`（ADR-0159）。
+FIELDS = ("usage", "errors")
+CONSENT_SCHEMA = 2
+NOTICE_CODE = "labels.remoteReporting.notice"
 _lock = threading.RLock()
 _client = None
 _client_dsn = ""
@@ -43,7 +44,14 @@ LOCAL_EXCEPTION_TYPES = frozenset({
     ("httpx", "TimeoutException"),
 })
 # 磁盘与文件系统层的 SQLite 错误，以及下一轮会重试的锁争用。
-LOCAL_SQLITE_ERRORS = ("SQLITE_IOERR", "SQLITE_FULL", "SQLITE_BUSY", "SQLITE_LOCKED")
+SQLITE_CONDITIONS = (("SQLITE_IOERR", "sqlite_io"), ("SQLITE_FULL", "disk_full"),
+                     ("SQLITE_BUSY", "sqlite_busy"), ("SQLITE_LOCKED", "sqlite_busy"))
+MEDIA_CONDITIONS = frozenset({"invalid_media", "permission_denied", "disk_full", "missing_media", "io_error"})
+#: 媒体所在的盘或网络卷不可用：读写错误、磁盘满，外接盘与网络卷掉线（macOS 报 ENXIO）、连接断开。
+#: 不收 ENETUNREACH：`smb_transport` 把认不出的异常也归成它，收进来会盖住代码缺陷。
+MEDIA_VOLUME_ERRNOS = frozenset(getattr(errno, name) for name in (
+    "EIO", "ENOSPC", "ENXIO", "ENODEV", "ENOTCONN", "ESTALE", "ENETDOWN",
+    "EHOSTDOWN", "EHOSTUNREACH") if hasattr(errno, name))
 
 
 def _config(config=None):
@@ -66,12 +74,33 @@ def _read(path, *, missing=None):
 def _consent(path):
     value = _read(path, missing={"usage": True, "errors": True, "revision": "default"})
     enabled = all(value.get(key) is True for key in FIELDS)
-    return {"usage": enabled, "errors": enabled,
-            "revision": str(value.get("revision", ""))}
+    result = {"usage": enabled, "errors": enabled,
+              "revision": str(value.get("revision", ""))}
+    identity = value.get('diagnostic_instance')
+    if (enabled and value.get('schema') == CONSENT_SCHEMA and isinstance(identity, str)
+            and re.fullmatch(r'[a-f0-9]{32}', identity)):
+        result['diagnostic_instance'] = identity
+    return result
 
 
 def consent(config=None):
-    return _consent(_config(config).directory("state") / "remote-reporting.json")
+    return _consent(_config(config).directory('state') / 'remote-reporting.json')
+
+
+def _instance_consent(config):
+    from filelock import FileLock
+    from .fsutil import atomic_write_text
+    path = _config(config).directory('state') / 'remote-reporting.json'
+    current = _consent(path)
+    if not current['usage'] or current.get('diagnostic_instance'):
+        return current
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(path) + '.lock', timeout=5):
+        current = _consent(path)
+        if current['usage'] and not current.get('diagnostic_instance'):
+            current['diagnostic_instance'] = uuid.uuid4().hex
+            atomic_write_text(path, json.dumps({**current, 'schema': CONSENT_SCHEMA}))
+        return current
 
 
 def dsn(environment="PEACH_SENTRY_DSN", key="dsn"):
@@ -96,20 +125,24 @@ def dsn(environment="PEACH_SENTRY_DSN", key="dsn"):
 def snapshot(config=None):
     from . import reporting_delivery
     config = _config(config)
-    return {**{key: value for key, value in consent(config).items() if key != "revision"},
-            "available": bool(dsn()), "fields": FIELDS, "notice": NOTICE,
+    current = consent(config)
+    return {**{key: current[key] for key in FIELDS},
+            "available": bool(dsn()),
+            "fields": {key: interface_text.text(f"server:labels.remoteReporting.field.{key}") for key in FIELDS},
+            "field_codes": {key: f"labels.remoteReporting.field.{key}" for key in FIELDS},
+            "notice": interface_text.text(f"server:{NOTICE_CODE}"), "notice_code": NOTICE_CODE,
             "delivery": reporting_delivery.snapshot(config)}
 
 
 def parse_choices(body, *, partial=False):
     if not isinstance(body, dict):
-        raise ValueError("遥测和自动错误诊断必须是布尔值")
+        raise UserValueError("errors.remoteReporting.notBoolean")
     defaults = consent() if partial else {}
     choices = {key: body.get(key, defaults.get(key)) for key in FIELDS}
     if any(type(value) is not bool for value in choices.values()):
-        raise ValueError("遥测和自动错误诊断必须是布尔值")
+        raise UserValueError("errors.remoteReporting.notBoolean")
     if choices["usage"] != choices["errors"]:
-        raise ValueError("版本统计与错误诊断须同时开启或关闭")
+        raise UserValueError("errors.remoteReporting.mustMatch")
     return choices
 
 
@@ -117,6 +150,10 @@ def save(body, config=None):
     payload = parse_choices(body)
     from .fsutil import atomic_write_text
     config = _config(config)
+    previous = consent(config)
+    payload['schema'] = CONSENT_SCHEMA
+    if payload['usage']:
+        payload['diagnostic_instance'] = previous.get('diagnostic_instance') or uuid.uuid4().hex
     payload["revision"] = uuid.uuid4().hex
     atomic_write_text(config.directory("state") / "remote-reporting.json", json.dumps(payload))
     from . import diagnostic_frequency
@@ -267,6 +304,8 @@ def _submit_telemetry(kind, items, config, current, target):
 
 def _submit(kind, event, config, current, target):
     with _lock:
+        if current.get('diagnostic_instance'):
+            event = {**event, 'tags': {**event.get('tags', {}), 'diagnostic_instance': current['diagnostic_instance']}}
         client = _connect(target)
         from .reporting_delivery import record
         permit = _permit(kind, config, current)
@@ -302,14 +341,29 @@ def _frequency_tick():
             _schedule_frequency(next(iter(_frequency_configs.values())))
 
 
+def _code_location(values):
+    """被捕获异常里最内层的 Peach 栈帧，写成「文件:函数」和行号；没有 Peach 栈帧就不带。"""
+    frames = [frame for frame in (values[-1].get("stacktrace", {}).get("frames", []) if values else [])
+              if "module" not in frame]
+    if not frames or not frames[-1].get("filename"):
+        return {}
+    frame = frames[-1]
+    location = {"code_location": f"{frame['filename']}:{frame['function']}" if frame.get("function") else frame["filename"]}
+    if type(frame.get("lineno")) is int:
+        location["code_line"] = frame["lineno"]
+    return location
+
+
 def _count_logs(config, current, target):
-    """计数日志带整数 `occurrence_count`，接收端可按诊断键、日期与版本直接求和。"""
+    """计数日志带整数 `occurrence_count`，接收端可按诊断键、日期与版本直接求和，按代码位置对应到源码。"""
     def submit(counts):
         items = []
         for event in counts:
             values = event.get("exception", {}).get("values", [])
             extra = {"occurrence_count": int(event["tags"]["occurrence_count"]),
-                     **({"exception_type": values[-1].get("type", "")} if values else {})}
+                     **({'diagnostic_instance': current['diagnostic_instance']} if current.get('diagnostic_instance') else {}),
+                     **({"exception_type": values[-1].get("type", "")} if values else {}),
+                     **_code_location(values)}
             items.append(_log_item("Peach diagnostic count", event, extra))
         return _submit_telemetry("errors", items, config, current, target)
     return submit
@@ -319,8 +373,11 @@ def flush_counts(config=None, *, force=False):
     try:
         from . import diagnostic_frequency
         config = _config(config)
-        current, target = consent(config), dsn()
-        if _disabled or not current["errors"] or not target:
+        target = dsn()
+        if _disabled or not target:
+            return
+        current = _instance_consent(config)
+        if not current['errors']:
             return
         diagnostic_frequency.flush(config, current["revision"],
             lambda event: _submit("errors", event, config, current, target),
@@ -329,23 +386,32 @@ def flush_counts(config=None, *, force=False):
         pass
 
 
-def send(kind, event, config=None):
-    """发送失败不影响应用；技术诊断按同意版本聚合，关闭时不初始化 SDK。"""
+def send(kind, event, config=None, *, count_only=False):
+    """发送失败不影响应用；技术诊断按同意版本聚合，关闭时不初始化 SDK。`count_only` 的环境条件只计次数。"""
     if _disabled:
         return
     try:
         config = _config(config)
-        current = consent(config)
         target = dsn()
-        if kind not in FIELDS or not current[kind] or not target:
+        if kind not in FIELDS or not target:
+            return
+        current = _instance_consent(config)
+        if not current[kind]:
             return
         metadata = event_metadata(kind)
         event = {**event, **metadata, "tags": {**event.get("tags", {}), **metadata["tags"]}}
+        if current.get('diagnostic_instance'):
+            event['tags']['diagnostic_instance'] = current['diagnostic_instance']
+        if kind == 'usage':
+            event['tags']['activity_kind'] = 'instance-day'
         if kind == "errors":
             from . import diagnostic_frequency
-            diagnostic_frequency.record(config, current["revision"], event,
-                lambda batch: _submit(kind, batch, config, current, target),
-                _count_logs(config, current, target))
+            if count_only:
+                diagnostic_frequency.tally(config, current["revision"], event)
+            else:
+                diagnostic_frequency.record(config, current["revision"], event,
+                    lambda batch: _submit(kind, batch, config, current, target),
+                    _count_logs(config, current, target))
             _schedule_frequency(config)
         elif _reserve(config, kind, event):
             # 版本统计是一条日志加一条会话汇总，不占错误事件额度（ADR-0132）。
@@ -371,7 +437,9 @@ def usage(config=None):
 
 
 def _http_status(error):
-    status = getattr(error, "status_code", None)
+    # 带 code 的报错（`UserFacingError`）身上的 `status_code` 只是「漏到接口层时回什么状态」的提示，
+    # 不是一次 HTTP 失败；按它判 4xx 会把后台技术故障当成预期情况、不再上报。
+    status = None if isinstance(error, UserFacingError) else getattr(error, "status_code", None)
     if type(status) is not int or not 100 <= status <= 599:
         status = getattr(getattr(error, "response", None), "status_code", None)
     if type(status) is not int and any(cls.__module__ == "urllib.error" and cls.__name__ == "HTTPError"
@@ -404,9 +472,6 @@ def _expected_failure(stage, error, fields):
         if status in {502, 503, 504}:
             # 路由主动报告上游不可用；未处理异常走 500，仍然上报。
             return True
-    name = getattr(error, "sqlite_errorname", "")
-    if isinstance(name, str) and name.startswith(LOCAL_SQLITE_ERRORS):
-        return True
     if stage == "logging" and fields.get("level", "ERROR") not in {"ERROR", "CRITICAL"}:
         return True
     if stage == "browser" and fields.get("error_name") == "AbortError":
@@ -418,18 +483,33 @@ def _expected_failure(stage, error, fields):
             "not_found", "gone", "no_usable_metadata", "rate_limited", "timeout", "server_error", "network"}
     if ("peach.metadata", "MetadataProviderError") in kinds and error.detail != "parse_error":
         return error.kind in {"auth", "not_found"} or error.retryable is True or error.temporary is True
-    if _media_failure(stage, error):
-        detail = getattr(error, "diagnostics", {})
-        if (isinstance(error, (subprocess.TimeoutExpired, TimeoutError))
-                or isinstance(detail, dict) and detail.get("reason") == "timeout"):
-            return True
-        if isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.EIO):
-            return True
-        if isinstance(error, (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)):
-            filename = getattr(error, "filename", None)
-            if filename and Path(filename).name != Path(str(fields.get("tool", ""))).name:
-                return True
     return False
+
+
+def _condition(stage, error, fields):
+    """环境条件的固定类别：数据库磁盘与锁争用、媒体所在的盘掉线、媒体输入缺失或损坏、权限、空间与超时。
+
+    这些情况回答「各平台、各部署方式下多常见」，只计次数，不上传定位事件；不是环境条件时返回空串。
+    """
+    name = getattr(error, "sqlite_errorname", "")
+    if isinstance(name, str):
+        for prefix, condition in SQLITE_CONDITIONS:
+            if name.startswith(prefix):
+                return condition
+    if not _media_failure(stage, error):
+        return ""
+    detail = getattr(error, "diagnostics", {})
+    if (isinstance(error, (subprocess.TimeoutExpired, TimeoutError))
+            or isinstance(detail, dict) and detail.get("reason") == "timeout"):
+        return "timeout"
+    if isinstance(error, OSError) and error.errno in MEDIA_VOLUME_ERRNOS:
+        return {errno.ENOSPC: "disk_full", errno.EIO: "io_error"}.get(error.errno, "media_volume")
+    if isinstance(error, (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)):
+        filename = getattr(error, "filename", None)
+        if filename and Path(filename).name != Path(str(fields.get("tool", ""))).name:
+            return "permission_denied" if isinstance(error, PermissionError) else "missing_media"
+    reason = media_details(error, fields, {})
+    return reason if reason in MEDIA_CONDITIONS else ""
 
 
 def _actionable(stage, error, fields):
@@ -471,7 +551,7 @@ def _http_details(stage, fields):
 
 
 def _technical_projection(stage, error, fields):
-    """投影各入口的故障证据，排除缺少定位信息与已知媒体输入条件的记录。"""
+    """投影各入口的故障证据，排除缺少定位信息的记录。"""
     media_stage = _media_failure(stage, error)
     if error is None and stage != "browser" and not media_stage:
         return
@@ -491,8 +571,6 @@ def _technical_projection(stage, error, fields):
     reason = ""
     if media_stage:
         reason = media_details(error, fields, codes)
-        if reason in {"invalid_media", "permission_denied", "disk_full", "missing_media", "io_error"}:
-            return
         if not reason and not codes and error is None:
             return
     category = type(error).__name__ if error is not None else ("BrowserError" if stage == "browser" else "MediaToolError")
@@ -508,22 +586,32 @@ def capture(stage, error=None, **fields):
     capture_key = (os.getpid(), id(error.__traceback__)) if error is not None else None
     if error is not None and getattr(error, "_peach_remote_capture", None) == capture_key:
         return
-    projection = _technical_projection(stage, error, fields)
-    if projection is None:
-        return
-    values, codes, reason, debug_meta = projection
-    http, error_id = _http_details(stage, fields)
-    event = {"level": "error", "tags": {"os": platform.system(),
-        "python": platform.python_version(), "architecture": platform.machine(), "stage": stage,
-        **http, **{key: str(value) for key, value in codes.items()}, **({"media_failure": reason} if reason else {})},
-        "exception": {"values": values}}
-    if stage == "browser":
-        event["platform"] = "javascript"
-        if debug_meta:
-            event["debug_meta"] = debug_meta
-    if error_id:
-        event["event_id"] = error_id
-    if send("errors", event) and error is not None:
+    base = {"os": platform.system(), "python": platform.python_version(),
+            "architecture": platform.machine(), "stage": stage}
+    if condition := _condition(stage, error, fields):
+        # 环境条件只带类别与代码位置，不带错误码、路径或原文。
+        values = _exception_details(error)[0] if error is not None else []
+        sent = send("errors", {"tags": {**base, "condition": condition},
+                               **({"exception": {"values": values}} if values else {})}, count_only=True)
+    else:
+        projection = _technical_projection(stage, error, fields)
+        if projection is None:
+            return
+        values, codes, reason, debug_meta = projection
+        http, error_id = _http_details(stage, fields)
+        from .diagnostic_browser import environment
+        browser_tags = environment(fields) if stage == 'browser' else {}
+        event = {"level": "error", "tags": {**base, **http, **browser_tags,
+            **{key: str(value) for key, value in codes.items()}, **({"media_failure": reason} if reason else {})},
+            "exception": {"values": values}}
+        if stage == "browser":
+            event["platform"] = "javascript"
+            if debug_meta:
+                event["debug_meta"] = debug_meta
+        if error_id:
+            event["event_id"] = error_id
+        sent = send("errors", event)
+    if sent and error is not None:
         try:
             error._peach_remote_capture = capture_key
         except (AttributeError, TypeError):

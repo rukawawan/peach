@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from peach.jav_cache import DAY, PublicSnapshots, cache_fresh, cache_lifetime, stable_after
 from peach.javdb_public import PublicAPI, PublicSourceUnavailable, public_cache_scope, cache_checked_at
+from peach.metadata import relayed
 
 
 def stamp(day):
@@ -70,7 +71,7 @@ class PublicationCacheTests(unittest.TestCase):
             path = api._store().path('reviews:Exact:1')
             before = path.read_bytes()
             restarted = self.api(root, now)
-            unavailable = Mock(side_effect=PublicSourceUnavailable('来源未取得'))
+            unavailable = Mock(side_effect=PublicSourceUnavailable('errors.javdbPublic.unavailable'))
             with public_cache_scope(root) as reads:
                 self.assertEqual(restarted._cached('reviews:Exact:1', unavailable, refresh=True), ['second'])
                 self.assertEqual(restarted._cached('reviews:Exact:1', unavailable), ['second'])
@@ -177,7 +178,8 @@ class PublicationCacheTests(unittest.TestCase):
 
     def test_unavailable_source_with_empty_message_still_obeys_failure_cooldown(self):
         api = PublicAPI()
-        fetch = Mock(side_effect=PublicSourceUnavailable())
+        # 来源答复的原文就是空串：冷却照样记下。
+        fetch = Mock(side_effect=PublicSourceUnavailable(*relayed('')))
         for _ in range(2):
             with self.assertRaises(PublicSourceUnavailable):
                 api._cached('reviews:Exact:1', fetch)

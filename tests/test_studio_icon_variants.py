@@ -1063,15 +1063,19 @@ class HarvestTests(unittest.TestCase):
     def test_only_small_icons_is_its_own_verdict(self):
         """FC2 全站只有 16×16。那不是「只有字标」，下一步是找更大的资产。
         两者混成一个结论，就再没人会去找了。"""
-        rows = self.harvest_with_reasons(["只有 16x16"])
+        rows = self.harvest_with_reasons(images=[block_png((16, 16), inset=1)])
         self.assertEqual(rows[0]["verdict"], MODULE.TOOSMALL)
+        self.assertIn("只有 16x16", rows[0]["evidence"])
 
-    def harvest_with_reasons(self, reasons):
+    def harvest_with_reasons(self, reasons=(), images=()):
+        """站点声明的图标一枚都不合格：`reasons` 直接记成退回理由，`images` 交给闸门自己判。"""
         original = MODULE.site_icons.best_mark
 
         def stub(url, fetcher, policy, fallback=None, accept=None):
             fetcher(url)
             policy.reasons.extend(reasons)
+            for data in images:
+                policy(data)
             return None
 
         MODULE.site_icons.best_mark = stub
@@ -1449,10 +1453,10 @@ class RunTests(unittest.TestCase):
              (4, "studio", "Hon Naka"), (5, "agency", "T-POWERS")])
         connection.executemany(
             "INSERT INTO entity_link(entity_id, link_kind, label, url) VALUES(?,?,?,?)",
-            [(1, "official", "官方网站", "https://fitch-av.com/"),
-             (2, "official", "官方网站", "https://www.heyzo.com/"),
+            [(1, "official", "official-site", "https://fitch-av.com/"),
+             (2, "official", "official-site", "https://www.heyzo.com/"),
              # 有链接、一张图都没有：账本里 Hon Naka 就是这一例。
-             (4, "official", "官方网站", "https://honnaka.jp/"),
+             (4, "official", "official-site", "https://honnaka.jp/"),
              (5, "official", "T-POWERS", "https://t-powers.co.jp/")])
         connection.commit()
         connection.close()
@@ -1546,7 +1550,7 @@ class RunTests(unittest.TestCase):
 
     def test_a_studio_with_no_link_is_counted_separately(self):
         stats = self.invoke()
-        self.assertEqual((stats["ok"], stats["无官网链接"]), (1, 1))
+        self.assertEqual((stats[MODULE.OK], stats[MODULE.SKIP]), (1, 1))
 
     def test_reporting_never_touches_the_installed_directory(self):
         """默认只出复核件。装图必须是显式的第二步。"""
@@ -1717,9 +1721,9 @@ class StudioLinkTests(unittest.TestCase):
              (4, "studio", "FC2-PPV"), (5, "studio", "EST")])
         self.connection.executemany(
             "INSERT INTO entity_link(entity_id, link_kind, label, url) VALUES(?,?,?,?)",
-            [(1, "official", "官方网站", "https://ideapocket.com/"),
+            [(1, "official", "official-site", "https://ideapocket.com/"),
              (1, "social", "X", "https://x.com/ideapocket"),
-             (3, "official", "官方网站", "https://example.com/"),
+             (3, "official", "official-site", "https://example.com/"),
              (4, "catalog", "FC2-PPV", "https://adult.contents.fc2.com/"),
              (5, "social", "X", "https://x.com/EST_prod")])
 
@@ -2147,7 +2151,7 @@ class FaceGateTests(unittest.TestCase):
 
         def refuse():
             calls.append(1)
-            raise MODULE.face_detect.FaceModelUnavailable("缺少人脸模型：yunet.onnx")
+            raise MODULE.face_detect.FaceModelUnavailable("errors.faceDetect.faceModelMissing", {"path": "yunet.onnx"})
 
         MODULE.face_detect.FaceDetector = refuse
         gate = MODULE.FaceGate()

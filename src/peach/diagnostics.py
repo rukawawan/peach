@@ -12,15 +12,64 @@ import tempfile
 import time
 from contextlib import closing
 
-from . import __version__, access, distribution, settings_file
+from . import __version__, access, distribution, interface_text, settings_file
 from .ffmpeg import FFmpegResolver, binary_diagnostics
 from .health import inspect_database
 from .mount_reachability import MountReachability, PROBE_TIMEOUT
 
+#: 诊断项的显示名、原因与修法都是 `labels.diagnostics` 下的 code（ADR-0159）。
+_LABEL = "labels.diagnostics.label."
+_REASON = "labels.diagnostics.reason."
+_ACTION = "labels.diagnostics.action."
+#: 几条原因并列时的分隔符，进语言资源一起翻译。
+SEPARATOR = {"code": "labels.diagnostics.separator"}
 
-def item(label, status, reason, *, action="", target=None, details=None):
-    return {"label": label, "status": status, "reason": reason, "action": action,
-            "target": target, "details": details or {}}
+
+def _render(code, params=None, language=interface_text.SOURCE_LANGUAGE):
+    """渲染一句；列表参数由 `interface_text.text` 按语言资源的列表分隔符连起来（前端 `serverLabel` 同样处理）。"""
+    return interface_text.text(f"server:{code}", params, language)
+
+
+def render_parts(parts, language=interface_text.SOURCE_LANGUAGE):
+    """按段存的一句：每段是 `{code, params}` 或原样的 `{text}`，逐段渲染再连起来。"""
+    return "".join(part["text"] if "text" in part else _render(part["code"], part.get("params"), language)
+                   for part in parts)
+
+
+def joined(parts):
+    """几段原因用分隔符连成一句的段落列表。"""
+    result = []
+    for part in parts:
+        result += [SEPARATOR, part] if result else [part]
+    return result
+
+
+def item(label, status, reason, *, action="", target=None, details=None, reason_params=None, reason_parts=None):
+    """一项诊断。`label`、`reason`、`action` 是 `labels.diagnostics.label|reason|action.<名字>` 的名字；
+    几条原因并列时给 `reason_parts`（段落列表）。原字段放 zh-CN 渲染好的文字，旁边带 code。"""
+    result = {"label": _render(_LABEL + label), "label_code": _LABEL + label, "status": status}
+    if reason_parts:
+        result.update(reason=render_parts(reason_parts), reason_parts=reason_parts)
+    else:
+        result.update(reason=_render(_REASON + reason, reason_params), reason_code=_REASON + reason,
+                      reason_params=dict(reason_params or {}))
+    result.update(action=_render(_ACTION + action) if action else "",
+                  action_code=_ACTION + action if action else None, target=target, details=details or {})
+    return result
+
+
+def localized(check, language):
+    """把一项诊断的文字换成 `language`（命令行跟本机语言）；没带 code 的字段照原文。"""
+    result = dict(check)
+    if check.get("label_code"):
+        result["label"] = _render(check["label_code"], None, language)
+    if check.get("reason_parts"):
+        result["reason"] = render_parts(check["reason_parts"], language)
+    elif check.get("reason_code"):
+        result["reason"] = _render(check["reason_code"], check.get("reason_params"), language)
+    if check.get("action_code"):
+        result["action"] = _render(check["action_code"], None, language)
+    return result
 
 
 def doctor_endpoint(config):
@@ -42,30 +91,31 @@ def doctor_endpoint(config):
 
 
 def configuration(config, configured, *, validate=True):
-    try:
-        if validate:
+    unreadable = not validate and settings_file.error() is not None
+    if validate:
+        try:
             settings_file.load_config(environ=dict(os.environ, PEACH_DATA_ROOT=str(config.data_root)))
-        elif settings_file.error():
-            raise settings_file.SettingsFileError("配置文件无法读取")
-    except settings_file.SettingsFileError:
-        return item("配置", "failed", "配置文件无法读取", action="在本机修复配置文件")
+        except settings_file.SettingsFileError:
+            unreadable = True
+    if unreadable:
+        return item("configuration", "failed", "configurationUnreadable", action="repairConfiguration")
     if not configured:
-        return item("配置", "failed", "尚未完成首次配置", action="完成首次配置", target="/settings/library")
-    return item("配置", "ok", "配置可读取")
+        return item("configuration", "failed", "setupIncomplete", action="completeSetup", target="/settings/library")
+    return item("configuration", "ok", "configurationReadable")
 
 
 def database_checks(settings):
     state = inspect_database(settings.db_path)
-    reasons = {"missing": "数据库不存在", "empty": "数据库尚未初始化", "unavailable": "数据库无法读取"}
+    reasons = {"missing": "databaseMissing", "empty": "databaseEmpty", "unavailable": "databaseUnreadable"}
     readable = state["database"] == "available" and state["readable"]
-    database = item("数据库", "ok" if readable else "failed",
-                    "数据库可读取" if readable else reasons.get(state["database"], "数据库结构无法读取"),
-                    action="" if readable else "检查本机数据库与备份", details={"state": state["database"]})
-    schema_reasons = {"current": "迁移校验通过", "pending": "存在待执行迁移", "empty": "数据库尚未初始化",
-                      "mismatch": "迁移记录与当前程序不一致", "unavailable": "迁移校验未取得"}
+    database = item("database", "ok" if readable else "failed",
+                    "databaseReadable" if readable else reasons.get(state["database"], "databaseSchemaUnreadable"),
+                    action="" if readable else "checkDatabase", details={"state": state["database"]})
+    schema_reasons = {"current": "schemaCurrent", "pending": "schemaPending", "empty": "databaseEmpty",
+                      "mismatch": "schemaMismatch", "unavailable": "schemaUnavailable"}
     current = state["schema"] == "current"
-    schema = item("数据库迁移", "ok" if current else "failed", schema_reasons[state["schema"]],
-                  action="" if current else "在本机核对数据库迁移与备份",
+    schema = item("schema", "ok" if current else "failed", schema_reasons[state["schema"]],
+                  action="" if current else "checkSchema",
                   details={key: state[key] for key in ("schema", "version", "pending", "mismatched", "unknown_versions")})
     return database, schema
 
@@ -83,12 +133,12 @@ def tools(settings, *, inspect=True):
     missing = [name for name, value in found.items() if not value["available"]]
     unavailable = [name for name in ('ffmpeg', 'ffprobe') if found[name]['available'] and not found[name].get('usable', True)]
     incomplete = found['ffmpeg'].get('usable') and not found['ffmpeg'].get('av1_software')
-    problems = (["未找到：" + "、".join(missing)] if missing else [])
-    problems += (["无法执行：" + "、".join(unavailable)] if unavailable else [])
-    problems += ['FFmpeg 缺少 AV1 软件解码器'] if incomplete else []
-    return item("FFmpeg／OpenSSL", 'warning' if problems else 'ok',
-                '；'.join(problems) or ('媒体工具可执行，AV1 软件解码器可用' if inspect else '工具路径已找到'),
-                action='更新媒体工具' if problems else '', target='/settings/maintenance' if problems else None, details=found)
+    problems = ([{"code": _REASON + "toolsMissing", "params": {"names": missing}}] if missing else [])
+    problems += ([{"code": _REASON + "toolsUnusable", "params": {"names": unavailable}}] if unavailable else [])
+    problems += [{"code": _REASON + "av1Missing"}] if incomplete else []
+    return item("tools", 'warning' if problems else 'ok', 'toolsUsable' if inspect else 'toolsFound',
+                reason_parts=joined(problems), action='updateTools' if problems else '',
+                target='/settings/maintenance' if problems else None, details=found)
 
 
 def security(settings):
@@ -100,27 +150,31 @@ def security(settings):
     protected = policy["mode"] == "password" or (policy["mode"] == "legacy" and bool(settings.token))
     exposed = not loopback or settings.tunnel_enabled
     if policy["mode"] == "locked":
-        return item("访问安全", "failed", "访问密码配置无法读取", action="在本机检查访问密码配置")
+        return item("security", "failed", "accessUnreadable", action="checkAccess")
     if exposed and not protected:
-        return item("访问安全", "warning", "局域网或公网入口未开启访问密码",
-                    action="在配置中开启访问密码", target="/settings/network", details={"exposed": True, "protected": False})
-    return item("访问安全", "ok", "已开启访问密码" if protected else "仅监听本机",
+        return item("security", "warning", "passwordOff",
+                    action="enablePassword", target="/settings/network", details={"exposed": True, "protected": False})
+    return item("security", "ok", "passwordOn" if protected else "loopbackOnly",
                 details={"exposed": exposed, "protected": protected})
 
 
 def media_mounts(snapshot):
     if not snapshot["sources"]:
-        return item("媒体挂载", "disabled", "没有已配置的本地来源")
+        return item("mediaMounts", "disabled", "noLocalSources")
     states = {"ok": "ok", "degraded": "warning", "checking": "unknown"}
-    reason = "来源可读取" if snapshot["state"] == "ok" else "；".join(snapshot["warnings"]) or "挂载检测尚未完成"
-    return item("媒体挂载", states[snapshot["state"]], reason,
-                action="检查媒体目录与挂载状态" if snapshot["state"] != "ok" else "", target="/settings/library",
+    ok = snapshot["state"] == "ok"
+    # 快照的每条警告另有 `{code, params}`（`warning_codes`）；只有原文的警告原样作为一段。
+    codes = snapshot.get("warning_codes") or [None] * len(snapshot["warnings"])
+    warnings = [] if ok else [coded or {"text": text} for text, coded in zip(snapshot["warnings"], codes)]
+    return item("mediaMounts", states[snapshot["state"]], "sourcesReadable" if ok else "mountsChecking",
+                reason_parts=joined(warnings), action="checkMounts" if not ok else "", target="/settings/library",
                 details=snapshot)
 
 
-def component_checks(settings, snapshot, *, config=None, validate_config=True, inspect_tools=True):
+def component_checks(settings, snapshot, *, config=None, validate_config=True, inspect_tools=True, migrating=False):
     config = config or settings_file.active()
-    database, schema = database_checks(settings)
+    database, schema = ((item("database", "unknown", "databaseMigrating"), item("schema", "unknown", "databaseMigrating"))
+                        if migrating else database_checks(settings))
     checks = {"database": database, "schema": schema, "configured": configuration(config, settings.configured, validate=validate_config),
               "media_mounts": media_mounts(snapshot), "security": security(settings)}
     checks["ffmpeg"] = tools(settings, inspect=inspect_tools)
@@ -133,10 +187,10 @@ def writable_root(root):
             probe.write(b"peach")
             probe.flush()
     except PermissionError:
-        return item("数据目录", "failed", "没有权限写入数据目录", action="调整数据目录的写入权限")
+        return item("dataRoot", "failed", "dataRootDenied", action="fixDataRootPermission")
     except OSError:
-        return item("数据目录", "failed", "数据目录无法写入", action="检查数据目录与可用空间")
-    return item("数据目录", "ok", "临时写入与清理通过")
+        return item("dataRoot", "failed", "dataRootUnwritable", action="checkDataRoot")
+    return item("dataRoot", "ok", "dataRootWritable")
 
 
 def port_status(host, port):
@@ -144,7 +198,7 @@ def port_status(host, port):
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        return item("服务端口", "unknown", "监听地址不是 IP，端口状态未取得", details={"port": port})
+        return item("port", "unknown", "hostNotIp", details={"port": port})
     family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
     try:
         with socket.socket(family, socket.SOCK_STREAM) as probe:
@@ -152,9 +206,9 @@ def port_status(host, port):
     except OSError as error:
         import errno
         if error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) == 10048:
-            return item("服务端口", "ok", "端口正在使用", details={"port": port, "state": "in_use"})
-        return item("服务端口", "unknown", "端口状态未取得", details={"port": port})
-    return item("服务端口", "ok", "端口当前可用", details={"port": port, "state": "available"})
+            return item("port", "ok", "portInUse", details={"port": port, "state": "in_use"})
+        return item("port", "unknown", "portUnknown", details={"port": port})
+    return item("port", "ok", "portAvailable", details={"port": port, "state": "available"})
 
 
 def recent_failure(path):
@@ -164,13 +218,13 @@ def recent_failure(path):
             row = connection.execute("SELECT id,finished_at FROM task_run WHERE status='failed' "
                                      "ORDER BY finished_at DESC,id DESC LIMIT 1").fetchone()
     except (sqlite3.Error, OSError):
-        return item("后台任务", "unknown", "任务失败记录未取得")
+        return item("tasks", "unknown", "taskFailuresUnknown")
     if row is None:
-        return item("后台任务", "ok", "没有已记录的任务失败")
+        return item("tasks", "ok", "noTaskFailures")
     # 不公开任务 error、参数或结果原文，它们可能包含凭据和媒体路径。
     moment = str(row[1] or "")
     safe_time = moment if len(moment) <= 32 and all(c in "0123456789-:+.TZ " for c in moment) else None
-    return item("后台任务", "warning", "存在已记录的任务失败", action="在任务中心查看失败任务",
+    return item("tasks", "warning", "taskFailures", action="viewFailedTasks",
                 target="/tasks", details={"id": row[0], "finished_at": safe_time})
 
 
@@ -194,7 +248,8 @@ def report(settings, snapshot, *, config=None):
     checks = component_checks(settings, snapshot, config=config)
     checks.update(data_root=writable_root(config.data_root), port=port_status(settings.host, settings.port),
                   tasks=recent_failure(settings.db_path),
-                  version=item("版本", "ok", f"Peach {__version__} · Python {platform.python_version()}",
+                  version=item("version", "ok", "versions",
+                               reason_params={"peach": __version__, "python": platform.python_version()},
                                details={"peach": __version__, "python": platform.python_version()}))
     statuses = {check["status"] for check in checks.values()}
     state = "failed" if "failed" in statuses else "warning" if statuses & {"warning", "unknown"} else "ok"
@@ -203,7 +258,9 @@ def report(settings, snapshot, *, config=None):
             "sources": library_diagnostics.sources(settings, config)}
 
 
-def health_components(settings, snapshot):
-    checks = component_checks(settings, snapshot, validate_config=False, inspect_tools=False)
-    # 公开健康检查只保留分项原因；工具路径与详细修法由本机诊断提供。
-    return {key: {name: value[name] for name in ("status", "reason")} for key, value in checks.items()}
+def health_components(settings, snapshot, *, migrating=False):
+    """公开健康检查的分项。`migrating`：服务启动时正在迁移账本，数据库两项不打开账本，记为正在更新。"""
+    checks = component_checks(settings, snapshot, validate_config=False, inspect_tools=False, migrating=migrating)
+    # 公开健康检查只保留分项原因与它的 code；工具路径与详细修法由本机诊断提供。
+    fields = ("status", "reason", "reason_code", "reason_params", "reason_parts")
+    return {key: {name: value[name] for name in fields if name in value} for key, value in checks.items()}

@@ -24,7 +24,9 @@ import re
 from typing import Iterable, Mapping, Sequence
 
 from .catalog_rules import is_amateur_code, is_korean_mib_code, is_uncensored_code, is_uncensored_label_code
+from .content_words import OTHER_SYSTEM_MARKS
 from .metadata_policy import SOURCE_SPECS
+from .user_messages import UserValueError
 
 
 #: 内容类型。`unknown` 是「番号认不出来」，不是一种内容；`other` 是认得出、但 Peach 没接
@@ -47,7 +49,6 @@ _CODE_PARTS = re.compile(r"^([A-Z]+)-?0*(\d+)$")
 #: 路径里出现就说明这是 Peach 没接来源的体系。每一个都在本机账本的路径里实测出现过
 #: （2026-09-25 只读统计）：`兔子先生TZ-105`、`网红…合集\MXGD3721.MP4` 这类文件的番号
 #: 形状和有码一模一样，按有码链问下去是片商官网、r18.dev、DMM、三家综合索引各白问一遍。
-OTHER_SYSTEM_MARKS = ("国产", "國產", "网红", "網紅", "兔子先生", "麻豆")
 #: 欧美片站的文件名：番号前面挂着至少两个用连字符或下划线连起来的拉丁词
 #: （`wankzvr-elena-koshka-GFE-180_180x180_3dh_LR.mp4`，站名加演员名）。日本片的前缀是
 #: 站点水印（`hjd2048.com-`、`[FHD]`、`HD_`），不会是两个以上纯字母词连写。
@@ -237,17 +238,17 @@ def parse_route_overrides(raw: str | Mapping[str, Sequence[str] | str] | None):
     overrides: dict[str, tuple[str, ...]] = {}
     for entry in items:
         if len(entry) != 2:
-            raise ValueError("来源链覆盖要写成 `类型=来源,来源`")
+            raise UserValueError("errors.metadataRoutes.overrideFormat")
         name, value = entry
         content = str(name).strip()
         if content not in CONTENT_TYPES:
-            raise ValueError("未知内容类型：" + content)
+            raise UserValueError("errors.metadataRoutes.unknownContentType", {"type": content})
         parts = value.split(",") if isinstance(value, str) else list(value)
         sources = tuple(dict.fromkeys(
             str(part).strip() for part in parts if str(part).strip()))
         unknown = [source for source in sources if source not in SOURCE_SPECS]
         if unknown:
-            raise ValueError("未知来源：" + "、".join(unknown))
+            raise UserValueError("errors.metadataRoutes.unknownSources", {"sources": "、".join(unknown)})
         overrides[content] = sources
     return overrides
 
@@ -259,7 +260,7 @@ def route(content_type: str, *, overrides: Mapping[str, Sequence[str]] | None = 
     整条替换让设置里那一行自己就是答案。
     """
     if content_type not in ROUTES:
-        raise ValueError("未知内容类型：" + str(content_type))
+        raise ValueError("unknown content type: " + str(content_type))
     resolved = parse_route_overrides(overrides)
     if content_type in resolved:
         return resolved[content_type]

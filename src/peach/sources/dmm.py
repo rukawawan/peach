@@ -62,10 +62,10 @@ SEARCH_LIMIT = 30
 DETAIL_ATTEMPTS = 2
 HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
 JST = timezone(timedelta(hours=9))
-UNRECOGNISED = "认不出可以问 DMM 的番号"
-MISSING = "DMM 没有这个番号"
-NOT_JSON = "DMM 返回的不是作品 JSON"
-REFUSED = "DMM 拒绝了这条查询"
+#: 几种没给出结果的说法（code）。
+UNRECOGNISED = "errors.dmm.unrecognizedCode"
+MISSING = "errors.dmm.notFound"
+NOT_JSON = "errors.dmm.notWorkJson"
 
 #: 按女优编号列片单。列表型 `PPVContentSearchContent` 没有 `makerContentId` 与 `makerReleasedAt`。
 ACTRESS_WORKS_QUERY = (
@@ -107,11 +107,15 @@ _CID = re.compile(r"^(?:h_\d+|\d+)?([a-z]+)(\d+)([a-z]*)$")
 
 
 def code_from_cid(value: str) -> str:
-    """DMM 商品号的数字头属于发行目录，尾字母保留为作品身份。"""
+    """DMM 商品号的数字头属于发行目录，尾字母保留为作品身份；SOD 特典版的尾字母 `v` 除外。"""
     matched = _CID.fullmatch(str(value or "").lower())
     if not matched:
         return ""
     letters, digits, suffix = matched.groups()
+    # SOD 特典版的商品号以 v 结尾（`1sdjs00304v`，官方番号 SDJS-304-V），内容是通常版正片加特典映像，
+    # 资源与资料都按通常版番号收录，归到通常版（同 JavDB 对 FANZA 限定版取通常版的规则）。
+    if suffix == "v":
+        suffix = ""
     return normalise_code_key(f"{letters}-{digits}{suffix}")
 
 
@@ -171,7 +175,7 @@ def listed_page(data: dict) -> tuple[list[dict], int, bool]:
     result = (data.get("legacySearchPPV") or {}).get("result")
     contents = result.get("contents") if isinstance(result, dict) else None
     if not isinstance(contents, list):
-        raise SourceFailure(FailureReason.PARSE_ERROR, "DMM 返回的不是片单 JSON")
+        raise SourceFailure(FailureReason.PARSE_ERROR, "errors.dmm.notListJson")
     info = result.get("pageInfo") if isinstance(result.get("pageInfo"), dict) else {}
     total = info["totalCount"] if isinstance(info.get("totalCount"), int) else 0
     rows = [row for row in contents if isinstance(row, dict) and row.get("id")]
@@ -222,7 +226,9 @@ class DmmSource(SiteSource):
             errors = raw.get("errors")
             first = errors[0] if isinstance(errors, list) and errors and isinstance(errors[0], dict) else {}
             message = str(first.get("message") or "")
-            raise SourceFailure(FailureReason.PARSE_ERROR, REFUSED + (f"：{message}" if message else ""))
+            if message:
+                raise SourceFailure(FailureReason.PARSE_ERROR, "errors.dmm.refusedWithMessage", {"message": message})
+            raise SourceFailure(FailureReason.PARSE_ERROR, "errors.dmm.refused")
         return data
 
     def content(self, cid: str, *, session: Session) -> dict | None:
@@ -274,7 +280,7 @@ class DmmSource(SiteSource):
         一个人的片单动辄上千条（篠田ゆう 2066 部），每六小时全翻一遍只是花配额。
         """
         if not ACTRESS_ID.match(str(actress_id or "")):
-            raise SourceFailure(FailureReason.NOT_FOUND, "DMM 女优编号只认数字")
+            raise SourceFailure(FailureReason.NOT_FOUND, "errors.feeds.dmmActressIdDigits")
         name, total, works = "", 0, []
         offset = 0
         while offset < limit:
@@ -315,7 +321,7 @@ class DmmSource(SiteSource):
             raise SourceFailure(FailureReason.PARSE_ERROR, NOT_JSON)
         cid = str(item["id"])
         if not identifies_code(code, {"content_id": cid, "id": item.get("makerContentId")}):
-            raise SourceFailure(FailureReason.PARSE_ERROR, "来源返回的番号不匹配")
+            raise SourceFailure(FailureReason.PARSE_ERROR, "errors.base.codeMismatch")
         name = lambda key: str((item.get(key) or {}).get("name") or "")
         rows = lambda key: [row for row in item.get(key) or [] if isinstance(row, dict) and row.get("name")]
         directors = rows("directors")

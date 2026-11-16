@@ -21,18 +21,20 @@ const WIDTH = {
   tutorial: 'max-w-2xl',
 } as const;
 
-export function ModalFrame({ isOpen, onOpenChange, width, label, children, surfaceClassName = '' }: {
+export function ModalFrame({ isOpen, onOpenChange, width, label, children, surfaceClassName = '', portalContainer }: {
   isOpen: boolean;
   onOpenChange(open: boolean): void;
   width: keyof typeof WIDTH;
   /** 弹层没有 `Heading slot="title"` 时的无障碍名称。 */
   label?: string;
   surfaceClassName?: string;
+  /** 从原生 dialog 内打开的子弹层留在其 top layer 中。 */
+  portalContainer?: Element;
   children: ReactNode;
 }) {
   const { isFocusVisible } = useFocusVisible();
   return (
-    <ModalOverlay isOpen={isOpen} onOpenChange={onOpenChange} isDismissable
+    <ModalOverlay isOpen={isOpen} onOpenChange={onOpenChange} isDismissable UNSTABLE_portalContainer={portalContainer}
       data-modal-motion="" data-modal-kind={width} data-motion-instant={isFocusVisible || undefined}
       className="fixed inset-0 z-dialog flex items-center justify-center bg-scrim p-4">
       <Modal data-modal-surface="" data-modal-width={width} className={cx('flex max-h-full w-full flex-col overflow-hidden rounded-2-5xl border border-separator-border bg-background-full shadow-dropdown', WIDTH[width], surfaceClassName)}>

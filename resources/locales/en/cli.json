@@ -1,0 +1,198 @@
+{
+  "listSeparator": ", ",
+  "settingsUnreadable": "{{error}}\nFix this file, or regenerate it with `peach init --force`.",
+  "notInitialized": "This machine has not been initialized yet; run `peach init` first.",
+  "serve": {
+    "mdnsLoopback": "mDNS not published: --host {{host}} only allows local access, so publishing peach.local would point to an unreachable address. Use --host 0.0.0.0 for LAN access.",
+    "noAuthNotLoopback": "Refusing to start: --no-auth is only allowed when listening on a local address, and --host {{host}} is not.\nTurning off login on a LAN address hands the whole library and write APIs to any device on the network.",
+    "noToken": "Refusing to start: --host {{host}} allows other devices, and this machine has no access token yet.\nStarted like this, any device on the network could read the whole library and call write APIs.\nRun `peach token` to create and view the token (stored in {{path}}), then start again; for local use only, switch to --host 127.0.0.1."
+  },
+  "sync": {
+    "disabled": "Database role: disabled · replication.enabled = false, this device may modify the database on its own",
+    "role": "Database role: {{status}} · {{detail}}",
+    "conflict": "  The service is read-only. Choose one database manually: local {{local}}, shared {{shared}}.",
+    "result": "Database sync: {{action}} · {{result}}",
+    "pull": "Pulled from the shared copy",
+    "push": "Pushed to the shared copy",
+    "inSync": "Both sides already match",
+    "takeOwnership": "This device is now the only primary computer"
+  },
+  "migrate": {
+    "notWriter": "This device cannot migrate the database: {{reason}}; migrate on the primary computer and sync first"
+  },
+  "status": {
+    "missingDb": "Database not found: {{path}}",
+    "database": "Database {{path}}",
+    "locationRow": "  {{location}}{{count}} items{{size}} TB",
+    "total": "Total",
+    "media": "\n  Media types:",
+    "processing": "\n  Processing progress ({{total}} local videos):",
+    "measure": {
+      "duration": "Has duration (ffprobe)",
+      "snapshot": "Has contact sheet",
+      "hash": "Has hash",
+      "creator": "Has creator",
+      "activity": "Has watch history"
+    },
+    "context": "\n  Context:",
+    "contextLength": "Length",
+    "contextOrient": "Orientation",
+    "contextQuality": "Quality",
+    "contextValue": {
+      "landscape": "horizontal",
+      "long": "over 40 min",
+      "low": "low",
+      "medium": "15–40 min",
+      "portrait": "vertical",
+      "quick": "under 5 min",
+      "short": "5–15 min"
+    },
+    "migrations": "\n  Migrations: {{total}} total, {{pending}} pending",
+    "sync": "  Sync: {{action}} · {{reason}}; primary computer {{writer}}",
+    "writerLocal": "this device",
+    "writerUnknown": "undetermined"
+  },
+  "mount": {
+    "badFormat": "--mount takes STORAGE_ID=PATH, got: {{value}}",
+    "unknownSource": "--mount storage ID is not declared in [media.locations]: {{key}} (known: {{known}})",
+    "noneDeclared": "no storage declared yet"
+  },
+  "init": {
+    "exists": "Settings file already exists: {{path}}",
+    "forceHint": "Add --force to regenerate it; that overwrites this file and leaves your data alone.",
+    "forceHintInteractive": "Run `peach init --force` to regenerate it; that overwrites this file and leaves your data alone.",
+    "brokenNote": "Note: {{error}}",
+    "brokenRebuilt": "The file below was rebuilt from built-in defaults plus environment variables and does **not** keep values from the old file.",
+    "brokenRepeat": "Pass any coordinates you customized in the old file again with the matching options in this command.",
+    "settingsFile": "Settings file: {{path}}",
+    "interviewIntro": "First-run questions: press Enter to accept the default in brackets.",
+    "aborted": "{{reason}} Exited without writing any files.",
+    "dataRoot": "Peach data directory: {{path}}",
+    "scanSkipped": "{{reason}} Skipped scanning; run `peach scan local` later.",
+    "scanResult": "  Scan result: {{summary}}"
+  },
+  "scan": {
+    "offline": "{{location}}: mount point offline, not scanned",
+    "unknownSource": "✗ Undeclared storage {{location}}; known in [media.locations]: {{known}}",
+    "noneDeclared": "(none in the settings file)"
+  },
+  "process": {
+    "progress": "{{stage}}: {{checked}}/{{total}}",
+    "discovered": "{{stage}}: found {{count}} files",
+    "cancelled": "Task canceled; saved results are kept.",
+    "followups": "Follow-ups: {{declared}} declared, {{queued}} queued, {{duplicates}} already queued"
+  },
+  "tree": {
+    "dbExists": "Database already exists, skipped creating it: {{path}}",
+    "fromExistingHint": "To create a settings file for an existing deployment, use `peach init --from-existing`.",
+    "database": "Database: {{path}} ({{count}} migrations applied)",
+    "ca": "Local CA: {{path}}",
+    "noCa": "Local CA not created ({{error}}). Install openssl and rerun `peach init --force` to add it."
+  },
+  "token": {
+    "path": "Access token: {{path}}",
+    "reused": " (reusing the existing one)",
+    "lanHint": "Services bound to a LAN address must be able to read it; view it with `peach token`.",
+    "file": "Token file: {{path}}",
+    "value": "Token: {{token}}",
+    "relogin": "Browsers that were signed in must sign in again; running services pick up this token after a restart.",
+    "shared": "When two machines fetch each other's review results they send their own token, so the reader must use the same file as the writer."
+  },
+  "tunnel": {
+    "state": "State: {{state}}",
+    "url": "Address: {{url}}",
+    "reason": "Reason: {{reason}}",
+    "public": "Public address: {{url}}",
+    "stopping": "Stopping the temporary link…"
+  },
+  "blanks": {
+    "header": "These coordinates are empty (not an error; single-machine setups leave them empty):",
+    "row": "  {{field}} is empty → {{effect}}; to set it, rerun with {{flag}}",
+    "writerOriginFlag": "--writer-origin https://<writer address>",
+    "writerOriginEffect": "the reader does not mirror reviews",
+    "smbHostFlag": "--smb-host <writer hostname>",
+    "smbUserFlag": "--smb-user <keychain account>",
+    "noSharedMount": "the shared transfer point is not mounted",
+    "mounts": "  [media.mounts] is empty → storage directories can't be read; set them with --mount <STORAGE_ID>=<MEDIA_DIR> (known storage: {{known}})"
+  },
+  "next": {
+    "header": "\nNext steps:",
+    "existing1": "  1. Open the file above and check it, especially [media.mounts] and [replication].",
+    "existing2": "  2. Restart the service to apply it. Until then nothing changes.",
+    "existing3": "  3. Get the token with `peach token`: services bound to a LAN address won't start without it, and devices already in use must sign in again.",
+    "open": "  2. Open http://127.0.0.1:{{port}}/ in a browser to confirm the page works.",
+    "lanLoopback": "  3. For LAN access use --host 0.0.0.0 and install the local CA on each device. An access password is optional and set on the configuration page.",
+    "lan": "  3. LAN devices need the local CA installed. An access password is optional and set on the configuration page."
+  },
+  "sources": {
+    "intro": "Checking source pages and image CDNs; being reachable does not mean metadata or login sessions were verified."
+  },
+  "help": {
+    "localImage": "Read one companion image",
+    "mediaRead": "Read a media directory and companion files with a time limit",
+    "init": "First run: with no options, asks questions in the terminal; any option or --no-input runs non-interactively",
+    "noInput": "Skip the questions and generate from options and built-in defaults",
+    "dataRoot": "Peach data directory; defaults to the one currently discovered",
+    "fromExisting": "Only create a settings file for a running deployment; create no directories or database",
+    "force": "Overwrite an existing settings file",
+    "host": "Service listen address",
+    "port": "Service port",
+    "mdnsName": "Name this machine publishes on the LAN (<name>.local)",
+    "writerOrigin": "Writer origin the reader mirrors reviews from",
+    "writerProxy": "HTTP proxy used only for the writer origin",
+    "sharedRoot": "Shared transfer point for ledger replication",
+    "smbHost": "Host of the shared transfer point",
+    "smbShare": "Share name",
+    "smbUser": "Account used to mount the share",
+    "mountMetavar": "STORAGE_ID=PATH",
+    "mount": "Map a storage ID to a local media directory, e.g. local=/mnt/media; repeatable",
+    "setup": "Serve only the first-run form: ignore the discovered Peach data directory and require no token",
+    "noAuth": "Skip the login page; only allowed for local access, and never reads or changes the token file",
+    "scan": "Scan the directories of one storage and save file details to the database",
+    "scanLocation": "Storage ID (asset.location), declared in [media.locations]",
+    "scanRoot": "Media directory to scan; when omitted, uses the storage's configuration ([media.mounts] outside Windows)",
+    "process": "Scan files and fill in library metadata",
+    "token": "Show the LAN access token, creating one if needed",
+    "rotate": "Replace the token; issued cookies stop working immediately",
+    "tunnel": "Run or inspect the Cloudflare Tunnel (an access password must be set by default)",
+    "httpsPort": "Actual HTTPS port of the source deployment (8443 on macOS, 443 elsewhere by default)",
+    "checkSources": "After installing, run a bounded check of external metadata sources and image CDNs without reading videos",
+    "source": "Check only this source ID; repeatable, defaults to all metadata sources",
+    "sourcesJson": "Print JSON results without credentials",
+    "doctor": "Diagnose configuration, database, tools and mounts item by item without repairing anything",
+    "doctorJson": "Print a redacted JSON report",
+    "doctorHost": "Diagnose this service listen address",
+    "doctorPort": "Diagnose this service port"
+  },
+  "server": {
+    "description": "Run the Peach service managed from the browser",
+    "accessIgnored": "Access is already set up, ignoring {{env}}; change the access password in Settings under Network and access.",
+    "accessRejected": "{{env}} was not used: {{error}}. Opening Peach in a browser leads to the access setup.",
+    "accessWriteFailed": "{{env}} could not be saved: {{error}}",
+    "accessSet": "Access password set from {{env}}.",
+    "processFailed": "Library processing failed with exit code {{code}}",
+    "updateTokenFailed": "The one-click update token could not be created: {{error}}",
+    "listening": "Peach is listening on {{host}}:{{port}}. Access from outside the container follows the host port mapping.",
+    "firstSetup": "First-time setup: open Peach in a browser on the host or the LAN and follow the page.",
+    "firstOpen": "First open: open Peach in a browser on the host or the LAN, then set an access password or turn off sign-in.",
+    "firstSignIn": "First sign-in: run peach token where Peach runs to see the access token, then set an access password after signing in.",
+    "lanAccess": "NAS / LAN access: set PEACH_BIND in Compose to the host's LAN IP; 127.0.0.1 allows only the host."
+  },
+  "trayCommand": {
+    "description": "Start the Peach tray (the menu bar item on macOS) and manage services on this device; usually run without arguments.",
+    "silent": "Show only the tray after starting",
+    "show": "Open the browser after starting"
+  },
+  "nasSetup": {
+    "description": "Generate a Compose file for a NAS container manager. It does not talk to Docker or start or overwrite an existing deployment.",
+    "help": {
+      "bind": "LAN IP address of the NAS",
+      "media": "Existing media directory on the host; read-only /media inside the container",
+      "hostname": "Keep this name so tasks stay with the same worker after the container is recreated",
+      "uid": "Numeric UID that runs Peach, 1000 by default; use it to keep the NAS share permissions",
+      "gid": "Numeric GID that runs Peach, 1000 by default",
+      "prepareRender": "For a render node with mode 0600, the container entrypoint hands it to the service group; the host node is not changed",
+      "output": "Save to a new file and refuse to overwrite an existing one; prints to standard output by default"
+    }
+  }
+}

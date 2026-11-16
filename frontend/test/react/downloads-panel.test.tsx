@@ -18,10 +18,10 @@ beforeEach(() => { registerNameWritings([]); setNameLanguage('zh-CN') });
 const task = (patch: Partial<DownloadTask> = {}): DownloadTask => ({
   id: 1, info_hash: 'a'.repeat(40), provider: '115', provider_label: '115', source_uri: 'magnet:?xt=urn:btih:' + 'a'.repeat(40),
   display_name: 'ABC-123.mp4', target: '/115/云下载', code: 'ABC-123', title: null, origin: 'paste',
-  state: 'remote_running', state_label: '远端下载中', failure: null, failure_label: null, failure_detail: null,
+  state: 'remote_running', state_label: '网盘下载中', failure: null, failure_label: null, failure_detail: null,
   progress: 0.42, remote_name: null, ledger_path: null, asset_id: null, submitted_at: '2026-10-01T08:00:00Z',
   updated_at: '2026-10-01T08:01:00Z', finished_at: null, blocked: false, cancellable: true, resubmittable: false,
-  postprocess_state: 'not_requested', postprocess_label: '未开始', postprocess_detail: null,
+  postprocess_state: 'not_requested', postprocess_label: '整理未开始', postprocess_detail: null,
   postprocess_run_id: null, postprocessed_at: null, postprocess_active: false, postprocess_retryable: false,
   ...patch,
 });
@@ -128,7 +128,7 @@ it('远端在跑的任务给进度与取消键，取消发到取消接口', asyn
   const host = await show();
   const card = host.querySelector('[data-download-state=remote_running]')!;
   expect(card.querySelector('[role=progressbar]')?.getAttribute('aria-valuenow')).toBe('42');
-  expect(card.textContent).toContain('远端下载中');
+  expect(card.textContent).toContain('网盘下载中');
   expect(buttonNamed('重新提交', card)).toBeNull();
   // 辅助的两个在前，改动任务的取消排在最后。
   expect([...card.querySelectorAll('[data-download-actions] button')].map((node) => node.textContent))
@@ -140,15 +140,15 @@ it('远端在跑的任务给进度与取消键，取消发到取消接口', asyn
 
 it('失败的任务写中文原因，可以重新提交；被判违规的只剩复制磁力', async () => {
   const failed = task({ id: 2, state: 'failed', state_label: '失败', failure: 'no_source', cancellable: false,
-    resubmittable: true, failure_label: '没有可用的资源', failure_detail: '远端任务列表里找不到它' });
+    resubmittable: true, failure_label: '没有可用下载源或进度长时间未更新', failure_detail: '远端任务列表里找不到它' });
   const blocked = task({ id: 3, state: 'failed', state_label: '失败', failure: 'rejected', cancellable: false,
-    blocked: true, failure_label: '被判违规', failure_detail: '50038' });
+    blocked: true, failure_label: '网盘拒绝下载该资源', failure_detail: '50038' });
   const { posts } = serve(snapshot({ tasks: [failed, blocked] }),
     { '/api/downloads': { ok: true, outcome: 'submitted', task: failed } });
   const host = await show();
   const [first, second] = [...host.querySelectorAll('[data-download-state=failed]')];
-  expect(first?.textContent).toContain('没有可用的资源：远端任务列表里找不到它');
-  expect(second?.textContent).toContain('被判违规');
+  expect(first?.textContent).toContain('没有可用下载源或进度长时间未更新：远端任务列表里找不到它');
+  expect(second?.textContent).toContain('网盘拒绝下载该资源');
   expect([buttonNamed('取消', second!), buttonNamed('重新提交', second!)]).toEqual([null, null]);
   expect(buttonNamed('复制磁力', second!)).not.toBeNull();
   await click(buttonNamed('重新提交', first!));
@@ -156,6 +156,28 @@ it('失败的任务写中文原因，可以重新提交；被判违规的只剩�
   expect(posts()).toEqual([['/api/downloads', {
     magnet: failed.source_uri, provider: '115', target: '/115/云下载', code: 'ABC-123', title: null, origin: 'paste',
   }]]);
+});
+
+it('网盘空间不足时整段顶部给一条渠道提示，说明浏览器添加已暂停', async () => {
+  const failed = task({ id: 4, state: 'failed', state_label: '失败', failure: 'storage', cancellable: false,
+    resubmittable: true, failure_label: '网盘空间不足', failure_detail: '扩容或清理网盘空间后再提交' });
+  serve(snapshot({ tasks: [failed], channel_alerts: [{ provider: '115', provider_label: '115', failure: 'storage',
+    message: '扩容或清理网盘空间后再提交', message_code: 'errors.downloads.remoteStorageFull', message_params: {},
+    since: '2026-11-13T00:00:00+00:00' }] }));
+  const host = await show();
+  const note = host.querySelector('[role=note]');
+  expect(note?.textContent).toBe('115：网盘空间不足扩容或清理网盘空间后再提交。浏览器添加已暂停，恢复后自动继续');
+  expect(host.querySelector('[data-download-state=failed]')?.textContent).toContain('网盘空间不足：扩容或清理网盘空间后再提交');
+});
+
+it('网盘配置失效的渠道提示按错误显示', async () => {
+  serve(snapshot({ tasks: [task({ id: 5, state: 'failed', failure: 'config', cancellable: false, resubmittable: true,
+    failure_label: '配置或登录有误', failure_detail: '还没有填 CloudDrive2 的 API 令牌' })],
+  channel_alerts: [{ provider: '115', provider_label: '115', failure: 'config', message: '还没有填 CloudDrive2 的 API 令牌',
+    message_code: 'errors.downloadsClouddrive.tokenMissing', message_params: {}, since: '2026-11-13T00:00:00+00:00' }] }));
+  const host = await show();
+  expect(host.querySelector('[role=note]')).toBeNull();
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('115：配置或登录有误');
 });
 
 it('对账遇到暂时性故障退避重排时，底栏写出原因，卡片不算失败', async () => {
@@ -178,7 +200,7 @@ it('只读端任务照常列出，但没有取消键', async () => {
 it('后处理失败可以单独重试，不会重新提交磁力', async () => {
   const failed = task({
     state: 'ingested', state_label: '已入库', cancellable: false,
-    postprocess_state: 'failed', postprocess_label: '后处理失败',
+    postprocess_state: 'failed', postprocess_label: '整理失败',
     postprocess_detail: '资料采集失败', postprocess_retryable: true,
   });
   const { posts } = serve(snapshot({ tasks: [failed] }), {

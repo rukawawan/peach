@@ -16,6 +16,7 @@ import { useTableSelection } from './use-table-selection';
 import { useTablePreferences } from './table-column-preferences';
 import { TableColumnControls, TableColumnResizer } from './table-column-controls';
 import { TableSelectionHeader } from './table-selection-header';
+import { t } from '../../i18n';
 
 const features = tableFeatures({
   rowSortingFeature, rowSelectionFeature, rowPaginationFeature, columnVisibilityFeature,
@@ -53,10 +54,10 @@ interface DataTableProps<T> {
 
 /** 数据表共用排序、跨页选择与分页；业务动作只接收仍在清单里的所选行。 */
 export function DataTable<T extends RowData>({ label, items, columns, rowId, rowLabel, selected, onSelected, actions,
-  title = label, titleId, description, footerActions, toolbarActions, panel = true, unit = '条记录' }: DataTableProps<T>) {
+  title = label, titleId, description, footerActions, toolbarActions, panel = true, unit = t('shell:dataTable.recordUnit') }: DataTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const preferenceColumns = useMemo(() => [
-    { id: 'select', label: '选择', width: 48, min: 48, max: 48, required: true },
+    { id: 'select', label: t('shell:dataTable.selectColumn'), width: 48, min: 48, max: 48, required: true },
     ...columns.map((column, index) => ({ ...column, width: column.width ?? (index === 0 ? 320 : 160),
       min: column.min ?? (index === 0 ? 320 : 96), flex: column.flex ?? index === 0, required: index === 0 })),
   ], [columns]);
@@ -70,9 +71,9 @@ export function DataTable<T extends RowData>({ label, items, columns, rowId, row
     const helper = createColumnHelper<typeof features, T>();
     return helper.columns([
       helper.display({ id: 'select', header: ({ table }) => (
-        <TableSelectionHeader table={table} label={`全选${label}`} />
+        <TableSelectionHeader table={table} label={t('shell:dataTable.selectAll', { label })} />
       ), cell: ({ row }) => (
-        <Checkbox slot={null} aria-label={`选择 ${rowLabel(row.original)}`} isSelected={row.getIsSelected()}
+        <Checkbox slot={null} aria-label={t('shell:dataTable.selectRow', { name: rowLabel(row.original) })} isSelected={row.getIsSelected()}
           onChange={(on) => row.toggleSelected(on)} />
       ) }),
       ...columns.map((column) => helper.accessor((item: T) => column.value?.(item) ?? '', {
@@ -103,7 +104,7 @@ export function DataTable<T extends RowData>({ label, items, columns, rowId, row
     <div data-data-table-panel={panel || undefined} className={panel
       ? cardClass({ padding: 'none', className: 'flex flex-col gap-4 px-6 py-5 max-sm:px-4' })
       : 'flex min-w-0 flex-col gap-4'}>
-      <div data-responsive-toolbar="" role="toolbar" aria-label={`${label}工具栏`}>
+      <div data-responsive-toolbar="" role="toolbar" aria-label={t('shell:dataTable.toolbar', { label })}>
         <div data-toolbar-heading="">
         <h3 id={titleId} className="text-title-2-medium text-text-primary">{title}</h3>
         <span className="text-body-2-regular tabular-nums text-text-secondary">
@@ -118,9 +119,9 @@ export function DataTable<T extends RowData>({ label, items, columns, rowId, row
         </div>
       </div>
       {description ? <p className="text-body-2-regular text-text-secondary">{description}</p> : null}
-      <SelectionDock label={`${label}批量操作`} visible={chosen.length > 0} count={`已选 ${chosen.length.toLocaleString()} ${unit}`}>
+      <SelectionDock label={t('shell:dataTable.bulkActions', { label })} visible={chosen.length > 0} count={t('shell:dataTable.selectedCount', { count: chosen.length, unit })}>
         {actions(chosen, () => onSelected([]))}
-        <Button variant="ghost" size="small" onClick={() => onSelected([])}>取消选择</Button>
+        <Button variant="ghost" size="small" onClick={() => onSelected([])}>{t('shell:dataTable.clearSelection')}</Button>
       </SelectionDock>
       <DataTableFrame follow preferences={preferences} onRowClick={(id) => table.getRow(id)?.toggleSelected()}>
         <Table aria-label={label} size="sm"
@@ -135,9 +136,9 @@ export function DataTable<T extends RowData>({ label, items, columns, rowId, row
                 </span><TableColumnResizer preferences={preferences} id={header.id} /></>}
               </TableColumn>
             ))}
-            <TableColumn id="remaining-space" aria-label="行空白区域" data-table-space="" width={preferences.spaceWidth} minWidth={0} />
+            <TableColumn id="remaining-space" aria-label={t('shell:dataTable.spacerColumn')} data-table-space="" width={preferences.spaceWidth} minWidth={0} />
           </TableHeader>
-          <TableBody renderEmptyState={() => '没有记录'}>
+          <TableBody renderEmptyState={() => t('shell:dataTable.empty')}>
             {table.getRowModel().rows.map((row) => (
               <TableRow key={row.id} id={row.id} data-board-selected={row.getIsSelected() || undefined}>
                 {row.getVisibleCells().map((cell) => <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>)}

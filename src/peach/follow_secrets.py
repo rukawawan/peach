@@ -11,12 +11,19 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import interface_text
 from .fsutil import atomic_write_text
 from .platform import root_online
+from .user_messages import UserFacingError
 
 
-class CredentialError(RuntimeError):
-    pass
+class CredentialError(UserFacingError, RuntimeError):
+    """追更来源的凭据缺失、读不出或被站点拒绝。`code` 与参数见 `user_messages.UserFacingError`。
+
+    状态码沿用 500，理由同 `follow.FollowSourceError`：漏到接口层与错误上报的行为不变。
+    """
+
+    status_code = 500
 
 
 @dataclass(frozen=True)
@@ -27,9 +34,8 @@ class Credential:
     def require(self, *names: str) -> tuple[str, ...]:
         missing = [name for name in names if not self.values.get(name)]
         if missing:
-            raise CredentialError(
-                f"{self.provider} 凭据缺少字段：{', '.join(missing)}"
-            )
+            raise CredentialError("errors.followSecrets.missingFields",
+                                  {"provider": self.provider, "fields": ", ".join(missing)})
         return tuple(str(self.values[name]) for name in names)
 
 
@@ -52,7 +58,7 @@ class CredentialStore:
 
     def path_for(self, provider: str) -> Path:
         if not provider or "/" in provider or "\\" in provider or provider.startswith("."):
-            raise CredentialError("provider 名称非法")
+            raise CredentialError("errors.followSecrets.invalidProvider")
         return self.root / f"{provider}.json"
 
     def syncable(self, provider: str) -> tuple[str, ...]:
@@ -78,9 +84,9 @@ class CredentialStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise CredentialError(f"{provider} 凭据文件无法解析") from exc
+            raise CredentialError("errors.followSecrets.unreadable", {"provider": provider}) from exc
         if not isinstance(payload, dict):
-            raise CredentialError(f"{provider} 凭据文件必须是 JSON 对象")
+            raise CredentialError("errors.followSecrets.notObject", {"provider": provider})
         return {
             str(key): str(value) for key, value in payload.items()
             if value is not None and not isinstance(value, (dict, list))
@@ -187,17 +193,17 @@ CREDENTIAL_GUIDE: dict[str, dict] = {
         "fields": ["cookie"],
         # FANBOX Cookie 绑定浏览器会话与风控环境，不跨机同步。
         "syncable": [],
-        "why": "公开列表不需要登录；帖子详情被 FANBOX 验证页拦住时，可用浏览器会话取得正文、多图和外部资源链接。",
+        "why_code": "labels.followSecrets.why.fanbox",
         "where": "https://www.fanbox.cc/",
-        "howto": "登录 FANBOX 后，从一次成功的 api.fanbox.cc/post.info 请求复制整条 Cookie 请求头。",
+        "howto_code": "labels.followSecrets.howto.fanbox",
     },
     "gofile": {
         "requirement": "optional",
         "fields": ["api_token"],
         "syncable": [],
-        "why": "用于展开 Gofile 文件页，取得其中的图片和视频列表；Gofile 当前要求 Premium 才能读取 contents API，不配置仍会保留文件页链接。",
+        "why_code": "labels.followSecrets.why.gofile",
         "where": "https://gofile.io/myprofile",
-        "howto": "登录 Premium Gofile 账户后，在个人资料页复制 API token。",
+        "howto_code": "labels.followSecrets.howto.gofile",
     },
     "kemono": {"requirement": "none"},
     "coomer": {"requirement": "none"},
@@ -207,39 +213,44 @@ CREDENTIAL_GUIDE: dict[str, dict] = {
         "requirement": "optional",
         "fields": ["access_token"],
         "syncable": [],
-        "why": "公开作者视频无需登录；有访问限制的视频需要账号访问权及有效登录凭据。",
+        "why_code": "labels.followSecrets.why.iwara",
         "where": "https://www.iwara.tv/",
-        "howto": "登录 Iwara 后，从成功的 apiq.iwara.tv/video 请求复制 Authorization 中 Bearer 后的值，填写 access_token。令牌过期后需重新复制。",
+        "howto_code": "labels.followSecrets.howto.iwara",
     },
     "rule34xxx": {
         "requirement": "required",
         "fields": ["user_id", "api_key"],
         # 账号级、与机器无关，用户明确要求跨机同步。
         "syncable": ["user_id", "api_key"],
-        "why": "网页版挂了 Cloudflare 验证码，Peach 不绕验证码，只能走官方 API。",
+        "why_code": "labels.followSecrets.why.rule34xxx",
         "where": "https://rule34.xxx/index.php?page=account&s=options",
-        "howto": "登录后在账号设置页生成 API key，把 user_id 和 api_key 写进凭据文件。",
+        "howto_code": "labels.followSecrets.howto.rule34xxx",
     },
     "f95zone": {
         "requirement": "optional",
         "fields": ["cookie"],
         # cookie 绑会话与客户端 IP，同步到另一台大概率直接失效——不同步。
         "syncable": [],
-        "why": "发现更新不需要登录；只有取附件和 masked 下载链接才需要会话。",
+        "why_code": "labels.followSecrets.why.f95zone",
         "where": "https://f95zone.to/",
-        "howto": "登录后从浏览器复制整条 Cookie 请求头，写进凭据文件的 cookie 字段。",
+        "howto_code": "labels.followSecrets.howto.f95zone",
     },
     "simpcity": {
         "requirement": "required",
         "fields": ["cookie"],
         # 登录会话绑浏览器与 DDoS-Guard 的放行记录，同步到另一台大概率直接失效——不同步。
         "syncable": [],
-        "why": "站点不让游客读帖，检查更新必须带登录会话；前面的 DDoS-Guard 对标准桌面浏览器"
-               "标识不出质询，Peach 也不解任何质询，cookie 失效就原样报错。",
+        "why_code": "labels.followSecrets.why.simpcity",
         "where": "https://simpcity.cr/",
-        "howto": "登录后从浏览器复制整条 Cookie 请求头，写进凭据文件的 cookie 字段。",
+        "howto_code": "labels.followSecrets.howto.simpcity",
     },
 }
+#: 给人看的说明只在语言资源里（`why_code`、`howto_code`）；`why`、`howto` 是按 zh-CN 渲染的原句，
+#: 给还不认 code 的调用方兜底；接口把 `why_code`、`howto_code` 一起交给界面取当前语言。
+for _guide in CREDENTIAL_GUIDE.values():
+    for _part in ("why", "howto"):
+        if f"{_part}_code" in _guide:
+            _guide[_part] = interface_text.text(f"server:{_guide[f'{_part}_code']}")
 
 
 #: 哪些字段可以跨机同步，逐 provider 逐字段声明。绝不按字段名猜——今天 `api_key`

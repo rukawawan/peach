@@ -16,9 +16,10 @@ export function DiscoveryFaces({ item }: { item: Discovery }) {
       ? { children: <SourceAvatar code={item.code} person={person} /> }
       : { dangerouslySetInnerHTML: { __html: avatarInner(person.name, person, null) } };
     return person.id
-      ? <a key={person.name} data-media-avatar="" style={style} href={entityPath('performer', person.name, person.id)} aria-label={`打开女优页：${entityDisplayName('performer', person.name, person.id)}`} {...face} />
+      ? <a key={person.name} data-media-avatar="" style={style} href={entityPath('performer', person.name, person.id)} aria-label={t('catalog:javDiscovery.openActress', { name: entityDisplayName('performer', person.name, person.id) })} {...face} />
       : <span key={person.name} data-media-avatar="" style={style} title={entityDisplayName('performer', person.name)} {...face} />;
   });
   return people.length > 1 ? <div data-media-avatars="" style={{ '--media-avatar-count': Math.min(5, people.length) } as CSSProperties}>{faces}</div> : faces[0] || null;
 }
 import type { CSSProperties } from 'react';
+import { t } from '../../i18n';

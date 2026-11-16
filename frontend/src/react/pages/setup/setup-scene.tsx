@@ -3,6 +3,7 @@ import { RiFolderLine, RiPlayFill, RiSearchLine } from '@remixicon/react';
 import macbook from '../../../../../resources/setup/macbook.png';
 import iphone from '../../../../../resources/setup/iphone.png';
 import { PeachSilhouette } from './peach-silhouette';
+import { t } from '../../../i18n';
 
 type SceneStep = number | 'restore' | 'done';
 
@@ -16,14 +17,14 @@ function LibraryPreview() {
 
 /** 首次设置的场景说明；使用 Peach 图标与布局，不包含真实馆藏。 */
 export function SetupScene({ step }: { step: SceneStep }) {
-  const title = step === 0 ? '你的私人媒体空间。' : step === 1 ? '让文件成为馆藏。'
-    : step === 2 ? '从书桌，到手边。' : step === 3 ? '全都准备好了。'
-    : step === 'restore' ? '从熟悉的地方继续。' : '馆藏，准备开启。';
-  const description = step === 0 ? '把喜欢的内容，整理成自己的收藏。'
-    : step === 1 ? '按媒体库归类，文件保留在原来的位置。'
-    : step === 2 ? '电脑与手机，连接同一套 Peach。'
-    : step === 3 ? '确认后保存，扫描按你的选择开始。'
-    : step === 'restore' ? '沿用原来的配置与记录，接着使用。' : '进入 Peach，开始探索你的收藏。';
+  const title = step === 0 ? t('shell:setupScene.welcomeTitle') : step === 1 ? t('shell:setupScene.mediaTitle')
+    : step === 2 ? t('shell:setupScene.accessTitle') : step === 3 ? t('shell:setupScene.confirmTitle')
+    : step === 'restore' ? t('shell:setupScene.restoreTitle') : t('shell:setupScene.doneTitle');
+  const description = step === 0 ? t('shell:setupScene.welcomeBody')
+    : step === 1 ? t('shell:setupScene.mediaBody')
+    : step === 2 ? t('shell:setupScene.accessBody')
+    : step === 3 ? t('shell:setupScene.confirmBody')
+    : step === 'restore' ? t('shell:setupScene.restoreBody') : t('shell:setupScene.doneBody');
   return <aside data-setup-scene="">
     <div data-setup-scene-brand=""><PeachSilhouette variant="brand" /><span>Peach</span></div>
     <div data-setup-scene-art="" key={step} aria-hidden="true">
@@ -34,7 +35,7 @@ export function SetupScene({ step }: { step: SceneStep }) {
         <div data-setup-iphone=""><img src={iphone} alt="" /><div data-setup-device-screen=""><LibraryPreview /></div></div>
       </div> : <div data-setup-library-scene="">
         <LibraryPreview />
-        <div data-setup-scene-badge=""><RiFolderLine /><span>你的媒体库</span></div>
+        <div data-setup-scene-badge=""><RiFolderLine /><span>{t('shell:setupScene.libraryBadge')}</span></div>
       </div>}
     </div>
     <div data-setup-scene-caption="" key={`caption-${step}`}>

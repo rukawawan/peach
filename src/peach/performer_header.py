@@ -22,6 +22,7 @@ import re
 import sqlite3
 from datetime import date
 
+from . import interface_text
 from .entities import normalize_entity_name
 from .genre_decisions import load_genre_decisions
 from .genre_taxonomy import resolve_profile_tag
@@ -35,7 +36,11 @@ from .social_links import name_key
 HIDDEN_SOURCES = frozenset({"r18:performer", PLANNING_ALIAS_SOURCE})
 #: 名字那一行在读音之后先列几个。
 SHOWN = 3
-CURRENT, FORMER, OTHER = "现名", "旧名义", "其它"
+#: 页头名字的三个固定分组：显示名的 code（ADR-0159）。分组的 `label` 照旧是 zh-CN 原文，另带 `label_code`；
+#: 各渠道名义那几组的 `label` 是资料站上的注记原文（内容数据），不带 code。
+GROUP_CODES = ("labels.performerHeader.current", "labels.performerHeader.former", "labels.performerHeader.other")
+CURRENT, FORMER, OTHER = (interface_text.text(f"server:{code}") for code in GROUP_CODES)
+_LABEL_CODES = dict(zip((CURRENT, FORMER, OTHER), GROUP_CODES))
 #: 身材一格的列 → 页头的键。
 _BODY = (("height_cm", "height"), ("bust_cm", "bust"), ("waist_cm", "waist"),
          ("hip_cm", "hip"), ("cup", "cup"))
@@ -142,6 +147,12 @@ def page_sections(page: dict, reading: str) -> list[tuple[str, list[dict]]]:
             *sorted(notes.items(), key=lambda item: -len(item[1]))]
 
 
+def name_group(label: str, names: list[dict]) -> dict:
+    """页头的一组名字；固定分组带上 `label_code`，前端按它取当前语言。"""
+    code = _LABEL_CODES.get(label)
+    return {"label": label, **({"label_code": code} if code else {}), "names": names}
+
+
 class _Groups:
     """往页头的组里一个个放名字：同键的只放一次，中日文规范名下不放纯拉丁写法。"""
 
@@ -162,7 +173,7 @@ class _Groups:
     def add(self, label: str, entries: list[dict]) -> None:
         names = [entry for entry in entries if self.keep(entry["name"])]
         if names:
-            self.groups.append({"label": label, "names": names})
+            self.groups.append(name_group(label, names))
 
 
 def name_groups(connection: sqlite3.Connection, entity_id: int, canonical: str,

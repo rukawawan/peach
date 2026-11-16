@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
+import sys
+
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 from .check_readme_impact import git, trailers, unpublished
 
@@ -14,6 +19,14 @@ VENDORS = {
     "Codex": "noreply@openai.com",
     "opencode": "noreply@opencode.ai",
 }
+
+#: 维护者本人的提交邮箱（小写）。fork 来的 PR 里出现这些身份，说明贡献者照 `git log`
+#: 配成了维护者，`scripts/check_pr_identity.py` 据此拒收。
+MAINTAINER_MAILS = frozenset({
+    "longmeidao@pm.me",
+    "42052392+longmeidao@users.noreply.github.com",
+    "longmeidao@users.noreply.github.com",
+})
 
 #: 署名形态：`工具 (模型 版本) <厂商 noreply>`。括号里那一段是重点——同一个工具换代
 #: 模型，写出来的代码差别比换工具本身还大，事后翻这一行是要知道哪个模型写的。
@@ -54,7 +67,7 @@ def problems(label: str, found: list[str], *, own: bool = True) -> list[str]:
     外部贡献者是否用了 AI 由本人在 PR 里说明，门槛不替作者补签，也不卡他用的工具名单。
     """
     if not found:
-        return [f"提交「{label}」须有 Co-Authored-By 写明工具与模型，如 {EXAMPLE}"] if own else []
+        return [t("co_author.missing", label=label, example=EXAMPLE)] if own else []
     problems = []
     has_agent = False
     for value in found:
@@ -65,19 +78,18 @@ def problems(label: str, found: list[str], *, own: bool = True) -> list[str]:
                 and human["mail"].casefold() not in VENDORS.values()):
             continue
         if parsed is None:
-            problems.append(f"提交「{label}」的署名「{value}」形态不对，须为 工具 (模型 版本) "
-                            f"<厂商 noreply>，如 {EXAMPLE}")
+            problems.append(t("co_author.badForm", label=label, value=value, example=EXAMPLE))
         elif parsed["tool"] not in VENDORS:
             if own:
-                problems.append(f"提交「{label}」的署名里，工具「{parsed['tool']}」未登记，"
-                                "已登记：" + "、".join(VENDORS))
+                problems.append(t("co_author.unknownTool", label=label, tool=parsed['tool'],
+                                  tools=list(VENDORS)))
         elif parsed["mail"] != VENDORS[parsed["tool"]]:
-            problems.append(f"提交「{label}」里 {parsed['tool']} 的署名地址须是 "
-                            f"{VENDORS[parsed['tool']]}，不是 {parsed['mail']}")
+            problems.append(t("co_author.wrongMail", label=label, tool=parsed['tool'],
+                              expected=VENDORS[parsed['tool']], actual=parsed['mail']))
         else:
             has_agent = True
     if own and not problems and not has_agent:
-        problems.append(f"提交「{label}」须有 Co-Authored-By 写明工具与模型，如 {EXAMPLE}")
+        problems.append(t("co_author.missing", label=label, example=EXAMPLE))
     return problems
 
 

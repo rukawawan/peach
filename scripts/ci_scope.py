@@ -20,6 +20,7 @@ if not __package__:
     sys.path.insert(0, str(ROOT))
     __package__ = "scripts"
 sys.path.insert(0, str(ROOT / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 #: 三个平台都要验的面：路径与数据目录、证书与权限、首次设置拉起服务、调用本机 ffmpeg，
 #: 以及在本平台浏览器里走首启、播放链和普通 HTTP 来源。
@@ -72,7 +73,7 @@ def successful_pipelines(environ: dict[str, str]) -> list[dict]:
     url = f"{environ['CI_API_V4_URL'].rstrip('/')}/projects/{environ['CI_PROJECT_ID']}/pipelines?{query}"
     payload = json.loads(read_url(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}, timeout=60))
     if not isinstance(payload, list):
-        raise ValueError("流水线列表不是数组")
+        raise ValueError(t("ci_scope.pipelinesNotArray"))
     return payload
 
 
@@ -91,27 +92,27 @@ def plan(platform: str, root: Path, environ: dict[str, str], *,
     try:
         base = verified_base(pipelines(environ), current, ancestor_of_head(root))
     except (OSError, KeyError, ValueError) as error:
-        return ["full"], f"取不到已验证的主线流水线（{error}）"
+        return ["full"], t("ci_scope.noVerifiedPipeline", error=error)
     if base is None:
-        return ["full"], "最近的成功主线流水线里没有本提交的祖先"
+        return ["full"], t("ci_scope.noVerifiedAncestor")
     try:
         paths = runner.changed_files(root, base)
         scopes, explanation = runner.scopes_for_changes(paths, contents=runner.changed_contents(root, base, paths))
     except (OSError, subprocess.CalledProcessError) as error:
-        return ["full"], f"无法比较 {base[:12]}（{error}）"
+        return ["full"], t("ci_scope.cannotCompare", base=base[:12], error=error)
     if definitions := sorted(PIPELINE_DEFINITIONS.intersection(paths)):
-        return ["full"], f"流水线定义有改动：{'、'.join(definitions)}"
+        return ["full"], t("ci_scope.pipelineChanged", files=list(definitions))
     if "full" in scopes:
         return ["full"], explanation
-    return [base, *PLATFORM_TESTS[platform]], f"基线 {base[:12]}；{explanation}"
+    return [base, *PLATFORM_TESTS[platform]], t("ci_scope.baseline", base=base[:12], explanation=explanation)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("ci_scope.description"))
     parser.add_argument("--platform", choices=tuple(PLATFORM_TESTS), required=True)
     args = parser.parse_args(argv)
     lines, reason = plan(args.platform, ROOT, dict(os.environ))
-    print(f"主线选测：{reason}", file=sys.stderr, flush=True)
+    print(t("ci_scope.selection", reason=reason), file=sys.stderr, flush=True)
     print("\n".join(lines), flush=True)
     return 0
 

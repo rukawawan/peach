@@ -21,6 +21,7 @@ import logging
 import threading
 
 from . import face_detect
+from .task_outcomes import said
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class Reporter:
         try:
             self._record(label, error)
         except Exception:                       # 记录失败不能拖垮取模型的那一方
-            LOGGER.warning("人脸模型的任务记录没写进去", exc_info=True)
+            LOGGER.warning("Failed to record the face model task", exc_info=True)
 
     def _record(self, label: str, error: Exception | None) -> None:
         if not self.runs.enabled:
@@ -52,7 +53,9 @@ class Reporter:
             if error is None:
                 if last is None or last.status != "failed":
                     return
-                status, summary, message = "succeeded", {"outcome": f"已取得{label}"}, ""
+                from . import face_match
+                fetched = "matchModelFetched" if label == face_match.MODEL_LABEL else "faceModelFetched"
+                status, summary, message = "succeeded", said(fetched), ""
             else:
                 if last is not None and last.status == "failed":
                     return
@@ -132,4 +135,4 @@ def download_all() -> dict:
             failures.append(str(error))
     if failures:
         return {"ok": False, "error": "；".join(failures)}
-    return {"ok": True, "outcome": "人脸模型已就绪"}
+    return {"ok": True, **said("faceModelsReady")}

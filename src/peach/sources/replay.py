@@ -154,7 +154,7 @@ class Cassette:
     def load(cls, path: Path) -> Cassette:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         if raw.get("format") != FORMAT:
-            raise ValueError(f"{path} 的录制格式是 {raw.get('format')!r}，当前只认 {FORMAT}")
+            raise ValueError(f"{path} has recording format {raw.get('format')!r}; only {FORMAT} is supported")
         return cls(source=raw["source"], code=raw["code"], recorded=raw.get("recorded", ""),
                    note=raw.get("note", ""), outcome=raw["outcome"], payload=raw.get("payload"),
                    failure=raw.get("failure"), interactions=list(raw.get("interactions") or []))
@@ -204,9 +204,10 @@ class ReplayTransport:
         row = self.table.get(key)
         if row is None:
             self.misses.append(key)
-            raise ReplayMiss(f"{self.cassette.source} {self.cassette.code} 的录制里没有 {key[0]} {key[1]}"
-                             + (f"（请求体 {key[2][:12]}…）" if key[2] else "")
-                             + "：解析器的取页方式变了，用 scripts/record_source_fixtures.py --update 重录")
+            raise ReplayMiss(f"{self.cassette.source} {self.cassette.code} recording has no {key[0]} {key[1]}"
+                             + (f" (request body {key[2][:12]}...)" if key[2] else "")
+                             + ": the parser fetches pages differently now; re-record with "
+                               "scripts/record_source_fixtures.py --update")
         self.used.add(key)
         response = decode_response(row["response"])
         if max_bytes and len(response.body) > max_bytes:

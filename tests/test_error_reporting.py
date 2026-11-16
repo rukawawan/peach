@@ -120,7 +120,7 @@ class ErrorReportingTests(unittest.TestCase):
             self.assertEqual(summary['export']['status'], 'separate_export_required')
             self.assertGreater(summary['export']['compressed_bytes'], summary['export']['inline_limit_bytes'])
             self.assertNotIn('scraping/manifest.json', archive.namelist())
-            self.assertIn('按问题番号', summary['detail'])
+            self.assertIn('separately by code', summary['detail'])
         with zipfile.ZipFile(io.BytesIO(scraping_diagnostics.bundle_bytes(config, codes='ABC-123'))) as archive:
             self.assertIn('snapshots/0.json', archive.namelist())
 
@@ -830,12 +830,12 @@ class ErrorReportingTests(unittest.TestCase):
         for index, expected in ((0, "kemono"), (1, "unknown")):
             with self.subTest(index=index):
                 with mock.patch.object(error_reporting, "event") as emit:
-                    _report_follow_media_failure(item, ValueError("媒体条目格式不符"),
+                    _report_follow_media_failure(item, ValueError("unexpected media entry shape"),
                                                  operation="stream", phase="resolve", media_index=index)
                 self.assertEqual(emit.call_args.kwargs["resource_provider"], expected)
         del item.source_id
         with mock.patch.object(error_reporting, "event") as emit:
-            _report_follow_media_failure(item, ValueError("图片来源不可用"),
+            _report_follow_media_failure(item, ValueError("image source unavailable"),
                                          operation="image", phase="resolve")
         self.assertIsNone(emit.call_args.kwargs["source_id"])
 
@@ -1402,7 +1402,7 @@ class DiagnosticExportJobTests(unittest.TestCase):
             started.set()
             release.wait(5)
             if options['cancelled']():
-                raise scraping_diagnostics.ExportCancelled('导出已取消')
+                raise scraping_diagnostics.ExportCancelled()
         with mock.patch.object(scraping_diagnostics, 'bundle_to', side_effect=generate):
             first = self.exports.start('scraping', 'ABC-123')
             try:

@@ -35,8 +35,8 @@ if(location.pathname==='/wall')document.documentElement.setAttribute('data-wall-
 </script>
 </head>
 <body>
-<a class="skiplink" href="#main">跳到正文</a>
-<!-- Lucide static 1.70.0, ISC. Local pinned subset; no CDN/runtime dependency.
+<a class="skiplink" href="#main" data-i18n="shell:chrome.skipToContent">跳到正文</a>
+<!-- Lucide static 1.72.0, ISC. Local pinned subset; no CDN/runtime dependency.
      Climax uses Health Icons 3.1.0 sperm outline-24px, CC0/public domain.
      Phosphor 2.1.1 regular, MIT: filled glyphs where a stroked icon cannot say it. -->
 <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
@@ -223,27 +223,27 @@ if(location.pathname==='/wall')document.documentElement.setAttribute('data-wall-
 </svg>
 
 <header class="top">
-  <button class="ib" id="filterBtn" title="导航与筛选" aria-label="展开导航与筛选"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-panel-left"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
-  <a class="brand" href="#" id="brandHome" aria-label="选择媒体库"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-database"/></svg></span><h1 class="disp">全部媒体库</h1><svg class="board-library-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></a>
-  <button class="ib searchback" id="searchBack" title="退出搜索" aria-label="退出搜索"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="filterBtn" title="导航与筛选" aria-label="展开导航与筛选" data-i18n-title="shell:chrome.navigationTitle" data-i18n-aria-label="shell:sidebar.expand"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-panel-left"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <a class="brand" href="#" id="brandHome" aria-label="选择媒体库" data-i18n-aria-label="shell:libraryPicker.choose"><span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-database"/></svg></span><h1 class="disp" data-i18n="shell:libraryPicker.allLibraries">全部媒体库</h1><svg class="board-library-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></a>
+  <button class="ib searchback" id="searchBack" title="退出搜索" aria-label="退出搜索" data-i18n-title="shell:chrome.exitSearch" data-i18n-aria-label="shell:chrome.exitSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
   <div class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg>
-    <input id="q" name="q" type="search" enterkeyhint="search" placeholder="搜索馆藏" data-suggestion="" autocomplete="off" aria-label="搜索作品、女优、厂牌或标签">
+    <input id="q" name="q" type="search" enterkeyhint="search" placeholder="搜索馆藏" data-suggestion="" autocomplete="off" aria-label="搜索作品、女优、厂牌或标签" data-i18n-placeholder="catalog:searchSuggest.placeholder" data-i18n-aria-label="shell:chrome.searchLabel">
     <div class="searchmenu" id="searchMenu" data-search-menu hidden></div><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></div>
-  <button class="ib" id="searchBtn" title="搜索" aria-label="搜索"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
-  <button class="ib" id="immerseBtn" title="沉浸模式 · 随机连播" aria-label="进入沉浸模式"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-play"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
-  <button class="ib" id="wallBtn" title="播放墙" aria-label="进入播放墙"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-gallery-thumbnails"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
-  <button class="ib" id="selectMode" title="多选（Ctrl 单项，Shift 连续）" aria-label="多选模式" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-square-check-big"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
-  <button class="ib" id="density" title="密度：大图 / 密集" aria-label="切换卡片密度"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-layout-grid"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
-  <button class="ib" id="settingsBtn" title="设置" aria-label="打开设置"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="searchBtn" title="搜索" aria-label="搜索" data-i18n-title="catalog:shared.search" data-i18n-aria-label="catalog:shared.search"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="immerseBtn" title="沉浸模式 · 随机连播" aria-label="进入沉浸模式" data-i18n-title="shell:chrome.immersiveTitle" data-i18n-aria-label="catalog:shortsStrip.enterImmersive"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-play"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="wallBtn" title="播放墙" aria-label="进入播放墙" data-i18n-title="shell:routeTitle.videoWall" data-i18n-aria-label="shell:chrome.openWall"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-gallery-thumbnails"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="selectMode" title="多选（Ctrl 单项，Shift 连续）" aria-label="多选模式" data-i18n-title="shell:chrome.selectTitle" data-i18n-aria-label="shell:chrome.selectMode" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-square-check-big"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="density" aria-label="切换卡片密度" data-i18n-aria-label="shell:chrome.densityToggle"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-layout-grid"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
+  <button class="ib" id="settingsBtn" title="设置" aria-label="打开设置" data-i18n-title="shell:routeTitle.preferences" data-i18n-aria-label="shell:chrome.openPreferences"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg><span data-glass-drift aria-hidden="true"><span data-drift="b"><span></span></span><span data-drift="a"><span></span></span></span></button>
 
-<button class="ib" id="tutorialBtn" title="新手教程" aria-label="打开新手教程"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-compass"/></svg></button>
+<button class="ib" id="tutorialBtn" title="新手教程" aria-label="打开新手教程" data-i18n-title="onboarding:tutorialCenter.title" data-i18n-aria-label="shell:chrome.openTutorial"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-compass"/></svg></button>
 </header>
 
 <!-- 外网连不上时的通栏横幅（`react/network-banner.tsx`），由路由树画进这个节点；联网时它是空的。 -->
 <div data-network-banner></div>
 
 <!-- 首页筛选条（`catalog-filter` 岛）：两排头像与筛选浮层。宿主不生成盒子，里面那几块直接当 body 的孩子排。 -->
-<div id="catalogPageHeading" hidden><h2 class="disp" data-page-title>首页</h2></div>
+<div id="catalogPageHeading" hidden><h2 class="disp" data-page-title data-i18n="navigation:sidebar.home">首页</h2></div>
 <div id="javLibraryHeader" class="peach-react" hidden></div>
 <h2 class="disp listtitle" id="listTitle" hidden></h2>
 <div id="catalogFilter" data-catalog-filter></div>
@@ -252,7 +252,7 @@ if(location.pathname==='/wall')document.documentElement.setAttribute('data-wall-
   <aside id="catalogFoldersTree" class="peach-react" hidden></aside>
   <div id="catalogFolderHeader" class="peach-react" hidden></div>
   <!-- 订阅源发现的新作（ADR-0042）。只在首页那几条目录路径上出现，由应用控制器按路径开合。 -->
-  <section class="feednew" id="feedNew" aria-label="未入库的新作" hidden></section>
+  <section class="feednew" id="feedNew" aria-label="未入库的新作" data-i18n-aria-label="shell:feedNew.sectionLabel" hidden></section>
   <div id="combo"></div>
   <section class="index" id="index" hidden></section>
   <!-- 管理条、面包屑、标题与说明行是常驻组件 manage-header（`frontend/src/react/manage-header/`），由路由树画进这个节点。 -->
@@ -279,13 +279,17 @@ if(location.pathname==='/wall')document.documentElement.setAttribute('data-wall-
   const brand=document.querySelector('#brandHome'),toggle=document.querySelector('#filterBtn');
   const narrow=matchMedia('(max-width:760px)').matches;
   let expanded=!narrow,library='';
-  try{expanded=!narrow&&sessionStorage.getItem('board.sidebar')!=='closed';library=sessionStorage.getItem('peach.library')?(sessionStorage.getItem('peach.library-label')||'媒体库'):''}catch(_e){}
-  brand.querySelector('h1').textContent=library||'全部媒体库';head.append(brand);
+  try{expanded=!narrow&&sessionStorage.getItem('board.sidebar')!=='closed';library=sessionStorage.getItem('peach.library')?sessionStorage.getItem('peach.library-label')||null:''}catch(_e){}
+  /* 选了媒体库就先写上次记下的名字（已是界面语言），名字丢了写通称；界面语言的通称由 i18n 按 data-i18n 换上。 */
+  const title=brand.querySelector('h1');
+  if(library){title.textContent=library;title.removeAttribute('data-i18n')}
+  else if(library===null){title.textContent='媒体库';title.dataset.i18n='catalog:shared.library'}
+  head.append(brand);
   if(!narrow)head.append(toggle);
   drawer.classList.toggle('open',expanded);drawer.inert=narrow;
   document.body.classList.toggle('drawer-open',expanded);
   toggle.setAttribute('aria-expanded',String(expanded));toggle.setAttribute('aria-controls','drawer');
-  toggle.setAttribute('aria-label',expanded?'收起侧栏':'展开侧栏');
+  toggle.setAttribute('aria-label',expanded?'收起侧栏':'展开侧栏');toggle.dataset.i18nAriaLabel=expanded?'shell:sidebar.collapse':'shell:sidebar.expand';
   try{
     const settings=JSON.parse(localStorage.getItem('peach.settings.v1')||'{}');
     const photos=new URLSearchParams(location.search).get('media')==='photos';

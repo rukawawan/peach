@@ -287,6 +287,10 @@ class PlanTests(unittest.TestCase):
                                        online=False, file_template="{number}")
         self.assertEqual(plan["counts"]["skip"], 1)
         self.assertEqual(plan["reasons"], {organize.SKIP_OFFLINE: 1})
+        # 计划里记 id、界面按 code 取语言；写给人看的计划 CSV 按本机语言写成一句话。
+        self.assertEqual((organize.SKIP_OFFLINE, plan["reason_codes"]), ("offline", {"offline": "labels.organize.skip.offline"}))
+        path = organize.write_plan(self.holder / "plan.csv", plan["rows"])
+        self.assertIn("来源未挂载", path.read_text(encoding="utf-8-sig"))
 
     def test_path_outside_the_declared_root_is_skipped(self):
         _seed(self.db_path, [
@@ -315,7 +319,7 @@ class ApplyTests(unittest.TestCase):
                                   name=f'{index}.mp4', code=f'ABC-00{index}') for index in (1, 2)])
         plan = _plan(self.db_path, file_template='{number}')
         def stop(**fields):
-            raise InterruptedError('模拟整理中断')
+            raise InterruptedError('simulated organize interruption')
         with closing(sqlite3.connect(self.db_path)) as connection, self.assertRaises(InterruptedError):
             organize.apply_plan(connection, plan['rows'], generated_root=self.holder, stamp='resume', progress=stop)
         with closing(sqlite3.connect(self.db_path)) as connection:
@@ -452,7 +456,7 @@ class ApplyTests(unittest.TestCase):
                           "target_path": "R:\\media\\ABC-123.mp4"}]}
         result = self._apply(plan)
         self.assertEqual((result["moved"], result["failed"]), (0, 1))
-        self.assertEqual(result["failures"][0]["reason"], organize.SKIP_TARGET_EXISTS)
+        self.assertEqual(result["failures"][0]["reason_code"], organize.SKIP_REASON_CODES[organize.SKIP_TARGET_EXISTS])
         self.assertTrue((self.media / "旧" / "abc123.mp4").is_file())
 
     def test_cross_volume_row_is_refused(self):
@@ -465,7 +469,7 @@ class ApplyTests(unittest.TestCase):
                           "current_path": "R:\\media\\旧\\abc123.mp4",
                           "target_path": "B:\\media\\ABC-123.mp4"}]}
         result = self._apply(plan)
-        self.assertEqual(result["failures"][0]["reason"], organize.SKIP_CROSS_VOLUME)
+        self.assertEqual(result["failures"][0]["reason_code"], organize.SKIP_REASON_CODES[organize.SKIP_CROSS_VOLUME])
         self.assertTrue((self.media / "旧" / "abc123.mp4").is_file())
 
     def _pikpak_plan(self):

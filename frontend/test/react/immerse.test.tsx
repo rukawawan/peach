@@ -74,7 +74,7 @@ vi.mock('../../src/player', async (importOriginal) => {
 /* ── 假服务端 ── */
 
 const row = (id: number, patch: Partial<ImmerseItem> = {}): ImmerseItem => ({
-  id, name: `clip-${id}.mp4`, duration: 60, cost: 'free', location: 'local', width: 1080, height: 1920, ctx_orient: '竖屏', ...patch,
+  id, name: `clip-${id}.mp4`, duration: 60, cost: 'free', location: 'local', width: 1080, height: 1920, ctx_orient: 'portrait', ...patch,
 });
 
 const detail = (id: number, patch: Partial<DetailItem> = {}): DetailItem => ({

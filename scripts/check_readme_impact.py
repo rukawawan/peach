@@ -6,6 +6,11 @@ import subprocess
 import re
 import tomllib
 from pathlib import Path
+import sys
+
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 READMES = {"README.md", "README.zh-CN.md"}
 
@@ -18,10 +23,10 @@ def installation_contracts(repo: Path) -> list[str]:
     for name in sorted(READMES):
         text = (repo / name).read_text(encoding='utf-8')
         if not re.search(rf'\bPython {re.escape(floor)}(?:\+| or newer| 或更高)', text):
-            problems.append(f'{name}: Python 下限须为 {floor}')
+            problems.append(t("check_readme_impact.pythonFloor", name=name, floor=floor))
         counterpart, = READMES - {name}
         if counterpart not in re.findall(r'\]\(([^)\s]+)\)', text):
-            problems.append(f'{name}: 缺少语言入口 {counterpart}')
+            problems.append(t("check_readme_impact.languageLink", name=name, counterpart=counterpart))
     return problems
 
 

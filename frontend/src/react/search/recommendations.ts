@@ -6,6 +6,7 @@ import type { OnlineAuthor } from '../follow/online-vocab';
 import { onlineAuthorRingHtml } from '../index/index-controller';
 import type { Discovery } from '../jav/jav';
 import type { Recommendations, SuggestCard, SuggestGroup, SuggestItem } from './search';
+import { t } from '../../i18n';
 
 type Request = (url: string) => Promise<any>;
 type Latest = { id: number; code: string; release_date: string };
@@ -13,13 +14,13 @@ type Latest = { id: number; code: string; release_date: string };
 /** 推荐栏的分组与次序固定：还没取到的那组照样占着位置（`pending`），取到一组填一组，栏不改版式。
  *  `size` 是一页摆几条：人三行、作品一排五格。 */
 const GROUPS = [
-  { kind: 'performer', label: '艺人与新作', href: '/subscriptions?tab=add', action: '订阅新作', size: 3 },
-  { kind: 'author', label: '关注作者', href: '/subscriptions?tab=add', action: '添加关注', size: 3 },
-  { kind: 'asset', label: '作品推荐', href: '/', action: '全部作品', size: 5 },
-  { kind: 'jav', label: 'JAV 推荐', href: '/jav?tab=discover', action: '发现 JAV', size: 5 },
-  { kind: 'post', label: '关注作品', href: '/follow', action: '全部关注作品', size: 5 },
-  { kind: 'photo', label: '关注图片', href: '/follow?media=images', action: '全部关注图片', size: 5 },
-  { kind: 'release', label: '订阅新作', href: '/subscriptions', action: '管理订阅', size: 5 },
+  { kind: 'performer', label: t('catalog:searchSuggest.performersReleases'), href: '/subscriptions?tab=add', action: t('catalog:entityHero.subscribeNewReleases'), size: 3 },
+  { kind: 'author', label: t('catalog:searchSuggest.followedCreators'), href: '/subscriptions?tab=add', action: t('catalog:entityOnlineEmpty.addFollow'), size: 3 },
+  { kind: 'asset', label: t('catalog:searchSuggest.recommendedVideos'), href: '/', action: t('catalog:searchSuggest.allVideos'), size: 5 },
+  { kind: 'jav', label: t('catalog:searchSuggest.recommendedJav'), href: '/jav?tab=discover', action: t('catalog:searchSuggest.discoverJav'), size: 5 },
+  { kind: 'post', label: t('catalog:searchSuggest.followedPosts'), href: '/follow', action: t('catalog:searchSuggest.allFollowedPosts'), size: 5 },
+  { kind: 'photo', label: t('catalog:searchSuggest.followedImages'), href: '/follow?media=images', action: t('catalog:searchSuggest.allFollowedImages'), size: 5 },
+  { kind: 'release', label: t('catalog:entityHero.subscribeNewReleases'), href: '/subscriptions', action: t('catalog:searchSuggest.manageSubscriptions'), size: 5 },
 ] as const;
 
 /* 每组一次取一池（池的大小由 `/api/search/recommendations` 定），「换一批」在池里翻页，不再发请求。
@@ -34,7 +35,7 @@ export function pendingRecommendations(): SuggestGroup[] {
 const day = (date: string) => date.startsWith(String(new Date().getFullYear())) ? date.slice(5, 10) : date.slice(0, 10);
 
 /** 署名只写第一位，共演再给总人数，同作品卡。 */
-const byline = (names: string[], total = names.length) => total > 1 ? `${names[0]} 等 ${total} 人` : names[0] || '';
+const byline = (names: string[], total = names.length) => total > 1 ? t('catalog:searchSuggest.byline', { name: names[0], count: total }) : names[0] || '';
 
 /** 空搜索那一栏：一个请求取齐（`/api/search/recommendations`），在这里照各组的口径拼。某一份服务端
  *  没取到就是 null，只缺那一组。 */
@@ -45,7 +46,7 @@ export async function searchRecommendations(request: Request): Promise<Recommend
     latest?: Record<string, Latest>; words?: string[];
   };
   const work = (card: SuggestCard, href: string | undefined, who: string, whoAvatarHtml = ''): SuggestItem => ({
-    value: String(card.code || card.display_title || card.title || card.name || '未命名作品'),
+    value: String(card.code || card.display_title || card.title || card.name || t('catalog:catalogList.untitled')),
     id: card.id, code: card.code, title: String(card.display_title || card.title || ''),
     who, whoAvatarHtml, card, href,
   });
@@ -77,7 +78,7 @@ export async function searchRecommendations(request: Request): Promise<Recommend
         href: `/performers/${ref.id}`,
         image_version: ref.image_version, avatar_focus: ref.avatar_focus, rep: ref.has_avatar ? ref.rep : null,
         works: [card as unknown as SuggestCard],
-        subtitle: found ? `最新作 ${found.code || '无番号'} · ${day(found.release_date)}` : '最新作未取得',
+        subtitle: found ? t('catalog:searchSuggest.latestRelease', { code: found.code || t('catalog:searchSuggest.noCode'), date: day(found.release_date) }) : t('catalog:searchSuggest.latestNotFound'),
       });
     }
   }
@@ -112,7 +113,7 @@ export async function searchRecommendations(request: Request): Promise<Recommend
   pools.author = bundle.authors ? (bundle.authors.items || []).map(row => ({
     value: row.k, href: row.entity_id ? `/creators/${row.entity_id}` : `/follow?author=${encodeURIComponent(row.key)}`,
     avatarHtml: onlineAuthorRingHtml(row),
-    subtitle: row.latest ? `最新更新于 ${followCompactWhen({ published_at: row.latest } as FollowItem)}` : '更新时间未取得',
+    subtitle: row.latest ? t('catalog:searchSuggest.lastUpdated', { time: followCompactWhen({ published_at: row.latest } as FollowItem) }) : t('catalog:searchSuggest.updateTimeNotFound'),
   })) : null;
 
   const groups = GROUPS.map(group => {

@@ -1,9 +1,10 @@
 import './styles.css';
 import { installErrorReporting } from '../error-reporting';
 import { mountApplication } from './application';
+import { t } from '../i18n';
 installErrorReporting();
 const host = document.getElementById('appRoot');
-if (!host) throw new Error('主界面宿主缺失');
+if (!host) throw new Error(t('shell:errorReport.hostMissing'));
 mountApplication(host);
 export { peachHistory } from '../history';
 export { popCount } from '../ui-kit';

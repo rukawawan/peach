@@ -14,12 +14,12 @@ it('定位请求只递这条路径，成功回执一句', async () => {
   const host = await mount(<PathLine path={LOG} prefix="完整记录：" onRevealed={revealed} />);
 
   expect(host.textContent).toContain(`完整记录：${LOG}`);
-  await click(host.querySelector('button[aria-label="在资源管理器中显示"]'));
+  await click(host.querySelector('button[aria-label="查看文件位置"]'));
 
   expect(fetcher.mock.calls[0]?.[0]).toBe('/api/reveal');
   expect(sentBody(fetcher)).toEqual({ path: LOG });
   /* 资源管理器弹在跑 Peach 那台机器上：从别的设备看这一页时，屏幕上不会有任何动静。 */
-  expect(revealed).toHaveBeenCalledWith('已在资源管理器中显示');
+  expect(revealed).toHaveBeenCalledWith('已在文件管理器中显示');
 });
 
 it('开不了时原因留在路径旁边，不冒充成功的回执', async () => {
@@ -27,7 +27,7 @@ it('开不了时原因留在路径旁边，不冒充成功的回执', async () =
   const revealed = vi.fn();
   const host = await mount(<PathLine path={LOG} onRevealed={revealed} />);
 
-  await click(host.querySelector('button[aria-label="在资源管理器中显示"]'));
+  await click(host.querySelector('button[aria-label="查看文件位置"]'));
 
   expect(host.textContent).toContain('这个位置已经不在了');
   expect(revealed).not.toHaveBeenCalled();
@@ -41,7 +41,7 @@ it('服务端不认这条路径时照直说，不落进通用的权限说法', a
   }));
   const host = await mount(<PathLine path={'C:\\Windows'} />);
 
-  await click(host.querySelector('button[aria-label="在资源管理器中显示"]'));
+  await click(host.querySelector('button[aria-label="查看文件位置"]'));
 
   expect(host.textContent).toContain('这个位置不归 Peach 管，只能自己打开');
 });

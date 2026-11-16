@@ -14,6 +14,14 @@ from peach.interaction import _windows_reveal, reveal_path
 class RevealPathTests(unittest.TestCase):
     """在文件管理器里定位源文件。"""
 
+    def test_headless_service_never_launches_a_desktop_file_manager(self):
+        with patch.dict(os.environ, {'PEACH_HEADLESS_MANAGED': '1'}), \
+                patch('peach.interaction.subprocess.Popen') as launch, \
+                patch('peach.interaction._windows_reveal') as reveal:
+            self.assertFalse(reveal_path(Path('/media/a.mp4')))
+        launch.assert_not_called()
+        reveal.assert_not_called()
+
     @unittest.skipUnless(os.name == "nt", "Windows Shell API only")
     def test_windows_uses_the_native_shell_selection_api(self):
         ole32, shell32 = Mock(), Mock()

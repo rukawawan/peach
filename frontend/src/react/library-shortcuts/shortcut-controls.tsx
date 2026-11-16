@@ -18,14 +18,18 @@ import { NavigationDropLine, NavigationOrderMenu, useNavigationOrder } from '../
 import { useSidebarReorder } from '../sidebar/use-sidebar-reorder';
 import { busyProps } from '../settings/busy-props';
 import { favoriteHref, isFavorite, useShortcuts, useShortcutWrite, type Favorite } from './library-shortcuts';
+import { t } from '../../i18n';
+import { codedText } from '../../core/server-text';
 import './shortcuts.css';
 
 const Star = spriteGlyph('star');
 const Bookmark = spriteGlyph('bookmark-plus');
 const ChevronRight = spriteGlyph('chevron-right');
-const LABELS: Record<string, string> = { performer: '艺人', creator: '创作者', studio: '片商与厂牌', series: '系列', agency: '事务所', tag: '标签' };
+const LABELS: Record<string, string> = { performer: t('settings:favoritesPanel.performers'), creator: t('settings:favoritesPanel.creators'), studio: t('settings:favoritesPanel.studios'), series: t('settings:favoritesPanel.series'), agency: t('settings:favoritesPanel.agencies'), tag: t('settings:favoritesPanel.tags') };
+/** 行里名字下方的类型说明，单数。 */
+const KIND_LABELS: Record<string, string> = { performer: t('settings:favoriteKinds.performer'), creator: t('settings:favoriteKinds.creator'), studio: t('settings:favoriteKinds.studio'), series: t('settings:favoriteKinds.series'), agency: t('settings:favoriteKinds.agency'), tag: t('settings:favoriteKinds.tag') };
 const GLYPHS = { all: spriteGlyph('star'), performer: spriteGlyph('user-round'), creator: spriteGlyph('user-round'), studio: spriteGlyph('clapperboard'), series: spriteGlyph('film'), agency: spriteGlyph('briefcase'), tag: spriteGlyph('tags'), filters: spriteGlyph('list-filter') };
-const SCOPES = [['all', '全部'], ...Object.entries(LABELS), ['filters', '保存的筛选']];
+const SCOPES = [['all', t('settings:shared.all')], ...Object.entries(LABELS), ['filters', t('settings:favoritesPanel.savedFilters')]];
 
 /** 实体行内的图标动作，共用收藏按钮的尺寸、悬停与焦点反馈。 */
 export function EntityActionButton({ label, children, ...props }: ComponentProps<'button'> & { label: string }) {
@@ -46,12 +50,12 @@ function FavoriteChoice({ item }: { item: Favorite }) {
     : item.favorite ?? (query.data ? isFavorite(query.data.favorites || [], item) : false);
   return <span className="inline-flex min-w-0 flex-col gap-1">
     <EntityActionButton data-favorite="" aria-pressed={!!selected}
-      label={`${selected ? '取消收藏' : '收藏'}${entityDisplayName(item.kind, item.name, item.entity_id)}`}
+      label={t(selected ? 'settings:favoritesPanel.unfavoriteLabel' : 'settings:favoritesPanel.favoriteLabel', { name: entityDisplayName(item.kind, item.name, item.entity_id) })}
       {...busyProps(write.isPending)} onClick={() => {
         if (!write.isPending) write.mutate({ action: 'favorite', ...item, on: !selected });
       }}>{write.isPending ? <span aria-hidden dangerouslySetInnerHTML={{ __html: spinnerHtml('') }} /> : <Star />}</EntityActionButton>
     {write.isError ? <Note tone="error">{errorMessage(write.error)}</Note> : null}
-    {query.isError ? <Button variant="secondary" size="small" aria-label="立即重试读取收藏" onClick={() => void query.refetch()}>立即重试</Button> : null}
+    {query.isError ? <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.retryLoadLabel')} onClick={() => void query.refetch()}>{t('settings:shared.retryNow')}</Button> : null}
   </span>;
 }
 
@@ -59,9 +63,9 @@ function FavoriteChoice({ item }: { item: Favorite }) {
 export function LibraryShortcuts({ currentHref, kind }: { currentHref?: () => string; kind?: string }) {
   const [open, setOpen] = useState(false);
   return <>
-    <span data-shortcuts-entry=""><FilterIconButton data-shortcuts-trigger="" label="我的收藏" icon={Star}
+    <span data-shortcuts-entry=""><FilterIconButton data-shortcuts-trigger="" label={t('settings:favoritesPanel.title')} icon={Star}
       aria-haspopup="dialog" aria-expanded={open} onPress={() => setOpen(true)} /></span>
-    <ModalFrame isOpen={open} onOpenChange={setOpen} width="collections" label="我的收藏">
+    <ModalFrame isOpen={open} onOpenChange={setOpen} width="collections" label={t('settings:favoritesPanel.title')}>
       {open ? <ShortcutContents currentHref={currentHref} kind={kind} close={() => setOpen(false)} /> : null}
     </ModalFrame>
   </>;
@@ -105,7 +109,7 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
     previousScope.current = scope;
   }, [scope]);
   useLayoutEffect(() => { scroll.current?.() });
-  const label = SCOPES.find(([value]) => value === scope)?.[1] || '全部';
+  const label = SCOPES.find(([value]) => value === scope)?.[1] || t('settings:shared.all');
   const selectWithKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey) return;
     const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
@@ -123,7 +127,7 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
     event.preventDefault();
     if (!currentHref || !name.trim() || write.isPending) return;
     write.mutate({ action: 'save_filter', name: name.trim(), href: currentHref() }, {
-      onSuccess: () => { setName(''); setMessage('筛选已保存') },
+      onSuccess: () => { setName(''); setMessage(t('settings:favoritesPanel.filterSaved')) },
     });
   };
   const data = query.data;
@@ -134,14 +138,14 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
   return <div data-shortcuts-panel="">
     <div ref={head} data-shortcuts-head="">
       <h2 className="text-title-2-semibold text-text-primary">{label}</h2>
-      <SettingsDialogClose label="关闭我的收藏" onPress={close} />
+      <SettingsDialogClose label={t('settings:favoritesPanel.close')} onPress={close} />
     </div>
       <aside data-shortcuts-sidebar="" data-settings-nav="" data-glass-pane={narrow ? undefined : ''}>
-      <div ref={navigation} data-shortcuts-categories="" data-glass-pane={narrow ? '' : undefined} role="tablist" aria-label="收藏类型"
+      <div ref={navigation} data-shortcuts-categories="" data-glass-pane={narrow ? '' : undefined} role="tablist" aria-label={t('settings:favoritesPanel.typesLabel')}
         data-navigation-order="favorites" data-navigation-axis={narrow ? 'x' : 'y'} data-reordering={reorder.picked ? '' : undefined}
         onClickCapture={reorder.clickCapture} onKeyDown={selectWithKeys} onPointerLeave={glide.leave}>
         <span ref={pane} data-view-glide="" data-shortcuts-glide="" aria-hidden="true" hidden />
-        <p data-shortcuts-caption="" role="presentation">我的收藏</p>
+        <p data-shortcuts-caption="" role="presentation">{t('settings:favoritesPanel.title')}</p>
         {scopes.map(([value, label]) => {
           const Glyph = GLYPHS[value as keyof typeof GLYPHS] || Star;
           const count = value === 'filters' ? data?.filters.length || 0 : (data?.favorites || []).filter(row => value === 'all' || row.kind === value).length;
@@ -162,46 +166,46 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
       </div>
       <NavigationOrderMenu order={order} />
       <VisuallyHidden role="status" aria-live="polite">{reorder.announcement}</VisuallyHidden>
-      <nav data-shortcuts-footer="" aria-label="收藏作品清单">
-        <a href="/flagged" onClick={close}><Star aria-hidden />已标记<ChevronRight aria-hidden /></a>
-        <a href="/watch-later" onClick={close}><Bookmark aria-hidden />稍后看<ChevronRight aria-hidden /></a>
+      <nav data-shortcuts-footer="" aria-label={t('settings:favoritesPanel.videoListsLabel')}>
+        <a href="/flagged" onClick={close}><Star aria-hidden />{t('settings:favoritesPanel.flagged')}<ChevronRight aria-hidden /></a>
+        <a href="/watch-later" onClick={close}><Bookmark aria-hidden />{t('settings:favoritesPanel.watchLater')}<ChevronRight aria-hidden /></a>
       </nav>
       </aside>
       <div ref={content} data-shortcuts-content="" role="tabpanel" id={`${id}-content`} aria-labelledby={`${id}-${scope}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto overscroll-contain">
-    {query.isPending ? <div aria-busy="true" data-skeleton="" className="h-12 animate-pulse rounded-lg bg-background-secondary-default" /> : null}
-    {query.isError ? <Note tone="error" action={<Button variant="secondary" onClick={() => void query.refetch()}>立即重试</Button>}>{errorMessage(query.error)}</Note> : null}
+    {query.isPending ? <div aria-busy="true" data-skeleton="" className="relative h-12 rounded-lg skeleton-sheen" /> : null}
+    {query.isError ? <Note tone="error" action={<Button variant="secondary" onClick={() => void query.refetch()}>{t('settings:shared.retryNow')}</Button>}>{errorMessage(query.error)}</Note> : null}
     {write.isError ? <Note tone="error">{errorMessage(write.error)}</Note> : null}
     {data ? scope !== 'filters' ? <>
-      <Input aria-label="搜索收藏" placeholder="搜索收藏" leadingIcon={spriteGlyph('search')} value={search} onChange={setSearch} />
-      {!rows.length ? <EmptyState size="compact" icon={Star} title={search ? '没有匹配的收藏' : (data.favorites.length ? '还没有此类收藏' : '还没有收藏')}
-        actions={search ? <Button size="small" onClick={() => setSearch('')}>清除搜索</Button>
-          : data.favorites.length ? <Button size="small" onClick={() => setScope('all')}>查看全部收藏</Button>
-          : <ButtonLink size="small" href="/" onClick={close}>浏览馆藏</ButtonLink>}>
-        {search ? '试试其他名称。' : '在资料页或标签页收藏常用内容。'}
+      <Input aria-label={t('settings:favoritesPanel.search')} placeholder={t('settings:favoritesPanel.search')} leadingIcon={spriteGlyph('search')} value={search} onChange={setSearch} />
+      {!rows.length ? <EmptyState size="compact" icon={Star} title={search ? t('settings:favoritesPanel.noMatches') : (data.favorites.length ? t('settings:favoritesPanel.emptyType') : t('settings:favoritesPanel.empty'))}
+        actions={search ? <Button size="small" onClick={() => setSearch('')}>{t('settings:favoritesPanel.clearSearch')}</Button>
+          : data.favorites.length ? <Button size="small" onClick={() => setScope('all')}>{t('settings:favoritesPanel.viewAll')}</Button>
+          : <ButtonLink size="small" href="/" onClick={close}>{t('settings:favoritesPanel.browseCollection')}</ButtonLink>}>
+        {search ? t('settings:favoritesPanel.tryOtherName') : t('settings:favoritesPanel.emptyHelp')}
       </EmptyState> : null}
       <div data-shortcuts-list="">{rows.map((row) => <div key={row.key} data-shortcuts-row="" className="flex min-w-0 items-center justify-between gap-3">
         <a href={favoriteHref(row)} aria-label={entityDisplayName(row.kind, row.name, row.entity_id)} onClick={close} className="flex min-w-0 flex-1 items-center gap-3 text-body-regular text-text-primary">
           <FavoriteAvatar key={row.image_url} item={row} />
           <span className="flex min-w-0 flex-col gap-1"><span className="truncate">{entityDisplayName(row.kind, row.name, row.entity_id)}</span>
-            <span className="text-caption-1-regular text-text-secondary">{row.scope === 'online' ? '在线标签' : LABELS[row.kind]}</span></span>
+            <span className="text-caption-1-regular text-text-secondary">{row.scope === 'online' ? t('settings:favoritesPanel.onlineTag') : KIND_LABELS[row.kind]}</span></span>
         </a>
-        <Button variant="secondary" size="small" aria-label={`取消收藏${entityDisplayName(row.kind, row.name, row.entity_id)}`} {...busyProps(write.isPending)}
-          onClick={() => { if (!write.isPending) write.mutate({ action: 'favorite', ...row, on: false }) }}>取消收藏</Button>
+        <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.unfavoriteLabel', { name: entityDisplayName(row.kind, row.name, row.entity_id) })} {...busyProps(write.isPending)}
+          onClick={() => { if (!write.isPending) write.mutate({ action: 'favorite', ...row, on: false }) }}>{t('settings:favoritesPanel.unfavorite')}</Button>
       </div>)}</div>
     </> : <>
-      {data.filters.length > 1 ? <Button variant="secondary" size="small" onClick={() => setSorting(true)}>调整筛选顺序</Button> : null}
-      {sorting ? <ObjectOrderDialog title="调整筛选顺序" items={data.filters} close={() => setSorting(false)}
-        save={async ids => { await write.mutateAsync({ action: 'reorder_filters', ids }); setMessage('筛选顺序已保存') }} /> : null}
-      {!data.filters.length ? <EmptyState size="compact" icon={spriteGlyph('list-filter')} title="还没有保存的筛选"
-        actions={<ButtonLink size="small" href="/" onClick={close}>浏览馆藏</ButtonLink>}>在馆藏页保存当前条件，随时打开。</EmptyState> : null}
+      {data.filters.length > 1 ? <Button variant="secondary" size="small" onClick={() => setSorting(true)}>{t('settings:favoritesPanel.reorderFilters')}</Button> : null}
+      {sorting ? <ObjectOrderDialog title={t('settings:favoritesPanel.reorderFilters')} items={data.filters} close={() => setSorting(false)}
+        save={async ids => { await write.mutateAsync({ action: 'reorder_filters', ids }); setMessage(t('settings:favoritesPanel.filterOrderSaved')) }} /> : null}
+      {!data.filters.length ? <EmptyState size="compact" icon={spriteGlyph('list-filter')} title={t('settings:favoritesPanel.noSavedFilters')}
+        actions={<ButtonLink size="small" href="/" onClick={close}>{t('settings:favoritesPanel.browseCollection')}</ButtonLink>}>{t('settings:favoritesPanel.noSavedFiltersHelp')}</EmptyState> : null}
       {data.filters.map((row) => <div key={row.id} className="flex min-w-0 items-center justify-between gap-2">
         <a href={row.href} onClick={close} className="min-w-0 flex-1 break-all text-body-regular text-text-primary underline">{row.name}</a>
-        <Button variant="secondary" size="small" aria-label={`删除筛选${row.name}`} {...busyProps(write.isPending)}
-          onClick={() => { if (!write.isPending) write.mutate({ action: 'delete_filter', id: row.id }) }}>删除</Button>
+        <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.deleteFilterLabel', { name: row.name })} {...busyProps(write.isPending)}
+          onClick={() => { if (!write.isPending) write.mutate({ action: 'delete_filter', id: row.id }) }}>{t('settings:shared.delete')}</Button>
       </div>)}
-      {currentHref ? <form onSubmit={submit} className="flex flex-col gap-3" aria-label="保存当前筛选">
-        <Input label="筛选名称" value={name} onChange={setName} maxLength={80} />
-        <Button type="submit" disabled={!name.trim()} {...busyProps(write.isPending)}>保存当前筛选</Button>
+      {currentHref ? <form onSubmit={submit} className="flex flex-col gap-3" aria-label={t('settings:favoritesPanel.saveCurrentFilter')}>
+        <Input label={t('settings:favoritesPanel.filterName')} value={name} onChange={setName} maxLength={80} />
+        <Button type="submit" disabled={!name.trim()} {...busyProps(write.isPending)}>{t('settings:favoritesPanel.saveCurrentFilter')}</Button>
         {message ? <span role="status" className="text-body-2-regular text-text-secondary">{message}</span> : null}
       </form> : null}
     </> : null}
@@ -211,7 +215,7 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
 
 function FavoriteAvatar({ item }: { item: Favorite }) {
   const Glyph = GLYPHS[item.kind as keyof typeof GLYPHS] || Star;
-  return <span data-shortcuts-avatar="" title={item.image_label || item.name}>
+  return <span data-shortcuts-avatar="" title={codedText(item, 'image_label') || item.name}>
     {item.image_url ? <img src={item.image_url} alt="" loading="lazy" decoding="async"
       data-drop="self" data-fallbacks={item.image_fallbacks?.join('|') || undefined} /> : null}
     <Glyph aria-hidden className="size-5" />

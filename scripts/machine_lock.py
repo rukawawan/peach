@@ -17,23 +17,31 @@ if not __package__:
     sys.path.insert(0, str(ROOT))
     __package__ = "scripts"
 
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
+
 from . import test_evidence  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--wait", type=float, default=3600, help="最多等多少秒；CI 作业时限内足够让本机一轮全量跑完")
+    parser = argparse.ArgumentParser(description=t("machine_lock.description"),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--wait", type=float, default=3600, help=t("machine_lock.waitHelp"))
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
-        parser.error("缺少要运行的命令")
+        parser.error(t("machine_lock.commandMissing"))
     lock = test_evidence.machine_lock_path()
     try:
         with test_evidence.held(lock, wait_seconds=args.wait, scope=" ".join(command)[:120], root=str(ROOT)):
             return subprocess.run(command, check=False).returncode
     except test_evidence.Timeout:
-        print(f"等了 {args.wait:g} 秒仍拿不到整机重负载锁（{test_evidence.describe_holder(lock)}）。", flush=True)
+        print(t("machine_lock.timedOut", seconds=f"{args.wait:g}", holder=test_evidence.describe_holder(lock)),
+              flush=True)
         return 2
 
 

@@ -32,7 +32,8 @@ from typing import Any, Mapping
 
 from .. import jav_cover_fetch
 from ..jav_cover_fetch import NotFound, Unavailable
-from ..metadata import MetadataProviderError, auth_error
+from ..content_words import CLOUDFLARE_CHALLENGE_TITLES, GEO_REFUSAL_PHRASES
+from ..metadata import MetadataProviderError, RelayableError, auth_error, relay_args
 
 
 class FailureReason(StrEnum):
@@ -96,7 +97,7 @@ PERMANENT_REASONS = frozenset({FailureReason.PARSE_ERROR})
 #: 按规则拦下的是 `Attention Required! | Cloudflare`。正文是给浏览器跑的脚本，站方回的状态码可能是
 #: 403，也可能是 200（AVBase）。只认标题：Cloudflare 往正常页里也注入 `challenge-platform` 脚本，按它认会误判。
 CHALLENGE_TITLE = re.compile(
-    r"<title[^>]*>\s*(?:Just a moment\.\.\.|请稍候…|Attention Required! \| Cloudflare)\s*</title>")
+    r"<title[^>]*>\s*(?:" + "|".join(map(re.escape, CLOUDFLARE_CHALLENGE_TITLES)) + r")\s*</title>")
 
 
 def challenge_page(html: str | bytes) -> bool:
@@ -112,9 +113,7 @@ def challenge_page(html: str | bytes) -> bool:
 #: - 出口封禁：`banned your access`（同取自 amane）。
 #: 说明页把这几句放在开头，正常页的正文不会这么写；只看开头 `REFUSAL_SCAN` 字节，大页不整页解码。
 REFUSAL_MARKS: tuple[tuple[re.Pattern[str], FailureReason], ...] = (
-    (re.compile(r"not available in your region|お住まいの地域からはご利用になれません"
-                r"|access to this site is prohibited in the country|本站禁止了你的網路所在國家的訪問",
-                re.I), FailureReason.GEO_RESTRICTED),
+    (re.compile("|".join(map(re.escape, GEO_REFUSAL_PHRASES)), re.I), FailureReason.GEO_RESTRICTED),
     (re.compile(r"banned your access", re.I), FailureReason.IP_BANNED),
 )
 REFUSAL_SCAN = 32 * 1024
@@ -132,17 +131,18 @@ DEFAULT_PAGE_LIMIT = 4 * 1024 * 1024
 DEFAULT_INTERVAL = 2.0
 
 
-class SourceFailure(RuntimeError):
-    """一站没给出结果：`reason` 是细档，`message` 是给人看的那一句。
+class SourceFailure(RelayableError, RuntimeError):
+    """一站没给出结果：`reason` 是细档，`message` 是给人看的那一句（按 zh-CN 渲染的原句）。
 
+    给人看的那一句写成 code 与 `params`；上游原样的说法（amane 桥的报错、`HTTP 503`）写成 `*relayed(原文)`。
     `detail` 默认就是细档名；amane 桥把上游原样的 reason 放在这里，冷却与快照据此回溯。
     """
 
-    def __init__(self, reason: FailureReason | str, message: str, *,
+    def __init__(self, reason: FailureReason | str, code: str, params: dict | None = None, *,
                  status_code: int = 0, detail: str = "") -> None:
-        super().__init__(message)
+        super().__init__(code, params)
         self.reason = FailureReason(reason)
-        self.message = message
+        #: 上游答复的 HTTP 状态，不是接口响应的状态码。
         self.status_code = status_code
         self.detail = detail or self.reason.value
         #: 冷却已经记过：嵌套的 `holding()`（`r18dev.query` 包着基类的 `query`）不再记第二次。
@@ -159,20 +159,22 @@ class SourceFailure(RuntimeError):
     def provider_error(self, label: str) -> MetadataProviderError:
         """翻成 `MetadataProviderError`。`auth` 的措辞只有 `auth_error` 一处，其余两档措辞由抛错处给。"""
         if self.kind == "auth":
-            return auth_error(label, self.message, status_code=self.status_code, detail=self.detail)
+            return auth_error(label, {"code": self.code, "params": dict(self.params)},
+                              status_code=self.status_code, detail=self.detail)
         if self.kind == "not_found":
-            return MetadataProviderError(self.message, kind="not_found", status_code=self.status_code,
+            return MetadataProviderError(*relay_args(self), kind="not_found", status_code=self.status_code,
                                          detail=self.detail)
         transient = self.reason not in PERMANENT_REASONS
-        return MetadataProviderError(self.message, kind="unavailable", status_code=self.status_code,
+        return MetadataProviderError(*relay_args(self), kind="unavailable", status_code=self.status_code,
                                      detail=self.detail, retryable=transient, temporary=transient)
 
 
 def http_failure(error: Unavailable) -> SourceFailure:
-    """`_fetch` 抛出的 HTTP 分档（`HTTP 403`、`HTTP 429`、`HTTP 503`）→ 细档。措辞保留原文。"""
+    """`_fetch` 抛出的 HTTP 分档（`HTTP 403`、`HTTP 429`、`HTTP 503`）→ 细档。措辞照搬原 code 与参数。"""
     text = str(error)
     if isinstance(error, NotFound):
-        return SourceFailure(FailureReason.NOT_FOUND, text, status_code=404 if text == "HTTP 404" else 0)
+        return SourceFailure(FailureReason.NOT_FOUND, *relay_args(error),
+                             status_code=404 if text == "HTTP 404" else 0)
     status = int(text[5:]) if text.startswith("HTTP ") and text[5:].isdigit() else 0
     if status in (401, 403):
         reason = FailureReason.AUTH_REQUIRED
@@ -184,7 +186,7 @@ def http_failure(error: Unavailable) -> SourceFailure:
         reason = FailureReason.SERVER_ERROR
     else:
         reason = FailureReason.NETWORK
-    return SourceFailure(reason, text, status_code=status)
+    return SourceFailure(reason, *relay_args(error), status_code=status)
 
 
 @dataclass(frozen=True)

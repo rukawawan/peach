@@ -19,6 +19,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from filelock import FileLock, Timeout
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t, list_separator, local_language  # noqa: E402
 
 from . import change_impact, test_environment_identity
 
@@ -67,7 +70,7 @@ def manifest(root: Path) -> dict:
         elif not path.exists():
             continue
         else:
-            raise ValueError(f"无法为文件生成验证快照：{name}")
+            raise ValueError(t("test_evidence.snapshotFailed", name=name))
     version = root / "src/peach/__init__.py"
     body = version.read_text(encoding="utf-8") if version.is_file() else ""
     body = re.sub(r'(?m)^__version__ = "\d+\.\d+\.\d+"$', '__version__ = "VERSION"', body)
@@ -466,9 +469,9 @@ def held(lock_path: Path, *, wait_seconds: float = 0, **note: object):
                 raise Timeout(str(lock_path))
             if announced != len(ahead):
                 announced = len(ahead)
-                place = f"；前面还有 {announced} 个在排队" if announced else ""
-                print(f"等待 {lock_path.name}（{describe_holder(lock_path)}{place}），最长 {wait_seconds:g} 秒。",
-                      file=sys.stderr, flush=True)
+                place = t("test_evidence.queueAhead", count=announced) if announced else ""
+                print(t("test_evidence.waiting", lock=lock_path.name, holder=describe_holder(lock_path), place=place,
+                        seconds=f"{wait_seconds:g}"), file=sys.stderr, flush=True)
             time.sleep(min(QUEUE_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
     finally:
         ticket.unlink(missing_ok=True)
@@ -502,12 +505,12 @@ def describe_holder(lock_path: Path) -> str:
         with FileLock(record.with_suffix(".lock"), timeout=1):
             note = json.loads(record.read_text(encoding="utf-8"))
     except Timeout:
-        return "持有者信息暂未取得"
+        return t("test_evidence.holderUnknown")
     except (OSError, ValueError):
-        return "持有者刚退出或没留记录"
-    parts = [f"pid {note.get('pid')}", f"{note.get('started_at')} 起"]
+        return t("test_evidence.holderGone")
+    parts = [f"pid {note.get('pid')}", t("test_evidence.holderSince", time=note.get('started_at'))]
     parts.extend(f"{key} {note[key]}" for key in ("scope", "branch", "root") if note.get(key))
-    return "、".join(parts)
+    return list_separator(local_language()).join(parts)
 
 
 def run_lock(repo: Path, state: str, **note: object):

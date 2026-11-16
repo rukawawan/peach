@@ -103,7 +103,7 @@ class MediaRepairRunTests(unittest.TestCase):
             mock.patch.object(rm_repair.mp4recover, "untrunc_path", lambda root: Path("untrunc")),
             mock.patch.object(rm_repair.media_probe, "measure",
                               lambda ffprobe, asset_id, path: (95.0, 720, 406, "h264", 29.97, None,
-                                                               "短", "横屏", "低画质", asset_id)),
+                                                               "short", "landscape", "low", asset_id)),
         ):
             patch.start()
             self.addCleanup(patch.stop)
@@ -210,7 +210,7 @@ class MediaRepairRunTests(unittest.TestCase):
     def test_a_file_no_reference_can_rebuild_is_not_tried_again(self):
         def hopeless(source, references, **kwargs):
             self.recovered.append((Path(source).name, []))
-            raise RepairUnavailable("没有一个参照切得出能解码的片子")
+            raise RepairUnavailable("errors.mp4recover.noDecodableReference")
 
         self.recover = hopeless
         first = self.run_once()

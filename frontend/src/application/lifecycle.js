@@ -8,6 +8,7 @@ import { catalogState } from './catalog.js';
 import { recalledHomeFeed } from './feed.js';
 import { layoutState } from './layout.js';
 import { followState } from './follow.js';
+import { t } from '../i18n';
 export function installLifecycle1() {
 initBoardControls();
 wireBusyActions(document);
@@ -33,7 +34,7 @@ followState.followProviders = new Set();
 followState.followTags = new Set();
 followState.followWorks = new Set();
 followState.followMediaView = 'videos';
-followState.FOLLOW_FEED_SORTS = [['new','更新时间'],['hot','热度'],['dur','时长']];
+followState.FOLLOW_FEED_SORTS = [['new',t('shell:followSort.updated')],['hot',t('shell:followSort.popular')],['dur',t('shell:followSort.duration')]];
 followState.FOLLOW_RANDOM_SORT = 'rand';
 followState.followSort = 'new';
 followState.followDir = 'desc';

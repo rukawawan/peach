@@ -9,6 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/peach-mitao/peach?include_prereleases&sort=semver&label=release&logo=github)](https://github.com/peach-mitao/peach/releases)
 [![CI 流水线](https://img.shields.io/github/actions/workflow/status/peach-mitao/peach/test.yml?branch=master&label=CI&logo=githubactions&logoColor=white)](https://github.com/peach-mitao/peach/actions/workflows/test.yml)
 [![许可证](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue?logo=gnu&logoColor=white)](LICENSE)
+[![翻译进度](https://hosted.weblate.org/widget/peach/svg-badge.svg)](https://hosted.weblate.org/engage/peach/)
 [![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](docs/TESTING_DESKTOP.md)
 [![macOS DMG](https://img.shields.io/badge/macOS-DMG-555555?logo=apple&logoColor=white)](docs/OPERATIONS.md#macos-独立测试包)
 [![年龄限制](https://img.shields.io/badge/age-18%2B-555555)](#许可证)
@@ -54,8 +55,8 @@
 
 | 方式 | 入口 |
 | --- | --- |
-| Windows x64 | [安装版](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-windows-x64-setup.exe) · [免安装版](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-windows-x64.zip) |
-| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.56.0/Peach-0.56.0-macos-x86_64.dmg) |
+| Windows x64 | [安装版](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-windows-x64-setup.exe) · [免安装版](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-windows-x64.zip) |
+| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-macos-x86_64.dmg) |
 | Docker / NAS | [部署说明](docs/DOCKER.md) |
 | 源码运行 | [安装步骤](docs/OPERATIONS.md#从源码运行windowsmacos)，需要 Git、uv 和 Python 3.14+ |
 
@@ -70,6 +71,10 @@
 ## 问题反馈
 
 [提交问题或建议](https://github.com/peach-mitao/peach/issues/new/choose)，附版本、复现步骤与报错。公开截图使用演示资料，遮盖隐私；不要上传影片或数据库。安全问题按[安全政策](SECURITY.md)私下报告。
+
+## 参与翻译
+
+Peach 的界面翻译在 [Hosted Weblate](https://hosted.weblate.org/engage/peach/) 上进行。现有英文是 AI 初稿，欢迎提建议和投票。做法见[贡献说明](CONTRIBUTING.md#翻译)。
 
 ## 相关项目
 

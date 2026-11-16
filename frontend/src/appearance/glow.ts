@@ -17,6 +17,7 @@ import {
 
 import type { SettingsStore } from '../settings-store';
 import { appSettingsStore } from './settings';
+import { t } from '../i18n';
 
 /** 这一层读写的那两项；store 上还有别的字段。 */
 export interface GlowSettings { homeGlow: HomeGlow; accent: string }
@@ -53,7 +54,7 @@ const chip = (key: string, label: string, colors: readonly string[]): GlowChip =
    什么也不会变，读起来却像还有一档没试过。 */
 export function glowChips(glow: HomeGlow): GlowChip[] {
   const chips = HOME_GLOW_PRESETS.map(([key, label, palette]) => chip(key, label, HOME_GLOW_SPOTS.map((spot) => palette[spot].color)));
-  if (glow.preset === 'custom') chips.push(chip('custom', '自定义', HOME_GLOW_SPOTS.map((spot) => glow[spot].color)));
+  if (glow.preset === 'custom') chips.push(chip('custom', t('settings:shared.custom'), HOME_GLOW_SPOTS.map((spot) => glow[spot].color)));
   return chips;
 }
 

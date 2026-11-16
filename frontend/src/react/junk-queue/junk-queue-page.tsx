@@ -15,7 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { requestErrorMessage } from '@peach/legacy/core';
-import { LOAD_MORE_STATUS, loadingDotsHtml, popBadges } from '@peach/legacy/ui';
+import { activityStatusHtml, LOAD_MORE_STATUS, popBadges } from '@peach/legacy/ui';
 import { ButtonLink } from '@/components/base/buttons/button';
 
 import { EmptyState } from '../components/empty-state';
@@ -151,5 +151,5 @@ function RevealMore({ onMore }: { onMore(): void }) {
     observer.observe(el);
     return () => observer.disconnect();
   }, [onMore]);
-  return <div ref={node} data-load-more="" onClick={onMore} dangerouslySetInnerHTML={{ __html: loadingDotsHtml(LOAD_MORE_STATUS) }} />;
+  return <div ref={node} data-load-more="" onClick={onMore} dangerouslySetInnerHTML={{ __html: activityStatusHtml('linear-dots', LOAD_MORE_STATUS) }} />;
 }

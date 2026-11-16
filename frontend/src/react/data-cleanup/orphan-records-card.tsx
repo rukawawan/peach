@@ -16,6 +16,7 @@ import { ORPHAN_RECORDS_TEXT } from '../../cleanup-tool-skeletons';
 import { DataTable, type DataColumn } from '../components/data-table';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
+import { SourceLabel } from '../components/source-label';
 import { spriteGlyph } from '../components/sprite-glyph';
 import { queryClient } from '../query';
 import { busyProps } from '../settings/use-action';
@@ -97,8 +98,10 @@ function OrphanIdentity({ item }: { item: OrphanRecord }) {
           </span>
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span title={item.name} className="truncate text-body-regular text-text-primary">{item.name}</span>
-            <small className="truncate text-caption-1-regular text-text-secondary">
-              {[item.code, LOC[item.location] || item.location].filter(Boolean).join(' · ')}
+            <small className="flex min-w-0 items-center gap-1.5 text-caption-1-regular text-text-secondary">
+              {item.code ? <span className="shrink-0">{item.code}</span> : null}
+              {item.code && item.location ? <span aria-hidden="true">·</span> : null}
+              {item.location ? <SourceLabel source={item.location} label={LOC[item.location] || item.location} /> : null}
             </small>
           </span>
         </span>

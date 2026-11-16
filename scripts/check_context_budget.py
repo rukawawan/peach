@@ -18,6 +18,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from peach.interface_text import dev as t  # noqa: E402
 
 # 不可越过的天花板。`SKILL.md` 与 description 用 Anthropic 官方 skill authoring 的值
 # （正文 500 行、description 1024 字符硬校验）；入口文件没有官方值，由本项目定死为 200 行。
@@ -120,39 +124,38 @@ def _check_history(
     problems: list[str] = []
     for name, changes in changes_by_name.items():
         if not changes:
-            problems.append(f"{name}: 缺少{unit}预算变更记录")
+            problems.append(t("check_context_budget.noHistory", name=name, unit=unit))
             continue
         ceiling = ceilings.get(name)
         previous = None
         for value, date, reason in changes:
             if ceiling is not None and value > ceiling:
-                problems.append(f"{name}: {unit}预算 {value} 越过天花板 {ceiling}（{date}）")
+                problems.append(t("check_context_budget.overCeiling", name=name, unit=unit, value=value, ceiling=ceiling, date=date))
             if previous is not None and value > previous:
                 if not reason.strip() or reason.strip() == "初始值":
-                    problems.append(
-                        f"{name}: {previous} → {value}（{date}）是上调（{unit}预算），必须写明"
-                        "这些内容为什么无法下沉到 docs/ 或技能"
-                    )
+                    problems.append(t("check_context_budget.raiseNeedsReason", name=name, previous=previous,
+                                      value=value, date=date, unit=unit))
             previous = value
     return problems
 
 
 def check_budget_history() -> list[str]:
     """预算只能降不能升；上调必须留下理由；任何值都不得越过天花板。"""
-    problems = _check_history(BUDGET_CHANGES, MAX_EVER, "行数")
-    problems += _check_history(BYTE_BUDGET_CHANGES, MAX_EVER_BYTES, "字节")
+    problems = _check_history(BUDGET_CHANGES, MAX_EVER, t("check_context_budget.unitLines"))
+    problems += _check_history(BYTE_BUDGET_CHANGES, MAX_EVER_BYTES, t("check_context_budget.unitBytes"))
 
     if SKILL_MAX_LINES > MAX_EVER["SKILL.md"]:
         problems.append(
-            f"SKILL.md 预算 {SKILL_MAX_LINES} 越过天花板 {MAX_EVER['SKILL.md']}"
+            t("check_context_budget.skillLinesOverCeiling", value=SKILL_MAX_LINES, ceiling=MAX_EVER['SKILL.md'])
         )
     if SKILL_MAX_BYTES > MAX_EVER_BYTES["SKILL.md"]:
         problems.append(
-            f"SKILL.md 字节预算 {SKILL_MAX_BYTES} 越过天花板 {MAX_EVER_BYTES['SKILL.md']}"
+            t("check_context_budget.skillBytesOverCeiling", value=SKILL_MAX_BYTES, ceiling=MAX_EVER_BYTES['SKILL.md'])
         )
     if DESCRIPTION_MAX_CHARS > MAX_EVER["description"]:
         problems.append(
-            f"description 预算 {DESCRIPTION_MAX_CHARS} 越过天花板 {MAX_EVER['description']}"
+            t("check_context_budget.descriptionOverCeiling", value=DESCRIPTION_MAX_CHARS,
+              ceiling=MAX_EVER['description'])
         )
     return problems
 
@@ -162,11 +165,11 @@ def check_line_budgets(root: Path) -> list[str]:
     for name, budget in LINE_BUDGET.items():
         path = root / name
         if not path.is_file():
-            problems.append(f"{name}: 文件缺失")
+            problems.append(t("check_context_budget.fileMissing", name=name))
             continue
         count = _count_lines(path.read_text(encoding="utf-8"))
         if count > budget:
-            problems.append(f"{name}: {count} 行，超出预算 {budget} 行")
+            problems.append(t("check_context_budget.overLines", name=name, count=count, budget=budget))
     return problems
 
 
@@ -175,11 +178,11 @@ def check_byte_budgets(root: Path) -> list[str]:
     for name, budget in BYTE_BUDGET.items():
         path = root / name
         if not path.is_file():
-            problems.append(f"{name}: 文件缺失")
+            problems.append(t("check_context_budget.fileMissing", name=name))
             continue
         size = len(path.read_bytes())
         if size > budget:
-            problems.append(f"{name}: {size} 字节，超出预算 {budget} 字节")
+            problems.append(t("check_context_budget.overBytes", name=name, size=size, budget=budget))
     return problems
 
 
@@ -194,7 +197,8 @@ def check_line_lengths(root: Path) -> list[str]:
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if len(line) > MAX_LINE_CHARS:
                 problems.append(
-                    f"{name}: 第 {number} 行 {len(line)} 字符，超出单行上限 {MAX_LINE_CHARS}"
+                    t("check_context_budget.lineTooLong", name=name, number=number, length=len(line),
+                      limit=MAX_LINE_CHARS)
                 )
     return problems
 
@@ -208,37 +212,38 @@ def check_skills(root: Path) -> tuple[list[str], list[tuple[str, datetime.date]]
 
         size = len(path.read_bytes())
         if size > SKILL_MAX_BYTES:
-            problems.append(f"{rel}: {size} 字节，超出技能预算 {SKILL_MAX_BYTES} 字节")
+            problems.append(t("check_context_budget.skillOverBytes", name=rel, size=size, budget=SKILL_MAX_BYTES))
 
         count = _count_lines(text)
         if count > SKILL_MAX_LINES:
-            problems.append(f"{rel}: {count} 行，超出技能预算 {SKILL_MAX_LINES} 行")
+            problems.append(t("check_context_budget.skillOverLines", name=rel, count=count, budget=SKILL_MAX_LINES))
 
         fields = _parse_frontmatter(text)
         if fields is None:
-            problems.append(f"{rel}: 缺少 --- 包裹的 frontmatter")
+            problems.append(t("check_context_budget.noFrontmatter", name=rel))
             continue
 
         name = fields.get("name", "")
         if name != path.parent.name:
-            problems.append(f"{rel}: name `{name}` 与目录名 `{path.parent.name}` 不一致")
+            problems.append(t("check_context_budget.nameMismatch", path=rel, name=name, directory=path.parent.name))
 
         description = fields.get("description", "")
         if not description:
-            problems.append(f"{rel}: 缺少 description")
+            problems.append(t("check_context_budget.noDescription", name=rel))
         elif len(description) > DESCRIPTION_MAX_CHARS:
             problems.append(
-                f"{rel}: description {len(description)} 字符，超出 {DESCRIPTION_MAX_CHARS}"
+                t("check_context_budget.descriptionTooLong", name=rel, length=len(description),
+                  limit=DESCRIPTION_MAX_CHARS)
             )
 
         match = REVIEW_PATTERN.search(text)
         if match is None:
-            problems.append(f"{rel}: 缺少 `最后复核：YYYY-MM-DD` 行")
+            problems.append(t("check_context_budget.noReviewLine", name=rel))
         else:
             try:
                 reviewed.append((rel, datetime.date(*(int(part) for part in match.groups()))))
             except ValueError:
-                problems.append(f"{rel}: `最后复核` 不是合法日期")
+                problems.append(t("check_context_budget.badReviewDate", name=rel))
     return problems, reviewed
 
 
@@ -246,11 +251,11 @@ def check_skill_index(root: Path) -> list[str]:
     """`AGENTS.md` 的技能索引必须与实际文件一一对应。"""
     entry = root / "AGENTS.md"
     if not entry.is_file():
-        return ["AGENTS.md: 文件缺失"]
+        return [t("check_context_budget.fileMissing", name="AGENTS.md")]
     listed = set(SKILL_LINK_PATTERN.findall(entry.read_text(encoding="utf-8")))
     actual = {path.relative_to(root).as_posix() for path in _skill_files(root)}
-    problems = [f"AGENTS.md 索引指向不存在的技能：{item}" for item in sorted(listed - actual)]
-    problems += [f"技能未登记进 AGENTS.md 索引：{item}" for item in sorted(actual - listed)]
+    problems = [t("check_context_budget.indexMissingSkill", item=item) for item in sorted(listed - actual)]
+    problems += [t("check_context_budget.skillNotIndexed", item=item) for item in sorted(actual - listed)]
     return problems
 
 
@@ -277,8 +282,8 @@ def check_repo(root: Path) -> tuple[list[str], list[tuple[str, datetime.date]]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="检查上下文文件的结构、预算与复核日期")
-    parser.add_argument("--root", type=Path, default=ROOT, help="仓库根目录")
+    parser = argparse.ArgumentParser(description=t("check_context_budget.description"))
+    parser.add_argument("--root", type=Path, default=ROOT, help=t("check_context_budget.helpRoot"))
     args = parser.parse_args(argv)
 
     root = args.root.resolve()
@@ -286,16 +291,16 @@ def main(argv: list[str] | None = None) -> int:
     stale = stale_reviews(reviewed, datetime.date.today())
 
     for problem in problems:
-        print(f"[错误] {problem}")
+        print(t("check_context_budget.errorLine", problem=problem))
     for rel, days in stale:
-        print(f"[超期] {rel}: 距最后复核 {days} 天，超过 {REVIEW_MAX_DAYS} 天，请复核或清退")
+        print(t("check_context_budget.staleLine", name=rel, days=days, limit=REVIEW_MAX_DAYS))
 
     if problems:
         return 1
     if stale:
         return 3
     entries = set(LINE_BUDGET) | set(BYTE_BUDGET)
-    print(f"上下文预算检查通过：{len(reviewed)} 个技能，{len(entries)} 个入口文件。")
+    print(t("check_context_budget.passed", skills=len(reviewed), entries=len(entries)))
     return 0
 
 

@@ -6,18 +6,19 @@ import json
 
 from .task_runs import TaskRunHandle
 from .task_control import bind, Cancelled
+from .user_messages import UserValueError
 from .web_batch import _purge_outside_lock, _purge_receipt
 from .web_entity import _decorate_index
 
 
 def _performer_ids(values):
     if not isinstance(values, list) or not values:
-        raise ValueError("请先选择女优")
+        raise UserValueError("api.performerDelete.selectionRequired")
     ids = []
     for value in values:
         text = str(value)
         if not text.isascii() or not text.isdecimal() or len(text) > 19 or not 0 < int(text) < 2**63:
-            raise ValueError("请选择有效的女优")
+            raise UserValueError("api.performerDelete.selectionInvalid")
         ids.append(int(text))
     return sorted(set(ids))
 
@@ -46,7 +47,7 @@ def _selection(connection, ids):
         f"SELECT id,canonical_name FROM entity WHERE id IN ({marks}) AND kind='performer' ORDER BY id", ids,
     ).fetchall()
     if len(people) != len(ids):
-        raise ValueError("所选女优不存在，请刷新列表")
+        raise UserValueError("api.performerDelete.performerGone")
     rows = connection.execute(
         "SELECT a.* FROM asset a WHERE a.medium='video' AND EXISTS "
         f"(SELECT 1 FROM asset_entity ae WHERE ae.asset_id=a.id AND ae.entity_id IN ({marks})) ORDER BY a.id",
@@ -78,16 +79,17 @@ def q_performer_delete_plan(contract, args):
 def w_performer_delete(contract, body):
     ids = _performer_ids(body.get('entity_ids'))
     if not isinstance(body.get('plan'), str) or len(body['plan']) != 64:
-        raise ValueError("请先查看影片删除清单")
-    run = contract.task_runs.start('batch', trigger='manual', label='按女优永久删除影片')
+        raise UserValueError("api.performerDelete.planRequired")
+    from .task_stages import batch_progress
+    run = contract.task_runs.start('batch', trigger='manual', **batch_progress('performer-delete'))
     handle = TaskRunHandle(contract.task_runs, run.id if run else None)
 
     def reviewed(connection):
         _people, rows, token = _selection(connection, ids)
         if token != body['plan']:
-            raise ValueError("影片清单已变化，请关闭确认窗口后重新查看")
+            raise UserValueError("api.performerDelete.planChanged")
         if not rows:
-            raise ValueError("没有可删除的影片")
+            raise UserValueError("api.performerDelete.nothingToDelete")
         return rows
     try:
         with bind(contract.task_runs, handle.run_id):
@@ -103,7 +105,8 @@ def w_performer_delete(contract, body):
         handle.finish('cancelled', summary={'cancelled_by_user': True})
         raise
     except BaseException as error:
-        handle.finish('failed', error=f'{type(error).__name__}: {error}')
+        from .user_messages import failure_fields
+        handle.finish('failed', **failure_fields(error))
         raise
     handle.finish('succeeded', summary={'operation': 'performer-delete',
                                        'changed': result['purged'], 'blocked': len(result['blocked'])})

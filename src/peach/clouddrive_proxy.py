@@ -14,25 +14,26 @@ from .downloads import CLOUDDRIVE_CREDENTIAL, DownloadError, DownloadSettings
 from .downloads_clouddrive import CloudDriveClient
 from .follow_secrets import CredentialError, CredentialStore
 from .push_discovery import PushDiscoverySettings
+from .user_messages import UserFacingError, UserValueError
 
 _KEY = secrets.token_bytes(32)
 _WRITE_LOCK = threading.Lock()
 MODES = {'system': pb.SYSTEM, 'direct': pb.NOPROXY, 'http': pb.HTTP, 'socks5': pb.SOCKS5}
 
 
-class ProxyConflict(ValueError):
+class ProxyConflict(UserFacingError, ValueError):
     """表单读取后，CloudDrive 账号配置已有变化。"""
 
 
 def client_for(config):
     address = DownloadSettings(config.directory('state')).load().clouddrive_address
     if not address:
-        raise ValueError('请先在下载设置中填写 CloudDrive2 地址和 API 令牌')
+        raise UserValueError("errors.clouddriveProxy.notConfigured")
     try:
         credential = CredentialStore(config.directory('secrets')).load(CLOUDDRIVE_CREDENTIAL)
         token = credential.require('token')[0] if credential else ''
     except CredentialError:
-        raise ValueError('CloudDrive2 API 令牌无法读取，请在下载设置中重新填写') from None
+        raise UserValueError("errors.clouddriveProxy.tokenUnreadable") from None
     return CloudDriveClient(address, token, timeout=3)
 
 
@@ -51,7 +52,7 @@ def _revision(client, api, config):
 
 def _get(client, api):
     return client.call('GetCloudAPIConfig', pb.GetCloudAPIConfigRequest(
-        cloudName=api.name, userName=api.userName), '读取网盘代理')
+        cloudName=api.name, userName=api.userName), 'readProxy')
 
 
 def _proxy(config, field):
@@ -71,8 +72,8 @@ def _account(client, api, config, writable, libraries=()):
 def _accounts(client):
     info = client.token_info()
     if not info.permissions.allow_get_cloud_apis:
-        raise ValueError('CloudDrive2 API 令牌需要“查看云盘”权限')
-    apis = client.call('GetAllCloudApis', Empty(), '读取网盘账号').apis
+        raise UserValueError("errors.clouddriveProxy.needsViewPermission")
+    apis = client.call('GetAllCloudApis', Empty(), 'readAccounts').apis
     return info.permissions, apis
 
 
@@ -94,22 +95,22 @@ def read(config):
 
 def _apply(target, value):
     if not isinstance(value, dict) or value.get('mode') not in MODES:
-        raise ValueError('请选择直连、跟随系统、HTTP 或 SOCKS5')
+        raise UserValueError("errors.clouddriveProxy.chooseMode")
     mode = value['mode']
     host, port, username = value.get('host', ''), value.get('port', 0), value.get('username', '')
     if not isinstance(host, str) or not isinstance(username, str):
-        raise ValueError('代理地址和用户名需要是文字')
+        raise UserValueError("errors.clouddriveProxy.hostUserNotText")
     host = host.strip()
     if mode in ('http', 'socks5'):
         if not host or len(host) > 253 or any(c in host for c in '/@?#') or any(c.isspace() for c in host):
-            raise ValueError('代理地址只填主机名或 IP')
+            raise UserValueError("errors.clouddriveProxy.hostOnly")
         if type(port) is not int or not 1 <= port <= 65535:
-            raise ValueError('代理端口需要在 1–65535 之间')
+            raise UserValueError("errors.clouddriveProxy.portRange")
     password = value.get('password', '')
     if not isinstance(password, str) or len(password) > 1024 or len(username) > 256:
-        raise ValueError('代理凭据格式无效')
+        raise UserValueError("errors.clouddriveProxy.invalidCredentials")
     if value.get('clear_password') not in (None, False, True):
-        raise ValueError('清除密码需要是布尔值')
+        raise UserValueError("errors.clouddriveProxy.clearPasswordNotBoolean")
     target.proxyType = MODES[mode]
     if mode in ('http', 'socks5'):
         target.host, target.port, target.username = host, port, username
@@ -121,25 +122,25 @@ def _apply(target, value):
 
 def save(config, body):
     if not isinstance(body, dict) or not any(key in body for key in ('api', 'data')):
-        raise ValueError('请选择需要保存的代理设置')
+        raise UserValueError("errors.clouddriveProxy.chooseSettings")
     with _WRITE_LOCK, client_for(config) as client:
         permissions, apis = _accounts(client)
         if not permissions.allow_modify_cloud_apis:
-            raise ValueError('CloudDrive2 API 令牌需要“修改云盘”权限')
+            raise UserValueError("errors.clouddriveProxy.needsModifyPermission")
         api = next((api for api in apis if _identity(api) == body.get('id')), None)
         if api is None:
-            raise ProxyConflict('网盘账号已变化，请重新读取')
+            raise ProxyConflict("errors.clouddriveProxy.accountChanged")
         libraries = [row for row in _bindings(config, client, permissions, apis) if row['account'] == _identity(api)]
         if not libraries:
-            raise ProxyConflict('媒体库已变化，请重新读取')
+            raise ProxyConflict("errors.clouddriveProxy.libraryChanged")
         current = _get(client, api)
         if not hmac.compare_digest(str(body.get('revision', '')), _revision(client, api, current)):
-            raise ProxyConflict('CloudDrive2 配置已变化，请重新读取后保存')
+            raise ProxyConflict("errors.clouddriveProxy.configChanged")
         for key, field in (('api', 'apiProxy'), ('data', 'dataProxy')):
             if key in body:
                 _apply(getattr(current, field), body[key])
         client.call('SetCloudAPIConfig', pb.SetCloudAPIConfigRequest(
-            cloudName=api.name, userName=api.userName, config=current), '保存网盘代理')
+            cloudName=api.name, userName=api.userName, config=current), 'saveProxy')
         # 写请求只发一次；重新读取才能确认 CloudDrive 实际保存的值。
         return _account(client, api, _get(client, api), True, libraries)
 
@@ -174,7 +175,7 @@ def _bindings(config, client, permissions, apis):
     mounts = []
     if permissions.allow_get_mounts:
         try:
-            mounts = client.call('GetMountPoints', Empty(), '读取挂载点').mountPoints
+            mounts = client.call('GetMountPoints', Empty(), 'readMountPoints').mountPoints
         except DownloadError:
             pass
     result = []

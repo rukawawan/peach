@@ -14,6 +14,8 @@ from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from .update_tasks import UpdateBusy
 from .fsutil import atomic_write_text
+from . import interface_text
+from .user_messages import UserFacingError, UserValueError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +38,11 @@ def _stamp(moment: datetime | None = None) -> str:
 FEED_JOB_ID = "peach-feed-update"
 RUNTIME_COUNTS = ('last_checked', 'last_added', 'consecutive_failures')
 RUNTIME_TIMES = ('last_started_at', 'last_finished_at', 'last_skipped_at', 'failing_since', 'next_run_at')
+#: 上次失败的原因：`last_error` 是 zh-CN 原文，`last_error_code` 与 `last_error_params` 给界面取译文。
+#: 旧状态文件只有原文，读出来照原文显示。
+RUNTIME_ERROR = ('last_error', 'last_error_code', 'last_error_params')
+#: 订阅源拉取只在写入端可用：`api.py` 建订阅源那一个调度对象时传 `unavailable_code=FEED_UNAVAILABLE_CODE`。
+FEED_UNAVAILABLE_CODE = "errors.followScheduler.feedWriterOnly"
 
 
 @dataclass(frozen=True)
@@ -93,12 +100,15 @@ class FollowUpdateScheduler:
                  default: FollowScheduleConfig | None = None,
                  tick_minutes: int | None = None,
                  unavailable_message: str =
-                 "automatic follow updates are available only on the ledger writer"):
+                 "automatic follow updates are available only on the ledger writer",
+                 unavailable_code: str | None = None):
         self.job_id = job_id
         #: 多久跑一次。不给就等于设置里的间隔；订阅源给的是 `feeds.TICK_MINUTES`：
         #: 那边设置里的间隔是每个源的周期，到期由源自己判（ADR-0134）。
         self.tick_minutes = tick_minutes
         self.unavailable_message = unavailable_message
+        #: 给了 code 就抛带 code 的报错，界面按语言显示；只给原文的照旧抛原文。
+        self.unavailable_code = unavailable_code
         self.store = FollowScheduleStore(state_root, filename, default)
         self.run_check = run_check
         self.available = bool(available)
@@ -111,6 +121,8 @@ class FollowUpdateScheduler:
         self._last_finished_at: str | None = None
         self._last_skipped_at: str | None = None
         self._last_error: str | None = None
+        self._last_error_code: str | None = None
+        self._last_error_params: dict | None = None
         self._last_checked = 0
         self._last_added = 0
         self._consecutive_failures = 0
@@ -124,26 +136,35 @@ class FollowUpdateScheduler:
         try:
             state = json.loads(self._runtime_path.read_text(encoding='utf-8'))
             if not isinstance(state, dict):
-                raise ValueError('运行状态应为对象')
+                raise ValueError('runtime state must be an object')
             for key in RUNTIME_COUNTS:
                 value = state.get(key, 0)
                 if type(value) is not int or value < 0:
-                    raise ValueError('运行计数无效')
+                    raise ValueError('invalid runtime count')
             for key in RUNTIME_TIMES:
                 value = state.get(key)
                 if value is not None and (not isinstance(value, str)
                         or datetime.fromisoformat(value.replace('Z', '+00:00')).tzinfo is None):
-                    raise ValueError('运行时间无效')
-            if state.get('last_error') is not None and not isinstance(state['last_error'], str):
-                raise ValueError('运行错误无效')
-            for key in (*RUNTIME_COUNTS, *RUNTIME_TIMES, 'last_error'):
+                    raise ValueError('invalid runtime timestamp')
+            for key, kind in zip(RUNTIME_ERROR, (str, str, dict)):
+                if state.get(key) is not None and not isinstance(state[key], kind):
+                    raise ValueError('invalid runtime error')
+            for key in (*RUNTIME_COUNTS, *RUNTIME_TIMES, *RUNTIME_ERROR):
                 setattr(self, '_' + key, state.get(key, 0 if key in RUNTIME_COUNTS else None))
         except FileNotFoundError:
             return
         except (OSError, ValueError, TypeError):
             LOGGER.warning('automatic follow runtime state unavailable at %s', self._runtime_path,
                            exc_info=True)
-            self._last_error = '上次自动检查的运行状态未取得'
+            self._fail('labels.followScheduler.runtimeUnavailable')
+
+    def _fail(self, code: str | None = None, params: dict | None = None, *, text: str | None = None) -> None:
+        """记下上次失败的原因：给 code 时原文按 zh-CN 渲染；只有原文（别处异常的说明）时不带 code。
+        `text=None` 且不给 code 就是清掉。调用方持 `_state_lock`。"""
+        values = dict(params or {})
+        self._last_error = interface_text.text(f"server:{code}", values) if code else text
+        self._last_error_code = code
+        self._last_error_params = values if code else None
 
     def _save_runtime(self) -> None:
         job = self.scheduler.get_job(self.job_id) if self._started else None
@@ -151,7 +172,7 @@ class FollowUpdateScheduler:
             if self._started:
                 self._next_run_at = _stamp(job.next_run_time) if job is not None else None
             state = {key: getattr(self, '_' + key)
-                     for key in (*RUNTIME_COUNTS, *RUNTIME_TIMES, 'last_error')}
+                     for key in (*RUNTIME_COUNTS, *RUNTIME_TIMES, *RUNTIME_ERROR)}
             atomic_write_text(self._runtime_path, json.dumps(state, ensure_ascii=False) + '\n')
 
     def start(self) -> None:
@@ -169,7 +190,8 @@ class FollowUpdateScheduler:
 
     def update(self, *, enabled: object, interval_minutes: object) -> dict:
         if not self.available:
-            raise ValueError(self.unavailable_message)
+            raise (UserValueError(self.unavailable_code) if self.unavailable_code
+                   else ValueError(self.unavailable_message))
         self.config = self.store.validate(enabled, interval_minutes)
         self.store.save(self.config)
         if self._started:
@@ -183,9 +205,10 @@ class FollowUpdateScheduler:
         这个任务自己再跑一轮。之后的轮次从这一轮起按原间隔排。
         """
         if not self.available:
-            raise ValueError(self.unavailable_message)
+            raise (UserValueError(self.unavailable_code) if self.unavailable_code
+                   else ValueError(self.unavailable_message))
         if not self._started or not self.config.enabled:
-            raise ValueError("自动运行没有开启")
+            raise UserValueError("errors.followScheduler.autoRunOff")
         with self._state_lock:
             already = self._running
             # 提前标成运行中：调度线程领走这一轮之前，读状态的人不该再看到旧的失败。
@@ -199,7 +222,7 @@ class FollowUpdateScheduler:
         except JobLookupError:
             with self._state_lock:
                 self._running = False
-            raise ValueError("自动运行没有开启") from None
+            raise UserValueError("errors.followScheduler.autoRunOff") from None
         self._save_runtime()
         accepted['next_run_at'] = _stamp(scheduled_at)
         return accepted
@@ -247,10 +270,10 @@ class FollowUpdateScheduler:
     def _run(self) -> None:
         with self._state_lock:
             started_before = self._last_started_at
-            error_before = self._last_error
+            error_before = (self._last_error, self._last_error_code, self._last_error_params)
             self._running = True
             self._last_started_at = _stamp()
-            self._last_error = None
+            self._fail()
         skipped = False
         try:
             # 这一轮在 `task_run` 里的记录由 `run_check` 那条路上的 BackgroundJob 落下
@@ -279,7 +302,7 @@ class FollowUpdateScheduler:
                 skipped = True
                 with self._state_lock:
                     self._last_started_at = started_before
-                    self._last_error = error_before
+                    self._last_error, self._last_error_code, self._last_error_params = error_before
                 return
             rows = result.get("results") or []
             failures = [row for row in rows if not row.get("ok")]
@@ -287,12 +310,15 @@ class FollowUpdateScheduler:
                 self._last_checked = int(result.get("checked") or 0)
                 self._last_added = sum(int(row.get("added") or 0) for row in rows)
                 if failures:
-                    self._last_error = f"{len(failures)} 个来源检查失败"
+                    self._fail('labels.followScheduler.sourcesFailed', {'count': len(failures)})
             self._settle(failed=bool(failures))
         except Exception as error:  # the background job must never terminate the scheduler
             LOGGER.exception("automatic follow update failed")
             with self._state_lock:
-                self._last_error = str(error)
+                if isinstance(error, UserFacingError):
+                    self._fail(error.code, error.params)
+                else:
+                    self._fail(text=str(error))
             self._settle(failed=True)
         finally:
             with self._state_lock:
@@ -349,6 +375,8 @@ class FollowUpdateScheduler:
                 # `last_error`，但也不能一点痕迹都不留。
                 "last_skipped_at": self._last_skipped_at,
                 "last_error": self._last_error,
+                "last_error_code": self._last_error_code,
+                "last_error_params": self._last_error_params,
                 "last_checked": self._last_checked,
                 "last_added": self._last_added,
                 "consecutive_failures": self._consecutive_failures,

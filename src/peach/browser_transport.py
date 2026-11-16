@@ -32,7 +32,10 @@ from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
+from .coded_text import Said
+from .content_words import BROWSER_CHALLENGE_MARKS
 from .http import HttpRequest, HttpResponse
+from .user_messages import UserFacingError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -49,14 +52,14 @@ CLICK_SECONDS = 120.0
 IDLE_SECONDS = 600.0
 #: 站点的年龄门之类点一下就过的页：点完之后最多等多久跳回去。
 GATE_SECONDS = 15.0
-#: 启动时窗口放的位置：屏幕外（系统会把它钳到 -16384）。自动能过的验证在那里照样过。
+#: 启动时窗口放的位置：屏幕外（系统会把它钳到 -16384）。自动能过的验证在那里照样过。窗口在任务栏上
+#: 有按钮，点它只会在屏幕外激活、最小化、再还原回屏幕外，所以验证页上用户把它最小化就当作要看（见 `_load`）。
 OFFSCREEN = (-32000, -32000)
 #: 要人点时窗口放回屏幕内的位置与大小。
 ONSCREEN = (200, 100)
 WINDOW_SIZE = (1000, 800)
 #: 验证页的标记，前两条是 Cloudflare 的标题（英文与中文界面），后面是它脚本与文案里的固定字串。
-CHALLENGE_MARKS = ("Just a moment", "请稍候", "cf-chl-", "challenge-platform",
-                   "Verifying you are human", "Attention Required")
+CHALLENGE_MARKS = BROWSER_CHALLENGE_MARKS
 #: 导航时不下载的资源：图片、字体与媒体。要的是 HTML，验证页也不靠这些。
 BLOCKED_RESOURCES = ("*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.avif", "*.ico",
                      "*.woff", "*.woff2", "*.ttf", "*.mp4", "*.webm", "*.m3u8")
@@ -89,6 +92,14 @@ _LINUX_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-b
 
 class BrowserUnavailable(RuntimeError):
     """浏览器起不来或半路断了。调用方按连接失败重试，下一次会重新拉起。"""
+
+
+class BrowserLaunchFailed(UserFacingError, BrowserUnavailable):
+    """浏览器没能拉起来：原因写成 `errors.browserTransport.*` 的 code，登录窗口的状态会带给人看。
+
+    仍是 `BrowserUnavailable`，按它捕获的地方照旧接得住。请求半路断开、页面超时这类只进日志的
+    仍抛 `BrowserUnavailable` 或 `PageTimeout`，原文是英文。
+    """
 
 
 class ChallengeUnsolved(RuntimeError):
@@ -156,10 +167,10 @@ class _WebSocket:
         while b"\r\n\r\n" not in head:
             chunk = self.sock.recv(4096)
             if not chunk:
-                raise ConnectionError("浏览器在握手时关闭了连接")
+                raise ConnectionError("browser closed the connection during the handshake")
             head += chunk
         if b" 101 " not in head.split(b"\r\n", 1)[0]:
-            raise ConnectionError("浏览器拒绝了调试连接")
+            raise ConnectionError("browser refused the debugging connection")
         self.buffer = head.split(b"\r\n\r\n", 1)[1]
         self.next_id = 0
 
@@ -167,7 +178,7 @@ class _WebSocket:
         while len(self.buffer) < size:
             chunk = self.sock.recv(65536)
             if not chunk:
-                raise ConnectionError("浏览器关闭了调试连接")
+                raise ConnectionError("browser closed the debugging connection")
             self.buffer += chunk
         out, self.buffer = self.buffer[:size], self.buffer[size:]
         return out
@@ -199,7 +210,7 @@ class _WebSocket:
             if opcode == 0x1:
                 return data.decode()
             if opcode == 0x8:
-                raise ConnectionError("浏览器关闭了调试连接")
+                raise ConnectionError("browser closed the debugging connection")
 
     def call(self, method: str, timeout: float = 30.0, **params):
         """发一条 CDP 命令，等它的回包；中途到的事件跳过。"""
@@ -245,6 +256,8 @@ class _Browser:
         self.process: subprocess.Popen | None = None
         self.socket: _WebSocket | None = None
         self.window_id = None
+        #: 窗口是 Peach 收起来的（`place(visible=False)`）。这时还原位置已在屏幕内，用户点任务栏能自己唤出。
+        self.put_away = False
 
     def start(self) -> None:
         self.profile.mkdir(parents=True, exist_ok=True)
@@ -267,7 +280,7 @@ class _Browser:
             self.process = self._popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL)
         except OSError as error:
-            raise BrowserUnavailable(f"浏览器没有启动：{error}") from None
+            raise BrowserLaunchFailed("errors.browserTransport.notStarted", {"error": str(error)}) from None
         port = self._wait_port(port_file)
         try:
             page = next(target for target in self._targets(port) if target.get("type") == "page")
@@ -279,19 +292,21 @@ class _Browser:
             self.window_id = self.socket.call("Browser.getWindowForTarget", targetId=page.get("id", "")).get("windowId")
         except (OSError, StopIteration, KeyError, ValueError, RuntimeError) as error:
             self.close()
-            raise BrowserUnavailable(f"浏览器的调试口没有接上：{error}") from None
+            raise BrowserLaunchFailed("errors.browserTransport.debugPortNotConnected",
+                                      {"error": str(error)}) from None
 
     def _wait_port(self, port_file: Path) -> int:
         for _ in range(300):
             if self.process is not None and self.process.poll() is not None:
-                raise BrowserUnavailable(f"浏览器启动后立即退出（{self.process.returncode}）")
+                raise BrowserLaunchFailed("errors.browserTransport.exitedAtStart",
+                                          {"code": self.process.returncode})
             if port_file.is_file():
                 lines = port_file.read_text(encoding="utf-8", errors="replace").splitlines()
                 if len(lines) >= 2 and lines[0].strip().isdigit():
                     return int(lines[0])
             self._sleep(0.1)
         self.close()
-        raise BrowserUnavailable("浏览器没有写出调试口")
+        raise BrowserLaunchFailed("errors.browserTransport.debugPortMissing")
 
     def alive(self) -> bool:
         return self.socket is not None and self.process is not None and self.process.poll() is None
@@ -300,7 +315,7 @@ class _Browser:
         assert self.socket is not None
         result = self.socket.call("Runtime.evaluate", timeout, expression=expression, returnByValue=True)
         if "exceptionDetails" in result:
-            raise RuntimeError(result["exceptionDetails"].get("text") or "页面脚本出错")
+            raise RuntimeError(result["exceptionDetails"].get("text") or "page script error")
         return result.get("result", {}).get("value")
 
     def navigate(self, url: str, *, referrer: str | None = None) -> None:
@@ -332,6 +347,7 @@ class _Browser:
         """
         if self.socket is None or self.window_id is None:
             return
+        self.put_away = not visible
         if visible:
             self.socket.call("Browser.setWindowBounds", windowId=self.window_id, bounds={"windowState": "normal"})
             self.socket.call("Browser.setWindowBounds", windowId=self.window_id,
@@ -340,6 +356,17 @@ class _Browser:
             self.socket.call("Page.bringToFront")
         else:
             self.socket.call("Browser.setWindowBounds", windowId=self.window_id, bounds={"windowState": "minimized"})
+
+    def minimized_by_user(self) -> bool:
+        """窗口被最小化了、又不是 Peach 收的：屏幕外的窗口只有用户点任务栏按钮才会这样。
+
+        这种窗口的还原位置仍在屏幕外，点任务栏还原也看不见，只有最大化才上屏（2026-11-09 本机 Chrome 实测：
+        最小化再还原落回 -16384）。`place(visible=True)` 从这里出发能把它放回 (200, 100)。
+        """
+        if self.socket is None or self.window_id is None or self.put_away:
+            return False
+        bounds = self.socket.call("Browser.getWindowBounds", windowId=self.window_id).get("bounds", {})
+        return bounds.get("windowState") == "minimized"
 
     def close(self) -> None:
         if self.socket is not None:
@@ -422,9 +449,9 @@ class BrowserTransport:
 
     def __call__(self, request: HttpRequest, timeout: float, max_bytes: int) -> HttpResponse:
         from .processing_traffic import unobserved
-        unobserved('浏览器采集流量未观测')
+        unobserved(Said('labels.browserTransport.trafficUnobserved'))
         if request.method.upper() != "GET":
-            raise BrowserUnavailable("浏览器传输只发 GET")
+            raise BrowserUnavailable("browser transport only sends GET")
         with self._lock:
             browser = self._ensure()
             try:
@@ -436,7 +463,7 @@ class BrowserTransport:
                     raise
                 # 页面脚本、调试连接或进程任一处坏了都按断连处理：关掉，下一次请求重新拉起。
                 self._drop()
-                raise BrowserUnavailable(f"浏览器请求未取得：{error}") from None
+                raise BrowserUnavailable(f"browser request failed: {error}") from None
             finally:
                 self._touch()
         body = document["html"].encode("utf-8")[:max_bytes + 1]
@@ -473,6 +500,8 @@ class BrowserTransport:
            从弹出那一刻起再等 `click_seconds`，这一段不受 `timeout` 约束——人点验证要的时间不归一条请求的
            预算管。还没过就记进 `_unsolved` 并报 `ChallengeUnsolved`，同一站之后不再弹，直到哪次页面正常打开，
            所以一个站最多让整趟多等一次 `click_seconds`。
+        4. 验证页还没弹窗时用户就点任务栏把屏幕外的窗口最小化了：当作要看，立刻按第 3 步弹出并开始等点击，
+           `_unsolved` 里的站也一样。
         """
         host = urlsplit(url).hostname or url
         referrer = next((value for key, value in headers.items() if key.lower() == REFERRER_HEADER), None)
@@ -485,8 +514,19 @@ class BrowserTransport:
         challenged_seen = False
         cleared = False
         shown_at: float | None = None
+
+        def show(reason: str) -> float:
+            browser.place(visible=True)
+            _set_attention(host, f"{host} verification needs a click; the browser window is open")
+            LOGGER.warning("%s verification page %s; window moved on screen, waiting for the user to click", host, reason)
+            return self._clock()
+
         try:
             while True:
+                # 先看窗口再读页面：最小化的窗口里页面脚本要好几秒才回（2026-11-09 本机 Chrome 实测），
+                # 先拉上屏，用户点完任务栏马上就能看到。
+                if shown_at is None and challenged_seen and browser.minimized_by_user():
+                    shown_at = show("restored from the taskbar by the user")
                 state = self._state(browser)
                 challenged = any(mark in state["head"] or mark in state["title"] for mark in CHALLENGE_MARKS)
                 # DOM 解析完（`interactive`）就够：验证页的标记在页头里，此时已经看得到；不等外部
@@ -500,25 +540,23 @@ class BrowserTransport:
                 if shown_at is not None:
                     if now - shown_at >= self.click_seconds:
                         self._unsolved.add(host)
-                        raise ChallengeUnsolved(f"{host} 的人机验证在 {int(elapsed)} 秒内没有通过")
+                        raise ChallengeUnsolved(f"{host} verification did not pass within {int(elapsed)} s")
                 elif challenged_seen:
                     waited = now - phase_started
                     if not cleared and waited >= reset_limit:
                         cleared = True
                         count = browser.clear_cookies(url)
-                        LOGGER.info("%s 的验证页 %d 秒没有自动通过，清掉该站 %d 条 cookie 重载", host, int(elapsed), count)
+                        LOGGER.info("%s verification page did not pass within %d s; cleared %d cookies for the site and reloaded", host, int(elapsed), count)
                         browser.navigate(url, referrer=referrer)
                         phase_started = now
                     elif cleared and waited >= auto_limit:
                         if host in self._unsolved:
-                            raise ChallengeUnsolved(f"{host} 的人机验证在 {int(elapsed)} 秒内没有自动通过；"
-                                                    "窗口上次弹出后没点过去，这次不再弹")
-                        shown_at = now
-                        browser.place(visible=True)
-                        _set_attention(host, f"{host} 的人机验证需要点一下，浏览器窗口已打开")
-                        LOGGER.warning("%s 的验证页没有自动通过，等待用户点击", host)
+                            raise ChallengeUnsolved(f"{host} verification did not pass automatically within "
+                                                    f"{int(elapsed)} s; the window was not clicked last time, "
+                                                    "so it is not shown again")
+                        shown_at = show("did not pass automatically")
                 elif elapsed >= timeout:
-                    raise PageTimeout(f"{host} 的页面在 {int(elapsed)} 秒内没有打开")
+                    raise PageTimeout(f"{host} page did not open within {int(elapsed)} s")
                 self._sleep(1.0)
         except ChallengeUnsolved:
             # 放弃的验证页不能留在窗口里：它每 50 秒自己重载一次，`cf_chl_rc_ni` 跟着涨，在没人看的窗口里
@@ -538,7 +576,7 @@ class BrowserTransport:
             return state
         clicked = browser.evaluate(_CLICK_SCRIPT % {"pattern": json.dumps(gate["button"])})
         if not clicked:
-            LOGGER.warning("%s 的年龄门上没有找到能点的按钮", parts.hostname)
+            LOGGER.warning("%s age gate has no clickable button", parts.hostname)
             return state
         started = self._clock()
         while self._clock() - started < GATE_SECONDS:
@@ -546,7 +584,7 @@ class BrowserTransport:
             state = self._state(browser)
             if state["ready"] in ("interactive", "complete") and state["url"] and gate["path"] not in urlsplit(state["url"]).path:
                 return state
-        LOGGER.warning("%s 的年龄门点了「%s」但没有跳回去", parts.hostname, clicked)
+        LOGGER.warning("%s age gate: clicked \"%s\" but the page did not navigate back", parts.hostname, clicked)
         return state
 
     def _touch(self) -> None:

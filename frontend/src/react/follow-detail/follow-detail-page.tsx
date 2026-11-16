@@ -42,6 +42,7 @@ import {
 } from './follow-detail';
 import { fetchFollowRelated, followRelatedGroups, followRelatedKey, followRelatedReasons } from './follow-related';
 import { FollowTags } from './follow-tags';
+import { t } from '../../i18n';
 
 const realDuration = (value: unknown) => Number(value) > 0;
 
@@ -91,13 +92,13 @@ function GoneNote({ onBack }: { onBack(): void }) {
   return (
     <div data-follow-detail-gone="" onClick={(event) => {
       if ((event.target as HTMLElement).closest('[data-note-action]')) onBack();
-    }} dangerouslySetInnerHTML={{ __html: noteHtml('这条关注内容已不存在，可能已被来源删除或已清理。', { actionLabel: '回到关注' }) }} />
+    }} dangerouslySetInnerHTML={{ __html: noteHtml(t('follow:followDetail.itemGone'), { actionLabel: t('follow:followDetail.backToFollowing') }) }} />
   );
 }
 
 /** 关闭键。`id` 留着：Escape、点浮窗外面与壳的兜底都按 `#closeStage` 找它再点一下。 */
 const CloseStage = ({ onClose }: { onClose(): void }) => (
-  <button type="button" data-stage-close="" id="closeStage" title="关闭" aria-label="关闭" onClick={onClose}
+  <button type="button" data-stage-close="" id="closeStage" title={t('follow:shared.close')} aria-label={t('follow:shared.close')} onClick={onClose}
     dangerouslySetInnerHTML={{ __html: icon('x') }} />
 );
 
@@ -148,7 +149,7 @@ function Related({ data, media, limit, context, helpers, actions }: {
 }) {
   const result = useQuery({ queryKey: followRelatedKey(data.item.id, media, limit),
     queryFn: ({ signal }) => fetchFollowRelated(data, media, limit, signal) });
-  const [skeleton] = useState(() => pageSkeletonHtml('正在读取推荐', { cards: true, className: 'related-skeleton' }));
+  const [skeleton] = useState(() => pageSkeletonHtml(t('follow:followDetail.loadingRecommendations'), { cards: true, className: 'related-skeleton' }));
   const cardActions = useMemo(() => ({
     openDetail: actions.openItem, openAuthor: actions.openAuthor, canFlip: actions.canFlip,
   }), [actions]);
@@ -158,7 +159,7 @@ function Related({ data, media, limit, context, helpers, actions }: {
   const relatedContext = { ...context, sources, aliases: result.data?.pages.at(-1)?.author_aliases || context.aliases };
   return <RelatedSection online data-follow-related="" wireDrag={helpers.wireDrag} busy={result.isPending}
     empty={!!result.data && !groups.length}
-    error={result.isError ? `读取接着看失败：${requestErrorMessage(result.error)}` : undefined}
+    error={result.isError ? t('follow:followDetail.upNextLoadFailed', { error: requestErrorMessage(result.error) }) : undefined}
     onRetry={() => { void result.refetch() }}>
     {result.data ? groups.map(group => <FollowCard key={group.primary.id} variant="next" group={group} media={media}
       authorSources={authorSources(group.primary, sources)} context={relatedContext} selected={false} selectMode={false}
@@ -212,13 +213,13 @@ function MediaFrame({ item, media, actions, onMedia, issues }: {
       ) : (
         <div data-follow-detail-placeholder="">
           <span className="contents" dangerouslySetInnerHTML={{ __html: sourceIcon(item.resource_provider || item.provider) }} />
-          <span>没有可用预览</span>
+          <span>{t('follow:followDetail.noPreview')}</span>
         </div>
       )}
       {carousel ? <MediaCarousel items={images} position={position} onSelect={onMedia} below renderThumbnail={entry => {
         const image = images.find(image => image.index === entry.index)!;
         const thumbnail = image.thumb_url || (item.playable ? `/follow-stream?id=${item.id}&media=${entry.index}` : item.thumb_url);
-        return thumbnail ? <img src={thumbnail} alt="" referrerPolicy="no-referrer" /> : <span>预览未取得</span>;
+        return thumbnail ? <img src={thumbnail} alt="" referrerPolicy="no-referrer" /> : <span>{t('follow:followDetail.previewNotFound')}</span>;
       }} /> : null}
     </div>
   );
@@ -249,8 +250,8 @@ function CollectionQueue({ group, itemId, helpers, actions }: {
   const items = videoItems(group) as FollowDetailItem[];
   const listRef = useDragRow(helpers);
   return (
-    <MixQueue kind="collection" data-follow-queue="" title="视频合集" onClose={actions.close} listRef={listRef}
-      summary={`${followTitle(group.primary)} · ${items.length} 个视频`}>
+    <MixQueue kind="collection" data-follow-queue="" title={t('follow:followDetail.videoSetQueue')} onClose={actions.close} listRef={listRef}
+      summary={t('follow:followDetail.videoSetSummary', { title: followTitle(group.primary), count: items.length })}>
       {items.map((member) => {
         const duplicate = group.duplicates.includes(member);
         const copy = collectionCopy(group, member, duplicate ? member.provider_label : '');
@@ -294,8 +295,8 @@ function MediaQueue({ item, current, currentId = item.id, helpers, actions, onMe
   });
   const pick = (media: FollowDetailMedia) => (item.id === currentId ? onMedia(media.index) : actions.openItem(item.id, media.index));
   return (
-    <MixQueue kind="media" data-follow-queue="" title="多媒体" onClose={actions.close} listRef={listRef}
-      summary={`${followTitle(item)} · ${items.length} 个媒体`}>
+    <MixQueue kind="media" data-follow-queue="" title={t('follow:followDetail.mixedMediaQueue')} onClose={actions.close} listRef={listRef}
+      summary={t('follow:followDetail.mixedMediaSummary', { title: followTitle(item), count: items.length })}>
       {groups.map((row) => [
         row.label ? <MixGroupLabel key={`label:${row.key}`} label={row.label} count={row.items.length} /> : null,
         ...row.items.map((media) => (
@@ -303,7 +304,7 @@ function MediaQueue({ item, current, currentId = item.id, helpers, actions, onMe
             data-follow-media-item={media.index} data-media-kind={media.media_kind || ''} onClick={() => pick(media)}
             pic={media.thumb_url ? <QueueThumb src={media.thumb_url} /> : <NoThumb kind={media.media_kind || ''} />}>
             <b data-middle-truncate="">{mediaName(media)}</b>
-            <span data-truncate-end="">{media.media_kind === 'image' ? '图片' : '视频'}</span>
+            <span data-truncate-end="">{media.media_kind === 'image' ? t('follow:shared.image') : t('follow:shared.video')}</span>
           </MixQueueRow>
         )),
       ])}
@@ -335,7 +336,7 @@ function Side({ item, data, context, media, write, issue, helpers, actions }: {
             dangerouslySetInnerHTML={{ __html: followTitleMarks(single, item) + esc(followTitle(item)) }} />
           {item.url ? (
             <a data-follow-origin="" href={item.url} target="_blank" rel="noreferrer noopener"
-              title="打开来源页面" aria-label="打开来源页面"
+              title={t('follow:followDetail.viewOnSite')} aria-label={t('follow:followDetail.viewOnSite')}
               dangerouslySetInnerHTML={{ __html: EXTERNAL_MARK }} />
           ) : null}
         </div>
@@ -346,11 +347,11 @@ function Side({ item, data, context, media, write, issue, helpers, actions }: {
         </div>
         <div data-item-identity="" data-follow-detail-identity="">
           <section data-id-group="creator">
-            <h5 data-id-label="">创作者</h5>
+            <h5 data-id-label="">{t('follow:shared.creator')}</h5>
             <div data-id-row="">
               {identity.entityName ? <FollowAuthorLink name={identity.entityName} actions={actions}
                 data-id-cell="creator" data-entity-kind="creator" data-follow-source-avatar=""
-                title={identity.author} aria-label={`查看 ${identity.author} 的作者页`}>
+                title={identity.author} aria-label={t('follow:followFeed.viewCreatorPage', { name: identity.author })}>
                 <span data-id-face="" dangerouslySetInnerHTML={{ __html: identity.avatar }} />
                 <span data-id-name="">{identity.author}</span>
               </FollowAuthorLink> : <span data-id-cell="creator" data-follow-source-avatar="">
@@ -360,8 +361,8 @@ function Side({ item, data, context, media, write, issue, helpers, actions }: {
             </div>
           </section>
           {postedBy || identity.credited ? <div data-follow-detail-credit="">
-            {postedBy ? <span>发布者 {postedBy}</span> : null}
-            {identity.credited ? <span>署名含 {identity.credited}</span> : null}
+            {postedBy ? <span>{t('follow:followDetail.postedBy')} {postedBy}</span> : null}
+            {identity.credited ? <span>{t('follow:followDetail.creditedLabel')} {identity.credited}</span> : null}
           </div> : null}
         </div>
         {item.summary ? <Summary key={item.id} text={item.summary} /> : null}
@@ -369,10 +370,10 @@ function Side({ item, data, context, media, write, issue, helpers, actions }: {
         {/* 上游没给出媒体时，代理只会回一个不含缘由的失败。有缩略图就换上缩略图并说明这是缩略图；
             连缩略图也取不到，才说「这次没取到、多半是限流」——别让人对着一块空画布猜。 */}
         <p data-follow-media-issue="" data-media-load-issue="" hidden={issue !== 'failed'}>
-          媒体未取回：上游这一次没有返回内容，多半是站点限流，过一阵再打开。
+          {t('follow:followDetail.mediaLoadFailed')}
         </p>
         <p data-follow-media-issue="" data-media-thumb-fallback="" hidden={issue !== 'thumb'}>
-          原图未取回，先显示缩略图：上游拦下了这一次请求。
+          {t('follow:followDetail.thumbFallback')}
         </p>
         {item.resource_urls?.length ? (
           <div data-follow-resources="">
@@ -384,42 +385,42 @@ function Side({ item, data, context, media, write, issue, helpers, actions }: {
           </div>
         ) : null}
         <div data-stage-actions="" data-follow-detail-actions="">
-          <button type="button" data-stage-action="later" data-follow-detail-save="" aria-label={saved ? '已保存' : '保存到数据库'}
-            title={saved ? '已保存' : '保存到数据库'} disabled={saved} {...busyAttrs('save')}
+          <button type="button" data-stage-action="later" data-follow-detail-save="" aria-label={saved ? t('follow:shared.saved') : t('follow:followDetail.saveToDatabase')}
+            title={saved ? t('follow:shared.saved') : t('follow:followDetail.saveToDatabase')} disabled={saved} {...busyAttrs('save')}
             onClick={write.save} dangerouslySetInnerHTML={{ __html: icon(saved ? 'check' : 'bookmark-plus') }} />
           <button type="button" data-stage-action="later" data-follow-detail-want="" aria-pressed={!!write.want}
-            aria-label={write.want ? '取消想要' : '想要'} title={write.want ? '取消想要' : '想要'}
+            aria-label={write.want ? t('follow:wantToggle.remove') : t('follow:wantToggle.want')} title={write.want ? t('follow:wantToggle.remove') : t('follow:wantToggle.want')}
             {...busyAttrs('want')} onClick={write.toggleWant} dangerouslySetInnerHTML={{ __html: icon('star') }} />
-          <button type="button" data-stage-action="seen" data-follow-detail-status="seen" aria-label="标记已看" title="标记已看"
+          <button type="button" data-stage-action="seen" data-follow-detail-status="seen" aria-label={t('follow:followDetail.markSeen')} title={t('follow:followDetail.markSeen')}
             aria-pressed={item.status === 'seen'} {...busyAttrs('seen')} onClick={() => write.status('seen')}
             dangerouslySetInnerHTML={{ __html: icon('eye') }} />
-          <button type="button" data-stage-action="dislike" data-follow-detail-status="ignored" aria-label="忽略" title="忽略"
+          <button type="button" data-stage-action="dislike" data-follow-detail-status="ignored" aria-label={t('follow:shared.ignore')} title={t('follow:shared.ignore')}
             aria-pressed={item.status === 'ignored'} {...busyAttrs('ignored')} onClick={() => write.status('ignored')}
             dangerouslySetInnerHTML={{ __html: icon('eye-off') }} />
           {item.status === 'seen' || item.status === 'ignored' ? (
-            <button type="button" data-follow-detail-status="new" aria-label="恢复未看" title="恢复未看"
+            <button type="button" data-follow-detail-status="new" aria-label={t('follow:followDetail.markUnseen')} title={t('follow:followDetail.markUnseen')}
               {...busyAttrs('new')} onClick={() => write.status('new')}
               dangerouslySetInnerHTML={{ __html: icon('rotate-ccw') }} />
           ) : null}
           {kind === 'image' && selected ? (
-            <button type="button" data-stage-action="dislike" data-follow-media-hide={selected.index} aria-label="隐藏这张图"
-              title="隐藏这张图" {...busyAttrs(`hide:${selected.index}`)} onClick={() => write.hide(selected.index)}
+            <button type="button" data-stage-action="dislike" data-follow-media-hide={selected.index} aria-label={t('follow:followDetail.hideImage')}
+              title={t('follow:followDetail.hideImage')} {...busyAttrs(`hide:${selected.index}`)} onClick={() => write.hide(selected.index)}
               dangerouslySetInnerHTML={{ __html: icon('image-off') }} />
           ) : null}
           {src ? (
             <a data-stage-action-link="" data-follow-download="" href={`${src}${src.includes('?') ? '&' : '?'}download=1`} download=""
-              aria-label="下载到本地" title="下载到本地" dangerouslySetInnerHTML={{ __html: icon('download') }} />
+              aria-label={t('follow:followDetail.download')} title={t('follow:followDetail.download')} dangerouslySetInnerHTML={{ __html: icon('download') }} />
           ) : null}
         </div>
         {/* 被隐藏的图退到这条恢复带上：缩略图加一枚撤销键，点了就回到轮播。不占媒体队列，也不进
             角标数——它们已经是「不在看」的那部分。 */}
         {item.hidden_media?.length ? (
           <div data-follow-hidden-media="">
-            <span data-follow-hidden-label="">已隐藏 {item.hidden_media.length} 张</span>
+            <span data-follow-hidden-label="">{t('follow:followDetail.hiddenCount', { count: item.hidden_media.length })}</span>
             <div data-follow-hidden-thumbs="">
               {item.hidden_media.map((hidden) => (
                 <button type="button" key={hidden.index} data-follow-media-restore={hidden.index}
-                  title={`恢复显示 ${hidden.name || ''}`} aria-label={`恢复显示 ${hidden.name || ''}`}
+                  title={t('follow:followDetail.unhideMedia', { name: hidden.name || '' })} aria-label={t('follow:followDetail.unhideMedia', { name: hidden.name || '' })}
                   {...busyAttrs(`restore:${hidden.index}`)} onClick={() => write.restore(hidden.index)}>
                   {hidden.thumb_url ? <QueueThumb src={hidden.thumb_url} /> : <Glyph name="image-off" />}
                   <i dangerouslySetInnerHTML={{ __html: icon('rotate-ccw') }} />
@@ -454,7 +455,7 @@ function Summary({ text }: { text: string }) {
       <p ref={node} data-follow-detail-summary="" data-long-text="" lang={textLang(text)} data-clamped={open ? undefined : ''}>{text}</p>
       {overflows || open ? (
         <Button variant="ghost" size="small" data-follow-summary-toggle="" aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? '收起' : '展开'}
+          {open ? t('follow:shared.collapse') : t('follow:shared.expand')}
         </Button>
       ) : null}
     </>
@@ -484,8 +485,8 @@ function useDetailWrite(item: FollowDetailItem, actions: FollowDetailActions, on
     setFollowItemStatus(id, to);
   };
   const failed = (error: unknown) => {
-    setFailure(requestErrorMessage(error) || '操作失败');
-    actions.failure('更新关注状态', error);
+    setFailure(requestErrorMessage(error) || t('follow:followDetail.actionFailed'));
+    actions.failure(t('follow:followDetail.updateStatusAction'), error);
   };
   const statusMutation = useMutation({
     mutationFn: ({ to }: { to: string; was: string }) => apiSend(FOLLOW_STATUS_URL, { item: id, to }),
@@ -503,7 +504,7 @@ function useDetailWrite(item: FollowDetailItem, actions: FollowDetailActions, on
   });
   const saveMutation = useMutation({
     mutationFn: () => apiSend(FOLLOW_SAVE_URL, { item: id }),
-    onSuccess: () => { apply('saved'); setFailure(''); actions.toast('已保存到数据库') },
+    onSuccess: () => { apply('saved'); setFailure(''); actions.toast(t('follow:followDetail.savedToDatabase')) },
     onError: failed,
     onSettled: () => mark('save', false),
   });
@@ -517,7 +518,7 @@ function useDetailWrite(item: FollowDetailItem, actions: FollowDetailActions, on
       if (data) replaceFollowItem(data.item);
       onMedia(next);
       setFailure('');
-      actions.toast(hidden ? '已隐藏这张图' : '已恢复显示');
+      actions.toast(hidden ? t('follow:followDetail.imageHidden') : t('follow:followDetail.imageUnhidden'));
     },
     onError: failed,
     onSettled: (_result, _error, { index, hidden }) => mark(`${hidden ? 'hide' : 'restore'}:${index}`, false),
@@ -534,7 +535,7 @@ function useDetailWrite(item: FollowDetailItem, actions: FollowDetailActions, on
     },
     onSuccess: (added) => {
       setFailure('');
-      actions.toast(added ? '已加入想要' : '已取消想要');
+      actions.toast(added ? t('follow:wantToggle.added') : t('follow:wantToggle.removed'));
       void invalidateWants();
     },
     onError: failed,

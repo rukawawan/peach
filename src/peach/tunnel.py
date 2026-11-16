@@ -22,13 +22,14 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, TextIO
 
-from . import access
+from . import access, interface_text
 from .process_job import assign_to_job, close_job, create_kill_on_close_job
+from .user_messages import UserFacingError
 
 
 STATE_FILENAME = "cloudflare-tunnel.json"
@@ -43,7 +44,8 @@ EDGE_HEADERS = ("cf-connecting-ip", "cf-ray")
 QUICK_MODE = "quick"
 NAMED_MODE = "named"
 MODES = (QUICK_MODE, NAMED_MODE)
-STANDALONE_NAMED_ERROR = "独立包只支持临时链接"
+#: 与 `errors.tunnel.standaloneQuickOnly` 同一句的 zh-CN 原文，给按原文比对的旧调用方。
+STANDALONE_NAMED_ERROR = interface_text.text("server:errors.tunnel.standaloneQuickOnly")
 #: 一段主机名标签：字母数字开头结尾，中间可带连字符；整串至少两段且不超过 253 字符。
 HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -51,7 +53,7 @@ HOSTNAME_RE = re.compile(
 )
 
 
-class TunnelError(RuntimeError):
+class TunnelError(UserFacingError, RuntimeError):
     """Tunnel 不能安全启动或已经异常退出。"""
 
 
@@ -78,9 +80,24 @@ class TunnelPlan:
 class TunnelSnapshot:
     state: str = "stopped"
     url: str = ""
+    #: 给人看的错误：`error` 是 zh-CN 原文，`error_code`／`error_params` 是同一句的 code（ADR-0159）。
     error: str = ""
     pid: int | None = None
     started_at: str = ""
+    error_code: str = ""
+    error_params: dict = field(default_factory=dict)
+
+
+def _error_fields(code: str, params: dict | None = None) -> dict:
+    values = dict(params or {})
+    return {"error": interface_text.text(f"server:{code}", values), "error_code": code, "error_params": values}
+
+
+def _failure_fields(failure: "TunnelError | None", fallback: str = "") -> dict:
+    """进程记下的失败：有带 code 的异常就用它，否则只有原文。"""
+    if failure is not None:
+        return {"error": failure.message, "error_code": failure.code, "error_params": dict(failure.params)}
+    return {"error": fallback}
 
 
 def state_path(state_dir: Path) -> Path:
@@ -152,25 +169,25 @@ def build_origin(
     """
     if standalone_mode:
         if type(port) is not int or not 1 <= port <= 65535:
-            raise TunnelError(f"独立包 Tunnel 的 HTTP 端口无效：{port}")
+            raise TunnelError("errors.tunnel.standalonePortInvalid", {"port": port})
         return TunnelOrigin(f"http://127.0.0.1:{port}")
     if port is None:
         port = 443
     address = (lan_address or "").strip()
     if not address:
-        raise TunnelError("无法确定源码服务的局域网地址")
+        raise TunnelError("errors.tunnel.lanAddressUnknown")
     try:
         parsed_address = ipaddress.ip_address(address)
     except ValueError as exc:
-        raise TunnelError(f"源码 Tunnel 的局域网地址不是 IP：{address}") from exc
+        raise TunnelError("errors.tunnel.lanAddressNotIp", {"address": address}) from exc
     hostname = (mdns_name or "").strip().rstrip(".")
     if not hostname:
-        raise TunnelError("源码服务没有配置 mDNS 名称")
+        raise TunnelError("errors.tunnel.mdnsMissing")
     origin_name = hostname if hostname.endswith(".local") else f"{hostname}.local"
     if ca_path is None or not Path(ca_path).is_file():
-        raise TunnelError(f"源码 Tunnel 需要项目 CA：{ca_path}")
+        raise TunnelError("errors.tunnel.caMissing", {"path": str(ca_path)})
     if type(port) is not int or not 1 <= port <= 65535:
-        raise TunnelError(f"源码 Tunnel 的 HTTPS 端口无效：{port}")
+        raise TunnelError("errors.tunnel.httpsPortInvalid", {"port": port})
     host = f"[{address}]" if parsed_address.version == 6 else address
     return TunnelOrigin(
         f"https://{host}:{port}", origin_server_name=origin_name, ca_path=Path(ca_path),
@@ -193,29 +210,29 @@ def origin_for_config(
 
 def _access_error(policy: dict, token: str) -> str | None:
     if policy.get("mode") == "locked":
-        return "访问设置损坏，不能启动公网 Tunnel"
+        return "errors.tunnel.accessLocked"
     if policy.get("mode") == "open":
-        return "启动公网 Tunnel 前必须先设置访问密码"
+        return "errors.tunnel.passwordRequired"
     if policy.get("mode") not in {"password", "legacy"}:
-        return "访问设置不是受支持的密码模式"
+        return "errors.tunnel.unsupportedAccessMode"
     if not token:
-        return "缺少 Peach 内部访问令牌，不能启动公网 Tunnel"
+        return "errors.tunnel.internalTokenMissing"
     return None
 
 
 def validate_access(access_path: Path | None, token: str) -> None:
     """公网入口只接受有第二道登录闸门的部署。"""
     policy = access.load(access_path)
-    message = _access_error(policy, token)
-    if message:
-        raise TunnelError(message)
+    code = _access_error(policy, token)
+    if code:
+        raise TunnelError(code)
 
 
 def normalize_mode(value: str) -> str:
     """把设置里的模式收敛成两个已知值之一；空串按临时链接处理。"""
     mode = (value or "").strip().lower() or QUICK_MODE
     if mode not in MODES:
-        raise TunnelError(f"tunnel.mode 只能是 quick 或 named：{value}")
+        raise TunnelError("errors.tunnel.invalidMode", {"value": value})
     return mode
 
 
@@ -232,9 +249,9 @@ def normalize_hostname(value: str) -> str:
             host = host[len(prefix):]
     host = host.rstrip("/").rstrip(".")
     if not host:
-        raise TunnelError("命名隧道需要填写公开主机名")
+        raise TunnelError("errors.tunnel.hostnameRequired")
     if not HOSTNAME_RE.match(host):
-        raise TunnelError(f"公开主机名不是有效的域名：{value}")
+        raise TunnelError("errors.tunnel.invalidHostname", {"value": value})
     return host
 
 
@@ -273,10 +290,10 @@ def named_plan(
 ) -> TunnelPlan:
     """命名隧道只在源码开发环境可用，且必须同时有令牌和公开主机名。"""
     if standalone_mode:
-        raise TunnelError(STANDALONE_NAMED_ERROR)
+        raise TunnelError("errors.tunnel.standaloneQuickOnly")
     secret = (token or "").strip()
     if not secret:
-        raise TunnelError("命名隧道需要填写 Cloudflare 隧道令牌")
+        raise TunnelError("errors.tunnel.tokenRequired")
     url = public_url(normalize_hostname(hostname))
     return TunnelPlan(
         binary=binary, origin=TunnelOrigin(url), command=build_named_command(binary, secret),
@@ -300,7 +317,7 @@ def plan_for_config(
     """校验安全前置并返回可审阅的启动计划。"""
     validate_access(access_path, token)
     if not standalone_mode and not tls_enabled:
-        raise TunnelError("源码 Tunnel 需要正在运行的 HTTPS 服务")
+        raise TunnelError("errors.tunnel.httpsRequired")
     tunnel_settings = getattr(config, "tunnel", None)
     binary = _require_binary(
         getattr(tunnel_settings, "binary", ""),
@@ -331,10 +348,7 @@ def _require_binary(
         configured, executable=executable, environ=environ, which=which,
     )
     if binary is None:
-        raise TunnelError(
-            "找不到 cloudflared：安装官方 cloudflared，"
-            "或用设置文件的 tunnel.binary 与 PEACH_CLOUDFLARED 指定路径"
-        )
+        raise TunnelError("errors.tunnel.cloudflaredMissing")
     return binary
 
 
@@ -352,7 +366,7 @@ def plan_for_settings(
     """
     validate_access(settings.access_path, settings.token)
     if not settings.tunnel_standalone and not settings.tls_enabled:
-        raise TunnelError("源码 Tunnel 需要正在运行的 HTTPS 服务")
+        raise TunnelError("errors.tunnel.httpsRequired")
     binary = _require_binary(
         settings.tunnel_binary, executable=executable, environ=environ, which=which,
     )
@@ -396,15 +410,17 @@ def _read_state(path: Path) -> TunnelSnapshot:
     except FileNotFoundError:
         return TunnelSnapshot()
     except (OSError, ValueError, TypeError):
-        return TunnelSnapshot(error="Tunnel 状态文件不可读")
+        return TunnelSnapshot(**_error_fields("labels.tunnel.stateUnreadable"))
     if not isinstance(data, dict):
-        return TunnelSnapshot(error="Tunnel 状态文件格式错误")
+        return TunnelSnapshot(**_error_fields("labels.tunnel.stateInvalid"))
     return TunnelSnapshot(
         state=str(data.get("state") or "stopped"),
         url=str(data.get("url") or ""),
         error=str(data.get("error") or ""),
         pid=int(data["pid"]) if isinstance(data.get("pid"), int) else None,
         started_at=str(data.get("started_at") or ""),
+        error_code=str(data.get("error_code") or ""),
+        error_params=data["error_params"] if isinstance(data.get("error_params"), dict) else {},
     )
 
 
@@ -412,9 +428,7 @@ def saved_snapshot(state_dir: Path) -> TunnelSnapshot:
     """读取状态文件；不把旧的 running 记录误报成当前进程仍在运行。"""
     saved = _read_state(state_path(state_dir))
     if saved.state in {"running", "starting"}:
-        return TunnelSnapshot(
-            state="stopped", error="上一次 Tunnel 没有正常收尾，运行结果未取得",
-        )
+        return TunnelSnapshot(state="stopped", **_error_fields("labels.tunnel.notSettled"))
     return saved
 
 
@@ -424,6 +438,8 @@ def _write_state(path: Path, snapshot: TunnelSnapshot) -> None:
         "state": snapshot.state,
         "url": snapshot.url,
         "error": snapshot.error,
+        "error_code": snapshot.error_code,
+        "error_params": snapshot.error_params,
         "pid": snapshot.pid,
         "started_at": snapshot.started_at,
     }
@@ -571,6 +587,7 @@ class TunnelManager:
         self._fixed_url = False
         self._secret = ""
         self._error = ""
+        self._failure: TunnelError | None = None
         self._started_at = ""
         self._ready = threading.Event()
         # A stopped child may still be draining its pipe while a new one starts.
@@ -651,14 +668,14 @@ class TunnelManager:
         terminate_pid(pid)
         return pid
 
-    def _write_error(self, message: str) -> None:
-        self._error = message
+    def _write_error(self, failure: TunnelError) -> None:
+        self._error, self._failure = failure.message, failure
         # 启动失败后不留着命名隧道那个固定地址：它是计划里的值，不是一条在服务的入口。
         self._url = ""
         self._fixed_url = False
         self._secret = ""
         try:
-            _write_state(self.state_file, TunnelSnapshot(state="error", error=message))
+            _write_state(self.state_file, TunnelSnapshot(state="error", **_failure_fields(failure)))
         except OSError:
             # The process must still be stopped when the state directory is not writable.
             pass
@@ -669,14 +686,15 @@ class TunnelManager:
             if self._process_alive(process):
                 return TunnelSnapshot(
                     state="running" if self._url and self._pidfile_matches(process) else "starting",
-                    url=self._url, error=self._error, pid=self._process_pid(process),
-                    started_at=self._started_at,
+                    url=self._url, pid=self._process_pid(process), started_at=self._started_at,
+                    **_failure_fields(self._failure, self._error),
                 )
             if process is not None and not self._process_alive(process):
-                error = self._error or "cloudflared 已退出"
+                error = (_failure_fields(self._failure, self._error) if self._error
+                         else _error_fields("labels.tunnel.exited"))
                 return TunnelSnapshot(
-                    state="error", url=self._url, error=error,
-                    pid=self._process_pid(process), started_at=self._started_at,
+                    state="error", url=self._url, pid=self._process_pid(process), started_at=self._started_at,
+                    **error,
                 )
         # 服务重启后不复用旧进程；状态文件只用于给页面一个明确的 stopped/error 结论。
         return saved_snapshot(self.state_dir)
@@ -717,10 +735,11 @@ class TunnelManager:
                 if not self._process_alive(process):
                     with self._lock:
                         if not self._url and not self._error:
-                            self._error = "cloudflared 在取得入口前退出"
+                            self._failure = TunnelError("errors.tunnel.exitedBeforeEntry")
+                            self._error = self._failure.message
                         snapshot = TunnelSnapshot(
-                            state="error", url=self._url, error=self._error,
-                            pid=self._process_pid(process), started_at=self._started_at,
+                            state="error", url=self._url, pid=self._process_pid(process),
+                            started_at=self._started_at, **_failure_fields(self._failure, self._error),
                         )
                     try:
                         _write_state(self.state_file, snapshot)
@@ -742,6 +761,7 @@ class TunnelManager:
             self._fixed_url = bool(plan.url)
             self._secret = plan.secret
             self._error = ""
+            self._failure = None
             self._started_at = datetime.now(timezone.utc).isoformat()
             self._ready.clear()
             self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -772,18 +792,18 @@ class TunnelManager:
                         handle.close()
                     except OSError:
                         pass
-                message = f"cloudflared 启动失败：{exc}"
+                failure = TunnelError("errors.tunnel.startFailed", {"error": str(exc)})
                 self._generation += 1
                 self._process = None
                 self._reader = None
                 self._ready.set()
-                self._write_error(message)
-                raise TunnelError(message) from exc
+                self._write_error(failure)
+                raise failure from exc
             assign_to_job(self._job, process)
             self._process = process
             stream = process.stdout
             if stream is None:
-                message = "cloudflared 没有输出通道"
+                failure = TunnelError("errors.tunnel.noOutput")
                 self._terminate_process(process)
                 self._generation += 1
                 self._process = None
@@ -794,8 +814,8 @@ class TunnelManager:
                         handle.close()
                     except OSError:
                         pass
-                self._write_error(message)
-                raise TunnelError(message)
+                self._write_error(failure)
+                raise failure
             self._reader = threading.Thread(
                 target=self._read_output, args=(stream, process, handle, generation),
                 name="PeachCloudflared", daemon=True,
@@ -807,7 +827,7 @@ class TunnelManager:
                     started_at=self._started_at,
                 ))
             except (OSError, RuntimeError) as exc:
-                message = f"Tunnel 启动状态失败：{exc}"
+                failure = TunnelError("errors.tunnel.stateFailed", {"error": str(exc)})
                 self._generation += 1
                 self._process = None
                 self._reader = None
@@ -818,8 +838,8 @@ class TunnelManager:
                         handle.close()
                     except OSError:
                         pass
-                self._write_error(message)
-                raise TunnelError(message) from exc
+                self._write_error(failure)
+                raise failure from exc
 
         deadline = self._clock() + self._wait_timeout
         while self._clock() < deadline:
@@ -837,17 +857,17 @@ class TunnelManager:
             process = self._process
             url = self._url
             error = self._error
+            failure = self._failure
             alive = self._process_alive(process)
             connected = self._pidfile_matches(process)
         if not url or not alive or not connected:
             if alive:
                 self.stop()
-            message = error or (
-                "cloudflared 未在限定时间内取得入口"
-                if not url else "cloudflared 未在限定时间内连接到 Cloudflare 边缘"
-            )
-            self._write_error(message)
-            raise TunnelError(message)
+            # 等待期间 `_error` 只会由读输出的线程写入，它同时留下了带 code 的 `_failure`。
+            if not (error and failure is not None):
+                failure = TunnelError("errors.tunnel.noEntry" if not url else "errors.tunnel.notConnected")
+            self._write_error(failure)
+            raise failure
         snapshot = TunnelSnapshot(
             state="running", url=url, pid=self._process_pid(process),
             started_at=self._started_at,
@@ -855,10 +875,10 @@ class TunnelManager:
         try:
             _write_state(self.state_file, snapshot)
         except OSError as exc:
-            message = f"Tunnel 状态写入失败：{exc}"
+            failure = TunnelError("errors.tunnel.stateWriteFailed", {"error": str(exc)})
             self.stop()
-            self._write_error(message)
-            raise TunnelError(message) from exc
+            self._write_error(failure)
+            raise failure from exc
         return snapshot
 
     def stop(self) -> TunnelSnapshot:

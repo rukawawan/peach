@@ -20,6 +20,11 @@ import argparse
 import socket
 import sys
 import time
+from pathlib import Path
+
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 
 MDNS_GROUP = "224.0.0.251"
@@ -53,9 +58,9 @@ def query(hostname: str, seconds: float) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="验证 peach.local 在局域网上可解析")
-    parser.add_argument("--name", default="peach", help="mDNS 名字，默认 peach")
-    parser.add_argument("--expect", help="期望应答的地址；给了就核对")
+    parser = argparse.ArgumentParser(description=t("check_mdns.description"))
+    parser.add_argument("--name", default="peach", help=t("check_mdns.helpName"))
+    parser.add_argument("--expect", help=t("check_mdns.helpExpect"))
     parser.add_argument("--seconds", type=float, default=3.0)
     return parser
 
@@ -64,16 +69,16 @@ def run(args: argparse.Namespace) -> int:
     hostname = f"{args.name}.local"
     responders = query(hostname, args.seconds)
     if not responders:
-        print(f"{hostname}：无人应答")
-        print("  服务在跑却无人应答时，先查「本地网络」权限，或确认走的是 dns-sd 后端")
+        print(t("check_mdns.noResponse", hostname=hostname))
+        print(t("check_mdns.noResponseHint"))
         return 1
-    print(f"{hostname}：{'、'.join(responders)}")
+    print(t("check_mdns.responders", hostname=hostname, addresses=list(responders)))
     if len(responders) > 1:
         # 同一个名字两台机器都在广播。不会报错，只是有一边按名字访问不到。
-        print("  撞名：多台机器在广播同一个名字，一次只开一台，或用 PEACH_MDNS_NAME 换名")
+        print(t("check_mdns.nameClash"))
         return 1
     if args.expect and args.expect not in responders:
-        print(f"  期望 {args.expect}，实际不在应答列表里")
+        print(t("check_mdns.unexpected", address=args.expect))
         return 1
     return 0
 

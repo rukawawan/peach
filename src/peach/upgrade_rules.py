@@ -19,3 +19,9 @@ DISPLAY_DIMENSIONS_SAR = 'display-dimensions-2'
 DANGLING_CANDIDATES = 1
 #: JavDB 演员 id 按本机缓存的搜索卡片补记有碼／無碼（#271）。判据改了就加一，升级时再对存量做一遍。
 JAVDB_ACTOR_RECORDS = 1
+#: 刮削按来源 genre 挂上的分辨率标签（`4K` 等说的是官方发行版本）解除。判据改了就加一，升级时再对存量做一遍。
+SOURCE_RESOLUTION_TAGS = 1
+#: 按现行扩展名规则是视频、账本里还记成 other 的行改成视频（#551 的 WebM）。判据改了就加一，升级时再对存量做一遍。
+VIDEO_MEDIUM = 1
+#: 旧任务行与补全记录里的界面文字转成 code（ADR-0159 第五条）。模板措辞改了就加一，升级时按新措辞再认一遍。
+INTERFACE_TEXT_CODES = 1

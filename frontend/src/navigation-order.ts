@@ -1,24 +1,25 @@
 /** 导航保存稳定 ID；显示名称、默认次序与固定首项集中维护。 */
+import { t } from './i18n';
 export const NAVIGATION_GROUPS = {
-  review: { label: '复核分类', items: [
-    ['metadata_fields', '元数据字段'], ['creator_tags', '创作者标签'], ['code_creators', '番号目录存疑'],
-    ['western_identity', '西方身份回配'], ['performer_avatars', '女优头像'], ['studio_logos', '厂牌 Logo'],
-    ['fc2_markings', 'FC2 评论标记'], ['fc2_similarity', 'FC2 跨号相似'], ['video_endcards', '片尾/出处证据'],
+  review: { label: t('navigation:navigationGroups.review'), items: [
+    ['metadata_fields', t('navigation:reviewCategories.metadataFields')], ['creator_tags', t('navigation:reviewCategories.creatorTags')], ['code_creators', t('navigation:reviewCategories.codeDirectories')],
+    ['western_identity', t('navigation:reviewCategories.westernIdentities')], ['performer_avatars', t('navigation:reviewCategories.actressAvatars')], ['studio_logos', t('navigation:reviewCategories.labelLogos')],
+    ['fc2_markings', t('navigation:reviewCategories.fc2CommentFlags')], ['fc2_similarity', t('navigation:reviewCategories.fc2SimilarCodes')], ['video_endcards', t('navigation:reviewCategories.endCardEvidence')],
   ] },
-  configuration: { label: 'Peach 配置', items: [
-    ['library', '媒体库与入库'], ['sources', '来源与订阅'], ['downloads', '下载渠道'],
-    ['network', '网络与访问'], ['maintenance', '应用与维护'], ['diagnostics', '系统诊断'],
+  configuration: { label: t('navigation:manage.configuration'), items: [
+    ['library', t('navigation:configurationSections.library')], ['sources', t('navigation:configurationSections.feeds')], ['downloads', t('navigation:configurationSections.downloads')],
+    ['network', t('navigation:configurationSections.network')], ['maintenance', t('navigation:configurationSections.maintenance')], ['diagnostics', t('navigation:configurationSections.diagnostics')],
   ] },
-  favorites: { label: '我的收藏', items: [
-    ['all', '全部'], ['filters', '保存的筛选'], ['performer', '艺人'], ['creator', '创作者'],
-    ['tag', '标签'], ['series', '系列'], ['studio', '片商与厂牌'], ['agency', '事务所'],
+  favorites: { label: t('navigation:navigationGroups.favorites'), items: [
+    ['all', t('navigation:shared.all')], ['filters', t('navigation:favoritesTabs.savedFilters')], ['performer', t('navigation:sidebar.performers')], ['creator', t('navigation:favoritesTabs.creators')],
+    ['tag', t('navigation:sidebar.tags')], ['series', t('navigation:favoritesTabs.series')], ['studio', t('navigation:favoritesTabs.studios')], ['agency', t('navigation:favoritesTabs.agencies')],
   ] },
-  jav: { label: 'JAV 分区', items: [['library', '馆藏'], ['wants', '想要'], ['releases', '新作'], ['discover', '发现']] },
-  follow: { label: '关注管理', items: [['list', '关注列表'], ['add', '添加关注'], ['tags', '标签管理']] },
-  tags: { label: '标签词表', items: [['local', '本地'], ['online', '在线']] },
-  preferences: { label: '个人设置', items: [
-    ['appearance', '外观与导航'], ['browsing', '浏览与播放'], ['jav', 'JAV 与新作'],
-    ['search', '搜索与推荐'], ['content', '内容显示'],
+  jav: { label: t('navigation:navigationGroups.jav'), items: [['library', t('navigation:javTabs.collection')], ['wants', t('navigation:javTabs.wanted')], ['releases', t('navigation:javTabs.newReleases')], ['discover', t('navigation:javTabs.discover')]] },
+  follow: { label: t('navigation:manage.subscriptions'), items: [['list', t('navigation:followTabs.follows')], ['add', t('navigation:followTabs.newFollow')], ['tags', t('navigation:followTabs.manageTags')]] },
+  tags: { label: t('navigation:navigationGroups.tagVocabulary'), items: [['local', t('navigation:tagTabs.localLabel')], ['online', t('navigation:tagTabs.online')]] },
+  preferences: { label: t('navigation:navigationGroups.preferences'), items: [
+    ['appearance', t('navigation:preferenceSections.appearance')], ['browsing', t('navigation:preferenceSections.playback')], ['jav', t('navigation:preferenceSections.jav')],
+    ['search', t('navigation:preferenceSections.search')], ['content', t('navigation:preferenceSections.content')],
   ] },
 } as const;
 

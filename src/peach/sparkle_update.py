@@ -16,7 +16,12 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from . import distribution
+from . import distribution, interface_text
+
+
+def _text(key: str, **params) -> str:
+    """macOS 菜单栏的通知，跟本机语言（`tray.sparkle.<名字>` 与托盘共用的标题）。"""
+    return interface_text.text(f"server:{key}", params, interface_text.local_language())
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,12 +77,12 @@ def install_blocker(heads: list[str | None], config) -> str | None:
     """
     from .runtime_prepare import configured_ledger_writer
     database = config.directory("database") / "ledger.db"
-    writer, reason = configured_ledger_writer(config)
+    writer, reason = configured_ledger_writer(config, language=interface_text.local_language())
     if writer or not database.is_file():
         return None
     numbers = [int(head) for head in heads if isinstance(head, str) and head.isdigit()]
     if not numbers:
-        return f"本机不能迁移账本：{reason}；更新源未给出新版本的迁移号，请先在写入端更新并同步"
+        return _text("tray.sparkle.noMigrationHead", reason=reason)
     connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         from .migrations import applied
@@ -85,7 +90,7 @@ def install_blocker(heads: list[str | None], config) -> str | None:
     finally:
         connection.close()
     if max(numbers) > max(done, default=0):
-        return f"本机不能迁移账本：{reason}；请先在写入端更新并同步"
+        return _text("tray.sparkle.needsMigration", reason=reason)
     return None
 
 
@@ -128,7 +133,7 @@ class Updater:
             from .automatic_updates import AutomaticUpdates
             preferences = AutomaticUpdates(state_dir, available=True).read()
         except Exception:
-            LOGGER.exception("读取自动更新偏好失败")
+            LOGGER.exception("Failed to read the automatic update preference")
             return
 
         def apply() -> None:
@@ -136,7 +141,7 @@ class Updater:
             try:
                 self.apply(preferences)
             except Exception:
-                LOGGER.exception("同步自动更新偏好到 Sparkle 失败")
+                LOGGER.exception("Failed to sync the automatic update preference to Sparkle")
 
         NSOperationQueue.mainQueue().addOperationWithBlock_(apply)
 
@@ -154,7 +159,7 @@ def start(*, config: Callable[[], object], stop_services: Callable[[], None],
             .initWithStartingUpdater_updaterDelegate_userDriverDelegate_(True, delegate, delegate)
         return Updater(controller, delegate)
     except Exception:
-        LOGGER.exception("Sparkle 更新器初始化失败，菜单栏改用版本检查")
+        LOGGER.exception("Sparkle updater failed to initialize; the menu bar falls back to version checks")
         return None
 
 
@@ -175,12 +180,12 @@ def _delegate_class():
                 heads = [item.propertiesDictionary().get(MIGRATION_HEAD) for item in appcast.items()]
                 reason = install_blocker(heads, self._config())
             except Exception as exc:
-                LOGGER.exception("核对更新的账本迁移失败")
-                reason = f"未能核对账本迁移：{exc}"
+                LOGGER.exception("Ledger migration check for the update failed")
+                reason = _text("tray.sparkle.checkFailed", error=exc)
             if reason is None:
                 return None
             # 空条目让 Sparkle 按「没有可用更新」收尾，原因另用通知说明。
-            self._notify(reason, "Peach 版本与更新")
+            self._notify(reason, _text("tray.title.versions"))
             return objc.lookUpClass("SUAppcastItem").emptyAppcastItem()
 
         def updater_willInstallUpdate_(self, _updater, _item):
@@ -188,14 +193,14 @@ def _delegate_class():
                 prepare_install(self._config().directory("database") / "ledger.db", self._stop)
             except Exception:
                 # 预约失败（例如另一个安装在进行）时任务来不及保存进度；服务仍要停，否则新版本抢不到端口。
-                LOGGER.exception("安装前保存任务进度失败")
+                LOGGER.exception("Failed to save task progress before installing")
                 self._stop()
 
         def updaterWillRelaunchApplication_(self, _updater):
             try:
                 self._stop()
             except Exception:
-                LOGGER.exception("重开前停止服务失败")
+                LOGGER.exception("Failed to stop services before relaunching")
 
         @objc.typedSelector(b"Z@:")
         def supportsGentleScheduledUpdateReminders(self):
@@ -205,8 +210,8 @@ def _delegate_class():
         def standardUserDriverWillHandleShowingUpdate_forUpdate_state_(self, handle, item, state):
             # 附件应用没有窗口可前置；定时检查到的更新用系统通知提醒一次。
             if not state.userInitiated():
-                self._notify(f"Peach {item.displayVersionString()} 可以安装，"
-                             "在菜单栏「版本与更新」中点「检查更新」", "Peach 版本与更新")
+                self._notify(_text("tray.sparkle.available", version=item.displayVersionString()),
+                             _text("tray.title.versions"))
 
     def create(config, stop_services, notify):
         delegate = SparkleDelegate.alloc().init()

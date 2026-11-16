@@ -28,9 +28,12 @@ from torznab.parser import parse_capabilities, parse_torznab
 from .catalog_rules import (
     UNCENSORED_EDITIONS, jav_edition_badges, normalise_code_key, release_code_from_text, same_release_code,
 )
+from .coded_text import Said, coded, parallel
+from .catalog_vocabulary import CHINESE_SUBTITLES, RESOURCE_CHINESE_SUBTITLES
 from .downloads import parse_magnet
 from .follow_secrets import CredentialError, CredentialStore
 from .feeds import scan_code
+from .user_messages import UserValueError, nested_message
 
 CREDENTIAL = "resource-indexers"
 MAX_INDEXERS = 4
@@ -49,11 +52,11 @@ def endpoint(value: object) -> str:
         url = urlsplit(text)
         port = url.port
     except ValueError:
-        raise ValueError("索引器地址格式不正确") from None
+        raise UserValueError("errors.resourceSearch.invalidEndpoint") from None
     if (len(text) > 2048 or url.scheme not in ("http", "https") or not url.hostname
             or url.username is not None or url.password is not None or url.query or url.fragment
             or any(char.isspace() for char in text) or port == 0):
-        raise ValueError("填写 HTTP 或 HTTPS API 地址；API key 单独填写，地址不带查询参数")
+        raise UserValueError("errors.resourceSearch.endpointFormat")
     return text
 
 
@@ -75,7 +78,7 @@ class Indexers:
                 endpoint(row.get("url"))
             return rows
         except (CredentialError, ValueError, TypeError):
-            raise ValueError("索引器配置读不出来，请在本机「配置 → 下载」中重新保存") from None
+            raise UserValueError("errors.resourceSearch.unreadableConfig") from None
 
     def public(self) -> dict:
         return {"indexers": [
@@ -86,26 +89,26 @@ class Indexers:
     def save(self, body: dict) -> dict:
         rows = body.get("indexers") if isinstance(body, dict) else None
         if not isinstance(rows, list) or len(rows) > MAX_INDEXERS:
-            raise ValueError(f"最多配置 {MAX_INDEXERS} 个索引器")
+            raise UserValueError("errors.resourceSearch.tooManyIndexers", {"max": MAX_INDEXERS})
         previous = {row["key"]: row for row in self.load()}
         saved: list[dict] = []
         keys: set[str] = set()
         for row in rows:
             if not isinstance(row, dict):
-                raise ValueError("索引器配置必须是对象")
+                raise UserValueError("errors.resourceSearch.indexerNotObject")
             key = str(row.get("key") or "")
             name = str(row.get("name") or "").strip()
             if not re.fullmatch(r"[a-zA-Z0-9_-]{1,48}", key) or key in keys:
-                raise ValueError("索引器编号为空或重复")
+                raise UserValueError("errors.resourceSearch.invalidIndexerKey")
             if not name or len(name) > 80:
-                raise ValueError("索引器名称须为 1 到 80 个字符")
+                raise UserValueError("errors.resourceSearch.invalidIndexerName")
             address = endpoint(row.get("url"))
             old = previous.get(key, {})
             secret = str(row.get("api_key") or "").strip()
             if not secret and not row.get("clear_api_key") and old.get("url") == address:
                 secret = old.get("api_key", "")
             if len(secret) > 512 or any(char.isspace() for char in secret):
-                raise ValueError("API key 格式不正确")
+                raise UserValueError("errors.resourceSearch.invalidApiKey")
             saved.append(dict(key=key, name=name, url=address, api_key=secret,
                               enabled=row.get("enabled") is True))
             keys.add(key)
@@ -121,9 +124,9 @@ class Filters:
 
     def __post_init__(self):
         if not 0 <= self.min_size <= self.max_size <= 1024 ** 4:
-            raise ValueError("体积区间须在 0 到 1 TiB 之间，下限不能大于上限")
+            raise UserValueError("errors.resourceSearch.invalidSizeRange")
         if self.goal not in ("quality", "chinese", "uncensored"):
-            raise ValueError("质量目标只能是高清、中字或无码")
+            raise UserValueError("errors.resourceSearch.invalidGoal")
 
 
 def qualities(title: str, tags: list[str], code: str) -> dict:
@@ -137,7 +140,9 @@ def qualities(title: str, tags: list[str], code: str) -> dict:
         (r"(?i)\b(?:h[ ._-]?264|x264|avc)\b", "AVC"),
         (r"(?i)\bav1\b", "AV1")) if re.search(pattern, text)), "")
     editions = jav_edition_badges(title, code, tags)
-    return {"resolution": resolution, "codec": codec, "chinese": "中字" in editions,
+    # 来源给的中字属性（JavDB 磁链的 `cnsub`）是 id，不在标签判据里，单独认。
+    chinese = CHINESE_SUBTITLES in editions or RESOURCE_CHINESE_SUBTITLES in tags
+    return {"resolution": resolution, "codec": codec, "chinese": chinese,
             "uncensored": any(label in UNCENSORED_EDITIONS for label in editions)}
 
 
@@ -149,12 +154,13 @@ def torrent_info_hash(data: bytes) -> str:
     meta = bencode2.bdecode(data)
     info = meta.get(b"info") if isinstance(meta, dict) else None
     if not isinstance(info, dict):
-        raise ValueError("种子文件缺少 info 字典")
+        raise ValueError("torrent file has no info dictionary")
     return hashlib.sha1(bencode2.bencode(info)).hexdigest()
 
 
 #: 条目被筛掉的原因。搜索结果为空时据此分开「索引器里没有」和「有，但都不合格」。
-REJECT_REASONS = {"code": "番号不符", "size": "体积不在区间", "seeders": "没有人做种", "hash": "取不到 infohash"}
+REJECT_REASONS = {"code": "labels.resourceSearch.reject.code", "size": "labels.resourceSearch.reject.size",
+                  "seeders": "labels.resourceSearch.reject.seeders", "hash": "labels.resourceSearch.reject.hash"}
 
 
 def candidate(item, indexer: dict, code: str, filters: Filters,
@@ -200,22 +206,22 @@ def _xml(client: httpx.Client, indexer: dict, params: dict, deadline: float) -> 
     params = {**params, "apikey": indexer.get("api_key", "")}
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("索引器查询超时")
+        raise TimeoutError("indexer query timed out")
     with client.stream("GET", indexer["url"], params=params, timeout=min(10, remaining)) as response:
         if response.status_code != 200:
-            raise httpx.HTTPStatusError(f"索引器返回 HTTP {response.status_code}", request=response.request, response=response)
+            raise httpx.HTTPStatusError(f"indexer returned HTTP {response.status_code}", request=response.request, response=response)
         content = bytearray()
         for chunk in response.iter_bytes(chunk_size=16384):
             if time.monotonic() > deadline:
-                raise TimeoutError("索引器查询超时")
+                raise TimeoutError("indexer query timed out")
             content.extend(chunk)
             if len(content) > MAX_BYTES:
-                raise ValueError("索引器响应超过 2 MiB")
+                raise UserValueError("errors.resourceSearch.responseTooLarge")
     text = bytes(content).decode("utf-8")
     if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
-        raise ValueError("索引器 XML 含不支持的实体声明")
+        raise UserValueError("errors.resourceSearch.xmlEntities")
     if fromstring(text).tag not in ("caps", "rss", "error"):
-        raise ValueError("索引器没有返回 Torznab XML")
+        raise UserValueError("errors.resourceSearch.notTorznab")
     return text
 
 
@@ -260,16 +266,16 @@ class Search:
     def run(self, indexers: list[dict], code: str, filters: Filters, blocked=()) -> dict:
         code = normalise_code_key(code)
         if not code or len(code) > 80 or not same_release_code(release_code_from_text(code), code):
-            raise ValueError("请输入可识别的作品番号")
+            raise UserValueError("errors.resourceSearch.invalidCode")
         active = [row for row in indexers if row.get("enabled")]
         if len(active) > MAX_INDEXERS:
-            raise ValueError("索引器数量超过上限")
+            raise UserValueError("errors.resourceSearch.indexerLimitExceeded")
         if not active:
             return {"ok": True, "state": "unavailable", "items": [], "warnings": [],
-                    "error": "请在本机「配置 → 下载」中添加并启用索引器"}
+                    **coded("error", Said("labels.resourceSearch.noIndexer"))}
         if not self.lock.acquire(blocking=False):
             return {"ok": False, "state": "busy", "items": [], "warnings": [],
-                    "error": "资源搜索正在进行，请稍后重试", "retry_after": 0.0}
+                    **coded("error", Said("labels.resourceSearch.busy")), "retry_after": 0.0}
         try:
             key = (json.dumps(active, sort_keys=True), code, filters)
             cached = self.cache.get(key)
@@ -301,7 +307,7 @@ class Search:
                     caps = parse_capabilities(_xml(client, indexer, {"t": "caps"}, deadline))
                     search = caps.searching.search if caps.searching else None
                     if not search or not search.available or "q" not in search.supported_params:
-                        raise ValueError("索引器没有声明番号搜索能力")
+                        raise UserValueError("errors.resourceSearch.noCodeSearch")
                     limit = min(MAX_ITEMS, max(1, caps.limits.max or MAX_ITEMS)) if caps.limits else MAX_ITEMS
                     items = parse_torznab(_xml(client, indexer, {
                         "t": "search", "q": query, "cat": "6000", "limit": str(limit)}, deadline))
@@ -324,20 +330,22 @@ class Search:
                         else:
                             found[row["info_hash"]] = row
                 except (httpx.HTTPError, TimeoutError, UnicodeError, ParseError, TorznabAPIError) as error:
-                    warnings.append(f"{indexer['name']}：请求失败或响应格式不正确，请检查索引器")
+                    warnings.append(Said("labels.resourceSearch.indexerFailed", indexer=indexer['name']))
                     if (delay := transient_delay(error)) is not None:
                         retry_delays.append(delay)
                 except ValueError as error:
-                    warnings.append(f"{indexer['name']}：{error}")
+                    warnings.append(Said("labels.resourceSearch.indexerError", indexer=indexer['name'],
+                                         error=nested_message(error)))
         def rank(row):
             target = row[filters.goal] if filters.goal in ("chinese", "uncensored") else row["resolution"]
             return (-int(target), -row["resolution"], -row["seeders"], row["size"], row["info_hash"])
         if not found and rejected:
             # 一条都没留下时说清是哪种「没有」：索引器里有、只是没过筛选，换体积区间或换来源还有救。
-            counts = "、".join(f"{label} {rejected[key]} 条" for key, label in REJECT_REASONS.items() if rejected[key])
-            warnings.append(f"索引器返回了 {sum(rejected.values())} 条结果，都没通过筛选：{counts}")
+            counts = [Said("labels.resourceSearch.rejectedCount", reason=Said(code), count=rejected[key])
+                      for key, code in REJECT_REASONS.items() if rejected[key]]
+            warnings.append(Said("labels.resourceSearch.allRejected", total=sum(rejected.values()), counts=counts))
         return {"ok": successful > 0, "state": "ready" if successful else "error",
                 "retry_after": max(retry_delays) if retry_delays else None,
-                "items": sorted(found.values(), key=rank), "warnings": warnings,
+                "items": sorted(found.values(), key=rank), "warnings": warnings, **parallel("warning", warnings),
                 "rejected": dict(rejected),
-                "error": "" if successful else "所有索引器都未能完成搜索"}
+                **coded("error", "" if successful else Said("labels.resourceSearch.allFailed"))}

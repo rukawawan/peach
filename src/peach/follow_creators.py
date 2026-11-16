@@ -31,14 +31,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from . import interface_text
+from .coded_text import Said, parallel
 from .entities import canonicalize_entity_name, normalize_entity_name
 from .follow_identity import author_display_name, author_name, name_key, trusted_profile_links
 from .follow_sources import KemonoConnector
 from .follow_store import FollowStore
-from .followups import FollowupType, register
+from .followups import Followup, FollowupType, register
+from .user_messages import UserValueError
 
 TASK_KEY = "follow-creator"
-TASK_LABEL = "关注作者建档"
+TASK_LABEL = interface_text.text(f"server:task.{TASK_KEY}")
 
 #: 这条后继写下的一切都带这个归属串，撤回按它认。
 SOURCE = "auto:follow-creator"
@@ -101,8 +104,14 @@ class Landing:
     links: tuple[dict, ...] = ()
     aliases: tuple[str, ...] = ()
     entity_id: int | None = None
+    #: `hold`、`skip` 的原因：`labels.followCreators.hold.*` 的 code。
     reason: str = ""
     providers: tuple[str, ...] = ()
+
+
+def _evidence(code: str, **params) -> dict:
+    """一条链接的依据：`{"code", "params"}`。写进账本链接的 `metadata_json`，读出时按界面语言渲染。"""
+    return {"code": code, "params": params}
 
 
 def source_links(row) -> list[dict]:
@@ -111,13 +120,14 @@ def source_links(row) -> list[dict]:
     found: list[dict] = []
     if provider in _OFFICIAL_PROVIDERS and row["url"]:
         found.append({"service": provider, "url": str(row["url"]),
-                      "evidence": f"{provider} 关注来源本身"})
+                      "evidence": _evidence("labels.followCreators.evidence.source", provider=provider)})
     if provider in KemonoConnector.HOSTS:
         service, _, user = str(row["ref"] or "").partition("/")
         mapped = _ARCHIVE_ACCOUNTS.get(service)
         if mapped and user and mapped[2](user):
             found.append({"service": mapped[0], "url": mapped[1].format(user),
-                          "evidence": f"{provider} 归档的原站账号 {service}/{user}"})
+                          "evidence": _evidence("labels.followCreators.evidence.archived", provider=provider,
+                                                account=f"{service}/{user}")})
     for link in trusted_profile_links(row):
         service = str(link.get("service") or "")
         handle = str(link.get("handle") or "").strip()
@@ -133,7 +143,8 @@ def source_links(row) -> list[dict]:
                 continue
             url = f"https://{host}/{handle}"
         found.append({"service": service, "url": url,
-                      "evidence": f"{provider} 名片 {service}/{handle}"})
+                      "evidence": _evidence("labels.followCreators.evidence.profileCard", provider=provider,
+                                            account=f"{service}/{handle}")})
     return found
 
 
@@ -184,21 +195,21 @@ def plan(connection: sqlite3.Connection) -> list[Landing]:
             entity_id = next(iter(owners))
             landings.append(Landing(key, "", "join", ids, links, entity_id=entity_id,
                                     providers=providers,
-                                    reason="同一名字键的来源已建档"))
+                                    reason="labels.followCreators.hold.sameKeyFiled"))
             continue
         name = canonicalize_entity_name("creator", author_name(group, key, canonical))
         if len(owners) > 1:
             landings.append(Landing(key, name, "hold", ids, providers=providers,
-                                    reason="同一名字键的来源分属几个实体"))
+                                    reason="labels.followCreators.hold.sameKeySplit"))
             continue
         if not name:
             landings.append(Landing(key, author_name(group, key, canonical), "skip", ids,
-                                    providers=providers, reason="名字是平台、目录或转载站"))
+                                    providers=providers, reason="labels.followCreators.hold.notAName"))
             continue
         held = _name_held(connection, normalize_entity_name(name))
         if held is not None:
             landings.append(Landing(key, name, "hold", ids, links, entity_id=held,
-                                    providers=providers, reason="数据库里已有同名创作者"))
+                                    providers=providers, reason="labels.followCreators.hold.nameTaken"))
             continue
         normalized = normalize_entity_name(name)
         spellings = [author_display_name(row) for row in group] + alias_names.get(key, [])
@@ -217,7 +228,7 @@ def plan(connection: sqlite3.Connection) -> list[Landing]:
     for landing in landings:
         if landing.action == "create" and counts[normalize_entity_name(landing.name)] > 1:
             landing.action, landing.links, landing.aliases = "hold", (), ()
-            landing.reason = "几组关注作者归一成同一个名字"
+            landing.reason = "labels.followCreators.hold.namesCollide"
     return landings
 
 
@@ -247,7 +258,7 @@ def apply(connection: sqlite3.Connection, landings: list[Landing], *, batch: str
             (entity_id, stamp, *landing.source_ids)).rowcount
         for link in landing.links:
             kind, label = CHANNELS[link["service"]]
-            metadata = {"source": source, "batch": batch, "verdict": "关注来源",
+            metadata = {"source": source, "batch": batch, "verdict": "follow-source",
                         "evidence": link["evidence"], "installed_at": stamp}
             linked += connection.execute(
                 "INSERT OR IGNORE INTO entity_link(entity_id,link_kind,label,url,hostname,"
@@ -279,7 +290,7 @@ def confirm(connection: sqlite3.Connection, entity_id: int, key: str) -> dict:
     """
     landing = next((item for item in held_for(connection, entity_id) if item.key == key), None)
     if landing is None:
-        raise ValueError("这组关注作者已经不在等确认了，刷新后再看")
+        raise UserValueError("errors.followCreators.holdGone")
     landing.action = "join"
     stamp = datetime.now(timezone.utc).isoformat()
     return apply(connection, [landing], batch=f"{CONFIRM_SOURCE}@{stamp}",
@@ -287,12 +298,13 @@ def confirm(connection: sqlite3.Connection, entity_id: int, key: str) -> dict:
 
 
 def summarize(landings: list[Landing]) -> dict:
-    """活动页上那一行：建了几位、并进几组，等人的那几位写名字和原因。"""
-    held = [f"{landing.name}（{landing.reason}）" for landing in landings
-            if landing.action == "hold"]
+    """活动页上那一行：建了几位、并进几组，等人的那几位写名字和原因（`hold` 是 zh-CN 原句，
+    `hold_codes`、`hold_params` 与它一一对应）。"""
+    held = [Said("labels.followCreators.held", name=landing.name, reason=Said(landing.reason))
+            for landing in landings if landing.action == "hold"]
     return {"create": sum(landing.action == "create" for landing in landings),
             "join": sum(landing.action == "join" for landing in landings),
-            "hold": held[:12], "held": len(held),
+            "hold": [str(item) for item in held[:12]], **parallel("hold", held[:12]), "held": len(held),
             "skip": sum(landing.action == "skip" for landing in landings)}
 
 
@@ -303,13 +315,13 @@ def declare(connection: sqlite3.Connection) -> list[dict]:
     """
     if not any(landing.action in ("create", "join") for landing in plan(connection)):
         return []
-    return [{"key": f"{TASK_KEY}:all", "task_key": TASK_KEY, "label": TASK_LABEL}]
+    return [Followup.item(f"{TASK_KEY}:all", TASK_KEY).declared()]
 
 
 def run(contract, key: str, handle) -> dict:
     """跑一轮建档。幂等：已绑的来源不再出现在计划里，重跑只是一张空计划。"""
     if key != f"{TASK_KEY}:all":
-        raise ValueError(f"认不出这条关注作者建档后继：{key}")
+        raise ValueError(f"unrecognized follow creator followup key: {key}")
     batch = f"{SOURCE}@{getattr(handle, 'run_id', None) or time.strftime('%Y%m%dT%H%M%S')}"
     with contract.database.write_transaction() as connection:
         landings = plan(connection)

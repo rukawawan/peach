@@ -38,6 +38,7 @@ from peach.config import GENERATED_DIR   # noqa: E402
 from peach.entities import (   # noqa: E402
     normalize_entity_name, rewrite_flat_projection,
 )
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import read_rows, write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args, counts_of, open_for_write, verify_after_write,
@@ -64,7 +65,7 @@ def apply_review(connection: sqlite3.Connection,
         entity_id, value = int(row["entity_id"]), str(row["value"])
         blocked = _blocked(connection, entity_id, targets)
         if blocked:
-            done["blocked"].append(f"{value}：{blocked}")
+            done["blocked"].append(t("split_composite_aliases.blocked", value=value, reason=blocked))
             continue
         if verdict == "split":
             source = str(row.get("source", ""))
@@ -95,14 +96,14 @@ def apply_review(connection: sqlite3.Connection,
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=t("split_composite_aliases.description"),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     add_ledger_write_args(parser)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "review" / "composite-names.csv",
-                        help="复核 CSV 输出路径")
+                        help=t("split_composite_aliases.reviewCsvHelp"))
     parser.add_argument("--from-review", type=Path,
-                        help="按这份人工判定过的 CSV 执行 split / strip，不再重新扫描")
+                        help=t("split_composite_aliases.fromReviewHelp"))
     return parser
 
 
@@ -110,9 +111,9 @@ def _report(before: dict[str, int], after: dict[str, int],
             connection: sqlite3.Connection) -> int:
     _integrity, violations = verify_after_write(connection)
     for key in before:
-        mark = "" if before[key] == after[key] else "  <-- 变化"
+        mark = "" if before[key] == after[key] else t("split_composite_aliases.changed")
         print(f"    {key}: {before[key]} -> {after[key]}{mark}")
-    print(f"  foreign_key_check 违规 {violations} 条")
+    print(t("split_composite_aliases.foreignKeyViolations", count=violations))
     return 1 if violations else 0
 
 
@@ -122,19 +123,19 @@ def run_review(args: argparse.Namespace) -> int:
         rows = read_rows(args.from_review)
         acting = [row for row in rows
                   if str(row.get("verdict", "")).strip() in {"split", "strip"}]
-        print(f"人工判定 {len(acting)} 行：{args.from_review}")
+        print(t("split_composite_aliases.reviewedRows", count=len(acting), path=args.from_review))
         for row in acting:
             print(f"    {row['verdict']} [{row['entity_id']}] {row['value']}"
                   f" -> {row['target']}")
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("split_composite_aliases.notWritten"))
             return 0
-        print(f"  已备份到 {args.backup}")
+        print(t("split_composite_aliases.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             done = apply_review(connection, acting)
         after = counts_of(connection, EXTRA_COUNTS)
-        print("  结果：", done)
+        print(t("split_composite_aliases.result"), done)
         return _report(before, after, connection)
     finally:
         connection.close()
@@ -148,25 +149,25 @@ def run(args: argparse.Namespace) -> int:
         rows = collect(connection)
         write_rows(args.review_csv, FIELDS, rows)
         verdicts = Counter(str(row["verdict"]) for row in rows)
-        print(f"带括号的名字 {len(rows)} 条，复核 CSV：{args.review_csv}")
-        print("  判定分布：", dict(verdicts))
+        print(t("split_composite_aliases.bracketedNames", count=len(rows), path=args.review_csv))
+        print(t("split_composite_aliases.verdicts"), dict(verdicts))
         for row in rows:
             if row["verdict"] == "auto":
-                print(f"    拆 [{row['entity_id']}] {row['canonical_name']}："
-                      f"{row['value']} -> {row['parts']}")
+                print(t("split_composite_aliases.autoSplit", id=row["entity_id"],
+                        name=row["canonical_name"], value=row["value"], parts=row["parts"]))
         by_kind = Counter(f"{row['kind']}/{row['field']}" for row in rows
                           if row["verdict"] != "auto")
-        print("  交人工：", dict(by_kind))
+        print(t("split_composite_aliases.forReview"), dict(by_kind))
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("split_composite_aliases.notWritten"))
             return 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("split_composite_aliases.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             moved = apply_rows(connection, rows)
         after = counts_of(connection, EXTRA_COUNTS)
-        print("  拆分结果：", moved)
+        print(t("split_composite_aliases.splitResult"), moved)
         return _report(before, after, connection)
     finally:
         connection.close()

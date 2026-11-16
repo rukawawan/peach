@@ -11,6 +11,7 @@ import {
   LIBRARY_PROCESSING_KEY, LIBRARY_PROCESSING_URL, processingActive,
   type LibraryProcessingData, type ProcessingControlCommand,
 } from './library-processing';
+import { t } from '../../i18n';
 
 /** 控制只作用于快照里的任务号；状态由服务端确认后交给所有入口。
  * 与任务中心的取消是同一个动作：同一枚图标、同一套说法，先确认再发。 */
@@ -21,8 +22,8 @@ export function ProcessingControls({ state, disabled = false }: {
   const confirming = useRef(false);
   const active = processingActive(state);
   const stopping = state.status === 'stopping';
-  const controlLabel = state.status === 'paused' ? '继续' : state.status === 'pausing' ? '正在暂停' : '暂停';
-  const cancelLabel = stopping ? '正在取消' : '取消任务';
+  const controlLabel = state.status === 'paused' ? t('manage:shared.resume') : state.status === 'pausing' ? t('manage:taskStatus.pausing') : t('manage:shared.pause');
+  const cancelLabel = stopping ? t('manage:taskStatus.canceling') : t('manage:shared.cancelTask');
   const change = (command: ProcessingControlCommand) => {
     if (disabled || action.busy) return;
     void action.run(command.action, signal =>
@@ -36,9 +37,9 @@ export function ProcessingControls({ state, disabled = false }: {
     if (!jobId || disabled || action.busy || confirming.current) return;
     confirming.current = true;
     void confirmModal({
-      title: '取消任务「扫描与采集」',
-      body: '将停止这一轮剩余的处理。已登记的影片、取得的资料和预览会保留。这一轮取消后不能继续，需要时重新同步。',
-      confirmLabel: '取消任务',
+      title: t('manage:processingControls.cancelTitle'),
+      body: t('manage:processingControls.cancelBody'),
+      confirmLabel: t('manage:shared.cancelTask'),
       danger: true,
     }).then(({ confirmed }) => { if (confirmed) change({ action: 'cancel', job_id: jobId }) })
       .finally(() => { confirming.current = false });

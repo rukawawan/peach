@@ -92,7 +92,7 @@ class ShareMountTests(unittest.TestCase):
 
     def test_a_failed_keychain_lookup_is_false_not_an_exception(self):
         self.assertFalse(share_credentials_present(
-            "peach-writer.local", "syncuser", run=Mock(side_effect=OSError("没有 security"))))
+            "peach-writer.local", "syncuser", run=Mock(side_effect=OSError("security: command not found"))))
 
     def test_mount_is_bounded_by_a_timeout(self):
         # 认证框只是最常见的一种等待；网络半通时 SMB 协商同样会挂着。没有超时，
@@ -107,7 +107,7 @@ class ShareMountTests(unittest.TestCase):
         failures = (
             Mock(returncode=1, stdout="", stderr="No route to host"),
             subprocess.TimeoutExpired("osascript", 15),
-            OSError("osascript 不存在"),
+            OSError("osascript: command not found"),
         )
         with patch("peach.mount.sys.platform", "darwin"):
             for failure in failures:

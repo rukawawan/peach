@@ -103,8 +103,8 @@ def collection_evidence(connection, index, counters):
         features["length"] = {length_band(row.get("duration"))} - {None}
         for kind, values in features.items():
             for eid in values:
-                counters["馆藏积累"][kind][eid] += 1
-                counters["观看与反馈"][kind][eid] += behavior
+                counters["collection"][kind][eid] += 1
+                counters["watched"][kind][eid] += behavior
 
 
 def browser_entities(url, title, index, matcher, accounts, decisions, account_hosts=None):
@@ -156,7 +156,7 @@ def browser_evidence(connection, store, index, accounts, counters, *, cache=True
             for kind, rows in cached['dimensions'].items():
                 for eid, name, count in rows:
                     index.names[kind][eid] = name
-                    counters['浏览记录'][kind][eid] = count
+                    counters["browsing"][kind][eid] = count
             return
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -174,7 +174,7 @@ def browser_evidence(connection, store, index, accounts, counters, *, cache=True
             days[kind][eid].add(visited_at[:10])
     for kind, identities in days.items():
         for eid, dates in identities.items():
-            counters["浏览记录"][kind][eid] = len(dates)
+            counters["browsing"][kind][eid] = len(dates)
     payload = {'version': 1, 'fingerprint': fingerprint, 'dimensions': {kind: [
         [eid, index.names[kind][eid], len(dates)] for eid, dates in identities.items()]
         for kind, identities in days.items()}}
@@ -187,7 +187,8 @@ def browser_evidence(connection, store, index, accounts, counters, *, cache=True
 
 def preference_evidence(connection, store, *, cache=True):
     index = IdentityIndex(connection)
-    counters = {source: defaultdict(Counter) for source in ("观看与反馈", "馆藏积累", "浏览记录", "浏览器书签", "关注")}
+    # 证据来源记 id（同 `taste_history.EVIDENCE_SOURCES`），推荐理由里的显示名在 `taste.evidence.<id>`。
+    counters = {source: defaultdict(Counter) for source in ("watched", "collection", "browsing", "bookmarks", "follows")}
     collection_evidence(connection, index, counters)
     accounts, followed = identity_context(connection)
     for kind, identities in followed.items():
@@ -195,7 +196,7 @@ def preference_evidence(connection, store, *, cache=True):
             if eid in index.excluded:
                 continue
             index.names[kind][eid] = name
-            counters["关注"][kind][eid] = count
+            counters["follows"][kind][eid] = count
     browser_evidence(connection, store, index, accounts, counters, cache=cache)
     if store.is_file():
         from .taste_history import _readonly_uri
@@ -212,7 +213,7 @@ def preference_evidence(connection, store, *, cache=True):
         for url, title in rows.items():
             for eid, kind, name in set(browser_entities(url, title, index, matcher, accounts, decisions)):
                 index.names[kind][eid] = name
-                counters["浏览器书签"][kind][eid] += 1
+                counters["bookmarks"][kind][eid] += 1
     strengths, evidence = {}, defaultdict(dict)
     for kind in (*KINDS, "era", "length"):
         values = set().union(*(set(by_kind[kind]) for by_kind in counters.values()))
@@ -220,11 +221,11 @@ def preference_evidence(connection, store, *, cache=True):
         for eid in values:
             if eid in index.excluded:
                 continue
-            raw = (2.5 * math.log2(1 + counters["观看与反馈"][kind][eid])
-                   + .45 * math.log2(1 + counters["馆藏积累"][kind][eid])
-                   + .7 * math.log2(1 + counters["浏览记录"][kind][eid])
-                   + 1.2 * math.log2(1 + counters["浏览器书签"][kind][eid])
-                   + 2 * counters["关注"][kind][eid])
+            raw = (2.5 * math.log2(1 + counters["watched"][kind][eid])
+                   + .45 * math.log2(1 + counters["collection"][kind][eid])
+                   + .7 * math.log2(1 + counters["browsing"][kind][eid])
+                   + 1.2 * math.log2(1 + counters["bookmarks"][kind][eid])
+                   + 2 * counters["follows"][kind][eid])
             if raw > 0:
                 strengths[kind][eid] = 1 - math.exp(-raw / 6)
                 evidence[kind][eid] = [source for source, by_kind in counters.items() if by_kind[kind][eid] > 0]

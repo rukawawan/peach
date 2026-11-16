@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 
+from . import interface_text
 from .catalog_rules import (
     is_korean_mib_code,
     normalise_code_key,
@@ -55,15 +56,9 @@ OTHER = "other"
 #: 日本在最前。`other` 永远垫底。
 REGIONS: tuple[str, ...] = (JAPAN, KOREA, CHINA, WEST, OTHER)
 
-#: 给人看的写法。`cn` 叫「国产」不叫「中国」：中文资源圈里这个词就指这批片，
-#: 换成「中国」反而要多解释一句它包不包括港台。
-REGION_LABELS: dict[str, str] = {
-    JAPAN: "日本",
-    KOREA: "韩国",
-    CHINA: "国产",
-    WEST: "欧美",
-    OTHER: "其他",
-}
+#: 给人看的写法在 `server:labels.regions.<分区码>`，未判定是 `labels.regions.none`（ADR-0159）。
+#: `cn` 叫「国产」不叫「中国」：中文资源圈里这个词就指这批片，换成「中国」反而要多解释一句它包不包括港台。
+UNKNOWN_LABEL_CODE = "labels.regions.none"
 
 #: 国产厂牌的番号前缀。这批片的番号写法完全照搬 JAV，只有名单能把它们分开。
 #: 取的是麻豆、天美、蜜桃、精东、星空无限、果冻这几家的常见前缀，以及台湾 SWAG。
@@ -107,9 +102,16 @@ def normalize_region(value: str | None) -> str:
     return text if text in REGIONS else REGION_UNKNOWN
 
 
+def region_label_code(value: str | None) -> str:
+    """产地显示名的 code；未判定返回空串。"""
+    region = normalize_region(value)
+    return f"labels.regions.{region}" if region else ""
+
+
 def region_label(value: str | None) -> str:
-    """给人看的产地写法；未判定返回空串。"""
-    return REGION_LABELS.get(normalize_region(value), "")
+    """给人看的产地写法（按 zh-CN 资源渲染，前端按 `region_label_code` 取当前语言）；未判定返回空串。"""
+    code = region_label_code(value)
+    return interface_text.text(f"server:{code}") if code else ""
 
 
 def _code_prefix(code: str | None) -> str:

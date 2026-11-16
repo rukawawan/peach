@@ -175,18 +175,18 @@ class DesktopSettingsTests(unittest.TestCase):
                 patch.object(settings_file, 'load_config', return_value=self.config), \
                 patch.object(desktop_uninstall, 'request', return_value={'accepted':True}) as remove:
             self.assertEqual(client.post('/api/configuration/uninstall',json={'delete_data':True}).status_code,400)
-            self.assertEqual(client.post('/api/configuration/uninstall',json={'delete_data':True,'confirmation':'卸载 Peach'},
+            self.assertEqual(client.post('/api/configuration/uninstall',json={'delete_data':True,'confirmation':'uninstall-peach'},
                                          headers={'origin':'https://other.invalid'}).status_code,403)
             remove.assert_not_called()
-            self.assertEqual(client.post('/api/configuration/uninstall',json={'delete_data':False,'confirmation':'卸载 Peach'}).status_code,200)
+            self.assertEqual(client.post('/api/configuration/uninstall',json={'delete_data':False,'confirmation':'uninstall-peach'}).status_code,200)
             remove.assert_called_once_with(self.config,False)
             from peach.jobs import BackgroundJob
             follow = BackgroundJob('PeachFollowCheckJob', task_key='follow-check')
             follow.state = {'job_id': 'running-follow', 'status': 'running'}
             app.state.web_contract = SimpleNamespace(follow_job=follow)
-            busy = client.post('/api/configuration/uninstall',json={'delete_data':False,'confirmation':'卸载 Peach'})
+            busy = client.post('/api/configuration/uninstall',json={'delete_data':False,'confirmation':'uninstall-peach'})
             self.assertEqual(busy.status_code,409)
-            self.assertEqual(busy.json()['detail'],'追更检查正在运行，请在任务中心等它完成或取消后再卸载')
+            self.assertEqual(busy.json()['detail']['message'],'追更检查正在运行，请在任务中心等它完成或取消后再卸载')
             remove.assert_called_once()
             self.assertEqual(client.post('/api/configuration/startup',json={'enabled':'false','silent':True}).status_code,400)
             self.assertEqual(client.post('/api/configuration/peach-proxy',json={'mode':'proxy','proxy':'invalid'}).status_code,400)
@@ -267,7 +267,9 @@ class DesktopSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '另一份'):
                 desktop_startup.save(self.config, enabled=False, silent=True, desktop=True)
             self.assertEqual(desktop_startup.desktop_snapshot(self.config),
-                             {'desktop': False, 'desktop_message': '桌面快捷方式属于另一份 Peach 安装'})
+                             {'desktop': False, 'desktop_message': '桌面快捷方式属于另一份 Peach 安装',
+                              'desktop_message_code': 'errors.desktopStartup.desktopShortcutForeign',
+                              'desktop_message_params': {}})
             desktop_startup.save(self.config, enabled=True, silent=True, desktop=False)
             self.assertEqual(len(list(startup.iterdir())), 1)
             self.assertTrue(icon.is_file())
@@ -383,7 +385,7 @@ class DesktopSettingsTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn('启动项未能保存', message)
         self.assertIn('Expected shortcut', message)
-        self.assertRegex(message, r'第 \d+ 行')
+        self.assertRegex(message, r'RuntimeException line \d+')
         self.assertNotIn('CLIXML', message)
 
     @unittest.skipUnless(os.name == 'nt', 'Windows 系统卸载助手')

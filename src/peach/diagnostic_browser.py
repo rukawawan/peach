@@ -18,6 +18,31 @@ _FRAME = re.compile(rf"(?<![\w.-])({SHIPPED})(?:\?[^\s):]*)?:(\d+):(\d+)")
 MAX_FRAMES = 20
 
 
+def environment(fields):
+    """从本机已取得的 User-Agent 提取有限客户端类别，原文留在本机。"""
+    browser = fields.get('browser')
+    browser = browser if isinstance(browser, dict) else {}
+    agent = browser.get('user_agent', fields.get('user_agent', ''))
+    if not isinstance(agent, str):
+        return {}
+    result = {}
+    for name, pattern in (('Edge', r'Edg(?:A|iOS)?/(\d{1,4})\.'),
+                          ('Opera', r'OPR/(\d{1,4})\.'),
+                          ('Firefox', r'(?:Firefox|FxiOS)/(\d{1,4})\.'),
+                          ('Chrome', r'(?:Chrome|CriOS)/(\d{1,4})\.'),
+                          ('Safari', r'Version/(\d{1,4})\..*Safari/')):
+        match = re.search(pattern, agent[:512])
+        if match:
+            result.update(client_browser=name, client_browser_major=match[1])
+            break
+    for system, marker in (('Android', 'Android'), ('iOS', 'iPhone'), ('iOS', 'iPad'),
+                           ('Windows', 'Windows'), ('macOS', 'Macintosh'), ('Linux', 'Linux')):
+        if marker in agent[:512]:
+            result['client_os'] = system
+            break
+    return result
+
+
 def shipped(name) -> bool:
     """是不是正式包里的一份 JavaScript。"""
     return isinstance(name, str) and _SHIPPED.fullmatch(name) is not None

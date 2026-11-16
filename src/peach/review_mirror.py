@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 from .fsutil import atomic_write_text
+from .user_messages import UserFacingError
 
 
 MAX_REVIEW_BYTES = 8 * 1024 * 1024
@@ -27,7 +28,7 @@ REVIEW_CACHE_SECONDS = 20.0
 LOGGER = logging.getLogger(__name__)
 
 
-class ReviewMirrorError(RuntimeError):
+class ReviewMirrorError(UserFacingError, RuntimeError):
     """writer 镜像不可用或响应不符合复核契约。"""
 
 
@@ -75,7 +76,7 @@ class ReviewMirror:
         """优先返回 writer 实时队列；失败时退回上次安全缓存或本机队列。"""
         if not self.enabled:
             return self._annotate(local_payload, state="unavailable",
-                                  error="未配置可严格校验的写入端 HTTPS")
+                                  error=ReviewMirrorError("errors.reviewMirror.strictHttpsMissing"))
         try:
             payload = self._fetch_cached_live()
             return self._annotate(payload, state="live")
@@ -83,8 +84,8 @@ class ReviewMirror:
             cached = self._read_cache()
             if cached is not None:
                 return self._annotate(cached["payload"], state="cached",
-                                      fetched_at=cached["fetched_at"], error=str(error))
-            return self._annotate(local_payload, state="unavailable", error=str(error))
+                                      fetched_at=cached["fetched_at"], error=error)
+            return self._annotate(local_payload, state="unavailable", error=error)
 
     def _fetch_cached_live(self) -> dict:
         now = self._now()
@@ -92,7 +93,7 @@ class ReviewMirror:
             return deepcopy(self._live_payload)
         health = self._request_json("/healthz")
         if health.get("ledger_sync") != "writer":
-            raise ReviewMirrorError("目标实例当前不是 ledger writer")
+            raise ReviewMirrorError("errors.reviewMirror.notWriter")
         payload = self._request_json("/api/review")
         self._validate(payload)
         rewritten = self._rewrite_preview_urls(payload)
@@ -101,7 +102,7 @@ class ReviewMirror:
             self._write_cache(rewritten, fetched_at)
         except OSError as error:
             # 缓存只是 writer 暂时离线时的降级，落盘失败不能把刚取得的实时队列也变成 500。
-            LOGGER.warning("复核镜像缓存写入失败：%s", error)
+            LOGGER.warning("Failed to write the review mirror cache: %s", error)
         self._live_payload = rewritten
         self._live_at = now
         return deepcopy(rewritten)
@@ -116,23 +117,23 @@ class ReviewMirror:
         except Exception as error:
             if not self.curl_fallback:
                 raise ReviewMirrorError(
-                    f"无法读取写入端：{type(error).__name__}: {error}",
+                    "errors.reviewMirror.readFailed", {"type": type(error).__name__, "error": str(error)},
                 ) from error
             try:
                 raw = self._curl_bytes(request.full_url)
             except ReviewMirrorError as curl_error:
                 raise ReviewMirrorError(
-                    f"无法读取写入端：{type(error).__name__}: {error}；"
-                    f"系统网络通道：{curl_error}",
+                    "errors.reviewMirror.readFailedWithCurl",
+                    {"type": type(error).__name__, "error": str(error), "curl": str(curl_error)},
                 ) from error
         if len(raw) > MAX_REVIEW_BYTES:
-            raise ReviewMirrorError("写入端复核响应超过 8 MiB 上限")
+            raise ReviewMirrorError("errors.reviewMirror.responseTooLarge")
         try:
             payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ReviewMirrorError("写入端返回的不是有效 JSON") from error
+            raise ReviewMirrorError("errors.reviewMirror.invalidJson") from error
         if not isinstance(payload, dict):
-            raise ReviewMirrorError("写入端返回的不是 JSON 对象")
+            raise ReviewMirrorError("errors.reviewMirror.notObject")
         return payload
 
     def _curl_bytes(self, url: str) -> bytes:
@@ -160,10 +161,13 @@ class ReviewMirror:
                 timeout=self.timeout + 2, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise ReviewMirrorError(f"curl 启动失败：{type(error).__name__}: {error}") from error
+            raise ReviewMirrorError("errors.reviewMirror.curlStartFailed",
+                                    {"type": type(error).__name__, "error": str(error)}) from error
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", errors="replace").strip()
-            raise ReviewMirrorError(f"curl 退出 {result.returncode}：{detail or '未取得错误详情'}")
+            if not detail:
+                raise ReviewMirrorError("errors.reviewMirror.curlExitNoDetail", {"code": result.returncode})
+            raise ReviewMirrorError("errors.reviewMirror.curlExit", {"code": result.returncode, "detail": detail})
         return bytes(result.stdout)
 
     @staticmethod
@@ -215,15 +219,15 @@ class ReviewMirror:
     def _validate(payload: dict) -> None:
         for key in ("sections", "sources", "counts"):
             if not isinstance(payload.get(key), dict):
-                raise ReviewMirrorError(f"写入端复核响应缺少 {key}")
+                raise ReviewMirrorError("errors.reviewMirror.responseMissingKey", {"key": key})
         queues = payload.get('queues')
         if not isinstance(queues, dict):
-            raise ReviewMirrorError('写入端未提供复核状态，请更新写入端')
+            raise ReviewMirrorError('errors.reviewMirror.queuesMissing')
         for key in ('later', 'ignored'):
             snapshot = queues.get(key)
             if not isinstance(snapshot, dict) or not all(
                     isinstance(snapshot.get(field), dict) for field in ('sections', 'counts')):
-                raise ReviewMirrorError(f'写入端的复核状态 {key} 未取得')
+                raise ReviewMirrorError('errors.reviewMirror.queueMissing', {'key': key})
 
     def _rewrite_preview_urls(self, payload: dict) -> dict:
         result = deepcopy(payload)
@@ -265,14 +269,18 @@ class ReviewMirror:
         *,
         state: str,
         fetched_at: str | None = None,
-        error: str = "",
+        error: str | BaseException = "",
     ) -> dict:
+        """`error` 是异常时：`error` 放 zh-CN 原文，带 code 的另有 `error_code`、`error_params`（ADR-0159）。"""
         result = deepcopy(payload)
+        coded = isinstance(error, UserFacingError)
         result["mirror"] = {
             "state": state,
             "origin": self.origin or None,
             "fetched_at": fetched_at,
-            "error": error or None,
+            "error": str(error) or None,
+            "error_code": error.code if coded else None,
+            "error_params": dict(error.params) if coded else {},
             "read_only": True,
         }
         return result

@@ -1,7 +1,7 @@
 name: Docker
 
-# 只验收不发布：镜像的版本号与 edge 由 release.yml 在 GitHub Release 成功后推送，
-# edge 始终指向最新发布的版本（ADR-0121）。
+# 只验收不发布：镜像的版本号、edge 与 latest 由 release.yml 在 GitHub Release 成功后推送，
+# edge 与 latest 始终指向最新发布的版本（ADR-0121）。
 on:
   workflow_dispatch:
 
@@ -15,9 +15,17 @@ concurrency:
 
 jobs:
   image:
-    name: Linux amd64 镜像验收
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    name: Linux ${{ matrix.arch }} 镜像验收
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -30,7 +38,7 @@ jobs:
           context: .
           load: true
           tags: longmeidao/peach:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
       - name: 验收临时容器
         run: python3 scripts/smoke_docker.py longmeidao/peach:test

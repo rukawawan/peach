@@ -18,10 +18,16 @@ from .web_resource_sync import w_resource_sync_scan, w_resource_sync_apply
 from .web_stats import w_taste_refresh
 from .web_media_repair import w_media_repair
 from .web_organize import w_organize_apply, w_organize_rollback
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 
 #: 一次接回超过这么久就记下卡在哪个任务、各线程停在哪一行；每次卡住只记一次。
 STUCK_SECONDS = 30
+#: 没有事件时的兜底：别的进程里的工作进程死掉不会通知本服务，最迟这么久接回。
+FALLBACK_SECONDS = 30
+#: 看见安装预约后多久问一次它撤下没有；撤下就接回并停掉这一问。
+RELEASE_POLL_SECONDS = 2
+AWAIT_RELEASE_JOB = 'await-install-release'
 
 
 def restore(contract, track=lambda key, handler: handler):
@@ -61,7 +67,12 @@ def thread_stacks() -> dict[str, list[str]]:
 
 
 class RecoveryService:
-    """安装取消或完成后，现有服务也会接回等待中的任务。"""
+    """接回等着的任务：有事才接，另留低频兜底。
+
+    触发接回的事件：服务启动（`start`）、本进程撤下安装预约或发现预约者已死（`update_tasks`
+    的 `released`）、别的进程撤下预约（看见预约后才开的 `RELEASE_POLL_SECONDS` 一问，撤下即停）。
+    工作进程死掉这类没人通知的情况由 `FALLBACK_SECONDS` 一轮的兜底接回。
+    """
 
     def __init__(self, contract, *, available):
         self.contract = contract
@@ -70,18 +81,65 @@ class RecoveryService:
         self._running_since = None
         self._step = None
         self._reported = False
+        self._tick_lock = threading.Lock()
+        self._again = False
+        self._awaiting = False
+        self._root = None
 
     def start(self):
         if self.available and not self.scheduler.running:
-            self.scheduler.add_job(self.tick, 'interval', seconds=1,
+            from .update_tasks import state_for, subscribe
+            self._root = state_for(self.contract.db_path)
+            self.scheduler.add_job(self.tick, 'interval', seconds=FALLBACK_SECONDS,
                                    max_instances=1, coalesce=True)
             self.scheduler.add_job(self.watch, 'interval', seconds=10,
                                    max_instances=1, coalesce=True)
             self.scheduler.start()
+            subscribe(self._notice)
+            # 启动时的那一次接回由 `_LedgerActivation` 先做了；预约还在（安装助手要等新服务就绪才撤）
+            # 就从这里开始等它撤下。
+            from .update_tasks import is_pausing
+            is_pausing(self.contract.db_path)
 
     def stop(self):
+        from .update_tasks import unsubscribe
+        unsubscribe(self._notice)
         if self.scheduler.running:
             self.scheduler.shutdown(wait=True)
+
+    def wake(self):
+        """马上接回一次；正在接回时，那一轮跑完再补一轮。"""
+        if self.scheduler.running:
+            self.scheduler.add_job(self.tick, max_instances=1, misfire_grace_time=None)
+
+    def _notice(self, root, event):
+        if root != self._root:
+            return
+        if event == 'released':
+            self._stop_awaiting()
+            self.wake()
+        elif event == 'pausing' and not self._awaiting and self.scheduler.running:
+            # 任务检查点在暂停期间一直在问 `is_pausing`，这里只看一个标志就返回。
+            self._awaiting = True
+            self.scheduler.add_job(self._await_release, 'interval', seconds=RELEASE_POLL_SECONDS,
+                                   id=AWAIT_RELEASE_JOB, replace_existing=True,
+                                   max_instances=1, coalesce=True)
+
+    def _await_release(self):
+        from .update_tasks import is_pausing
+        if is_pausing(self.contract.db_path):
+            return
+        self._stop_awaiting()
+        self.tick()
+
+    def _stop_awaiting(self):
+        if not self._awaiting:
+            return
+        try:
+            self.scheduler.remove_job(AWAIT_RELEASE_JOB)
+        except JobLookupError:
+            pass
+        self._awaiting = False
 
     def _track(self, key, handler):
         def tracked(body):
@@ -90,6 +148,18 @@ class RecoveryService:
         return tracked
 
     def tick(self):
+        if not self._tick_lock.acquire(blocking=False):
+            self._again = True
+            return
+        try:
+            self._again = True
+            while self._again:
+                self._again = False
+                self._tick_once()
+        finally:
+            self._tick_lock.release()
+
+    def _tick_once(self):
         from .update_tasks import is_pausing
         self._running_since, self._step, self._reported = time.monotonic(), 'update-pause-check', False
         try:
@@ -104,7 +174,7 @@ class RecoveryService:
     def watch(self, now=None):
         """接回卡住时只记一次：卡在哪一步、多久了、各线程停在哪一行（quan he，11-08）。
 
-        卡住期间每秒的 tick 都被调度器跳过，日志里只剩「上一次还没执行完」，看不出卡在哪。"""
+        卡住期间后来的接回都只记一笔「再来一轮」，日志里看不出卡在哪。"""
         started = self._running_since
         if started is None or self._reported:
             return

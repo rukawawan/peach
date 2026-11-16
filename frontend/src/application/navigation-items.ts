@@ -1,4 +1,4 @@
-/** 应用导航的完整词表；默认可见顺序由 sidebar 的持久偏好决定。名称取当前界面语言的译文（`locales/<语言>/navigation.json`）。 */
+/** 应用导航的完整词表；默认可见顺序由 sidebar 的持久偏好决定。名称取当前界面语言的译文（`resources/locales/<语言>/navigation.json`）。 */
 import { t } from '../i18n';
 
 export type SidebarKey = '' | 'performers' | 'studios' | 'tags' | 'jav' | 'flagged' | 'playlists'

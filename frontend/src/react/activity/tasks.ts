@@ -5,8 +5,10 @@
 import { apiGet, apiSend } from '../../api';
 import { fmtSize } from '@peach/legacy/core';
 import { requestErrorMessage } from '../../core/request-error';
+import { codedText, partsLabel, partsText, serverLabel, stageText, type TextPart } from '../../core/server-text';
 import { queryClient } from '../query';
 import type { ProcessingSpeed } from '../library-processing/library-processing';
+import { interfaceLanguage, t } from '../../i18n';
 
 export const TASKS_URL = '/api/tasks';
 /** 整页共用这一个键：三段是同一次响应的三个字段。 */
@@ -38,8 +40,13 @@ export interface TaskRunPayload {
   progress_current: number | null;
   progress_total: number | null;
   progress_label: string;
+  /** `progress_label` 与 `error` 的 code 和参数（ADR-0156 第三条）；旧行没有。 */
+  progress_code?: string;
+  progress_params?: Record<string, unknown>;
   result_summary: Record<string, unknown>;
   error: string;
+  error_code?: string;
+  error_params?: Record<string, unknown>;
   /** 派出这一轮的父任务；不是后继时为 null（ADR-0040）。 */
   parent_run_id: number | null;
   root_run_id: number | null;
@@ -102,20 +109,22 @@ export function foldByKind(rows: TaskRunPayload[], split: (run: TaskRunPayload) 
   return [...folds.values()];
 }
 
-/** 有东西在跑就两秒一次（和进度写库的节流同一个数），全是终态时十秒一次。 */
+/** 任务中心有东西在跑就两秒一次（和进度写库的节流同一个数），全是终态时十秒一次；读失败按 `withBackoff` 退避。 */
 export const RUNNING_POLL_MS = 2000;
 export const SETTLED_POLL_MS = 10000;
 export const pollInterval = (data: ActivityData | undefined): number =>
   data?.running?.length ? RUNNING_POLL_MS : SETTLED_POLL_MS;
 
+/** 全站那一处（`/api/result-updates`）有任务时五秒一次：结果版本在任务期间本就每 30 秒才放出一次
+ *  （`web_tasks.RESULT_UPDATE_INTERVAL`），再密只是重复读到同一份。闲着时十秒一次，是全站唯一的心跳。 */
+export const RESULT_BUSY_POLL_MS = 5000;
+export const RESULT_IDLE_POLL_MS = SETTLED_POLL_MS;
+
 export const fetchTasks = (signal?: AbortSignal, page = 1, limit = 20) =>
   apiGet<ActivityData>(page === 1 && limit === 20 ? TASKS_URL : `${TASKS_URL}?page=${page}&limit=${limit}`, signal);
 
-/** 每个页面常驻轮询的那一小份：结果版本、入库通知与有没有任务在排或在跑。完整任务列表只给任务中心。 */
-export const RESULT_UPDATES_KEY = ['result-updates'] as const;
-export type ResultUpdatesData = Pick<ActivityData, 'result_versions' | 'ingest_notices'> & { busy?: boolean };
-export const fetchResultUpdates = (signal?: AbortSignal) =>
-  apiGet<ResultUpdatesData>('/api/result-updates', signal);
+/** 每个页面常驻轮询的那一小份：结果版本、入库通知与在排在跑的任务（`running_tasks`）。完整任务列表只给任务中心。 */
+export { fetchResultUpdates, RESULT_UPDATES_KEY, type ResultUpdatesPayload as ResultUpdatesData } from '../../running-tasks';
 
 export const controlTask = (id: number, action: TaskControlAction, signal?: AbortSignal) =>
   apiSend(`${TASKS_URL}/${id}/control`, { action }, 'POST', signal);
@@ -129,12 +138,12 @@ export async function prefetchTasks(signal: AbortSignal): Promise<void> {
 }
 
 export const TRIGGER_LABELS: Record<string, string> = {
-  manual: '手动', scheduled: '定时', startup: '启动', cli: '命令行',
+  manual: t('manage:taskTrigger.manual'), scheduled: t('manage:taskTrigger.scheduled'), startup: t('manage:taskTrigger.startup'), cli: t('manage:taskTrigger.cli'),
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: '排队中', running: '进行中', succeeded: '已完成',
-  failed: '失败', cancelled: '已取消', interrupted: '意外中断',
+  pending: t('manage:taskStatus.queued'), running: t('manage:taskStatus.running'), succeeded: t('manage:taskStatus.completed'),
+  failed: t('manage:shared.failed'), cancelled: t('manage:shared.canceled'), interrupted: t('manage:taskStatus.interrupted'),
 };
 
 /** 状态的中文名。表里的状态集是封闭的，认不出来只可能是表先改了，那就原样显示。 */
@@ -142,33 +151,33 @@ export const statusLabel = (status: string): string => STATUS_LABELS[status] || 
 
 /* 主摘要使用已定义的中文字段；原始状态字典由技术详情保留。 */
 const SUMMARY_LABELS: Record<string, string> = {
-  checked: '已检查', total: '总数', scanned: '已扫描', identified: '已识别',
-  candidates: '作品资料', covers: '封面', changed: '已改动', operation: '操作',
-  ok: '取得', miss: '未取得', kept: '保留', planned: '计划', done: '已处理', added: '新增',
-  written: '已保存', removed: '已移除', issue_count: '需要处理',
-  followups_duplicate: '补充任务已在排队', followups_truncated: '补充任务超出数量上限',
-  followups_depth_exceeded: '补充任务超出层级上限', name: '名称',
-  matched: '匹配项', size: '尺寸', source: '来源', cover_network: '封面图片连接失败',
-  probed: '已读取媒体信息', previews: '预览图', paused_count: '等待来源恢复',
-  auto_applied: '已自动保存', auto_rejected: '未采用', performer_avatars: '女优头像',
-  performer_profile_failed: '女优资料采集失败', performer_aliases: '女优别名',
-  performer_profile_conflicts: '女优资料待复核', conflicts: '待复核冲突',
-  gone_count: '链接已失效', unclear_count: '链接访问失败',
-  source_failed: '来源检查失败', source_warning: '来源补查失败',
-  resolve_failed: '查找失败', sources_found: '找到来源',
-  warning_count: '需要留意', profiles_checked: '已读取浏览器资料',
-  missing: '文件已丢失', purge: '可删除记录', vanish: '需保留个人记录',
-  empty: '空目录', unreadable: '无法读取', cache_files: '可清理缓存文件',
-  cache_bytes: '可清理缓存大小', bytes_reclaimed: '已释放空间',
-  cache_removed: '已清理缓存文件', cache_blocked_count: '缓存清理失败', files_removed: '已删除文件',
-  purged: '已删除记录', vanished: '已标记文件丢失', reattached: '已转移记录',
-  blocked_count: '未能删除记录', dirs_removed: '已删除空目录', dir_errors: '目录清理失败',
-  marked: '已标记失效', recovered: '复查后可访问', entities: '涉及资料',
-  found: '发现待修复文件', repaired: '已修复', failed: '失败', missing_tool: '缺少修复工具',
-  moved: '已整理文件', restored: '已还原', skipped: '已跳过', made: '已生成预览图',
-  fetched: '已取得资料', updated: '已更新', discovered: '发现作品', without_code: '未识别番号',
-  incomplete: '资料或封面未取得',
-  result: '结果',
+  checked: t('manage:taskSummary.checked'), total: t('manage:taskSummary.total'), scanned: t('manage:taskSummary.scanned'), identified: t('manage:taskSummary.recognized'),
+  candidates: t('manage:taskSummary.metadata'), covers: t('manage:taskSummary.covers'), changed: t('manage:taskSummary.changed'), operation: t('manage:taskSummary.operation'),
+  ok: t('manage:taskSummary.found'), miss: t('manage:shared.notFound'), kept: t('manage:taskSummary.kept'), planned: t('manage:taskSummary.planned'), done: t('manage:taskSummary.processed'), added: t('manage:taskSummary.added'),
+  written: t('manage:taskSummary.saved'), removed: t('manage:taskSummary.removed'), issue_count: t('manage:backgroundIssues.title'),
+  followups_duplicate: t('manage:taskSummary.followupsDuplicate'), followups_truncated: t('manage:taskSummary.followupsTruncated'),
+  followups_depth_exceeded: t('manage:taskSummary.followupsTooDeep'), name: t('manage:shared.name'),
+  matched: t('manage:taskSummary.matched'), size: t('manage:taskSummary.size'), source: t('manage:taskSummary.source'), cover_network: t('manage:taskSummary.coverNetwork'),
+  probed: t('manage:taskSummary.probed'), previews: t('manage:taskSummary.previews'), paused_count: t('manage:taskSummary.pausedCount'),
+  auto_applied: t('manage:taskSummary.autoApplied'), auto_rejected: t('manage:taskSummary.autoRejected'), performer_avatars: t('manage:taskSummary.actressAvatars'),
+  performer_profile_failed: t('manage:taskSummary.actressFetchFailed'), performer_aliases: t('manage:taskSummary.actressAliases'),
+  performer_profile_conflicts: t('manage:taskSummary.actressToReview'), conflicts: t('manage:taskSummary.conflictsToReview'),
+  gone_count: t('manage:taskSummary.deadLinks'), unclear_count: t('manage:taskSummary.unreachableLinks'),
+  source_failed: t('manage:taskSummary.sourceCheckFailed'), source_warning: t('manage:taskSummary.sourceRecheckFailed'),
+  resolve_failed: t('manage:taskSummary.lookupFailed'), sources_found: t('manage:taskSummary.sourcesFound'),
+  warning_count: t('manage:taskSummary.warnings'), profiles_checked: t('manage:taskSummary.browserProfilesRead'),
+  missing: t('manage:taskSummary.missingFiles'), purge: t('manage:taskSummary.recordsToDelete'), vanish: t('manage:taskSummary.recordsToKeep'),
+  empty: t('manage:taskSummary.emptyDirectories'), unreadable: t('manage:taskSummary.unreadable'), cache_files: t('manage:taskSummary.cacheFiles'),
+  cache_bytes: t('manage:taskSummary.cacheSize'), bytes_reclaimed: t('manage:taskSummary.spaceFreed'),
+  cache_removed: t('manage:taskSummary.cacheCleaned'), cache_blocked_count: t('manage:taskSummary.cacheCleanupFailed'), files_removed: t('manage:taskSummary.filesDeleted'),
+  purged: t('manage:taskSummary.recordsDeleted'), vanished: t('manage:taskSummary.markedMissing'), reattached: t('manage:taskSummary.recordsTransferred'),
+  blocked_count: t('manage:taskSummary.recordsNotDeleted'), dirs_removed: t('manage:taskSummary.emptyDirsDeleted'), dir_errors: t('manage:taskSummary.directoryCleanupFailed'),
+  marked: t('manage:taskSummary.markedDead'), recovered: t('manage:taskSummary.recovered'), entities: t('manage:taskSummary.entities'),
+  found: t('manage:taskSummary.filesToRepair'), repaired: t('manage:taskSummary.repaired'), failed: t('manage:shared.failed'), missing_tool: t('manage:taskSummary.missingTool'),
+  moved: t('manage:taskSummary.filesOrganized'), restored: t('manage:taskSummary.restored'), skipped: t('manage:taskSummary.skipped'), made: t('manage:taskSummary.previewsGenerated'),
+  fetched: t('manage:taskSummary.metadataFetched'), updated: t('manage:taskSummary.updated'), discovered: t('manage:taskSummary.videosFound'), without_code: t('manage:taskSummary.withoutCode'),
+  incomplete: t('manage:taskSummary.incomplete'),
+  result: t('manage:taskSummary.result'),
 };
 
 const PROBLEM_COUNTS = [
@@ -187,13 +196,18 @@ export const hasResultProblems = (run: TaskRunPayload): boolean => run.result_su
   || PROBLEM_FLAGS.some((key) => run.result_summary?.[key] === true)
   || PROBLEM_COUNTS.some((key) => Number(run.result_summary?.[key]) > 0);
 
-export interface TaskIssue { source: number; label: string; provider: string; kind: string; error: string }
+/** 一条来源问题。`kind` 与 `error` 是服务端按中文渲染的原句；`kind_code` 与按段存的 `error_parts` 给当前语言。 */
+export interface TaskIssue {
+  source: number; label: string; provider: string; kind: string; error: string;
+  kind_code?: string; error_parts?: TextPart[];
+}
 
-/** 问题明细绑定本轮快照，当前来源状态由对应管理页查看。 */
+/** 问题明细绑定本轮快照，当前来源状态由对应管理页查看。类别与原因已换成当前语言。 */
 export function taskIssues(run: TaskRunPayload): TaskIssue[] {
   const issues = run.result_summary?.issues;
   return Array.isArray(issues) ? issues.filter((item): item is TaskIssue => !!item
-    && typeof item === 'object' && typeof item.error === 'string' && typeof item.label === 'string') : [];
+    && typeof item === 'object' && typeof item.error === 'string' && typeof item.label === 'string')
+    .map((issue) => ({ ...issue, kind: codedText(issue, 'kind'), error: partsLabel(issue.error_parts, issue.error) })) : [];
 }
 
 /** 处理入口只对同一种任务最新那一轮有意义的任务：目标页只显示最新一轮，更早的失败已经被后来的结果取代。
@@ -204,18 +218,18 @@ export function problemDestination(run: TaskRunPayload, latest = true): { href: 
   if (!hasResultProblems(run) && run.status !== 'failed') return null;
   if (LATEST_ONLY.has(run.task_key) && !latest) return null;
   const targets: Record<string, [string, string]> = {
-    'link-check': ['/data-cleanup#link-manager', '查看有问题的链接'],
-    'link-prune': ['/data-cleanup#link-manager', '查看有问题的链接'],
+    'link-check': ['/data-cleanup#link-manager', t('manage:taskLinks.problemLinks')],
+    'link-prune': ['/data-cleanup#link-manager', t('manage:taskLinks.problemLinks')],
     // 「需要处理」不收这里的可重试项：问题清单有几百项，先看清单再在那张卡上重试。
-    'library-processing': ['/data-cleanup#libraryProcessing', '查看未完成项'],
-    'follow-check': ['/subscriptions', '查看关注来源'],
-    'feed-check': ['/subscriptions', '查看订阅源'],
-    'follow-resolve': ['/subscriptions?tab=add', '查看来源查找'],
-    'resource-scan': ['/data-cleanup#resource-sync', '查看资源同步'],
-    'resource-apply': ['/data-cleanup#resource-sync', '查看资源同步'],
-    'media-repair': ['/data-cleanup#mediaRepair', '查看媒体修复'],
-    'taste-refresh': ['/taste', '查看口味数据来源'],
-    'follow-evidence-reclaim': ['/settings/maintenance/repairs', '查看修复与迁移'],
+    'library-processing': ['/data-cleanup#libraryProcessing', t('manage:taskLinks.unfinished')],
+    'follow-check': ['/subscriptions', t('manage:taskLinks.followSources')],
+    'feed-check': ['/subscriptions', t('manage:taskLinks.feeds')],
+    'follow-resolve': ['/subscriptions?tab=add', t('manage:taskLinks.sourceLookup')],
+    'resource-scan': ['/data-cleanup#resource-sync', t('manage:taskLinks.resourceSync')],
+    'resource-apply': ['/data-cleanup#resource-sync', t('manage:taskLinks.resourceSync')],
+    'media-repair': ['/data-cleanup#mediaRepair', t('manage:taskLinks.mediaRepair')],
+    'taste-refresh': ['/taste', t('manage:taskLinks.tasteSources')],
+    'follow-evidence-reclaim': ['/settings/maintenance/repairs', t('manage:taskLinks.repairs')],
   };
   const target = targets[run.task_key];
   return target ? { href: target[0], label: target[1] } : null;
@@ -286,17 +300,51 @@ export const isRoutine = (run: TaskRunPayload) => run.trigger === 'scheduled'
 
 export const isActive = (run: TaskRunPayload) => run.status === 'pending' || run.status === 'running';
 
-/** 后继那一行的说明：它在做哪一件（标签去掉与任务名重复的前缀）、做到第几项或结果如何。
- *  标题已经是任务名，这里再写一遍「新作资料采集：」读起来就是同一句话说了两次。 */
+/** 任务名按 `task_key` 取当前界面语言；没有译文的照用服务端的中文名。 */
+export const taskName = (run: Pick<TaskRunPayload, 'task_key' | 'task_label'>): string =>
+  serverLabel(`task.${run.task_key}`, run.task_label);
+
+const ITEM_PROGRESS = 'taskRun.progress.item';
+const ITEMS_PROGRESS = 'taskRun.progress.items';
+
+/** 落库的一句说明（ADR-0156 第三条）：带 code 的按界面语言显示，任务名、触发方式和阶段换成当前语言的名字；
+ *  旧行没有 code，照原文显示。 */
+function runText(run: TaskRunPayload, code: string | null | undefined, params: Record<string, unknown> | undefined,
+  original: string): string {
+  if (!code) return original;
+  if (code === ITEM_PROGRESS && !params?.name) return taskName(run);
+  const trigger = String(params?.trigger || ''), stage = String(params?.stage || '');
+  return serverLabel(code, original, {
+    ...params, task: taskName(run), ...(trigger ? { trigger: TRIGGER_LABELS[trigger] || trigger } : {}),
+    ...(stage ? { stage: stageText({ stage, stage_code: stage }) } : {}),
+  });
+}
+
+/** 这一轮此刻在做什么。 */
+export const progressLabel = (run: TaskRunPayload): string =>
+  runText(run, run.progress_code, run.progress_params, run.progress_label || '');
+
+/** 这一轮为什么停下：跳过、被打断这类由任务中心自己写的原因按界面语言显示，其余照原文。 */
+export const runError = (run: TaskRunPayload): string =>
+  runText(run, run.error_code, run.error_params, run.error || '');
+
+/** 后继在做的那一件。标题已经是任务名，这里只写条目，不再说一遍「新作资料采集：」。 */
+function followupItem(row: TaskRunPayload): string {
+  const params = row.progress_params || {};
+  if (row.progress_code === ITEM_PROGRESS) return String(params.name || '');
+  if (row.progress_code === ITEMS_PROGRESS) return t('manage:taskCenter.batchItems', { first: params.first, count: params.count });
+  if (row.progress_code) return progressLabel(row);
+  // 旧行没有 code，照原文显示；只是任务名的那一句与标题重复，不写。
+  return row.progress_label === row.task_label ? '' : row.progress_label || '';
+}
+
+/** 后继那一行的说明：它在做哪一件、做到第几项或结果如何。 */
 export function followupDetail(row: TaskRunPayload): string {
-  const prefix = `${row.task_label}：`;
-  const label = row.progress_label || '';
-  const item = String(row.result_summary?.name || '')
-    || (label.startsWith(prefix) ? label.slice(prefix.length) : label === row.task_label ? '' : label);
+  const item = String(row.result_summary?.name || '') || followupItem(row);
   const total = row.progress_total || 0;
   const { name: _name, ...result } = row.result_summary || {};
-  const tail = readableErrorHeadline(row.error) || summaryText(result)
-    || (isActive(row) && total > 0 ? `${progressText(row.progress_current, total)} 项` : '');
+  const tail = readableErrorHeadline(runError(row)) || summaryText(result)
+    || (isActive(row) && total > 0 ? t('manage:taskCenter.progressItems', { progress: progressText(row.progress_current, total) }) : '');
   return [item, tail].filter(Boolean).join(' · ');
 }
 
@@ -304,12 +352,12 @@ export function followupDetail(row: TaskRunPayload): string {
 export function elapsedText(seconds: number | null | undefined): string {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return '';
   const whole = Math.floor(seconds);
-  if (whole < 60) return `${whole} 秒`;
+  if (whole < 60) return t('manage:duration.seconds', { count: whole });
   const minutes = Math.floor(whole / 60);
-  if (minutes < 60) return `${minutes} 分 ${whole % 60} 秒`;
+  if (minutes < 60) return t('manage:duration.minutesSeconds', { count: minutes, seconds: whole % 60 });
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours} 小时 ${minutes % 60} 分`;
-  return `${Math.floor(hours / 24).toLocaleString()} 天 ${hours % 24} 小时`;
+  if (hours < 48) return t('manage:duration.hoursMinutes', { count: hours, minutes: minutes % 60 });
+  return t('manage:duration.daysHours', { count: Math.floor(hours / 24), hours: hours % 24 });
 }
 
 /** 进度读数「已做 / 总数」：服务端偶尔报出超过总数的已做数，按总数封顶。 */
@@ -332,39 +380,29 @@ export function readableErrorHeadline(text: string | null | undefined): string {
   const head = errorHeadline(text);
   const technical = head.match(/^(?:[\w.]*Error|Exception):\s*(.*)$/);
   if (!technical) return head;
-  return requestErrorMessage(technical[1]);
+  // Peach 自己抛的原因是中文原话，照原样显示；第三方库的英文消息是技术细节，带着异常类型交给通用句。
+  return /[㐀-鿿]/.test(technical[1]!) ? technical[1]! : requestErrorMessage(head);
 }
 
+/* 域状态里的英文结局值。后继的结论按段存 code，见 `summaryParts`；对不上资源的旧句子照原文显示。 */
 const OUTCOME_LABELS: Record<string, string> = {
-  partial: '处理已结束，部分项目需处理', complete: '处理完成', interrupted: '处理已中断',
-  cancelled: '已取消',
-  '没有新写法': '未发现新别名', '已装上': '已保存资料图片',
-  '已装着认得准的小图': '已保留身份核对通过的小尺寸图片',
-  '档案已不存在': '资料记录已不存在', '资料未过期': '现有资料仍在有效期内',
-  '图太小': '图片分辨率不足', '官网未取得': '未取得厂牌官网信息',
-  '两站都没有作品一览': '两个来源均未提供作品列表',
-  '哪一站都没对上她': '未找到与该人物相符的资料页',
-  '两站都没对上她': '两个来源均未找到与该人物相符的资料页',
-  '三站都没对上她': '三个来源均未找到与该人物相符的资料页',
-  '已有身份': '已有创作者分类', '已变': '资料已被其他操作修改，本次未保存',
+  partial: t('manage:taskOutcome.partial'), complete: t('manage:taskOutcome.complete'), interrupted: t('manage:taskOutcome.interrupted'),
+  cancelled: t('manage:shared.canceled'),
 };
 const SOURCE_NAMES: Record<string, string> = { avwikidb: 'AVWikiDB', javdb: 'JavDB', 'minnano-av': 'みんなのAV' };
 const OPERATION_LABELS: Record<string, string> = {
-  like: '标记喜欢', seen: '标记看过', later: '加入稍后看', dispose: '移入回收站',
-  restore: '还原', delete: '永久删除', 'empty-trash': '清空回收站',
-  'dismiss-junk': '确认不是垃圾', 'reconsider-junk': '重新判定垃圾', region: '判定产地',
+  like: t('manage:taskOperation.like'), seen: t('manage:taskOperation.markWatched'), later: t('manage:taskOperation.watchLater'), dispose: t('manage:shared.moveToTrash'),
+  restore: t('manage:shared.restore'), delete: t('manage:shared.deletePermanently'), 'empty-trash': t('manage:shared.emptyTrash'),
+  'dismiss-junk': t('manage:taskOperation.notJunk'), 'reconsider-junk': t('manage:taskOperation.recheckJunk'), region: t('manage:batchDock.setRegion'),
 };
-const outcomeText = (text: string): string => OUTCOME_LABELS[text] || text
-  .replace(/(avwikidb|javdb|minnano-av) (绑定|写入)/gi, (_, site: string, action: string) =>
-    action === '绑定' ? `已关联 ${SOURCE_NAMES[site.toLowerCase()]} 资料页`
-      : `已保存来自 ${SOURCE_NAMES[site.toLowerCase()]} 的资料`);
+const outcomeText = (text: string): string => OUTCOME_LABELS[text] || text;
 
 /** 时间戳说成本地的「月-日 时:分」。数据库里存的是 UTC，界面上一律按本机时区读。 */
 export function momentText(stamp: string | null | undefined): string {
   if (!stamp) return '';
   const moment = new Date(stamp);
   if (Number.isNaN(moment.getTime())) return '';
-  return moment.toLocaleString(undefined,
+  return moment.toLocaleString(interfaceLanguage,
     { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -375,12 +413,24 @@ const SUMMARY_HIDDEN = new Set([
   'blocked_by', 'status', 'run_id', 'request_id', 'started_at', 'completed_at', 'finished_at',
 ]);
 
+/** 结论里已经说了模型或人像闸不可用的那几段。 */
+const UNAVAILABLE_PARTS = new Set(['faceModelUnavailable', 'matchModelUnavailable', 'galleryMatchUnavailable', 'faceGateOff']);
+
+/** 按段存的结论与来源（ADR-0159）按界面语言拼；站点 id 换成站名。旧记录只有原文，照原文显示。 */
+const summaryParts = (summary: Record<string, unknown>, field: 'outcome' | 'source'): string | null => {
+  const parts = summary?.[`${field}_parts`];
+  if (!Array.isArray(parts)) return null;
+  return partsText(parts, String(summary[field] ?? ''), (params) =>
+    typeof params.site === 'string' ? { ...params, site: SOURCE_NAMES[params.site] || params.site } : params);
+};
+
 /** 任务结果只展示面向使用者的字段。 */
 export function summaryItems(summary: Record<string, unknown>): string[] {
   const items = fieldItems(summary);
   // 「发现问题」要说得出是什么问题。原因已写进结论（「人脸模型不可用：…」「人像闸未生效…」）时不再说一遍。
-  if (summary?.face_match_unavailable === true && !items.some((line) => /不可用|未生效/.test(line))) {
-    items.push('人脸模型不可用，未做人脸核对');
+  const parts = Array.isArray(summary?.outcome_parts) ? summary.outcome_parts as { code?: unknown }[] : [];
+  if (summary?.face_match_unavailable === true && !parts.some((part) => UNAVAILABLE_PARTS.has(String(part?.code)))) {
+    items.push(t('manage:taskOutcome.faceModelUnavailable'));
   }
   return items;
 }
@@ -392,11 +442,13 @@ function fieldItems(summary: Record<string, unknown>): string[] {
       && (typeof value === 'number' || typeof value === 'string')
       && String(value) !== '' && (value !== 0 || key === 'checked' || key === 'total'))
     .map(([key, value]) => {
-      if (key === 'followups') return `已安排 ${Number(value).toLocaleString()} 项补充任务`;
+      if (key === 'followups') return t('manage:taskOutcome.followupsScheduled', { count: Number(value) });
       if (key === 'error') return readableErrorHeadline(String(value));
-      if (key === 'outcome' || key === 'result') return outcomeText(String(value));
+      if (key === 'outcome') return summaryParts(summary, 'outcome') ?? outcomeText(String(value));
+      if (key === 'result') return outcomeText(String(value));
+      if (key === 'source') return `${SUMMARY_LABELS[key]} ${summaryParts(summary, 'source') ?? value}`;
       if (key === 'cache_bytes' || key === 'bytes_reclaimed') return `${SUMMARY_LABELS[key]} ${fmtSize(Number(value))}`;
-      if (key === 'operation') return `操作：${OPERATION_LABELS[String(value)] || '批量操作'}`;
+      if (key === 'operation') return t('manage:taskSummary.operationValue', { operation: OPERATION_LABELS[String(value)] || t('manage:taskOperation.bulk') });
       return `${SUMMARY_LABELS[key]} ${typeof value === 'number' ? value.toLocaleString() : value}`;
     });
 }

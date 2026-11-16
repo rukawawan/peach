@@ -13,6 +13,10 @@ import tempfile
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
+
 from . import ci_r2_artifacts as artifacts
 from .release_forge import GitLabForge, REQUIRED_TEST_JOBS, REHEARSAL_JOBS
 from .release_r2 import require_capacity
@@ -34,7 +38,7 @@ def verified_jobs(client, repo: str, build: dict) -> dict[str, int]:
            or selected[name]["status"] != "success" or selected[name].get("allow_failure")
            or selected[name].get("commit", {}).get("id") != build["commit"]]
     if bad:
-        raise ValueError("演练缺少同一提交的成功验证：" + "、".join(bad))
+        raise ValueError(t("release_candidate.missingVerification", jobs=list(bad)))
     return {name: selected[name]["id"] for name in sorted(required)}
 
 
@@ -53,7 +57,7 @@ def manifests(root: Path, build: dict) -> dict:
     for group in GROUPS:
         manifest = artifacts.remote_json(root, artifacts.checkpoint(build, group))
         if manifest is None:
-            raise ValueError("缺少完整上传的演练产物：" + group)
+            raise ValueError(t("release_candidate.missingUpload", group=group))
         artifacts.validate_manifest(manifest, group, build)
         result[group] = manifest
     return result
@@ -68,7 +72,7 @@ def publication_items(groups: dict) -> list[dict]:
                 continue
             row = {"name": path.name, "size": item["size"], "sha256": item["sha256"]}
             if path.name in result and result[path.name] != row:
-                raise ValueError("发行文件同名但内容不一致")
+                raise ValueError(t("release_candidate.sameNameDiffers"))
             result[path.name] = row
     return list(result.values())
 
@@ -90,7 +94,7 @@ def preflight(root: Path) -> dict:
     limit = int(os.environ.get("PEACH_R2_MAX_BYTES", "8000000000"))
     current = sum(row["Size"] for row in rows if not row.get("IsDir"))
     if limit <= 0 or current >= limit:
-        raise ValueError(f"发布桶当前占用 {current} 字节，预算 {limit}；先审阅暂存清理方案")
+        raise ValueError(t("release_candidate.overBudget", current=current, limit=limit))
     scopes = {}
     for row in rows:
         parts = row["Path"].split("/")
@@ -98,13 +102,13 @@ def preflight(root: Path) -> dict:
             scope = "/".join(parts[:4])
             scopes[scope] = scopes.get(scope, 0) + row["Size"]
     return {"current_bytes": current, "limit_bytes": limit, "staging_bytes": scopes,
-            "publication_peak": "构建清单齐备后精确核对；不按未知新版体积伪造剩余容量"}
+            "publication_peak": t("release_candidate.publicationPeakNote")}
 
 
 def seal(root: Path) -> dict:
     build = artifacts.identity()
     if os.environ.get("CI_COMMIT_BRANCH") != "master" or os.environ.get("CI_COMMIT_TAG"):
-        raise ValueError("只有受保护主线的发布演练可以登记候选")
+        raise ValueError(t("release_candidate.protectedOnly"))
     client = forge()
     jobs = verified_jobs(client, os.environ["CI_PROJECT_PATH"], build)
     groups = manifests(root, build)
@@ -125,31 +129,31 @@ def validate_docker(docker: dict, build: dict) -> None:
             or docker.get("version") != build["tag"][1:]
             or docker.get("image") != f"peach-ci:{build['tag'][1:]}-{build['pipeline']}"
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(docker.get("image_id", "")))):
-        raise ValueError("Docker 候选镜像不属于同一提交与演练")
+        raise ValueError(t("release_candidate.dockerMismatch"))
 
 
 def validate(root: Path) -> dict:
     target = artifacts.identity()
     if os.environ.get("CI_COMMIT_TAG") != target["tag"]:
-        raise ValueError("候选晋级只接受受保护版本标签")
+        raise ValueError(t("release_candidate.protectedTagOnly"))
     client, repo = forge(), os.environ["CI_PROJECT_PATH"]
     runs = client.test_runs(repo, target["commit"])
     if not runs or runs[0]["status"] != "completed" or runs[0]["conclusion"] != "success":
-        raise ValueError("同一提交的主线发布演练尚未成功")
+        raise ValueError(t("release_candidate.rehearsalNotSuccessful"))
     source = {**target, "pipeline": str(runs[0]["id"])}
     client.require_rehearsal(repo, int(source["pipeline"]))
     candidate = artifacts.remote_json(root, artifacts.prefix(source) + "/release-candidate.json")
     if not isinstance(candidate, dict) or candidate.get("format") != 1 or candidate.get("identity") != source:
-        raise ValueError("候选清单不属于当前项目、提交、版本与演练")
+        raise ValueError(t("release_candidate.manifestNotCurrent"))
     if candidate.get("jobs") != verified_jobs(client, repo, source) or set(candidate.get("groups", {})) != set(GROUPS):
-        raise ValueError("候选的验证记录与演练最新成功任务不一致")
+        raise ValueError(t("release_candidate.jobsMismatch"))
     for group, manifest in candidate["groups"].items():
         artifacts.validate_manifest(manifest, group, source)
     validate_docker(candidate.get("docker", {}), source)
     receipt = {"target": target, "candidate": candidate}
     path = root / RECEIPT
     if path.exists() and json.loads(path.read_text(encoding="utf-8")) != receipt:
-        raise ValueError("本标签已选择另一份候选，保留原回执并停止")
+        raise ValueError(t("release_candidate.otherCandidate"))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return receipt
@@ -170,21 +174,21 @@ def cleanup(root: Path) -> dict:
     receipt = json.loads((root / RECEIPT).read_text(encoding="utf-8"))
     target = artifacts.identity()
     if receipt.get("target") != target:
-        raise ValueError("回收回执不属于当前标签流水线")
+        raise ValueError(t("release_candidate.receiptNotCurrent"))
     client, repo = forge(), os.environ["CI_PROJECT_PATH"]
     runs = client.test_runs(repo, target["commit"])
     if not runs or runs[0]["status"] != "completed" or runs[0]["conclusion"] != "success":
-        raise ValueError("回收前未取得成功演练")
+        raise ValueError(t("release_candidate.noSuccessfulRehearsal"))
     source = {**target, "pipeline": str(runs[0]["id"])}
     if (receipt["candidate"].get("identity") != source
             or receipt["candidate"].get("jobs") != verified_jobs(client, repo, source)):
-        raise ValueError("回收回执与成功演练不一致")
+        raise ValueError(t("release_candidate.receiptMismatch"))
     client.require_rehearsal(repo, int(source["pipeline"]))
     return artifacts.cleanup(root, source=source)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("release_candidate.description"))
     parser.add_argument("mode", choices=("preflight", "check-capacity", "seal", "validate", "pull", "cleanup"))
     args = parser.parse_args()
     functions = {"preflight": preflight, "check-capacity": check_capacity,

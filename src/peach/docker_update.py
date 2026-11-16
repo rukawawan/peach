@@ -16,6 +16,15 @@ import httpx
 
 from .fsutil import atomic_write_text
 from .http import HttpRequest
+from . import interface_text
+from .user_messages import UserOSError, UserValueError, message_fields
+
+
+def _blocked(name: str, **params) -> dict:
+    """不能一键更新：`reason` 是 zh-CN 原文，旁边是 `labels.dockerUpdate.<名字>` 的 code（ADR-0159）。"""
+    code = f"labels.dockerUpdate.{name}"
+    return {"available": False, "reason": interface_text.text(f"server:{code}", params),
+            "reason_code": code, "reason_params": params}
 
 REPOSITORY = "longmeidao/peach"
 REGISTRY = "https://registry-1.docker.io"
@@ -35,7 +44,8 @@ TOKEN_NAME = "watchtower-token"
 #: compose 把 `${PEACH_VERSION:-edge}` 传进来。Watchtower 只换同一标签的新镜像，钉了版本号就换不动。
 IMAGE_TAG_ENV = "PEACH_IMAGE_TAG"
 ROLLING_TAG = "edge"
-RESTART_WATCHTOWER = "在 compose.yaml 所在目录运行 docker compose restart watchtower 后重试"
+#: 发布时 edge 与 latest 指向同一镜像（ADR-0121）；NAS 面板只认 latest，用它部署也能一键更新。
+ROLLING_TAGS = frozenset({ROLLING_TAG, "latest"})
 
 
 def image_tag() -> str:
@@ -69,10 +79,10 @@ def _digest(transport, tag: str, token: str) -> str | None:
     if response.status == 404:
         return None
     if response.status != 200:
-        raise OSError(f"Docker Hub 返回 HTTP {response.status}")
+        raise OSError(f"Docker Hub returned HTTP {response.status}")
     digest = {key.lower(): value for key, value in response.headers.items()}.get("docker-content-digest", "")
     if not _DIGEST.fullmatch(digest):
-        raise ValueError("Docker Hub 返回的镜像摘要无效")
+        raise ValueError("Docker Hub returned an invalid image digest")
     return digest
 
 
@@ -81,11 +91,11 @@ def published(transport, version: str) -> bool:
     response = transport(HttpRequest("GET", REGISTRY_AUTH + "?service=registry.docker.io&scope=repository:"
                                      + REPOSITORY + ":pull", {"Accept": "application/json"}), 12.0, 64_000)
     if response.status != 200:
-        raise OSError(f"Docker Hub 令牌请求返回 HTTP {response.status}")
+        raise OSError(f"Docker Hub token request returned HTTP {response.status}")
     body = json.loads(response.body)
     token = body.get("token") or body.get("access_token") if isinstance(body, dict) else None
     if not isinstance(token, str) or not token:
-        raise ValueError("Docker Hub 没有返回匿名令牌")
+        raise ValueError("Docker Hub did not return an anonymous token")
     target = _digest(transport, version, token)
     return target is not None and target == _digest(transport, ROLLING_TAG, token)
 
@@ -99,11 +109,11 @@ def status(*, transport: httpx.BaseTransport | None = None) -> dict:
     """能不能一键更新；不能时 `reason` 说明为什么，没启用 Watchtower 时为空。"""
     tag = image_tag()
     if not tag:
-        return {"available": False, "reason": "容器里没有镜像标签，compose.yaml 可能还是旧版；换成仓库当前的 compose.yaml 并重建容器后可一键更新。"}
-    if tag != ROLLING_TAG:
-        return {"available": False, "reason": f"镜像标签是 {tag}，Watchtower 只换同一标签的新镜像；把 .env 的 PEACH_VERSION 删掉或改成 edge 后可一键更新。"}
+        return _blocked("noImageTag")
+    if tag not in ROLLING_TAGS:
+        return _blocked("pinnedTag", tag=tag)
     if not _token():
-        return {"available": False, "reason": "更新令牌还没有生成，重建 Peach 容器后可一键更新。"}
+        return _blocked("noToken")
     try:
         with _client(transport, 3.0) as client:
             client.get(WATCHTOWER_URL + "/v1/update")
@@ -120,17 +130,19 @@ def trigger(*, transport: httpx.BaseTransport | None = None) -> dict:
     """
     state = status(transport=transport)
     if not state["available"]:
-        raise ValueError(state["reason"] or "没有检测到 Watchtower，请用 compose 的 watchtower profile 启动")
+        if not state["reason"]:
+            raise UserValueError("errors.dockerUpdate.watchtowerMissing")
+        raise UserValueError(state["reason_code"], state["reason_params"])
     try:
         with _client(transport, 15.0) as client:
             response = client.post(WATCHTOWER_URL + "/v1/update", params={"async": "true"},
                                    headers={"Authorization": f"Bearer {_token()}"})
     except httpx.HTTPError as error:
-        raise OSError(f"连不上 Watchtower（{type(error).__name__}），请稍后重试") from error
+        raise UserOSError("errors.dockerUpdate.unreachable", {"error": type(error).__name__}) from error
     if response.status_code == 202:
-        return {"state": "updating", "message": "Watchtower 正在拉取新镜像并重建容器。"}
+        return {"state": "updating", **message_fields("labels.dockerUpdate.updating")}
     if response.status_code == 401:
-        raise ValueError(f"Watchtower 读到的令牌与 Peach 不一致；{RESTART_WATCHTOWER}")
+        raise UserValueError("errors.dockerUpdate.tokenMismatch")
     if response.status_code == 429:
-        raise ValueError("Watchtower 正在执行另一次更新，请稍后再试")
-    raise OSError(f"Watchtower 返回 HTTP {response.status_code}")
+        raise UserValueError("errors.dockerUpdate.busy")
+    raise UserOSError("errors.dockerUpdate.httpStatus", {"status": response.status_code})

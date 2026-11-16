@@ -229,10 +229,11 @@ describe('播放器字幕', () => {
       await page.route('**/api/subtitles/search?**', route => {
         searches++;
         assert.equal(new URL(route.request().url()).searchParams.get('q'), 'ABP-758');
-        return route.fulfill({ json: { results: [{ id: 'test42', title: 'ABP-758 中文字幕', language: '简体中文', format: 'SRT' }], more: false } });
+        assert.equal(new URL(route.request().url()).searchParams.get('language'), 'zh', '中文界面应搜中文字幕');
+        return route.fulfill({ json: { results: [{ id: 'test42', title: 'ABP-758 中文字幕', languages: ['zh-Hans'], format: 'SRT' }], more: false } });
       });
-      await page.route('**/api/subtitles/subtitlecat/test42', route => route.fulfill({ json: { files: [{ index: 0, name: 'ABP-758.chs.srt', language: '简体中文', playable: true }] } }));
-      await page.route('**/api/subtitles/subtitlecat/test42/0', route => { downloads++; return route.fulfill({ contentType: 'text/vtt', body: 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n在线字幕\n' }) });
+      await page.route('**/api/subtitles/subtitlecat/test42?language=zh', route => route.fulfill({ json: { files: [{ index: 0, name: 'ABP-758.chs.srt', language: 'zh-Hans', playable: true }] } }));
+      await page.route('**/api/subtitles/subtitlecat/test42/0?language=zh', route => { downloads++; return route.fulfill({ contentType: 'text/vtt', body: 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n在线字幕\n' }) });
     });
     const { page, problems } = opened;
     try {
@@ -255,6 +256,12 @@ describe('播放器字幕', () => {
           await page.locator('[data-subtitle-result]').click();
         }
         await page.locator('[data-subtitle-online]').click();
+        // 加载完留在文件页：这一行标「已加载」，状态行报结果，不自己跳回字幕列表。
+        const files = page.locator('.vjs-peach-panel:not(.vjs-peach-panel-leaving)');
+        await files.locator('[data-subtitle-online][data-subtitle-loaded]').waitFor();
+        await files.locator('[data-subtitle-status]', { hasText: '已加载 ABP-758.chs.srt' }).waitFor();
+        await files.locator('[data-subtitle-back]').click();
+        await page.locator('.vjs-peach-panel:not(.vjs-peach-panel-leaving) [data-subtitle-back]').click();
         await page.getByRole('menuitemradio', { name: 'ABP-758.chs.srt', exact: true }).waitFor();
       }
       await caption(page, '在线字幕');
@@ -286,7 +293,7 @@ describe('播放器字幕', () => {
       await page.route('**/api/subtitles/search?**', route => {
         offsets.push(new URL(route.request().url()).searchParams.get('offset')!);
         if (offsets.length === 1) return route.fulfill({ contentType: 'application/json', body: '{' });
-        return route.fulfill({ json: { results: offsets.length === 2 ? [] : [{ id: 'next', title: '中文字幕', language: '简体中文', format: 'SRT' }], more: offsets.length === 2 } });
+        return route.fulfill({ json: { results: offsets.length === 2 ? [] : [{ id: 'next', title: '中文字幕', languages: ['zh-Hans'], format: 'SRT' }], more: offsets.length === 2 } });
       });
     });
     try {

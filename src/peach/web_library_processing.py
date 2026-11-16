@@ -3,12 +3,14 @@ import json
 import hashlib
 import logging
 
-from . import settings_file
+from . import interface_text, settings_file
 from .library_processing_scope import scoped_config, scoped_assets
 from .library_processing import (ALL_STAGES, COLLECT_STAGE, SCAN_STAGE, STAGES,
                                 METADATA_STAGE, PREVIEWS_STAGE, _asset_selection,
                                 decorate, issues_path, process_library, snapshot)
 from .processing_control import control_for, initial_estimate, valid_mode, mode_ratio
+from .task_stages import stage as stage_fields
+from .user_messages import UserValueError
 
 ACTIVE = ('running', 'pausing', 'paused', 'stopping')
 LOGGER = logging.getLogger(__name__)
@@ -19,10 +21,10 @@ LOGGER = logging.getLogger(__name__)
 #: 就是两兆多，还把媒体路径交给了浏览器。续跑与重试读的是 `_current()`，不经过这里。
 PUBLIC_FIELDS = frozenset({
     'library_id', 'library_name', 'run_id', 'metadata_only', 'status', 'outcome', 'speed_mode', 'eta_seconds_min', 'eta_seconds_max', 'eta_kind',
-    'eta_scope', 'eta_initial', 'job_id', 'stage', 'requested_stage', 'steps', 'checked', 'total',
+    'eta_scope', 'eta_scope_code', 'eta_initial', 'job_id', 'stage', 'stage_code', 'requested_stage', 'steps', 'checked', 'total',
     'scanned', 'scanned_bytes', 'identified', 'candidates', 'auto_applied', 'covers', 'previews',
     'performer_aliases', 'performer_avatars', 'performer_profile_conflicts',
-    'performer_profile_failed', 'error', 'issue_count', 'paused_count', 'issue_preview',
+    'performer_profile_failed', 'error', 'error_code', 'error_params', 'issue_count', 'paused_count', 'issue_preview',
     'issues_log', 'issues_truncated', 'retryable_asset_ids', 'notes', 'current_asset_id',
     'current_asset_name', 'current_action', 'current_started_at', 'last_progress_at', 'stalled',
     'waited_seconds', 'completed_at', 'current_source', 'skip_requested', 'archived', 'new_asset_count', 'trigger',
@@ -142,7 +144,13 @@ def q_library_processing(contract, _args):
     from .library_new_assets import pending
     state['new_asset_count'] = len(pending(contract.db_path))
     if state.get('status') not in ACTIVE and recovery.get('status') == 'blocked':
-        state.update(status='failed', outcome='interrupted', error=f"任务未能自动恢复：{recovery.get('error') or '请重新发起任务'}")
+        # 恢复记录带 code 时把原因嵌成同一语言的一句，旧记录只有原文。
+        reason = ({"code": recovery['error_code'], "params": recovery.get('error_params') or {}}
+                  if recovery.get('error_code') else recovery.get('error'))
+        code, params = (("errors.webLibraryProcessing.recoveryFailed", {"reason": reason}) if reason
+                        else ("errors.webLibraryProcessing.recoveryFailedRestart", {}))
+        state.update(status='failed', outcome='interrupted', error=interface_text.text(f"server:{code}", params),
+                     error_code=code, error_params=params)
     # 上一趟任务的状态文件里没有这个字段，而它那份完整清单还在磁盘上：按 job_id
     # 推出地址补回去，界面才有得可给。
     if state.get('issue_count') and state.get('job_id') and not state.get('issues_log'):
@@ -158,7 +166,7 @@ def _request_skip(control, previous, body):
             or previous.get('status') != 'running'
             or previous.get('current_asset_id') != asset_id
             or previous.get('current_action') not in ('querying_metadata', 'fetching_cover')):
-        raise ValueError('当前影片已变化或不在采集外部资料，请刷新后重试')
+        raise UserValueError('api.libraryProcessing.currentVideoChanged')
     control.skip_current(str(body['job_id']), asset_id)
 
 
@@ -166,13 +174,13 @@ def _archive_notice(contract, config, body, archived):
     """归档与撤销归档只翻这一趟的 `archived`，问题记录和任务历史原样留着。"""
     previous = _current(contract)
     if not body.get('job_id') or body['job_id'] != previous.get('job_id'):
-        raise ValueError('任务已变化，请刷新页面后重试')
+        raise UserValueError('api.libraryProcessing.taskChanged')
     if previous.get('status') in ACTIVE:
-        raise ValueError('任务结束后才能归档提示')
+        raise UserValueError('api.libraryProcessing.archiveAfterFinish')
     from .library_processing import _save, state_path
     saved = json.loads(state_path(config).read_text(encoding='utf-8'))
     if saved.get('job_id') != body['job_id']:
-        raise ValueError('任务已变化，请刷新页面后重试')
+        raise UserValueError('api.libraryProcessing.taskChanged')
     _save(state_path(config), {**saved, 'archived':archived})
     return q_library_processing(contract, {})
 
@@ -185,7 +193,7 @@ def _cancel_processing(contract, config, control, previous, job_id):
     if not (live and thread is not None and thread.is_alive()) and not _writer_active(config):
         from .job_recovery import finish
         from .library_processing import _save, state_path
-        previous.update(status='cancelled', outcome='cancelled', stage='已停止', error='')
+        previous.update(status='cancelled', outcome='cancelled', **stage_fields('job.stopped'), error='')
         _save(state_path(config), previous)
         finish(contract.db_path, 'library-processing', job_id, 'cancelled')
         if previous.get('run_id') is not None:
@@ -226,15 +234,15 @@ def _control_action(contract, config, body):
     if action in ('archive', 'unarchive'):
         return _archive_notice(contract, config, body, action == 'archive')
     if action not in ('pause', 'resume', 'set_speed', 'skip_current', 'cancel'):
-        raise ValueError('处理动作无效')
+        raise UserValueError('api.libraryProcessing.actionInvalid')
     previous = _current(contract)
     job_id = body.get('job_id')
     if action != 'set_speed' and not job_id:
-        raise ValueError('请选择正在处理的任务')
+        raise UserValueError('api.libraryProcessing.taskRequired')
     if job_id and str(job_id) != str(previous.get('job_id') or ''):
-        raise ValueError('任务已变化，请刷新页面后重试')
+        raise UserValueError('api.libraryProcessing.taskChanged')
     if action != 'set_speed' and not _controllable(contract, previous):
-        raise ValueError('当前没有可暂停或继续的任务')
+        raise UserValueError('api.libraryProcessing.noActiveTask')
     control = control_for(config)
     control.refresh(force=True)
     if job_id:
@@ -245,7 +253,7 @@ def _control_action(contract, config, body):
             request(contract.task_runs, previous['run_id'], action)
         return _cancel_processing(contract, config, control, previous, str(job_id))
     if previous.get('status') == 'stopping':
-        raise ValueError('正在等待任务停止，请稍后重试')
+        raise UserValueError('api.libraryProcessing.waitingForStop')
     if action == 'skip_current':
         _request_skip(control, previous, body)
         return q_library_processing(contract, {})
@@ -295,7 +303,7 @@ def q_library_processing_issues(contract, args):
     state = _current(contract)
     job_id = str(args.get('job_id') or '')
     if not job_id or job_id != str(state.get('job_id') or ''):
-        raise ValueError('任务已变化，请刷新页面后重试')
+        raise UserValueError('api.libraryProcessing.taskChanged')
     path = issues_path(settings_file.active(), job_id)
     if path.is_file():
         raw = path.read_text(encoding='utf-8')
@@ -307,11 +315,11 @@ def q_library_processing_issues(contract, args):
             saved = json.loads(state_path(settings_file.active()).read_text(encoding='utf-8'))
             rows = saved.get('issues', [])
             if not rows:
-                raise ValueError('未取得完整问题记录，请导出诊断日志')
+                raise UserValueError('api.libraryProcessing.issuesUnavailable')
         raw = json.dumps(rows, ensure_ascii=False)
     revision = hashlib.sha256(raw.encode()).hexdigest()
     if args.get('revision') and args['revision'] != revision:
-        raise ValueError('问题记录已变化，请重新导出')
+        raise UserValueError('api.libraryProcessing.issuesChanged')
     offset = max(0, int(args.get('offset') or 0))
     limit = max(1, min(200, int(args.get('limit') or 50)))
     return {'job_id': job_id, 'revision':revision, 'total': len(rows), 'offset': offset,
@@ -341,17 +349,17 @@ def _retry_ids(previous, body):
         return None
     job_id = str(body.get('job_id') or '')
     if not job_id or job_id != str(previous.get('job_id') or ''):
-        raise ValueError('原任务已变化，请刷新页面后重试')
+        raise UserValueError('api.libraryProcessing.originalTaskChanged')
     requested = body.get('retry')
     if not isinstance(requested, list):
-        raise ValueError('重试项目格式无效')
+        raise UserValueError('api.libraryProcessing.retryItemsInvalid')
     allowed = list(previous.get('retryable_asset_ids') or [])
     if not requested:
         return allowed
     chosen = []
     for value in requested:
         if isinstance(value, bool) or not isinstance(value, int) or value not in allowed:
-            raise ValueError('重试项目不属于原任务的失败集合')
+            raise UserValueError('api.libraryProcessing.retryItemNotFailed')
         chosen.append(value)
     return chosen
 
@@ -360,42 +368,42 @@ def _expand_new_scope(db_path, body):
     """校验增量发现与待补全集合的互斥关系，并冻结已登记的范围。"""
     if 'incremental' in body:
         if type(body['incremental']) is not bool:
-            raise ValueError('新增文件范围必须为开关值')
+            raise UserValueError('api.libraryProcessing.incrementalNotBoolean')
         if body['incremental'] and any(key in body for key in ('asset_ids', 'retry', 'scope')):
-            raise ValueError('新增文件发现不能与其他处理范围同时使用')
+            raise UserValueError('api.libraryProcessing.incrementalExclusive')
     if 'scope' in body:
         if body['scope'] != 'new' or 'asset_ids' in body or 'retry' in body:
-            raise ValueError('新入库范围不能与其他处理范围同时使用')
+            raise UserValueError('api.libraryProcessing.newScopeExclusive')
         from .library_new_assets import pending
         ids = pending(db_path)
         if not ids:
-            raise ValueError('暂无待处理的新入库影片')
+            raise UserValueError('api.libraryProcessing.noNewVideos')
         body['asset_ids'] = ids
 
 
 def _processing_request(contract, config, previous, body):
     """校验馆藏、阶段与互斥的处理范围。"""
     if not config.configured or not config.locations:
-        raise ValueError('请先添加媒体目录')
+        raise UserValueError('api.libraryProcessing.addMediaDirectory')
     if contract.db_path.resolve() != (config.directory('database') / 'ledger.db').resolve():
-        raise ValueError('当前馆藏与媒体配置不一致')
+        raise UserValueError('api.libraryProcessing.collectionConfigMismatch')
     body = dict(body or {})
     _expand_new_scope(contract.db_path, body)
     retry_ids = _retry_ids(previous, body)
     if 'asset_ids' in (body or {}) and body['asset_ids'] is None:
-        raise ValueError('请选择有效的视频项目')
+        raise UserValueError('api.libraryProcessing.selectionInvalid')
     asset_ids = _asset_selection(contract.db_path, (body or {}).get('asset_ids'))
     if asset_ids is not None and retry_ids is not None:
-        raise ValueError('选择项目与失败重试不能同时使用')
+        raise UserValueError('api.libraryProcessing.selectionRetryExclusive')
     stage = str((body or {}).get('stage') or
                 (previous.get('requested_stage') if retry_ids is not None else None) or ALL_STAGES)
     if stage not in STAGES:
-        raise ValueError('处理阶段无效')
+        raise UserValueError('api.libraryProcessing.stageInvalid')
     if body.get('incremental') and stage not in (ALL_STAGES, SCAN_STAGE):
-        raise ValueError('新增文件发现只支持扫描或同步')
+        raise UserValueError('api.libraryProcessing.incrementalStageUnsupported')
     from .media_processing_policy import metadata_only
     if stage == PREVIEWS_STAGE and metadata_only(config.directory('state')):
-        raise ValueError('视频预览生成已关闭，请先在媒体库设置中开启')
+        raise UserValueError('api.libraryProcessing.previewsDisabled')
     return retry_ids, asset_ids, stage
 
 
@@ -415,9 +423,9 @@ def _metered_grant(body, stage, asset_ids):
     """开了流量保护的目录只在人点名的影片上、只为抽帧读：整库同步与资料采集都不接受这个授权。"""
     granted = (body or {}).get('allow_metered', False)
     if type(granted) is not bool:
-        raise ValueError('流量保护授权必须为开关值')
+        raise UserValueError('api.libraryProcessing.meteredGrantNotBoolean')
     if granted and (stage != PREVIEWS_STAGE or asset_ids is None):
-        raise ValueError('流量保护授权只用于指定影片的补全预览')
+        raise UserValueError('api.libraryProcessing.meteredGrantPreviewsOnly')
     return granted
 
 
@@ -440,7 +448,7 @@ def retry_after_network_recovery(contract, sync=None):
             return None
         return w_library_processing(contract, {'job_id': previous.get('job_id'), 'retry': []})
     except Exception:
-        LOGGER.warning('联网恢复后自动重试未完成项失败', exc_info=True)
+        LOGGER.warning('Automatic retry of unfinished items after the network came back failed', exc_info=True)
         return None
 
 
@@ -466,16 +474,16 @@ def _scoped_processing_request(contract, config, previous, body, resume):
     if resume or (body or {}).get('retry') is not None:
         previous_library = previous.get('library_id')
         if library_id is not None and library_id != previous_library:
-            raise ValueError('重试或恢复必须沿用原任务的媒体库')
+            raise UserValueError('api.libraryProcessing.libraryMustMatch')
         library_id = previous_library
     config = scoped_config(config, library_id)
     retry_ids, asset_ids, stage = _processing_request(contract, config, previous, body)
     if library_id and asset_ids is not None:
         selected = scoped_assets(config, contract.db_path, library_id, asset_ids)
         if (body or {}).get('scope') != 'new' and set(selected) != set(asset_ids):
-            raise ValueError('所选影片不属于当前媒体库')
+            raise UserValueError('api.libraryProcessing.videoOutsideLibrary')
         if not selected:
-            raise ValueError('所选媒体库暂无待处理影片')
+            raise UserValueError('api.libraryProcessing.libraryNoPending')
         asset_ids = selected
     return config, library_id, retry_ids, asset_ids, stage
 
@@ -520,8 +528,8 @@ def w_library_processing(contract, body, *, resume=False):
             contract.cache_bust()
     # 起步那行字按这一趟真正要做的事写：点了「只扫描」却看到「读取本地资料」，
     # 人会以为点错了。
-    labels = {ALL_STAGES: '准备处理', SCAN_STAGE: '准备扫描文件', COLLECT_STAGE: '准备采集资料',
-              METADATA_STAGE: '准备采集资料', PREVIEWS_STAGE: '准备生成预览图'}
+    labels = {ALL_STAGES: 'library.startAll', SCAN_STAGE: 'library.startScan', COLLECT_STAGE: 'library.startCollect',
+              METADATA_STAGE: 'library.startCollect', PREVIEWS_STAGE: 'library.startPreviews'}
     estimate_ids = asset_ids if asset_ids is not None else retry_ids
     if incremental:
         from .library_new_assets import pending
@@ -529,7 +537,7 @@ def w_library_processing(contract, body, *, resume=False):
     estimate_ids = scoped_assets(config, contract.db_path, library_id, estimate_ids)
     library_name = config.library_catalog.get(library_id, {}).get('name', '')
     result = contract.library_processing_job.start(
-        work, restart=True, initial={'stage': labels[stage], 'requested_stage': stage,
+        work, restart=True, initial={**stage_fields(labels[stage]), 'requested_stage': stage,
                                     'library_id': library_id, 'library_name': library_name,
                                     **({'allow_metered': True} if allow_metered else {}),
                                     **initial_estimate(config, contract.db_path, stage, estimate_ids, mode,

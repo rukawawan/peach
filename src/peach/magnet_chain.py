@@ -18,14 +18,19 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from .catalog_rules import normalise_code_key, release_code_from_text, same_release_code
+from .coded_text import Said, coded, parallel
+from .content_words import PROMO_NAME, TRAILER_NAME
 from .downloads import parse_magnet
 from .jav_cover_fetch import HostLimitedTransport
-from .javdb_public import (_CACHE_ROOT, PUBLIC_API, PublicIdentityAmbiguous, PublicRequestBudget,
+from .metadata import relay_args
+from .javdb_public import (_CACHE_ROOT, PUBLIC_API, PublicIdentityAmbiguous, PublicNotFound, PublicRequestBudget,
                            PublicSourceUnavailable, public_cache_scope)
 from .resource_search import qualities
-from .scraping_access import SourceTransport
+from .scraping_access import SourcePaused, SourceTransport, paused_until
 from .sources import FailureReason, Session, SourceFailure
+from .sources.base import PERMANENT_REASONS
 from .task_retry import transient_delay
+from .user_messages import nested_message
 
 HIGH_QUALITY = 1080
 MAX_RESULTS = 8
@@ -36,7 +41,7 @@ BASE91_ALPHABET = (
 _BASE91 = {character: index for index, character in enumerate(BASE91_ALPHABET)}
 _SIZE = re.compile(r"(?i)\b(\d+(?:\.\d+)?)\s*(TiB|GiB|MiB|KiB|TB|GB|MB|KB)\b")
 _MAGNET = re.compile(r'href=["\'](magnet:\?[^"\']+)', re.I)
-_PROMO_FILE = re.compile(r"(?i)(?:\.url$|\.apk$|\.exe$|manko\.fun|广告|廣告|扫码|掃碼|最新地址)")
+_PROMO_FILE = re.compile(rf"(?i)(?:\.url$|\.apk$|\.exe$|{PROMO_NAME})")
 
 
 @dataclass(frozen=True)
@@ -157,7 +162,7 @@ def rank_candidates(items: list[dict], goal: str = "quality") -> list[dict]:
             prior["file_count"] = item["file_count"]
             prior["promo_files"] = item["promo_files"]
     def rank(row):
-        trailer = bool(re.search(r"(?i)\b(?:sample|trailer|preview)\b|予告|预告|預告", row["name"]))
+        trailer = bool(re.search(TRAILER_NAME, row["name"]))
         preferred = bool(row.get(goal)) if goal in {"chinese", "uncensored"} else False
         return (trailer, -int(preferred), -row["resolution"], -row["seeders"], row["promo_files"],
                 -row["size"], row["info_hash"])
@@ -221,16 +226,21 @@ class Fetcher:
         return rank_candidates(found)
 
     def javdb(self, code: str) -> list[dict]:
-        """匿名 API 现取磁链区与前四页评论；快照兜底的失败也记成警告，预算跟随本轮期限。"""
+        """匿名 API 现取磁链区与前四页评论；快照兜底的失败也记成警告，预算跟随本轮期限。
+        接口要求登录时作品身份改读 javdb.com 搜索页与详情页，磁链与评论仍走接口。"""
+        from .sources.javdb import page_reader
         source = CHAIN[1]
-        budget = PublicRequestBudget(max_requests=12, max_seconds=max(1, self.deadline - time.monotonic()))
+        seconds = max(1, self.deadline - time.monotonic())
+        budget = PublicRequestBudget(max_requests=12, max_seconds=seconds)
         try:
-            with public_cache_scope(_CACHE_ROOT.get()) as reads, PUBLIC_API.request_budget(budget):
+            with (public_cache_scope(_CACHE_ROOT.get()) as reads, PUBLIC_API.request_budget(budget),
+                  page_reader(self.root, seconds=seconds) as pages, PUBLIC_API.page_reader(pages)):
                 result = PUBLIC_API.resources(code, refresh=True, review_pages=4)
         except PublicSourceUnavailable as error:
-            reason = FailureReason.PARSE_ERROR if isinstance(error, PublicIdentityAmbiguous) else FailureReason.NETWORK
-            raise SourceFailure(reason, str(error)) from error
-        stale = [f"已沿用上次结果：{read['error']}" for read in reads if read['error']]
+            reason = (FailureReason.PARSE_ERROR if isinstance(error, PublicIdentityAmbiguous)
+                      else FailureReason.NOT_FOUND if isinstance(error, PublicNotFound) else FailureReason.NETWORK)
+            raise SourceFailure(reason, *relay_args(error)) from error
+        stale = [Said("labels.magnetChain.staleReused", error=read['error']) for read in reads if read['error']]
         result["warnings"] = list(dict.fromkeys([*result["warnings"], *stale]))
         self.resource_result = result
         return rank_candidates([candidate for item in result["items"] if (candidate := _normalise(
@@ -278,9 +288,12 @@ class Fetcher:
 
 def search(root: Path, code: str, *, transport=None, min_size: int = 0,
            max_size: int = 1024 ** 4, goal: str = "quality", stop_on_preferred: bool = True) -> dict:
-    """有界查询三个可直连来源；直接添加允许在 manko 高清命中时结束。"""
+    """有界查询三个可直连来源；直接添加允许在 manko 高清命中时结束。
+
+    `unfetched_sources` 列出这一轮没给出答复的来源：站上没有这个番号、身份对不上属于答复，不算在内。
+    来源在冷却时，`retry_after` 至少等到冷却结束。"""
     fetcher = Fetcher(root, transport=transport)
-    trace, warnings, found, retry_delays = [], [], [], []
+    trace, warnings, found, retry_delays, unfetched = [], [], [], [], []
     try:
         for source, collect in ((CHAIN[0], fetcher.manko), (CHAIN[1], fetcher.javdb),
                                 (CHAIN[2], fetcher.sukebei)):
@@ -288,31 +301,38 @@ def search(root: Path, code: str, *, transport=None, min_size: int = 0,
                 items = collect(code)
             except SourceFailure as error:
                 items = []
-                warnings.append(f"{source.label}：{error}")
+                warnings.append(Said("labels.magnetChain.sourceFailed", source=source.label,
+                                     error=nested_message(error)))
+                if error.reason != FailureReason.NOT_FOUND and error.reason not in PERMANENT_REASONS:
+                    unfetched.append(source.label)
                 if (delay := transient_delay(error)) is not None:
                     retry_delays.append(delay)
             except Exception as error:
                 items = []
-                warnings.append(f"{source.label}：未取得")
+                warnings.append(Said("labels.magnetChain.sourceUnfetched", source=source.label))
+                unfetched.append(source.label)
                 if (delay := transient_delay(error)) is not None:
                     retry_delays.append(delay)
+                elif isinstance(error, SourcePaused) and (until := paused_until(Path(root), source.key)):
+                    retry_delays.append(max(0.0, until - time.time()))
             items = [item for item in items if min_size <= item["size"] <= max_size]
             found.extend(items)
             if stop_on_preferred and source.key == "manko" and any(item["resolution"] >= HIGH_QUALITY for item in items):
-                trace.append(f"{source.label}：取得 1080p/2160p，已短路")
+                trace.append(f"{source.label}: 1080p/2160p found, stopped early")
                 break
-            trace.append(f"{source.label}：取得 {len(items)} 条" if items else f"{source.label}：无结果")
+            trace.append(f"{source.label}: {len(items)} found" if items else f"{source.label}: no results")
     finally:
         fetcher.close()
     incomplete = bool(warnings) and not found
     result = {"items": rank_candidates(found, goal), "warnings": warnings, "trace": trace,
-            'retry_after': max(retry_delays) if retry_delays else None,
+            'retry_after': max(retry_delays) if retry_delays else None, "unfetched_sources": unfetched,
             'state': 'error' if incomplete else 'ready',
-            'error': '部分来源未取得，请稍后重试或检查来源连接。' if incomplete else '',
+            **coded('error', Said('labels.magnetChain.incomplete') if incomplete else ''),
             "next_sources": [source.label for source in CHAIN[3:]],
             "reference_only": list(REFERENCE_ONLY)}
     if not stop_on_preferred:
         linked = getattr(fetcher, 'resource_result', {})
         result.update(linked_resources=linked.get('items', []), source_url=linked.get('source_url', ''))
         result['warnings'].extend(linked.get('warnings') or [])
+    result.update(parallel('warning', result['warnings']))
     return result

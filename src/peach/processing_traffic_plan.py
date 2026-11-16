@@ -9,6 +9,7 @@ from statistics import median
 from contextlib import closing
 
 from .catalog_rules import is_local_extra
+from .catalog_vocabulary import PERFORMER_TAG_PREFIX
 
 MIB = 1024 ** 2
 
@@ -25,12 +26,12 @@ def ledger_rows(db_path, asset_ids=None, *, library_roots=()):
     query = """SELECT asset.*,
         EXISTS(SELECT 1 FROM asset_entity ae JOIN entity e ON ae.entity_id=e.id
                WHERE ae.asset_id=asset.id AND e.kind='performer') AS performers,
-        EXISTS(SELECT 1 FROM asset_tag t WHERE t.asset_id=asset.id AND t.tag NOT LIKE '演员:%') AS tags
+        EXISTS(SELECT 1 FROM asset_tag t WHERE t.asset_id=asset.id AND t.tag NOT LIKE ?) AS tags
         FROM asset WHERE medium='video' AND disposal IS NULL"""
-    parameters = []
+    parameters = [PERFORMER_TAG_PREFIX + '%']
     if asset_ids is not None:
         query += ' AND id IN (SELECT value FROM json_each(?))'
-        parameters = [json.dumps(asset_ids)]
+        parameters.append(json.dumps(asset_ids))
     with closing(sqlite3.connect(db_path, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
         return [dict(row) for row in connection.execute(query, parameters)

@@ -17,6 +17,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "tools/amane-bridge"
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 
 def locked_amane() -> dict:
@@ -63,7 +66,7 @@ def corresponding_source(destination: Path, work: Path, facts: dict) -> None:
             with urllib.request.urlopen(source["url"], timeout=120) as response:
                 content = response.read()
             if "sha256:" + hashlib.sha256(content).hexdigest() != source["hash"]:
-                raise ValueError(f"依赖源码 SHA-256 不符：{package['name']}")
+                raise ValueError(t("build_amane_runtime.sourceMismatch", name=package['name']))
             output.writestr("dependencies/" + source["url"].rsplit("/", 1)[1], content)
     facts["source_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
     (destination / "NOTICE-amane.md").write_text(
@@ -81,13 +84,13 @@ def corresponding_source(destination: Path, work: Path, facts: dict) -> None:
 def verify(destination: Path, *, script: Path = BRIDGE / "bridge.py") -> dict:
     facts = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
     if any(facts.get(key) != value for key, value in locked_amane().items()):
-        raise ValueError("amane 运行时清单与发行锁不匹配")
+        raise ValueError(t("build_amane_runtime.manifestMismatch"))
     if facts["kind"] not in {"python", "executable"}:
-        raise ValueError("amane 运行时类型无效")
+        raise ValueError(t("build_amane_runtime.invalidKind"))
     executable = destination / facts["executable"]
     boundary = executable.parent.resolve() if facts["kind"] == "python" else executable.resolve()
     if not boundary.is_relative_to(destination.resolve()):
-        raise ValueError("amane 可执行文件必须位于运行时目录内")
+        raise ValueError(t("build_amane_runtime.executableOutside"))
     command = [str(executable)]
     if facts["kind"] == "python":
         command += ["-X", "utf8", str(script)]
@@ -101,7 +104,7 @@ def verify(destination: Path, *, script: Path = BRIDGE / "bridge.py") -> dict:
     expected_sites = list(runpy.run_path(str(script))["SITES"])
     if (not report.get("ok") or report.get("amane", {}).get("version") != facts["version"]
             or report.get("sites") != expected_sites):
-        raise ValueError(f"amane 运行时自检不匹配：{report}")
+        raise ValueError(t("build_amane_runtime.selfCheckMismatch", report=report))
     return report
 
 
@@ -109,7 +112,7 @@ def build(destination: Path, *, kind: str = "executable", work: Path | None = No
     destination = destination.resolve()
     work = (work or ROOT / "build/amane-runtime").resolve()
     if destination == work or work.is_relative_to(destination):
-        raise ValueError("构建工作目录必须在分发目录之外")
+        raise ValueError(t("build_amane_runtime.workInsideDestination"))
     pending = destination / ".peach-amane-build.json"
     if destination.exists() and any(destination.iterdir()):
         marker = destination / "manifest.json"
@@ -117,14 +120,14 @@ def build(destination: Path, *, kind: str = "executable", work: Path | None = No
         owned = owned or (pending.is_file() and json.loads(pending.read_text(encoding="utf-8")) ==
                           {"builder": "peach-amane-runtime", "kind": kind})
         if not owned:
-            raise ValueError("非空分发目录必须是相同类型的 amane 运行时")
+            raise ValueError(t("build_amane_runtime.destinationNotOwned"))
     destination.mkdir(parents=True, exist_ok=True)
     marker_content = json.dumps({"builder": "peach-amane-runtime", "kind": kind})
     pending.write_text(marker_content, encoding="utf-8")
     work.mkdir(parents=True, exist_ok=True)
     uv = shutil.which("uv")
     if not uv:
-        raise FileNotFoundError("构建 amane 运行时需要 uv")
+        raise FileNotFoundError(t("build_amane_runtime.uvRequired"))
     environment = destination / ".venv" if kind == "python" else work / ".venv"
     python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(environment)}
@@ -152,7 +155,7 @@ def build(destination: Path, *, kind: str = "executable", work: Path | None = No
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("build_amane_runtime.description"))
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--work", type=Path)
     parser.add_argument("--kind", choices=("executable", "python"), default="executable")

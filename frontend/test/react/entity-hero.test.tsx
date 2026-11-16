@@ -199,6 +199,18 @@ describe('排版用的纯函数', () => {
     expect(site).toEqual({ type: 'url', url: 'https://www.s1s1s1.com/', title: 'S1', text: '官方网站', mark: { site: '/link-mark?id=9' } });
   });
 
+  it('通用链接名存的是 id，显示按界面语言', () => {
+    const [site] = heroLinks({
+      id: 1, canonical_name: 'Example Studio', asset_count: 1,
+      links: [{ link_id: 9, link_kind: 'official', clickable: true, label: 'official-site', url: 'https://studio.example/' }],
+    }, 'studio');
+    expect(site).toEqual({ type: 'url', url: 'https://studio.example/', title: '官方网站', text: '官方网站', mark: { site: '/link-mark?id=9' } });
+    const [blog] = heroLinks(performer({
+      links: [{ link_id: 3, link_kind: 'social', clickable: true, label: 'blog', url: 'https://ameblo.jp/aoi' }],
+    }), 'performer');
+    expect(blog).toMatchObject({ type: 'icon', title: '博客' });
+  });
+
   it('没有语言投影时保留已有别名与原始值，统称排第一并去重去空', () => {
     expect(nameChoices({ id: 1, canonical_name: '葵つかさ', asset_count: 0, aliases: ['葵司', 'Tsukasa Aoi', '葵司', ''] }))
       .toEqual(['葵つかさ', '葵司', 'Tsukasa Aoi'].map(value => ({ value, label: value })));

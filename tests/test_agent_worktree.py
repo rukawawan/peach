@@ -13,7 +13,9 @@ from pathlib import Path
 from threading import Event
 from unittest import mock
 
-from scripts import agent_worktree, check_public_text, release_tag
+import psutil
+
+from scripts import agent_worktree, check_public_text, release_tag, test_evidence
 from scripts.agent_worktree import (
     WorkspaceError, _git, _lines, create, integrate, processes_under, prune, ready,
 )
@@ -23,6 +25,15 @@ from support.gitrepo import seed_repository
 #: 仓库里版本化的 git hook，测试原样装进临时仓库。
 HOOKS = Path(__file__).resolve().parents[1] / agent_worktree.HOOKS_PATH
 AUTHOR = "Co-Authored-By: Codex (GPT-6) <noreply@openai.com>"
+MAINTAINER = sorted(agent_worktree.co_author.MAINTAINER_MAILS)[0]
+
+
+def process_tree_ids(process: subprocess.Popen) -> set[int]:
+    """包含 Windows venv 启动器后面的解释器进程。"""
+    try:
+        return {process.pid, *(child.pid for child in psutil.Process(process.pid).children(recursive=True))}
+    except psutil.Error:
+        return {process.pid}
 
 
 def install_commit_hooks(repo: Path) -> None:
@@ -32,9 +43,14 @@ def install_commit_hooks(repo: Path) -> None:
     sources += [HOOKS.parent / name for name in
                 ("check_commit_message.py", "check_readme_impact.py", "co_author.py")
                 if (HOOKS.parent / name).is_file()]
+    # 钩子的报错按本机语言渲染（`peach.interface_text.dev`），连同它读的语言资源一起装进去。
+    package = HOOKS.parents[1] / "src" / "peach"
+    sources += [package / name for name in ("interface_text.py", "project_root.py", "system_language.py")]
+    sources += sorted((HOOKS.parent / "locales").glob("*/dev.json"))
     for source in sources:
         relative = source.relative_to(HOOKS.parent.parent)
         target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
         target.chmod(0o755)
         _git(repo, "add", relative.as_posix())
@@ -146,10 +162,19 @@ class AgentWorktreeTests(_WorktreeCase):
         self.assertFalse((self.repo / name).exists())
 
     def test_waiting_code_integration_does_not_block_documents(self):
+        """文档先合进去，排队的代码集成拿到锁后 rebase 到新的 master 上再合，不必回工作树重来。"""
         code = create(self.repo, "Codex", "queued-code", self.root / "worktrees")
         worker = Path(code["path"])
         (worker / "worker.txt").write_text("code\n", encoding="utf-8")
         commit(worker, "worker change")
+        origin = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+        _git(self.repo, "remote", "add", "origin", str(origin))
+        _git(worker, "push", "-q", "origin", str(code["branch"]))
+        for name in ("_verify_worker", "_await_pull_request_head"):
+            patcher = mock.patch.object(agent_worktree, name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         docs = create(self.repo, "Codex", "parallel-docs", self.root / "worktrees")
         (Path(docs["path"]) / "README.md").write_text("# Example\n", encoding="utf-8")
         _git(Path(docs["path"]), "add", "README.md")
@@ -173,8 +198,11 @@ class AgentWorktreeTests(_WorktreeCase):
                 report = integrate(self.repo, str(docs["branch"]), lock_timeout=0)
                 self.assertEqual(report["files"], ["README.md"])
                 self.assertFalse(future.done())
-            self.assertEqual(future.result(timeout=60)["files"], ["worker.txt"])
+            queued = future.result(timeout=60)
+            self.assertEqual(queued["files"], ["worker.txt"])
+            self.assertIsNotNone(queued["refreshed"], "排队期间 master 前进，拿到锁后自动 rebase")
         self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "code\n")
+        self.assertEqual((self.repo / "README.md").read_text(encoding="utf-8"), "# Example\n")
 
     def test_code_integration_waits_for_full_suite_without_changing_master(self):
         result = create(self.repo, "Codex", "code", self.root / "worktrees")
@@ -219,6 +247,140 @@ class AgentWorktreeTests(_WorktreeCase):
         commit(self.repo, "main overlap")
         with self.assertRaisesRegex(WorkspaceError, "same-file"):
             integrate(self.repo, str(result["branch"]))
+        self.assertEqual(_git(worker, "log", "-1", "--format=%s").stdout.strip(), "worker overlap",
+                         "有重叠时不自动 rebase")
+
+
+class QueuedRebaseTests(_WorktreeCase):
+    """排队等锁期间目标分支前进：拿到锁后把工作者分支 rebase 上去、补验、推送，再合入。"""
+
+    def setUp(self):
+        super().setUp()
+        self.verifier = mock.patch.object(agent_worktree, "_verify_worker")
+        self.verify = self.verifier.start()
+        self.addCleanup(self.verifier.stop)
+        head = mock.patch.object(agent_worktree, "_await_pull_request_head")
+        self.head = head.start()
+        self.addCleanup(head.stop)
+        self.origin = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(self.origin)], check=True)
+        _git(self.repo, "remote", "add", "origin", str(self.origin))
+
+    def worker(self, name: str, path: str, text: str) -> tuple[Path, str]:
+        result = create(self.repo, "Claude", name, self.root / "worktrees")
+        worker = Path(result["path"])
+        (worker / path).parent.mkdir(parents=True, exist_ok=True)
+        (worker / path).write_text(text, encoding="utf-8")
+        _git(worker, "add", path)
+        _git(worker, "commit", "-m", f"fix(tooling): {name}")
+        _git(worker, "push", "-q", "origin", str(result["branch"]))
+        return worker, str(result["branch"])
+
+    def test_a_target_that_moved_while_queued_is_rebased_verified_and_pushed(self):
+        worker, branch = self.worker("queued", "worker.txt", "worker\n")
+        before = _git(worker, "rev-parse", "HEAD").stdout.strip()
+        (self.repo / "tracked.txt").write_text("main moved\n", encoding="utf-8")
+        commit(self.repo, "main moved")
+        report = integrate(self.repo, branch)
+        after = _git(worker, "rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(report["refreshed"], {"from": before, "to": after})
+        self.assertNotEqual(before, after)
+        self.verify.assert_called_once_with(self.repo, worker, frontend=False)
+        self.head.assert_called_once_with(worker, branch, after)
+        self.assertEqual(_git(self.origin, "rev-parse", branch).stdout.strip(), after, "PR 分支推到 rebase 后的提交")
+        self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
+        self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "main moved\n")
+
+    def test_a_failed_reverification_merges_nothing(self):
+        worker, branch = self.worker("red-after-rebase", "worker.txt", "worker\n")
+        (self.repo / "tracked.txt").write_text("main moved\n", encoding="utf-8")
+        commit(self.repo, "main moved")
+        master = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        self.verify.side_effect = WorkspaceError("rebase 后补验未通过")
+        with self.assertRaisesRegex(WorkspaceError, "补验未通过"):
+            integrate(self.repo, branch)
+        self.assertEqual(_git(self.repo, "rev-parse", "HEAD").stdout.strip(), master)
+        self.assertEqual(_git(worker, "status", "--porcelain").stdout, "")
+        self.head.assert_not_called()
+
+    def test_an_up_to_date_branch_and_a_documents_branch_are_not_rebased(self):
+        worker, branch = self.worker("current", "worker.txt", "worker\n")
+        self.assertIsNone(integrate(self.repo, branch)["refreshed"])
+        _, docs = self.worker("docs", "README.md", "# Example\n")
+        (self.repo / "tracked.txt").write_text("main moved\n", encoding="utf-8")
+        commit(self.repo, "main moved")
+        self.assertIsNone(integrate(self.repo, docs)["refreshed"], "文档集成不持全量锁，不在锁内补验")
+        self.verify.assert_not_called()
+
+    def test_reverification_follows_the_test_entry_and_keeps_the_full_lock(self):
+        self.verifier.stop()
+        worker = self.root / "worker"
+        calls = []
+        with mock.patch.object(agent_worktree.subprocess, "run",
+                               side_effect=lambda command, **kwargs: calls.append((command, kwargs))
+                               or subprocess.CompletedProcess(command, 0)):
+            agent_worktree._verify_worker(self.repo, worker, frontend=True)
+        commands = [command for command, _ in calls]
+        self.assertIn("scripts/test_environment.py", commands[0])
+        self.assertEqual(commands[1][-3:], ["--prefix", "frontend", "ci"])
+        self.assertEqual(commands[2][1:], ["scripts/test_runner.py", "--scope", "auto", "--jobs", "auto",
+                                           "--full-lock-held"])
+        self.assertTrue(all(kwargs["cwd"] == worker for _, kwargs in calls))
+        self.assertEqual(calls[2][1]["env"]["PYTHONPATH"], str(worker / "src"))
+        with mock.patch.object(agent_worktree.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 1)), \
+                self.assertRaisesRegex(WorkspaceError, "integrate-verify.log"):
+            agent_worktree._verify_worker(self.repo, worker, frontend=False)
+        self.verifier.start()
+
+
+#: 子进程里的运行器核对借来的全量锁：argv 依次是仓库根与证据目录，退出码 0 表示放行。
+LENT_LOCK_PROBE = """
+import argparse, sys
+from pathlib import Path
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[1])
+from scripts import test_runner
+test_runner.test_evidence.evidence_dir = lambda root: Path(sys.argv[2])
+with test_runner.full_suite_guard(argparse.ArgumentParser(), SimpleNamespace(full_lock_held=True), ("auto",)):
+    pass
+"""
+#: 照 Windows venv 的 python.exe 启动器：中间隔一层进程，才到真正的解释器。
+LAUNCHER = "import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:]).returncode)"
+
+
+class LentFullLockTests(unittest.TestCase):
+    """集成入口持锁补验时，它派出的运行器沿用全量锁；别的进程冒用这个开关一律拒绝。"""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+
+    def probe(self, *, launcher: bool = False) -> subprocess.CompletedProcess:
+        command = [sys.executable, "-c", LENT_LOCK_PROBE, str(Path(__file__).resolve().parents[1]),
+                   str(self.folder)]
+        if launcher:
+            command = [sys.executable, "-c", LAUNCHER, *command]
+        return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=120)
+
+    def test_the_holding_integration_lends_its_lock_through_a_launcher(self):
+        with test_evidence.held(self.folder / "full-suite.lock", scope="integrate"):
+            for launcher in (False, True):
+                with self.subTest(launcher=launcher):
+                    result = self.probe(launcher=launcher)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_holder_outside_the_ancestry_or_no_holder_is_refused(self):
+        sibling = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(sibling.wait)
+        self.addCleanup(sibling.kill)
+        holder = test_evidence.holder_path(self.folder / "full-suite.lock")
+        holder.write_text(json.dumps({"pid": sibling.pid}), encoding="utf-8")
+        result = self.probe(launcher=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("只供持有全量锁的集成入口", result.stderr)
+        holder.unlink()
+        self.assertNotEqual(self.probe().returncode, 0)
 
 
 class PullRequestIntegrationTests(_WorktreeCase):
@@ -276,7 +438,7 @@ class PullRequestIntegrationTests(_WorktreeCase):
         body = ("排查记录里顺带提到 #3，不算关联。\n\nRefs #45\r\n"
                 "  Refs peach-mitao/peach-roadmap#7\n"
                 "Fixes https://github.com/example/peach/issues/8\n"
-                "Refs N01（Telegram 反馈）\n")
+                "Refs Telegram 用户反馈（非 GitHub issue）\n")
         with self.github(json.dumps({**self.pr, "body": body})):
             result = integrate(self.repo, self.branch)
         refs = ["Refs #45", "Refs peach-mitao/peach-roadmap#7",
@@ -297,6 +459,30 @@ class PullRequestIntegrationTests(_WorktreeCase):
             self.pr["headRefOid"] = _git(self.worker, "rev-parse", "HEAD").stdout.strip()
             with self.github(json.dumps({**self.pr, "body": "只修 ZZQ-101 的前缀。"})):
                 self.assertRaisesRegex(WorkspaceError, "提交 [0-9a-f]+（人物 2 个", integrate, self.repo, self.branch)
+
+    def test_a_fork_pull_request_committed_as_the_maintainer_is_refused(self):
+        """贡献者照 `git log` 把作者配成维护者时，本机集成和 CI 一样拒收；同仓库分支不查。"""
+        _git(self.worker, "-c", f"user.email={MAINTAINER}", "commit", "--allow-empty",
+             "-m", "fix(tooling): 冒用维护者身份")
+        self.pr["headRefOid"] = _git(self.worker, "rev-parse", "HEAD").stdout.strip()
+        with self.github(json.dumps({**self.pr, "isCrossRepository": True})):
+            self.assert_refused("作者是维护者")
+        with self.github(json.dumps({**self.pr, "isCrossRepository": False})):
+            integrate(self.repo, self.branch)
+        self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
+
+    def test_a_fork_pull_request_with_the_contributor_s_own_identity_integrates(self):
+        with self.github(json.dumps({**self.pr, "isCrossRepository": True})) as query:
+            integrate(self.repo, self.branch)
+        self.assertIn("isCrossRepository", query.call_args.args[0][-1])
+        self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
+
+    def test_insider_terms_in_the_pr_body_are_refused_but_commit_messages_may_name_the_tooling(self):
+        with mock.patch.object(check_public_text, "load_library", return_value=None):
+            self.assertRaisesRegex(WorkspaceError, "内部用语.*合批", agent_worktree.require_public_text,
+                                   self.repo, {"PR 正文": "合批验证：两处反馈修复。"})
+            agent_worktree.require_public_text(self.repo, {"PR 正文": "两处反馈修复一起合入。",
+                                                           "提交 abc1234": "fix(worktree): 工作树残留检查跳过空目录"})
 
     def test_a_single_example_or_a_machine_without_a_ledger_still_integrates(self):
         library = check_public_text.Library(codes={"ZZQ-101", "ZZQ-102", "ZZQ-103"})
@@ -577,15 +763,16 @@ class PruneTests(_WorktreeCase):
     def test_a_worktree_a_process_is_working_in_is_kept(self):
         """会话、终端或预览服务还开在里面的工作树不回收：分支合入了，人还在用。"""
         worker = self._integrated("in-use")
-        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=worker)
+        process = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                                   cwd=worker, stdin=subprocess.PIPE)
         try:
             report = prune(self.repo, apply=True)
+            pids = process_tree_ids(process)
         finally:
-            process.kill()
-            process.wait(timeout=15)
+            process.communicate(timeout=15)
         self.assertTrue(worker.is_dir())
         why = next(row["why"] for row in report["kept"] if row["path"] == str(worker))
-        self.assertIn(str(process.pid), why)
+        self.assertTrue(any(f"PID {pid}" in why for pid in pids), why)
 
     def test_a_dirty_worktree_is_refused_even_when_its_branch_is_merged(self):
         """分支已合入不等于工作区里没东西。
@@ -669,6 +856,146 @@ class PruneTests(_WorktreeCase):
                       "注册还在就是没回收成，分支不能删")
 
 
+class IdleWorktreeTests(_WorktreeCase):
+    """锁只在 `integrate` 时解开，批量集成和弃置的工作树就一直锁着、一直占地方。
+
+    2026-11-12 清点：367 个工作树占 276 GB，其中 202 个锁定，大多早已没人碰。
+    """
+
+    def _created(self, name: str) -> Path:
+        return Path(create(self.repo, "Codex", name, self.root / "worktrees")["path"])
+
+    def _age(self, worker: Path, days: int = agent_worktree.IDLE_DAYS + 1) -> None:
+        then = time.time() - days * 86400
+        admin = Path(_git(worker, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
+        reflog = admin / "logs" / "HEAD"
+        entries = []
+        for line in reflog.read_text(encoding="utf-8").splitlines():
+            head, _, message = line.partition("\t")
+            fields = head.split()
+            fields[-2] = str(int(then))
+            entries.append(" ".join(fields) + "\t" + message)
+        reflog.write_text("".join(entry + "\n" for entry in entries), encoding="utf-8")
+        for path in [admin / "HEAD", reflog, *worker.rglob("*")]:
+            if path.exists():
+                os.utime(path, (then, then))
+
+    def test_an_idle_worktree_with_the_task_lock_is_reclaimed(self):
+        worker = self._created("abandoned")
+        self._age(worker)
+        report = prune(self.repo, apply=True)
+        self.assertIn(str(worker), report["reclaimed"])
+        self.assertFalse(worker.exists())
+
+    def test_touching_the_reflog_file_does_not_count_as_activity(self):
+        """reflog 文件被批量操作碰过，mtime 刷新了，记录里的时间仍是旧的。"""
+        worker = self._created("touched-reflog")
+        self._age(worker)
+        admin = Path(_git(worker, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
+        os.utime(admin / "logs" / "HEAD")
+        report = prune(self.repo, apply=True)
+        self.assertIn(str(worker), report["reclaimed"])
+
+    def test_an_emptied_reflog_falls_back_to_the_commit_time(self):
+        worker = self._created("emptied-reflog")
+        old = time.time() - (agent_worktree.IDLE_DAYS + 1) * 86400
+        (worker / "worker.txt").write_text("old change\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"GIT_COMMITTER_DATE": f"{int(old)} +0000"}):
+            commit(worker, "old change")
+        _git(self.repo, "merge", "--no-ff", "-m", "merge old change", "agent/codex/emptied-reflog")
+        self._age(worker)
+        admin = Path(_git(worker, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
+        (admin / "logs" / "HEAD").write_text("", encoding="utf-8")
+        report = prune(self.repo, apply=True)
+        self.assertIn(str(worker), report["reclaimed"])
+
+    def test_an_emptied_reflog_on_a_recent_commit_is_kept(self):
+        worker = self._created("recent-commit")
+        (worker / "worker.txt").write_text("fresh change\n", encoding="utf-8")
+        commit(worker, "fresh change")
+        self._age(worker)
+        admin = Path(_git(worker, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip())
+        (admin / "logs" / "HEAD").write_text("", encoding="utf-8")
+        report = prune(self.repo, apply=True)
+        self.assertTrue(worker.is_dir())
+        self.assertEqual(report["reclaimed"], [])
+
+    def test_deleting_old_files_under_build_does_not_count_as_activity(self):
+        """清理删掉旧文件会把目录 mtime 刷成今天；工作树本身仍然闲置。"""
+        worker = self._created("cleaned-up")
+        logs = worker / agent_worktree.TEST_OUTPUT / "browser" / "network"
+        logs.mkdir(parents=True)
+        (logs / "network-1.json").write_text("{}", encoding="utf-8")
+        (logs / "network-2.json").write_text("{}", encoding="utf-8")
+        self._age(worker)
+        (logs / "network-2.json").unlink()
+        report = prune(self.repo, apply=True)
+        self.assertIn(str(worker), report["reclaimed"])
+
+    def test_a_recent_worktree_with_the_task_lock_is_kept(self):
+        worker = self._created("in-progress")
+        report = prune(self.repo, apply=True)
+        self.assertTrue(worker.is_dir())
+        self.assertEqual(next(row["why"] for row in report["kept"] if row["path"] == str(worker)),
+                         "工作树被活动任务锁定")
+
+    def test_a_lock_with_another_reason_is_never_expired(self):
+        worker = self._created("kept-on-purpose")
+        _git(self.repo, "worktree", "unlock", str(worker))
+        _git(self.repo, "worktree", "lock", "--reason", "保留：用户已确认的预览", str(worker))
+        self._age(worker)
+        report = prune(self.repo, apply=True)
+        self.assertTrue(worker.is_dir())
+        self.assertEqual(report["reclaimed"], [])
+
+    def test_test_output_alone_does_not_hold_back_reclaiming(self):
+        """测试入口的产物能重跑生成，单个工作树里却能到几 GB。"""
+        worker = self._created("tested")
+        records = worker / agent_worktree.TEST_OUTPUT / "browser" / "network"
+        records.mkdir(parents=True)
+        (records / "network-1.json").write_text("{}", encoding="utf-8")
+        self._age(worker)
+        report = prune(self.repo, apply=True)
+        self.assertIn(str(worker), report["reclaimed"])
+        self.assertEqual(report["archived"], [])
+
+    def test_session_files_of_an_idle_worktree_move_to_attic(self):
+        worker = self._created("coordinated")
+        (worker / "build").mkdir()
+        (worker / "build" / "report.md").write_text("复盘报告\n", encoding="utf-8")
+        (worker / agent_worktree.TEST_OUTPUT).mkdir(parents=True)
+        (worker / agent_worktree.TEST_OUTPUT / "auto.json").write_text("{}", encoding="utf-8")
+        self._age(worker)
+        report = prune(self.repo, apply=True)
+        self.assertFalse(worker.exists())
+        moved = Path(report["archived"][0]["to"])
+        self.assertEqual(moved, self.repo.parent / agent_worktree.BUILD_ARCHIVE / worker.name)
+        self.assertEqual((moved / "report.md").read_text(encoding="utf-8"), "复盘报告\n")
+        self.assertFalse((moved / "agent-verification").exists())
+
+    def test_an_idle_unmerged_worktree_keeps_its_work_but_drops_rebuildable_dependencies(self):
+        worker = self._created("unmerged")
+        (worker / "worker.txt").write_text("还没合入的改动\n", encoding="utf-8")
+        commit(worker, "unmerged change")
+        modules = worker / "frontend" / "node_modules" / "left-pad"
+        modules.mkdir(parents=True)
+        (modules / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+        self._age(worker)
+        report = prune(self.repo, apply=True)
+        self.assertTrue((worker / "worker.txt").is_file())
+        self.assertFalse((worker / "frontend" / "node_modules").exists())
+        self.assertEqual(report["slimmed"], [str(worker / "frontend" / "node_modules")])
+
+    def test_create_prunes_at_most_once_a_day(self):
+        abandoned = self._created("first")
+        self._age(abandoned)
+        (self.repo / ".git" / agent_worktree.PRUNE_STAMP).unlink()
+        second = create(self.repo, "Codex", "second", self.root / "worktrees")
+        self.assertEqual(second["pruned"]["reclaimed"], 1)
+        self.assertFalse(abandoned.exists())
+        self.assertIsNone(create(self.repo, "Codex", "third", self.root / "worktrees")["pruned"])
+
+
 class UnregisteredLeftoverTests(_WorktreeCase):
     """清掉两个工作树落点里已经不登记的残留目录。
 
@@ -743,7 +1070,7 @@ class LeftoverProcessTests(_WorktreeCase):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             rows = processes_under([cwd])
-            if any(row["pid"] == child.pid for row in rows):
+            if any(row["pid"] in process_tree_ids(child) for row in rows):
                 break
             time.sleep(0.1)
         return child
@@ -756,9 +1083,10 @@ class LeftoverProcessTests(_WorktreeCase):
         child = self.sleeper(self.repo.parent / agent_worktree.WORKTREE_ROOT / "busy")
         try:
             report = agent_worktree.processes(self.repo)
+            pids = process_tree_ids(child)
         finally:
             self.stop(child)
-        row = next(row for row in report["processes"] if row["pid"] == child.pid)
+        row = next(row for row in report["processes"] if row["pid"] in pids)
         self.assertFalse(row["orphan"], "父进程（测试本身）还在")
         self.assertFalse(row["caller"])
         self.assertGreaterEqual(row["age_minutes"], 0)
@@ -769,10 +1097,11 @@ class LeftoverProcessTests(_WorktreeCase):
         child = self.sleeper(self.root / "elsewhere")
         try:
             rows = processes_under([self.root / "elsewhere", Path(os.getcwd())])
+            pids = process_tree_ids(child)
         finally:
             self.stop(child)
-        self.assertIn(child.pid, [row["pid"] for row in rows])
-        self.assertNotIn(child.pid, [row["pid"] for row in processes_under([self.repo])])
+        self.assertTrue(any(row["pid"] in pids for row in rows))
+        self.assertFalse(any(row["pid"] in pids for row in processes_under([self.repo])))
         mine = [row for row in rows if row["pid"] == os.getpid()]
         self.assertEqual([row["caller"] for row in mine], [True], "调用者自己这条链要标出来")
 
@@ -783,10 +1112,11 @@ class LeftoverProcessTests(_WorktreeCase):
             with mock.patch.object(agent_worktree, "_delete_tree",
                                    return_value="PermissionError: 目录被别的进程占着"):
                 report = prune(self.repo, apply=True)
+            pids = process_tree_ids(child)
         finally:
             self.stop(child)
         self.assertEqual([row["path"] for row in report["residue"]], [str(held)])
-        self.assertIn(child.pid, [row["pid"] for row in report["residue"][0]["holders"]])
+        self.assertTrue(any(row["pid"] in pids for row in report["residue"][0]["holders"]))
 
     def test_without_psutil_the_scan_says_it_was_not_obtained(self):
         with mock.patch.dict(sys.modules, {"psutil": None}):
@@ -1011,6 +1341,63 @@ class CoAuthorTests(unittest.TestCase):
             key.assert_not_called()
 
 
+from scripts import check_pr_identity
+
+
+class PullRequestIdentityTests(unittest.TestCase):
+    """fork PR 的提交不得记在维护者名下；维护者已在目标分支上的提交不算。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name).resolve()
+        git(self.repo, "init", "-b", "master")
+        git(self.repo, "config", "user.name", "Contributor")
+        git(self.repo, "config", "user.email", "contributor@example.invalid")
+        git(self.repo, "-c", f"user.email={MAINTAINER}", "commit", "--allow-empty", "-m", "base")
+        git(self.repo, "checkout", "-b", "worker")
+
+    def test_the_contributor_s_own_commits_pass(self):
+        git(self.repo, "commit", "--allow-empty", "-m", "fix(web): 贡献者自己的提交")
+        self.assertEqual(check_pr_identity.problems(self.repo, "master"), [])
+
+    def test_the_maintainer_as_author_is_refused(self):
+        git(self.repo, "commit", "--allow-empty", "-m", "作者冒用",
+            "--author", f"Maintainer <{MAINTAINER.upper()}>")
+        found = check_pr_identity.problems(self.repo, "master")
+        self.assertEqual(len(found), 1)
+        self.assertTrue(found[0].endswith("作者冒用"), found)
+
+    def test_the_maintainer_rebasing_a_contributor_s_commit_is_not_impersonation(self):
+        git(self.repo, "-c", f"user.email={MAINTAINER}", "commit", "--allow-empty", "-m", "维护者 rebase 过",
+            "--author", "Contributor <contributor@example.invalid>")
+        self.assertEqual(check_pr_identity.problems(self.repo, "master"), [])
+
+    def test_maintainer_commits_merged_from_the_target_branch_are_not_the_contributor_s(self):
+        git(self.repo, "checkout", "master")
+        git(self.repo, "-c", f"user.email={MAINTAINER}", "commit", "--allow-empty", "-m", "上游的提交")
+        git(self.repo, "checkout", "worker")
+        git(self.repo, "commit", "--allow-empty", "-m", "贡献者自己的提交")
+        git(self.repo, "-c", f"user.email={MAINTAINER}", "merge", "--no-ff", "-m", "Merge master", "master")
+        self.assertEqual(check_pr_identity.problems(self.repo, "master"), [])
+
+    def test_the_ci_entry_runs_as_a_bare_script_and_explains_the_fix_in_the_local_language(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "check_pr_identity.py"
+
+        def run(language="en"):
+            return subprocess.run([sys.executable, str(script), "--base", "master"], cwd=self.repo,
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  env={**os.environ, "PYTHONIOENCODING": "utf-8", "PEACH_LANGUAGE": language})
+
+        self.assertEqual(run().returncode, 0)
+        git(self.repo, "-c", f"user.email={MAINTAINER}", "commit", "--allow-empty", "-m", "冒用")
+        for language, said in (("en", "authored as the maintainer"), ("zh-CN", "作者是维护者")):
+            result = run(language)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            for expected in (said, "--reset-author", "冒用"):
+                self.assertIn(expected, result.stderr)
+
+
 from scripts import commit_subject
 
 
@@ -1060,6 +1447,16 @@ class CommitSubjectTests(unittest.TestCase):
         git(self.repo, "commit", "--allow-empty", "-m", "fix(web): 自己的提交")
         git(self.repo, "merge", "--no-ff", "-m", "Merge branch 'master' into worker", "master")
         self.assertEqual(commit_subject.check(self.repo, "master"), [])
+
+    def test_an_adopted_community_commit_keeps_its_own_subject(self):
+        """`merge -s ours` 记入的社区提交原样保留，主题门槛只管本机提交者写的。"""
+        git(self.repo, "checkout", "-b", "community", "master")
+        git(self.repo, "-c", "user.email=someone@users.noreply.github.com", "commit", "--allow-empty",
+            "-m", "Translate frontend UI to English")
+        git(self.repo, "checkout", "worker")
+        git(self.repo, "merge", "-s", "ours", "--no-ff", "-m", "chore(i18n): 记入社区译法", "community")
+        self.assertEqual(commit_subject.check(self.repo, "master"), [])
+        self.assertTrue(self.titled("Translate it myself"))
 
     def test_a_subject_already_on_the_remote_master_is_not_the_worker_s_to_fix(self):
         problems = self.titled("Remove section from README", "docs(readme): 并回网页上的改动")

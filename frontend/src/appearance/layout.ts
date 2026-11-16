@@ -5,18 +5,19 @@
 import { normalizeJavLayout, type JavLayout } from '../jav-artwork';
 import type { SettingsStore } from '../settings-store';
 import { allowedSetting, appSettingsStore, type AppSettings } from './settings';
+import { t } from '../i18n';
 
 /** `[值, 显示名, 字形]`：版式开关在设置面板与筛选条下排各有一组，读的都是这一张表。 */
 export const JAV_LAYOUTS: readonly (readonly [value: string, label: string, icon: string])[] = [
-  ['big', '大图', 'maximize'], ['small', '小图', 'layout-grid'],
+  ['big', t('settings:tileSize.large'), 'maximize'], ['small', t('settings:tileSize.small'), 'layout-grid'],
 ];
 /* 图片墙是等宽网格，改的是列数。默认小图——一套图几十上百张，先看得见全貌，挑中哪一张再点开看大的。 */
 type Choice = readonly [value: string, label: string, icon: string];
 export const PHOTO_SIZES: readonly [big: Choice, small: Choice] = [
-  ['big', '大图', 'maximize'], ['small', '小图', 'layout-grid'],
+  ['big', t('settings:tileSize.large'), 'maximize'], ['small', t('settings:tileSize.small'), 'layout-grid'],
 ];
 export const PHOTO_LAYOUTS: readonly (readonly [value: string, label: string, icon: string])[] = [
-  ['fixed', '固定比例', 'layout-grid'], ['masonry', '瀑布流', 'columns-2'],
+  ['fixed', t('settings:photoLayout.fixed'), 'layout-grid'], ['masonry', t('settings:photoLayout.masonry'), 'columns-2'],
 ];
 /* 大图卡片固定为 3:4；传统正封完整居中，比例留白使用同图模糊补底，整幅大封按主体取景。 */
 export const COVER_FRONT_RATIO = 0.75;

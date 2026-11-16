@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fetch_ffmpeg_sources import digest, download_source
 from build_macos_media import audit_binary
+from peach.interface_text import dev as t
 from peach.peach_proxy import read_url
 
 
@@ -24,7 +25,7 @@ def fetch(destination: Path, architecture: str) -> Path:
     with tarfile.open(archive) as package:
         members = [member for member in package if member.isfile() and member.name.removeprefix("./") == "cloudflared"]
         if len(members) != 1 or members[0].size > 150_000_000:
-            raise ValueError("cloudflared 官方归档内容不符")
+            raise ValueError(t("fetch_cloudflared_macos.archiveMismatch"))
         binary = destination / "cloudflared"
         with package.extractfile(members[0]) as stream:
             binary.write_bytes(stream.read())
@@ -33,10 +34,10 @@ def fetch(destination: Path, architecture: str) -> Path:
     audit_binary(binary, architecture)
     version = subprocess.check_output([str(binary), "--version"], text=True, encoding="utf-8")
     if lock["version"] not in version:
-        raise ValueError("cloudflared 版本不符")
+        raise ValueError(t("fetch_cloudflared_macos.versionMismatch"))
     license_text = read_url(lock["license_url"], timeout=60).decode("utf-8")
     if "Apache License" not in license_text:
-        raise ValueError("cloudflared 许可证未取得")
+        raise ValueError(t("fetch_cloudflared_macos.licenseMissing"))
     (destination / "LICENSE-cloudflared.txt").write_text(license_text, encoding="utf-8")
     (destination / "NOTICE-cloudflared.md").write_text(
         f"cloudflared {lock['version']}，Cloudflare 与贡献者，Apache-2.0。\n"
@@ -55,7 +56,7 @@ def validate(destination: Path, architecture: str) -> dict:
     if (manifest["version"] != lock["version"] or manifest["architecture"] != architecture
             or manifest["source"] != lock["assets"][architecture]
             or set(manifest["files"]) != {"cloudflared", "LICENSE-cloudflared.txt", "NOTICE-cloudflared.md"}):
-        raise ValueError("cloudflared 清单与固定发行不符")
+        raise ValueError(t("fetch_cloudflared_macos.manifestMismatch"))
     checked_file(destination, "cloudflared.tgz", lock["assets"][architecture]["sha256"])
     for name, expected in manifest["files"].items():
         checked_file(destination, name, expected)
@@ -64,7 +65,7 @@ def validate(destination: Path, architecture: str) -> dict:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("fetch_cloudflared_macos.description"))
     parser.add_argument("--arch", choices=("arm64", "x86_64"), required=True)
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
+from . import interface_text
 from .windows_update import replace_with_retry, swap_tray_binary
 from .tray_detached import launch_detached
 
@@ -45,6 +46,11 @@ class RestartResult:
     backup: str | None = None
     #: 旧托盘停着的那段时间里做的准备（依赖同步）给人看的一句话；没做就是 None。
     preparation: str | None = None
+
+
+def _text(code: str, /, **params) -> str:
+    """重启结果给人看的一句：进重启脚本的输出与托盘通知，按本机语言渲染（`tray.restart.*`）。"""
+    return interface_text.text(f"server:{code}", params, interface_text.local_language())
 
 
 def _normal_path(path: str | Path) -> str:
@@ -401,25 +407,23 @@ def _stop_old_tray(
     if len(owned) < 2:
         foreign = strays(old_process_id, service_executable)
         if foreign:
-            listed = "、".join(str(pid) for pid in foreign)
+            listed = _text("tray.listSeparator").join(str(pid) for pid in foreign)
             return RestartResult(
-                False, f"拒绝重启：旧托盘名下只有 {len(owned)} 个子服务，端口由不归它管的"
-                       f" serve 进程占着（PID {listed}），重启托盘换不掉它们",
+                False, _text("tray.restart.strayServices", count=len(owned), pids=listed),
                 old_tray_pid=old_process_id, service_pids=foreign)
     if not all(stop_window(window.handle) for window in windows):
-        return RestartResult(False, "托盘停止消息发送失败", old_tray_pid=old_process_id)
+        return RestartResult(False, _text("tray.restart.stopMessageFailed"), old_tray_pid=old_process_id)
 
     deadline = time.monotonic() + timeout
     while alive(old_process_id) and time.monotonic() < deadline:
         sleep(0.1)
     if alive(old_process_id):
-        return RestartResult(False, "托盘未在期限内正常退出；未强杀、未另启",
-                             old_tray_pid=old_process_id)
+        return RestartResult(False, _text("tray.restart.oldTrayStillRunning"), old_tray_pid=old_process_id)
     while any(alive(pid) for pid in owned) and time.monotonic() < deadline:
         sleep(0.1)
     leftover = tuple(pid for pid in owned if alive(pid))
     if leftover:
-        return RestartResult(False, "旧托盘已退出，但它的子服务未在期限内退出；未另启",
+        return RestartResult(False, _text("tray.restart.oldServicesStillRunning"),
                              old_tray_pid=old_process_id, service_pids=leftover)
     return None
 
@@ -438,11 +442,10 @@ class _Launch:
 
     def failure(self) -> str:
         if self.exit_code is not None:
-            return f"新托盘退出，代码 {self.exit_code}"
+            return _text("tray.restart.newTrayExited", code=self.exit_code)
         if self.tray_pid is None:
-            return "新托盘窗口未在期限内出现"
-        return (f"新托盘（PID {self.tray_pid}）已起，但名下只有 {len(self.service_pids)} 个"
-                "子服务：端口可能被不归它管的进程占着")
+            return _text("tray.restart.newTrayMissing")
+        return _text("tray.restart.newTrayServices", pid=self.tray_pid, count=len(self.service_pids))
 
 
 def _await_new_tray(
@@ -497,15 +500,15 @@ def _rolled_back(
         shutil.copy2(backup, restore)
         replace_with_retry(restore, target, sleep=sleep)
     except OSError as exc:
-        return RestartResult(False, f"{message}；回滚失败，生产入口停在新二进制：{exc}",
+        return RestartResult(False, _text("tray.restart.rollbackFailed", reason=message, error=exc),
                              old_tray_pid=old_tray_pid, swapped_from=swapped_from,
                              backup=str(backup))
     started = start(target)
     if started.poll() is not None:
-        return RestartResult(False, f"{message}；已回滚到备份，但旧托盘也没起来",
+        return RestartResult(False, _text("tray.restart.rolledBackNotStarted", reason=message),
                              old_tray_pid=old_tray_pid, swapped_from=swapped_from,
                              backup=str(backup))
-    return RestartResult(False, f"{message}；已回滚到备份并重开旧托盘",
+    return RestartResult(False, _text("tray.restart.rolledBack", reason=message),
                          old_tray_pid=old_tray_pid, swapped_from=swapped_from,
                          backup=str(backup))
 
@@ -527,7 +530,7 @@ def _finished(ok: bool, message: str, prepared: tuple[bool, str | None],
               **fields) -> RestartResult:
     ready, note = prepared
     if ok and not ready:
-        ok, message = False, f"{message}，但运行环境没有备齐：{note}"
+        ok, message = False, _text("tray.restart.notPrepared", result=message, note=note)
     return RestartResult(ok, message, preparation=note, **fields)
 
 
@@ -549,14 +552,14 @@ def restart_tray(
     target = target.resolve()
     service_executable = target.parents[2] / ".venv" / "Scripts" / "peach.exe"
     if not target.is_file() or target.name.lower() != "peach.exe":
-        return RestartResult(False, f"拒绝重启：入口不存在或不是 Peach.exe：{target}")
+        return RestartResult(False, _text("tray.restart.targetInvalid", path=target))
     if not service_executable.is_file():
-        return RestartResult(False, f"拒绝重启：服务入口不存在：{service_executable}")
+        return RestartResult(False, _text("tray.restart.serviceMissing", path=service_executable))
 
     windows = find_windows(target)
     process_ids = {window.process_id for window in windows}
     if len(process_ids) != 1 or not windows:
-        return RestartResult(False, "拒绝重启：没有找到唯一且路径匹配的 Peach 托盘窗口")
+        return RestartResult(False, _text("tray.restart.windowNotUnique"))
     old_process_id = next(iter(process_ids))
     refusal = prepare.before_stop(old_process_id) if prepare is not None else None
     if refusal:
@@ -574,9 +577,9 @@ def restart_tray(
             backup = swap(swap_from.resolve(), target)
         except (OSError, ValueError) as exc:
             started = start(target)
-            message = f"换二进制失败，已按原样重开旧托盘：{exc}"
+            message = _text("tray.restart.swapFailed", error=exc)
             if started.poll() is not None:
-                message = f"换二进制失败，且旧托盘未能重开：{exc}"
+                message = _text("tray.restart.swapFailedNotStarted", error=exc)
             return RestartResult(False, message, old_tray_pid=old_process_id,
                                  swapped_from=str(swap_from))
 
@@ -589,7 +592,7 @@ def restart_tray(
         timeout=timeout, services=services, sleep=sleep)
     if launch.ready:
         return _finished(
-            True, "托盘已正常重启并重新拥有 HTTP/HTTPS 子服务", prepared,
+            True, _text("tray.restart.restarted"), prepared,
             old_tray_pid=old_process_id, new_tray_pid=launch.tray_pid,
             service_pids=launch.service_pids, swapped_from=swapped_from,
             backup=backup_path,
@@ -633,16 +636,14 @@ def restart_source_tray(
     windows = find_windows()
     process_ids = {window.process_id for window in windows}
     if len(process_ids) != 1:
-        return RestartResult(False, "拒绝重启：没有找到唯一且命令行匹配的源码托盘窗口")
+        return RestartResult(False, _text("tray.restart.sourceWindowNotUnique"))
     old_process_id = next(iter(process_ids))
     argv = parse_windows_command_line(command_lines().get(old_process_id))
     if len(argv) < 2 or "peach.tray" not in " ".join(argv):
-        return RestartResult(False, "拒绝重启：托盘窗口的命令行里没有 peach.tray，"
-                                    "照原样重启会起错东西",
-                             old_tray_pid=old_process_id)
+        return RestartResult(False, _text("tray.restart.notSourceTray"), old_tray_pid=old_process_id)
     service_executable = Path(argv[0]).parent / "peach.exe"
     if not service_executable.is_file():
-        return RestartResult(False, f"拒绝重启：源码托盘旁没有服务入口 {service_executable}",
+        return RestartResult(False, _text("tray.restart.sourceServiceMissing", path=service_executable),
                              old_tray_pid=old_process_id)
     refusal = prepare.before_stop(old_process_id) if prepare is not None else None
     if refusal:
@@ -658,7 +659,7 @@ def restart_source_tray(
         start_argv(argv), find_windows, service_executable,
         timeout=timeout, services=services, sleep=sleep)
     if launch.ready:
-        return _finished(True, "源码托盘已正常重启并重新拥有 HTTP/HTTPS 子服务", prepared,
+        return _finished(True, _text("tray.restart.sourceRestarted"), prepared,
                          old_tray_pid=old_process_id, new_tray_pid=launch.tray_pid,
                          service_pids=launch.service_pids)
     return _finished(False, launch.failure(), prepared, old_tray_pid=old_process_id,

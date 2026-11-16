@@ -68,7 +68,7 @@ describe('馆藏与口味分享', () => {
             await route.fulfill({ json: { ...await response.json(), library_sharing: state } });
           });
           await page.route('**/api/configuration/library-sharing/preview', route => route.fulfill({ json: {
-            token: 'preview-token', schema: 4, bytes: 128,
+            token: 'preview-token', schema: 4, bytes: 128, compressed_bytes: 64,
             data: { schema: 4, period: '2026-W42', library: [{ code: 'EXM-001', manual_tags: ['长标签'.repeat(500)] }],
               preferences: { performer: [] }, coverage: { uncoded_items: 0 } },
           } }));

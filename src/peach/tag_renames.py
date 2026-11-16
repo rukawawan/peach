@@ -48,7 +48,7 @@ def collect(connection: Connection) -> list[dict]:
         source_id = _entity_id(connection, old)
         entity = ""
         if source_id is not None:
-            entity = "合并" if _entity_id(connection, new) is not None else "改名"
+            entity = "merge" if _entity_id(connection, new) is not None else "rename"
         rows.append({"old": old, "new": new, "assets": curated - merged, "merged": merged,
                      "raw_kept": kept, "entity": entity})
     for old in sorted(DROPPED_TAGS):
@@ -58,7 +58,7 @@ def collect(connection: Connection) -> list[dict]:
         kept = connection.execute(
             f"SELECT count(*) FROM asset_tag WHERE tag=? AND source IN ({holes})",
             (old, *raw)).fetchone()[0]
-        entity = "删除" if _entity_id(connection, old) is not None else ""
+        entity = "delete" if _entity_id(connection, old) is not None else ""
         rows.append({"old": old, "new": "", "assets": curated, "merged": 0,
                      "raw_kept": kept, "entity": entity})
     rows.sort(key=lambda row: (-(row["assets"] + row["merged"]), row["old"]))
@@ -66,8 +66,8 @@ def collect(connection: Connection) -> list[dict]:
     # 预览按 `apply_rows` 的顺序推一遍，报出来的才是真会发生的事。
     claimed: set[str] = set()
     for row in rows:
-        if row["entity"] == "改名" and row["new"] in claimed:
-            row["entity"] = "合并"
+        if row["entity"] == "rename" and row["new"] in claimed:
+            row["entity"] = "merge"
         if row["entity"]:
             claimed.add(row["new"])
     return rows

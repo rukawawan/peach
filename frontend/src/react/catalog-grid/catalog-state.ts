@@ -1,6 +1,7 @@
 import { cleanTagFilter, isCatalogPath, ROUTE_STATES, STATE_ROUTES } from '@peach/legacy/core';
 import type { BarsContext, CatalogFilters } from '@peach/shell';
 
+import { lengthParam, orientParam } from '../../core/stored-values';
 import { defaultSortDir, preferredDirection, sortFromAddress } from '../../sort-preferences';
 
 export interface CatalogPreferences {
@@ -40,8 +41,8 @@ export function initialCatalogFilters(address: CatalogAddress, preferences: Cata
   return {
     loc: params.get('loc') ?? 'local,115', creator: read('creator') || '', studio: read('studio') || '',
     owner: read('owner') === 'none' ? 'none' : '', tag: cleanTagFilter(read('tag')),
-    tag_match: read('tag_match') === 'any' ? 'any' : 'all', len: read('len') || '',
-    dur_min: read('dur_min') || '', dur_max: read('dur_max') || '', orient: read('orient') || '',
+    tag_match: read('tag_match') === 'any' ? 'any' : 'all', len: lengthParam(read('len')),
+    dur_min: read('dur_min') || '', dur_max: read('dur_max') || '', orient: orientParam(read('orient')),
     region: read('region') || '', year: read('year') || '', state: ROUTE_STATES[pathname] || read('state') || '',
     ...resolveSort(read('sort'), read('dir'), preferences), seed: read('seed') || seed(),
     q: read('q') || '', jav: read('jav') || '', thumb: read('thumb') || '0',

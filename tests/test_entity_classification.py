@@ -33,9 +33,9 @@ class _Pages:
     def get(self, url):
         self.asked.append(url)
         if url in self.failing:
-            raise Unavailable('Wiki 网络请求未取得')
+            raise Unavailable('errors.performerAliasFollowup.networkFailed', {'type': 'ConnectError'})
         if url not in self.listed:
-            raise Missing('站上没有这一页')
+            raise Missing('errors.performerAliasFollowup.pageMissing')
         return Page(url, self.listed[url])
 
 
@@ -304,7 +304,7 @@ class EntityClassificationTests(unittest.TestCase):
                 classification.write_claim(self.connection,entity_id=entity_id,facet='identity',value='person',source='script:lookup',evidence='推断',**patch)
         with self.assertRaises(ValueError):
             self.claim(entity_id,'occupation','unknown_profession')
-        with self.assertRaisesRegex(ValueError,'代码判据'):
+        with self.assertRaisesRegex(ValueError,'code-rule sources'):
             classification.write_claim(self.connection,entity_id=entity_id,facet='identity',value='person',
                 source='script:identity-research',source_url='https://publisher.test/profile',
                 evidence='研究清单判断',status='observed',confidence=1)

@@ -6,6 +6,8 @@
 import { apiGet } from '../../api';
 import { queryClient } from '../query';
 import { CUSTOM_SOURCES_KEY, fetchCustomSources } from './custom-source-data';
+import { codedText } from '../../core/server-text';
+import { t } from '../../i18n';
 
 export const SCRAPING_URL = '/api/scraping';
 export const SCRAPING_SETTINGS_URL = '/api/scraping/settings';
@@ -29,6 +31,8 @@ export const AMANE_BRIDGE_KEY = ['scraping', 'amane-bridge'] as const;
 export interface Source {
   source: string;
   label: string;
+  /** 「片商官网」那样有译文的来源名带 code，其余是站方原名。 */
+  label_code?: string;
   login: string;
   accepts_cookie: boolean;
   network: string;
@@ -44,10 +48,15 @@ export interface ScrapingData {
 
 /** 一次连接检查的一项结果：来源页面，以及部分来源另有的高清图片地址。 */
 export interface Check {
+  /** 查的是哪一跳：`page` 来源页面，`cdn` 高清图片地址。`label` 是它的 zh-CN 原文。 */
+  target?: 'page' | 'cdn';
   label: string;
+  label_code?: string;
   ok: boolean;
   status?: number;
   message?: string;
+  message_code?: string;
+  message_params?: Record<string, unknown>;
   width?: number;
   height?: number;
   reason?: string;
@@ -62,12 +71,14 @@ export type CheckOutcome = 'ok' | 'auth' | 'http' | 'cooldown' | 'network' | 'sk
 export interface ReportedCheck extends Check {
   outcome: CheckOutcome;
   outcome_label: string;
+  outcome_label_code?: string;
 }
 
 /** 全部检查里的一个来源。 */
 export interface SourceReport {
   source: string;
   label: string;
+  label_code?: string;
   results: ReportedCheck[];
 }
 
@@ -89,7 +100,13 @@ export interface CoverJob {
   status: string;
   job_id?: string;
   result?: string;
-  error?: string;
+  /** `result` 与 `error` 的 code 和参数；有译文时显示译文。 */
+  result_code?: string;
+  result_params?: Record<string, unknown>;
+  error_code?: string;
+  error_params?: Record<string, unknown>;
+  /** 封面没取到时那句由几段拼成，每段一个 code。 */
+  error_parts?: { code: string; params?: Record<string, unknown> }[];
   width?: number;
   height?: number;
 }
@@ -108,7 +125,7 @@ export interface AmaneBridge {
   installed: boolean;
   installed_version: string;
   python: string;
-  sites: { source: string; label: string }[];
+  sites: { source: string; label: string; label_code?: string }[];
   job: CoverJob;
 }
 
@@ -137,9 +154,9 @@ export async function prefetchScraping(signal: AbortSignal): Promise<void> {
  *
  * 结果里的 `label` 是这一跳查的是什么；只有一跳时它就是来源页面本身，句子里不必再说一遍。 */
 export function checkText(check: Check, sourceLabel: string): string {
-  return `${sourceLabel}${check.label === '来源页面' ? '' : ' 高清图片'}`
-    + `：${check.ok ? '可连接' : '不能连接'}`
+  const target = check.target === 'cdn' ? t('manage:connectionCheck.hdImages', { source: sourceLabel }) : sourceLabel;
+  return t(check.ok ? 'manage:connectionCheck.reachableTarget' : 'manage:connectionCheck.unreachableTarget', { target })
     + (check.width ? ` · ${check.width} × ${check.height}` : '')
-    + (check.elapsed_s !== undefined ? ` · ${check.elapsed_s.toFixed(2)} 秒` : '')
-    + (check.message ? `。${check.message}` : '');
+    + (check.elapsed_s !== undefined ? t('manage:connectionCheck.secondsSuffix', { seconds: check.elapsed_s.toFixed(2) }) : '')
+    + (check.message ? t('manage:connectionCheck.messageSuffix', { message: codedText(check, 'message') }) : '');
 }

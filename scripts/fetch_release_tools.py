@@ -15,6 +15,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach.user_agent import USER_AGENT
+from peach.interface_text import dev as t
 from peach.peach_proxy import client_options, read_url
 try:
     import httpx
@@ -35,7 +36,7 @@ def standard_opener(options: dict) -> urllib.request.OpenerDirector:
         return urllib.request.build_opener()
     proxy = options.get("proxy", "")
     if proxy and urlsplit(proxy).scheme not in {"http", "https"}:
-        raise ValueError("标准库下载不支持 SOCKS 代理；请改用 HTTP 代理，或在装有 httpx 的环境中运行")
+        raise ValueError(t("fetch_release_tools.socksUnsupported"))
     return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {}))
 
 
@@ -55,7 +56,7 @@ def tool_specs(*, rclone_only: bool = False, system: str | None = None,
     arch = {"amd64": "amd64", "x86_64": "amd64", "arm64": "arm64", "aarch64": "arm64"}.get(machine)
     operating = {"Linux": "linux", "Darwin": "osx", "Windows": "windows"}.get(system)
     if not arch or not operating or (not rclone_only and system != "Linux"):
-        raise ValueError("此平台仅支持通过 --rclone-only 安装 rclone，且架构须为 amd64 或 arm64")
+        raise ValueError(t("fetch_release_tools.platformUnsupported"))
     suffix = ".exe" if system == "Windows" else ""
     stem = f"rclone-v1.75.2-{operating}-{arch}"
     rclone = ("rclone" + suffix, stem + ".zip", TOOLS[1][2], "SHA256SUMS", stem + "/rclone" + suffix)
@@ -72,7 +73,7 @@ def install(destination: Path, *, rclone_only: bool = False) -> None:
         expected = re.search(rf"^([0-9a-fA-F]{{64}})\s+\*?{re.escape(archive)}$", document, re.MULTILINE)
         content = download(f"{base}/{archive}")
         if expected is None or hashlib.sha256(content).hexdigest() != expected[1].lower():
-            raise ValueError(f"官方 CLI 的 SHA-256 不符：{name}")
+            raise ValueError(t("fetch_release_tools.shaMismatch", name=name))
         if archive.endswith(".zip"):
             with zipfile.ZipFile(io.BytesIO(content)) as package:
                 binary = package.read(member)
@@ -80,16 +81,16 @@ def install(destination: Path, *, rclone_only: bool = False) -> None:
             with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as package:
                 source = package.extractfile(member)
                 if source is None:
-                    raise ValueError(f"官方 CLI 归档缺少二进制：{name}")
+                    raise ValueError(t("fetch_release_tools.binaryMissing", name=name))
                 binary = source.read()
         target = destination / name
         target.write_bytes(binary)
         target.chmod(0o755)
-        print(f"已校验固定版本 CLI：{name}")
+        print(t("fetch_release_tools.verified", name=name))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("fetch_release_tools.description"))
     parser.add_argument("--rclone-only", action="store_true")
     args = parser.parse_args()
     install(Path("build/release-tools").resolve(), rclone_only=args.rclone_only)

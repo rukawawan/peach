@@ -49,6 +49,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: fork PR 不得用维护者身份提交
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_pr_identity.py --base "$BASE_SHA" --head "$HEAD_SHA"
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
@@ -166,11 +172,10 @@ jobs:
         run: npm --prefix frontend ci
       # 抽帧与 AV1 软件解码回归在两端执行；浏览器冒烟的 Chrome 仅在 Windows 装配。
       - name: 安装固定版本 FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
+        uses: ./.github/actions/setup-ffmpeg
         if: runner.os == 'Windows' && matrix.runtime_tools
         with:
           ffmpeg-version: "9.0.1"
-          github-token: ${{ github.token }}
       - name: 安装 macOS FFmpeg
         if: runner.os == 'macOS' && matrix.runtime_tools
         run: brew install ffmpeg
@@ -213,7 +218,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: python-${{ matrix.os }}-${{ matrix.scope }}-${{ matrix.shard_index }}
-          path: build/ci-tests.log
+          path: |
+            build/ci-tests.log
+            build/test-history/*.jsonl
           if-no-files-found: ignore
           retention-days: 14
 
@@ -281,10 +288,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm --prefix frontend ci
       - name: 安装固定版本 FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
+        uses: ./.github/actions/setup-ffmpeg
         with:
           ffmpeg-version: "9.0.1"
-          github-token: ${{ github.token }}
       - name: 指定 e2e 用的 Chrome
         shell: pwsh
         run: |
@@ -300,7 +306,7 @@ jobs:
         shell: pwsh
         run: |
           $peachBrowserFiles = @($env:BROWSER_FILES | ConvertFrom-Json)
-          & .\scripts\test.ps1 -Scope web -Focus $peachBrowserFiles
+          & .\scripts\test.ps1 -Scope web -Focus $peachBrowserFiles -RerunFailures
           if ($LASTEXITCODE -ne 0) { throw '浏览器分片未通过' }
       - name: 保存浏览器测试日志
         if: always()
@@ -312,6 +318,7 @@ jobs:
             build/agent-verification/browser/serve.log
             build/agent-verification/browser/setup-serve.log
             build/agent-verification/browser/network/*.json
+            build/test-history/*.jsonl
           if-no-files-found: ignore
           retention-days: 14
 

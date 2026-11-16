@@ -413,7 +413,7 @@ it('合演作品的格子标出人数，框选时提醒先找到她自己的脸'
   expect(cell?.textContent).toContain('15 人');
   expect(cell?.getAttribute('title')).toContain('15 人合演');
   await click(cell);
-  expect(dialog()?.textContent).toContain('DVAJ-495：15 人合演，先找到她自己的脸');
+  expect(dialog()?.textContent).toContain('DVAJ-495：15 人合演，先找到她的脸');
 });
 
 it('账号的作品画面格子在说明里注明是代表作画面、非本人', async () => {

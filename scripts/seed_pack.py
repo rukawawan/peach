@@ -22,25 +22,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import seed_pack  # noqa: E402
 from peach.config import DATABASE_PATH  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.scripting import add_ledger_write_args, open_for_write, open_readonly, verify_after_write  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=t("seed_pack.description"), formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    export = commands.add_parser("export", help="从本机账本导出种子包")
-    export.add_argument("--db", type=Path, default=DATABASE_PATH, help="账本路径")
+    export = commands.add_parser("export", help=t("seed_pack.exportHelp"))
+    export.add_argument("--db", type=Path, default=DATABASE_PATH, help=t("seed_pack.dbHelp"))
     export.add_argument("--version", default=date.today().isoformat(),
-                        help="包版本号，也是批次号的后半段；默认当天日期")
-    export.add_argument("--out", type=Path, default=seed_pack.DEFAULT_PACK, help="公共包路径；私人导出须显式指定仓库外路径")
-    export.add_argument("--previous", type=Path, help="继承累计撤销的上一份包；缺省读取现有输出文件")
-    export.add_argument("--revision", type=int, help="格式 2 的单调修订号；缺省由上一包递增")
-    export.add_argument("--withdrawals", type=Path, help="已复核的显式撤销 JSON 数组，原样继承历史撤销")
-    landing = commands.add_parser("import", help="把种子包补进本机账本")
+                        help=t("seed_pack.versionHelp"))
+    export.add_argument("--out", type=Path, default=seed_pack.DEFAULT_PACK, help=t("seed_pack.outHelp"))
+    export.add_argument("--previous", type=Path, help=t("seed_pack.previousHelp"))
+    export.add_argument("--revision", type=int, help=t("seed_pack.revisionHelp"))
+    export.add_argument("--withdrawals", type=Path, help=t("seed_pack.withdrawalsHelp"))
+    landing = commands.add_parser("import", help=t("seed_pack.importHelp"))
     add_ledger_write_args(landing)
-    landing.add_argument("--pack", type=Path, default=seed_pack.DEFAULT_PACK, help="种子包路径")
-    validation = commands.add_parser("validate", help="只校验种子包，不打开账本")
-    validation.add_argument("--pack", type=Path, default=seed_pack.DEFAULT_PACK, help="种子包路径")
+    landing.add_argument("--pack", type=Path, default=seed_pack.DEFAULT_PACK, help=t("seed_pack.packHelp"))
+    validation = commands.add_parser("validate", help=t("seed_pack.validateHelp"))
+    validation.add_argument("--pack", type=Path, default=seed_pack.DEFAULT_PACK, help=t("seed_pack.packHelp"))
     return parser
 
 
@@ -58,7 +59,7 @@ def export(args: argparse.Namespace) -> int:
     inherited = list((previous or {}).get("withdrawals", []))
     withdrawals = json.loads(args.withdrawals.read_text(encoding="utf-8")) if args.withdrawals else []
     if not isinstance(withdrawals, list):
-        raise ValueError("撤销输入必须是 JSON 数组")
+        raise ValueError(t("seed_pack.withdrawalsNotArray"))
     same_version = previous is not None and previous["version"] == args.version
     revision = args.revision if args.revision is not None else (
         max(1, previous.get("revision", 0)) if same_version else (previous or {}).get("revision", 0) + 1)
@@ -77,8 +78,7 @@ def export(args: argparse.Namespace) -> int:
     # 版本串按字典序比：ISO 日期加 `.n` 后缀在同一天十次以内单调；缺省的当天日期退不回已发过的 `.1`。
     if changed and current is not None and pack["version"] <= current:
         print(json.dumps({**summary, "written": False,
-                          "error": f"种子版本 {pack['version']} 必须比现有文件的 {current} 新：永久导入历史"
-                                   "拒绝同版本的不同内容；换一个新版本串再导"},
+                          "error": t("seed_pack.versionNotNewer", version=pack['version'], current=current)},
                          ensure_ascii=False))
         return 2
     if changed:
@@ -103,7 +103,7 @@ def land(args: argparse.Namespace) -> int:
         if not args.apply:
             report = seed_pack.plan(connection, pack)
             print(json.dumps(report, ensure_ascii=False))
-            print("dry-run；确认无误后加 --apply --backup <路径>")
+            print(t("seed_pack.dryRun"))
             return 0
         with connection:
             report = seed_pack.land(connection, pack)

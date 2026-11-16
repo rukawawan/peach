@@ -10,6 +10,7 @@ from .related import rank_related
 from .taste_preferences import preference_profile, preference_score
 from .genre_decisions import load_genre_decisions
 from .jav_discovery_metadata import discovery_metadata, source_number
+from .user_messages import UserValueError, message_fields
 from .web_state import path_version
 from .web_jav_detail import _source_fields, discovery_cover_url, visible_actors, source_performer_refs
 
@@ -149,7 +150,7 @@ def w_jav_discovery_metadata(contract, body):
     """
     action = str(body.get("action") or "start")
     if action not in ("start", "refresh", "cancel"):
-        raise ValueError("action 只能是 start、refresh 或 cancel")
+        raise UserValueError("api.javDiscovery.invalidMetadataAction")
     metadata = discovery_metadata(contract)
     if action == "cancel":
         job = metadata.cancel(body.get("job_id") or None)
@@ -166,18 +167,32 @@ def w_jav_discovery_metadata(contract, body):
 
 def _job_response(job):
     public_job = {key: value for key, value in job.items() if key not in ("codes", "error")}
-    public_job["message"] = _metadata_message(job)
-    public_job["error"] = public_job["message"] if job["status"] == "failed" else ""
+    message = message_fields(_metadata_message(job))
+    public_job.update(message)
+    failed = job["status"] == "failed"
+    public_job.update(error=message["message"] if failed else "",
+                      error_code=message["message_code"] if failed else "",
+                      error_params=message["message_params"] if failed else {})
     return {"metadata_job": public_job, **({"poll_after_ms": 3000} if job["status"] == "running" else {})}
 
 
-def _metadata_message(job):
-    messages = {"running": "正在读取作品资料", "complete": "作品资料读取完成", "failed": "作品资料未取得",
-                'cancelling': '正在取消作品资料读取', 'cancelled': '已取消作品资料读取'}
-    reasons = {"request_budget": "本轮请求预算已用完", "byte_budget": "本轮流量预算已用完",
-               "time_budget": "本轮时间预算已用完", "source_cooldown": "来源暂时不可用，已停止读取",
-               "cancelled": "已停止读取作品资料"}
-    return reasons.get(job.get("stop_reason"), messages.get(job["status"], "作品资料未取得"))
+#: 作品资料读取任务的状态说明：先看停止原因，再看状态。
+METADATA_STATUS_MESSAGES = {
+    "running": "jobMessage.webJavDiscovery.reading", "complete": "jobMessage.webJavDiscovery.complete",
+    "failed": "jobMessage.webJavDiscovery.unfetched", "cancelling": "jobMessage.webJavDiscovery.cancelling",
+    "cancelled": "jobMessage.webJavDiscovery.cancelled",
+}
+METADATA_STOP_MESSAGES = {
+    "request_budget": "jobMessage.webJavDiscovery.requestBudget", "byte_budget": "jobMessage.webJavDiscovery.byteBudget",
+    "time_budget": "jobMessage.webJavDiscovery.timeBudget", "source_cooldown": "jobMessage.webJavDiscovery.sourceCooldown",
+    "cancelled": "jobMessage.webJavDiscovery.stopped",
+}
+
+
+def _metadata_message(job) -> str:
+    """任务此刻那一句的 code。"""
+    return METADATA_STOP_MESSAGES.get(job.get("stop_reason"),
+                                      METADATA_STATUS_MESSAGES.get(job["status"], "jobMessage.webJavDiscovery.unfetched"))
 
 
 DISCOVERY_SORTS = ("taste", "release_date", "source_score", "duration", "code")
@@ -388,7 +403,7 @@ def w_jav_release_metadata(contract, body):
     """
     action = str(body.get("action") or "start")
     if action not in ("start", "cancel"):
-        raise ValueError("action 只能是 start 或 cancel")
+        raise UserValueError("api.javDiscovery.invalidReleaseMetadataAction")
     metadata = discovery_metadata(contract)
     if action == "cancel":
         job = metadata.cancel(body.get("job_id") or None)

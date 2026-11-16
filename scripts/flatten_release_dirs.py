@@ -37,6 +37,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.catalog_rules import promo_free_key, strip_promo_markers
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.migrations import sqlite_backup
 from peach.platform import translate_ledger_path
 from peach.review_csv import write_rows
@@ -132,23 +133,23 @@ def verify(operation: dict[str, str], resolve=translate_ledger_path) -> str:
     source = resolve(operation["ledger_dir"])
     target = resolve(operation["target_dir"])
     if not source.is_dir():
-        return "跳过：源目录不存在或未挂载"
+        return t("flatten_release_dirs.skipSourceMissing")
     if operation["kind"] == "collapse":
         try:
             siblings = [entry.name for entry in target.iterdir()]
         except OSError as error:
-            return f"跳过：父目录读不到（{error.__class__.__name__}）"
+            return t("flatten_release_dirs.skipParentUnreadable", error=error.__class__.__name__)
         extra = [name for name in siblings if name != source.name]
         if extra:
             try:
                 for entry in source.iterdir():
                     if entry.name.casefold() != source.name.casefold() and (target / entry.name).exists():
-                        return f"跳过：目标条目已存在（{entry.name}）"
+                        return t("flatten_release_dirs.skipEntryExists", name=entry.name)
             except OSError as error:
-                return f"跳过：子目录读不到（{error.__class__.__name__}）"
+                return t("flatten_release_dirs.skipChildUnreadable", error=error.__class__.__name__)
         return "ok"
     if target.exists():
-        return "跳过：目标名已存在"
+        return t("flatten_release_dirs.skipTargetExists")
     return "ok"
 
 
@@ -168,7 +169,7 @@ def plan_paths(connection: sqlite3.Connection,
                operations: list[dict[str, str]], *, table: str = "asset") -> list[dict[str, str]]:
     """按操作顺序（深的在前）逐条改写账本路径，返回真正会变的行。"""
     if table not in {"asset", "asset_subtitle"}:
-        raise ValueError("路径表不受支持")
+        raise ValueError(t("flatten_release_dirs.unsupportedTable"))
     indexed: dict[tuple[str, ...], list[tuple[int, dict[str, str]]]] = defaultdict(list)
     for index, operation in enumerate(operations):
         key = tuple(part.casefold() for part in PureWindowsPath(operation["ledger_dir"]).parts)
@@ -199,7 +200,7 @@ def apply_operation(operation: dict[str, str], resolve=translate_ledger_path) ->
     source = resolve(operation["ledger_dir"])
     target = resolve(operation["target_dir"])
     if source.is_symlink() or target.is_symlink():
-        raise ValueError("拒绝符号链接目录")
+        raise ValueError(t("flatten_release_dirs.symlinkRefused"))
     verification = verify(operation, resolve)
     if verification != "ok":
         raise ValueError(verification)
@@ -211,14 +212,14 @@ def apply_operation(operation: dict[str, str], resolve=translate_ledger_path) ->
         entries = list(source.iterdir())
         if any(entry.name.casefold() != source.name.casefold() and (target / entry.name).exists()
                for entry in entries):
-            raise FileExistsError("目标条目已存在")
+            raise FileExistsError(t("flatten_release_dirs.entryExists"))
         move_root = source
         try:
             if any(entry.name.casefold() == source.name.casefold() for entry in entries):
                 digest = hashlib.sha256(operation["ledger_dir"].encode("utf-8")).hexdigest()[:20]
                 move_root = source.with_name(".peach-organize-" + digest)
                 if move_root.exists() or move_root.is_symlink():
-                    raise FileExistsError("目录暂存位置已存在")
+                    raise FileExistsError(t("flatten_release_dirs.stagingExists"))
                 source.rename(move_root)
                 done.append((source, move_root))
             for entry in entries:
@@ -238,7 +239,7 @@ def apply_operation(operation: dict[str, str], resolve=translate_ledger_path) ->
     digest = hashlib.sha256(operation["ledger_dir"].encode("utf-8")).hexdigest()[:20]
     staging = target.with_name(".peach-organize-" + digest)
     if staging.exists() or staging.is_symlink():
-        raise FileExistsError("目录暂存位置已存在")
+        raise FileExistsError(t("flatten_release_dirs.stagingExists"))
     staged_child = staging / source.name
     try:
         target.rename(staging)
@@ -267,20 +268,20 @@ def rollback(done: list[tuple[Path, Path]]) -> None:
         except OSError as error:
             failures.append(f"{target} -> {source}: {error}")
     if failures:
-        raise RuntimeError("文件恢复失败：" + "；".join(failures))
+        raise RuntimeError(t("flatten_release_dirs.restoreFailed", failures=t("common.clauseSeparator").join(failures)))
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="摘掉冗余的发行物目录层与目录名广告标记")
+    parser = argparse.ArgumentParser(description=t("flatten_release_dirs.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--plan-csv", type=Path,
                         default=GENERATED_DIR / "flatten-release-dirs.csv")
     parser.add_argument("--path-csv", type=Path,
                         default=GENERATED_DIR / "flatten-release-dirs-paths.csv")
     parser.add_argument("--kind", choices=["collapse", "rename"],
-                        help="只处理一种操作；默认两种都做")
-    parser.add_argument("--apply", action="store_true", help="动文件和 ledger；默认只出计划")
-    parser.add_argument("--backup", type=Path, help="--apply 必需：写库前的 SQLite 备份路径")
+                        help=t("flatten_release_dirs.kindHelp"))
+    parser.add_argument("--apply", action="store_true", help=t("flatten_release_dirs.applyHelp"))
+    parser.add_argument("--backup", type=Path, help=t("flatten_release_dirs.backupHelp"))
     return parser
 
 
@@ -293,7 +294,7 @@ def apply_plan(connection: sqlite3.Connection, operations: list[dict[str, str]],
         connection.execute("BEGIN IMMEDIATE")
         if (plan_paths(connection, operations) != rows or
                 plan_paths(connection, operations, table="asset_subtitle") != subtitle_rows):
-            raise ValueError("冻结路径计划已失效")
+            raise ValueError(t("flatten_release_dirs.planStale"))
         for operation in operations:
             done.extend(apply_operation(operation))
         for table, changes in (("asset", rows), ("asset_subtitle", subtitle_rows)):
@@ -302,9 +303,9 @@ def apply_plan(connection: sqlite3.Connection, operations: list[dict[str, str]],
                     f"UPDATE {table} SET path=? WHERE id=? AND path=?",
                     (row["new_path"], int(row["id"]), row["old_path"])).rowcount
                 if changed != 1:
-                    raise ValueError("账本路径更新失败")
+                    raise ValueError(t("flatten_release_dirs.pathUpdateFailed"))
         if set(connection.execute("PRAGMA foreign_key_check")) - baseline_fk:
-            raise ValueError("出现新增外键问题")
+            raise ValueError(t("flatten_release_dirs.newForeignKeyIssues"))
         connection.commit()
     except Exception:
         connection.rollback()
@@ -314,7 +315,7 @@ def apply_plan(connection: sqlite3.Connection, operations: list[dict[str, str]],
 
 def run(args: argparse.Namespace) -> int:
     if args.apply and not args.backup:
-        raise SystemExit("--apply 必须同时给 --backup")
+        raise SystemExit(t("flatten_release_dirs.applyNeedsBackup"))
     connection = sqlite3.connect(args.db)
     try:
         operations = plan_operations(connection)
@@ -330,35 +331,34 @@ def run(args: argparse.Namespace) -> int:
         write_rows(args.path_csv.with_name(args.path_csv.stem + "-subtitles.csv"),
                    ["id", "old_path", "new_path"], subtitle_rows)
         collapses = sum(1 for row in ready if row["kind"] == "collapse")
-        print(f"计划 {len(operations)} 条，可执行 {len(ready)} 条"
-              f"（collapse {collapses}，rename {len(ready) - collapses}），"
-              f"影响资产路径 {len(rows)} 条、字幕路径 {len(subtitle_rows)} 条")
-        print(f"  计划 CSV：{args.plan_csv}")
-        print(f"  路径 CSV：{args.path_csv}")
-        print(f"  字幕 CSV：{args.path_csv.with_name(args.path_csv.stem + '-subtitles.csv')}")
+        print(t("flatten_release_dirs.planSummary", total=len(operations), ready=len(ready),
+                collapse=collapses, rename=len(ready) - collapses, assets=len(rows), subtitles=len(subtitle_rows)))
+        print(t("flatten_release_dirs.planCsv", path=args.plan_csv))
+        print(t("flatten_release_dirs.pathCsv", path=args.path_csv))
+        print(t("flatten_release_dirs.subtitleCsv", path=args.path_csv.with_name(args.path_csv.stem + "-subtitles.csv")))
         # 逐条打印被跳过的路径会在 GBK 控制台上崩掉（媒体名里有 emoji 和生僻字），
         # 而且量级是四位数。原因按类归并打印，明细留在计划 CSV 里。
         skipped: dict[str, int] = defaultdict(int)
         for operation in operations:
             if operation["verified"] != "ok":
-                skipped[operation["verified"].split("（")[0]] += 1
+                skipped[operation["verified"].split(t("flatten_release_dirs.detailOpen"))[0]] += 1
         for reason, count in sorted(skipped.items(), key=lambda item: -item[1]):
-            print(f"  {reason}：{count} 条")
+            print(t("flatten_release_dirs.reasonCount", reason=reason, count=count))
         if not ready:
-            print("  没有可执行的操作")
+            print(t("flatten_release_dirs.nothingReady"))
             return 0
         if not args.apply:
-            print("  未改动任何东西（加 --apply --backup 才执行）")
+            print(t("flatten_release_dirs.dryRun"))
             return 0
 
         before = connection.execute("SELECT count(*) FROM asset").fetchone()[0]
         sqlite_backup(args.db, args.backup)
-        print(f"  已备份到 {args.backup}")
+        print(t("flatten_release_dirs.backedUp", path=args.backup))
 
         apply_plan(connection, ready, rows, subtitle_rows)
 
         after = connection.execute("SELECT count(*) FROM asset").fetchone()[0]
-        print(f"  已执行 {len(ready)} 条；资产 {before} -> {after}")
+        print(t("flatten_release_dirs.applied", count=len(ready), before=before, after=after))
         return 1 if before != after else 0
     finally:
         connection.close()

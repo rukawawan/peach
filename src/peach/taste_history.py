@@ -31,9 +31,14 @@ from browserexport.browsers.common import Schema
 from browserexport.common import BrowserexportError
 import ahocorasick
 
+from . import interface_text
 from .catalog_rules import LENGTH_TAGS, TECH_TAGS
+from .catalog_vocabulary import PORTRAIT
 from .review_csv import read_rows, write_rows
 from .taste_sites import ADULT_DOMAINS, MIXED_DOMAINS, account_key, identity_context, mixed_adult, parse_url
+from .taste_words import (CATEGORY_TERMS, STOPWORDS, SUBTITLE_AND_RESTORE_TAGS, TASTE_CATEGORY_TAGS,
+                          TITLE_AMBIGUOUS_TERMS)
+from .user_messages import UserTimeoutError, UserValueError, message_fields
 
 
 @dataclass(frozen=True)
@@ -63,11 +68,6 @@ RESERVED_HANDLES = {
     "about", "account", "creator", "creators", "explore", "home", "login", "messages", "model",
     "models", "notifications", "post", "posts", "search", "settings", "share", "user", "users",
 }
-STOPWORDS = {
-    "and", "com", "download", "for", "from", "html", "http", "https", "in", "index", "is",
-    "login", "of", "one", "page", "search", "the", "this", "to", "video", "watch", "www",
-    "图片", "搜索", "视频",
-}
 TASTE_DOMAIN_SUFFIXES = {
     "cangku.moe", "coomer.st", "e-hentai.org", "exhentai.org", "f95zone.to", "fanbox.cc",
     "fansly.com", "fantia.jp", "gelbooru.com", "hanime1.me", "jable.tv", "javbus.com",
@@ -78,31 +78,7 @@ TASTE_DOMAIN_SUFFIXES = {
 }
 TASTE_DOMAIN_SUFFIXES = (TASTE_DOMAIN_SUFFIXES | ADULT_DOMAINS) - MIXED_DOMAINS
 QUERY_KEYS |= {"searchstr", "search_word", "search_query", "k", "word", "text"}
-CATEGORY_TERMS: dict[str, set[str]] = {
-    "足系": {"feet", "foot", "footjob", "soles", "toes", "足", "足交", "脚", "脚交"},
-    "3D/动画": {"3d", "animation", "blender", "daz", "sfm", "动画"},
-    "制服/角色扮演": {"cosplay", "jk", "maid", "schoolgirl", "uniform", "制服", "女仆", "角色扮演"},
-    "乳系": {"bigbreasts", "bigboobs", "boobs", "breasts", "tits", "巨乳", "乳"},
-    "口交": {"blowjob", "deepthroat", "oral", "口交", "深喉"},
-    "马眼/尿道/龟头": {"glans", "glansjob", "sounding", "urethra", "尿道", "马眼", "龟头"},
-    "ASMR/音声": {"asmr", "audio", "音声"},
-    "游戏同人": {"detroit", "detroitbecomehuman", "game", "gamecg", "hgame", "游戏", "同人"},
-    "反差/泄密/探花": {"leak", "leaked", "private", "反差", "探花", "泄密", "流出"},
-}
-TASTE_CATEGORY_TAGS: dict[str, tuple[str, ...]] = {
-    "3D/动画": ("3D动画", "游戏同人", "动漫同人"),
-    "口交": ("口交", "打扫口交", "深喉"),
-    "制服/角色扮演": ("制服", "角色扮演", "JK制服", "女仆"),
-    "足系": ("足交", "恋足", "裸足"),
-    "游戏同人": ("游戏同人", "动漫同人", "日系同人"),
-    "乳系": ("巨乳", "美乳"),
-    "马眼/尿道/龟头": ("马眼", "龟头责"),
-    "ASMR/音声": ("ASMR", "淫语"),
-    "反差/泄密/探花": ("反差", "泄密流出", "探花"),
-}
-NON_TASTE_SUMMARY_TAGS = TECH_TAGS | LENGTH_TAGS | {
-    "中文字幕", "内嵌字幕", "外挂字幕", "AI修复", "AI去码", "60fps",
-}
+NON_TASTE_SUMMARY_TAGS = TECH_TAGS | LENGTH_TAGS | SUBTITLE_AND_RESTORE_TAGS
 TAKEOUT_HISTORY_MEMBER = "Takeout/Chrome/History.json"
 TAKEOUT_ACTIVITY_MEMBERS = (
     ("chrome", "Google My Activity - Chrome", "Takeout/My Activity/Chrome/MyActivity.html"),
@@ -115,6 +91,60 @@ TAKEOUT_DATE_RE = re.compile(
     r"^(?P<date>[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2}:\d{2}\s+[AP]M) (?P<zone>HKT|UTC|GMT)$"
 )
 HONG_KONG_TIMEZONE = timezone(timedelta(hours=8), name="HKT")
+
+#: 口味证据的来源：看板榜单与发现页推荐理由里的名字在 `taste.evidence.<id>`。
+EVIDENCE_SOURCES = ("watched", "collection", "browsing", "bookmarks", "follows", "peach")
+
+
+def taste_text(code: str, params: dict | None = None, language: str = interface_text.SOURCE_LANGUAGE) -> str:
+    """渲染一句口味文字（ADR-0159）。参数可以是字符串与数字、列表（按 `labels.listSeparator` 连起来），
+    或 `taste_phrase` 给的一段（显示名，按它自己的 code 渲染）。"""
+    values = {name: _phrase_value(value, language) for name, value in (params or {}).items()}
+    return interface_text.text(f"server:{code}", values, language)
+
+
+def _phrase_value(value, language: str):
+    if isinstance(value, dict) and "code" in value:
+        return interface_text.label(f"server:{value['code']}", str(value.get("text") or ""),
+                                    {name: _phrase_value(item, language) for name, item in (value.get("params") or {}).items()},
+                                    language)
+    if isinstance(value, (list, tuple)):
+        separator = interface_text.text("server:labels.listSeparator", None, language)
+        return separator.join(str(_phrase_value(item, language)) for item in value)
+    return value
+
+
+def taste_phrase(code: str, params: dict | None = None, *, fallback: str = "") -> dict:
+    """一段要译的文字，放进别的句子的参数或列表里：`code`、`params`，以及按 zh-CN 渲染好的 `text`。
+    前端按 code 取当前语言的译文，没有译文时用 `text`；资源里没有这条 code 时 `text` 是 `fallback`。"""
+    params = dict(params or {})
+    phrase = {"code": code, "params": params, "text": fallback}
+    phrase["text"] = _phrase_value(phrase, interface_text.SOURCE_LANGUAGE)
+    return phrase
+
+
+def phrase_fields(name: str, *, code: str, params: dict | None = None) -> dict:
+    """结果里的一个显示字段：`<name>` 是按 zh-CN 渲染好的原文（给还不认 code 的前端兜底），
+    旁边是 `<name>_code` 与 `<name>_params`。"""
+    params = dict(params or {})
+    return {name: taste_text(code, params), f"{name}_code": code, f"{name}_params": params}
+
+
+def evidence_fields(sources) -> dict:
+    """榜单一行的证据来源：`evidence` 是显示名，`evidence_codes` 是并行的 code。"""
+    codes = [f"taste.evidence.{source}" for source in sources]
+    return {"evidence": [taste_text(code) for code in codes], "evidence_codes": codes}
+
+
+def category_phrase(category: str) -> dict:
+    """一个口味维度的显示名。"""
+    return taste_phrase(f"taste.category.{category}")
+
+
+def failure_row(code: str) -> dict:
+    """读取结果里一个来源没读成的原因：`error` 是按 zh-CN 渲染好的原句，配 `error_code` 与 `error_params`。
+    结果会写进分析清单，旧清单里只有 `error` 原文。"""
+    return {"error": taste_text(code), "error_code": code, "error_params": {}}
 
 
 def discover_history_sources(
@@ -219,7 +249,7 @@ def _consistent_copy(source: Path, destination: Path) -> None:
         started = time.monotonic()
         def progress(_status, _remaining, _total):
             if time.monotonic() - started > 20:
-                raise TimeoutError("浏览器历史快照未取得，请退出该浏览器后重新读取")
+                raise UserTimeoutError("errors.tasteHistory.snapshotTimeout")
         with closing(sqlite3.connect(destination)) as destination_db:
             source_db.backup(destination_db, pages=256, progress=progress)
 
@@ -375,23 +405,24 @@ def refresh_history(
         for index, source in enumerate(sources):
             def report(count=0, index=index):
                 if progress:
-                    progress(stage="reading", checked=count, total=None,
-                             message=f"读取浏览记录：第 {index + 1} / {len(sources)} 个浏览器资料，已读取 {count:,} 条")
+                    progress(stage="reading", checked=count, total=None, **message_fields(
+                        "jobMessage.tasteHistory.readingProfile",
+                        {"index": index + 1, "total": len(sources), "count": f"{count:,}"}))
             try:
                 with tempfile.TemporaryDirectory(prefix="peach-history-") as temp_dir:
                     snapshot = Path(temp_dir) / "history.sqlite"
                     if progress:
-                        progress(stage="snapshot", checked=0, total=None,
-                                 message=f"准备浏览器快照：第 {index + 1} / {len(sources)} 个资料")
+                        progress(stage="snapshot", checked=0, total=None, **message_fields(
+                            "jobMessage.tasteHistory.preparingSnapshot", {"index": index + 1, "total": len(sources)}))
                     _consistent_copy(source.path, snapshot)
                     report()
                     visits = _read_visits(snapshot, source.engine or source.browser, progress=report)
                     report(len(visits))
             except (sqlite3.DatabaseError, OSError, ValueError, TypeError, OverflowError, BrowserexportError) as error:
-                message = ("历史文件正在使用，请退出该浏览器后重新读取" if "locked" in str(error).casefold()
-                           else "浏览器历史未取得，请检查资料目录或退出浏览器后重试")
+                reason = ("errors.tasteHistory.historyInUse" if "locked" in str(error).casefold()
+                          else "errors.tasteHistory.historyNotRead")
                 results.append({"browser": source.browser, "profile": source.profile, "visits": 0,
-                                "added": 0, "status": "failed", "error": message})
+                                "added": 0, "status": "failed", **failure_row(reason)})
                 continue
             source_key = _source_key(source, host)
             from .taste_browsers import browser_snapshot_allowed
@@ -432,7 +463,7 @@ def _normalize_takeout_url(value: str) -> str:
 def _parse_takeout_date(value: str) -> datetime:
     match = TAKEOUT_DATE_RE.fullmatch(value.replace("\u202f", " "))
     if not match:
-        raise ValueError("Google My Activity 时间格式无法识别")
+        raise ValueError(f"unrecognized Google My Activity timestamp: {value!r}")
     naive = datetime.strptime(match.group("date"), "%b %d, %Y, %I:%M:%S %p")
     source_timezone = HONG_KONG_TIMEZONE if match.group("zone") == "HKT" else UTC
     return naive.replace(tzinfo=source_timezone).astimezone(UTC)
@@ -525,16 +556,16 @@ def _read_takeout_archive(path: Path) -> list[tuple[str, str, list[HistoryVisit]
         if TAKEOUT_HISTORY_MEMBER not in members and not any(
             member in members for _browser, _profile, member in TAKEOUT_ACTIVITY_MEMBERS
         ):
-            raise ValueError("Takeout 未包含可识别的浏览或搜索活动")
+            raise UserValueError("errors.tasteHistory.takeoutNoActivity")
         history_visits: list[HistoryVisit] = []
         if TAKEOUT_HISTORY_MEMBER in members:
             history_payload = json.loads(archive.read(TAKEOUT_HISTORY_MEMBER))
             history_rows = history_payload.get("Browser History")
             if not isinstance(history_rows, list):
-                raise ValueError("Takeout Chrome History 缺少 Browser History 列表")
+                raise UserValueError("errors.tasteHistory.takeoutHistoryListMissing")
             for index, row in enumerate(history_rows, 1):
                 if not isinstance(row, dict) or not row.get("url") or row.get("time_usec") is None:
-                    raise ValueError("Takeout Chrome History 含无效记录")
+                    raise UserValueError("errors.tasteHistory.takeoutHistoryRowInvalid")
                 url = str(row["url"])
                 time_usec = int(row["time_usec"])
                 digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
@@ -556,7 +587,8 @@ def _read_takeout_archive(path: Path) -> list[tuple[str, str, list[HistoryVisit]
             activity.feed(archive.read(member).decode("utf-8"))
             activity.close()
             if activity.errors:
-                raise ValueError(f"{profile} 含无法解析的活动记录：{activity.errors}")
+                raise UserValueError("errors.tasteHistory.takeoutActivityUnparsed",
+                                     {"profile": profile, "count": activity.errors})
             sources.append((browser, profile, activity.visits, activity.skipped))
     return sources
 
@@ -1115,9 +1147,9 @@ def _rank_combined(
             "peach_items": len(item_sets.get(normalized, set())),
             "entity_id": peach["entity_ids"].get(kind, {}).get(normalized),
             "representative_asset_id": peach["representatives"].get(kind, {}).get(normalized),
-            "evidence": [source for source, present in (
-                ("浏览记录", web_visits > 0), ("Peach", peach_score > 0),
-            ) if present],
+            **evidence_fields([source for source, present in (
+                ("browsing", web_visits > 0), ("peach", peach_score > 0),
+            ) if present]),
         })
     rows.sort(key=lambda row: (-float(row["score"]), -int(row["web_visits"]), str(row["name"])))
     return rows[:limit]
@@ -1139,7 +1171,7 @@ def _rank_for_source(
 def _tag_inventory(connection: sqlite3.Connection) -> dict[str, int]:
     """Count usable local tag matches without assuming every test schema is current."""
     columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(asset)")}
-    clauses = ["e.kind='tag'"]
+    clauses, parameters = ["e.kind='tag'"], []
     if "medium" in columns:
         clauses.append("a.medium='video'")
     if "disposal" in columns:
@@ -1149,14 +1181,15 @@ def _tag_inventory(connection: sqlite3.Connection) -> dict[str, int]:
     if "snapshot_path" in columns:
         clauses.append("a.snapshot_path IS NOT NULL")
     if "ctx_orient" in columns:
-        clauses.append("(a.ctx_orient IS NULL OR a.ctx_orient<>'竖屏')")
+        clauses.append("(a.ctx_orient IS NULL OR a.ctx_orient<>?)")
+        parameters.append(PORTRAIT)
     query = (
         "SELECT e.canonical_name,count(DISTINCT ae.asset_id) "
         "FROM asset_entity ae JOIN entity e ON e.id=ae.entity_id "
         "JOIN asset a ON a.id=ae.asset_id WHERE " + " AND ".join(clauses) +
         " GROUP BY e.id,e.canonical_name"
     )
-    return {str(name): int(count) for name, count in connection.execute(query)}
+    return {str(name): int(count) for name, count in connection.execute(query, parameters)}
 
 
 def _taste_category_scores(rows: list[dict[str, object]]) -> Counter[str]:
@@ -1193,46 +1226,41 @@ def _taste_analysis(
     ][:3]
     browser_only = next((name for name in browser_names if peach_categories[name] <= 0), "")
 
+    # 维度是 id，显示名由各自的 code 渲染；标签名与创作者名是内容，原样进参数。
     if browser_names and peach_names:
-        headline = f"浏览兴趣以{browser_names[0]}为主，Peach 中稳定出现{'、'.join(peach_names[:3])}。"
+        headline = phrase_fields("headline", code="taste.headline.browserAndPeach", params={
+            "category": category_phrase(browser_names[0]), "tags": peach_names[:3]})
     elif browser_names:
-        headline = f"浏览兴趣目前以{browser_names[0]}为主，Peach 观看证据仍偏少。"
+        headline = phrase_fields("headline", code="taste.headline.browserOnly",
+                                 params={"category": category_phrase(browser_names[0])})
     elif peach_names:
-        headline = f"Peach 观看行为目前更集中在{'、'.join(peach_names[:3])}。"
+        headline = phrase_fields("headline", code="taste.headline.peachOnly", params={"tags": peach_names[:3]})
     else:
-        headline = "证据还不足以形成稳定口味结论。"
+        headline = phrase_fields("headline", code="taste.headline.notEnough")
 
-    points: list[dict[str, str]] = []
+    def point(code: str, items: list) -> dict:
+        return {**phrase_fields("label", code=code),
+                **phrase_fields("text", code="taste.items", params={"items": items})}
+
+    points: list[dict[str, object]] = []
     if browser_names:
-        points.append({
-            "label": "浏览主线",
-            "text": "、".join(browser_names[:3]),
-        })
+        points.append(point("taste.point.browsing", [category_phrase(name) for name in browser_names[:3]]))
     if peach_names:
-        points.append({
-            "label": "Peach 印证",
-            "text": "、".join(peach_names),
-        })
+        points.append(point("taste.point.peach", peach_names))
     if shared:
-        points.append({
-            "label": "共同信号",
-            "text": "、".join(shared),
-        })
+        points.append(point("taste.point.shared", [category_phrase(name) for name in shared]))
     elif browser_only:
-        points.append({
-            "label": "待验证",
-            "text": browser_only,
-        })
+        points.append(point("taste.point.unverified", [category_phrase(browser_only)]))
 
     visits = int(history["visits"])
     assets = int(peach["assets"])
     explicit = int(peach["liked"]) + int(peach["disliked"])
     if visits >= 1000 and assets >= 50 and explicit >= 10:
-        confidence = ("high", "可信度较高")
+        confidence = "high"
     elif visits >= 1000 and assets >= 20:
-        confidence = ("medium", "可信度中等")
+        confidence = "medium"
     else:
-        confidence = ("early", "仍在学习")
+        confidence = "early"
 
     explore: list[dict[str, object]] = []
     used_tags: set[str] = set()
@@ -1244,16 +1272,27 @@ def _taste_analysis(
         used_tags.add(tag)
         corroborated = peach_categories[category] > 0
         explore.append({
-            "kind": "tag", "tag": tag, "title": f"探索 {tag}",
-            "detail": (
-                f"浏览信号 {int(signal):,} 次 · 馆藏 {inventory[tag]:,} 部 · "
-                + ("已有观看印证" if corroborated else "尚无观看印证")
-            ),
+            "kind": "tag", "tag": tag,
+            **phrase_fields("title", code="taste.explore.title", params={"tag": tag}),
+            **phrase_fields("detail", code=(
+                "taste.explore.corroborated" if corroborated else "taste.explore.uncorroborated"),
+                params={"signals": f"{int(signal):,}", "items": f"{inventory[tag]:,}"}),
             "items": inventory[tag], "signal": int(signal), "corroborated": corroborated,
         })
         if len(explore) == 3:
             break
 
+    return {
+        **headline,
+        "points": points,
+        "confidence": {"level": confidence, **phrase_fields("label", code=f"taste.confidence.{confidence}")},
+        "explore": explore,
+        "next_steps": _next_steps(peach, all_creators, explicit),
+    }
+
+
+def _next_steps(peach: dict[str, object], all_creators: list[dict[str, object]], explicit: int) -> list[dict[str, object]]:
+    """口味总结末尾的几步建议：关注常逛却没收的创作者、复核没打标签或没认出身份的作品、补喜欢与不喜欢。"""
     creator_leads = [
         row for row in all_creators
         if int(row["web_visits"]) >= 3 and not int(row["peach_items"])
@@ -1261,32 +1300,27 @@ def _taste_analysis(
     next_steps: list[dict[str, object]] = []
     if creator_leads:
         next_steps.append({
-            "kind": "follow", "title": "追踪常访创作者",
-            "detail": "、".join(str(row["name"]) for row in creator_leads),
+            "kind": "follow", **phrase_fields("title", code="taste.next.follow"),
+            **phrase_fields("detail", code="taste.items",
+                            params={"items": [str(row["name"]) for row in creator_leads]}),
             "route": "/subscriptions",
         })
     if int(peach["coverage"]["untagged"]) or int(peach["coverage"]["unidentified"]):
         next_steps.append({
-            "kind": "review", "title": "补齐馆藏证据",
-            "detail": (
-                f"{int(peach['coverage']['untagged'])} 项待补 Tag · "
-                f"{int(peach['coverage']['unidentified'])} 项待补身份"
-            ),
+            "kind": "review", **phrase_fields("title", code="taste.next.review"),
+            **phrase_fields("detail", code="taste.next.reviewDetail", params={
+                "untagged": int(peach["coverage"]["untagged"]),
+                "unidentified": int(peach["coverage"]["unidentified"])}),
             "route": "/review",
         })
     if explicit < 10:
         next_steps.append({
-            "kind": "feedback", "title": "去馆藏评价作品",
-            "detail": f"当前喜欢 {int(peach['liked'])} · 不合口味 {int(peach['disliked'])}",
+            "kind": "feedback", **phrase_fields("title", code="taste.next.feedback"),
+            **phrase_fields("detail", code="taste.next.feedbackDetail",
+                            params={"liked": int(peach["liked"]), "disliked": int(peach["disliked"])}),
             "route": "/",
         })
-    return {
-        "headline": headline,
-        "points": points,
-        "confidence": {"level": confidence[0], "label": confidence[1]},
-        "explore": explore,
-        "next_steps": next_steps,
-    }
+    return next_steps
 
 
 #: 每条浏览信号（身份访问在前、书签在后，与 `_HistoryRows` 同序）对应的出演者、创作者与
@@ -1384,9 +1418,9 @@ def _attach_bookmark_counts(rows, counts):
         normalized[label.casefold().strip()] += count
     for row in rows:
         row["web_bookmarks"] = normalized[row["name"].casefold().strip()]
-        row["evidence"] = [source for source, present in (
-            ("浏览记录", row["web_visits"] > row["web_bookmarks"]),
-            ("浏览器书签", row["web_bookmarks"] > 0), ("Peach", row["peach_score"] > 0)) if present]
+        row.update(evidence_fields([source for source, present in (
+            ("browsing", row["web_visits"] > row["web_bookmarks"]),
+            ("bookmarks", row["web_bookmarks"] > 0), ("peach", row["peach_score"] > 0)) if present]))
 
 
 def build_taste_dashboard(
@@ -1425,7 +1459,8 @@ def build_taste_dashboard(
     analysis = _taste_analysis(
         history, peach, all_tags, all_creators, _tag_inventory(ledger_connection),
     )
-    creator_flows: Counter[tuple[str, str]] = Counter()
+    # 前六个网站与前八位创作者之外的并成一端，键里记 None，输出时换成「其他网站」「其他创作者」。
+    creator_flows: Counter[tuple[str | None, str | None]] = Counter()
     top_creators = {name.casefold().strip() for name, _ in history["creators"].most_common(8)}
     flow_domains: Counter[str] = Counter()
     for domains in history["creator_domains"].values():
@@ -1436,8 +1471,15 @@ def build_taste_dashboard(
         for domain, count in domains.items():
             if not _is_taste_domain(domain):
                 continue
-            creator_flows[(domain if domain in top_domains else "其他网站",
-                           creator if creator in top_creators else "其他创作者")] += count
+            creator_flows[(domain if domain in top_domains else None,
+                           creator if creator in top_creators else None)] += count
+
+    def flow_end(side: str, name: str | None, other: str) -> dict:
+        return {side: name} if name is not None else phrase_fields(side, code=other)
+
+    def category_rows(scores: Counter[str]) -> list[dict]:
+        return [{**phrase_fields("name", code=f"taste.category.{name}"), "score": score}
+                for name, score in scores.most_common(20)]
     return {
         "summary": {
             "history_visits": history["visits"],
@@ -1452,13 +1494,12 @@ def build_taste_dashboard(
         },
         "sources": history["sources"],
         "activity": history["activity"],
-        "creator_flows": [{"source": source, "target": target, "value": count}
+        "creator_flows": [{**flow_end("source", source, "taste.flow.otherSites"),
+                           **flow_end("target", target, "taste.flow.otherCreators"), "value": count}
                           for (source, target), count in creator_flows.most_common()],
         "rankings": {
-            "browser_categories": [{"name": name, "score": score}
-                                   for name, score in history["categories"].most_common(20)],
-            "categories": [{"name": name, "score": score}
-                           for name, score in category_scores.most_common(20)],
+            "browser_categories": category_rows(history["categories"]),
+            "categories": category_rows(category_scores),
             "tags": tags,
             "creators": creators,
             "performers": performers,
@@ -1577,7 +1618,7 @@ def _title_genre_matcher():
     """标题复用内容词表，排除依赖来源语境的省写与单字。"""
     from .genre_taxonomy import CONTENT_GENRES, CONTENT_ALIASES, normalise_genre, resolve_genre
     matcher = ahocorasick.Automaton()
-    ambiguous = {"お掃除", "掃除", "仁王立ち", "ノーハンド", "swallow", "oral", "private", "生"}
+    ambiguous = TITLE_AMBIGUOUS_TERMS
     for raw in CONTENT_GENRES.keys() | CONTENT_ALIASES.keys() | set(CONTENT_GENRES.values()):
         term = normalise_genre(raw)
         label = resolve_genre(term)
@@ -1672,8 +1713,8 @@ def analyze_history(store_path: Path, output_dir: Path, *, since: str | None = N
         ceiling = db.execute("SELECT COUNT(*) FROM (" + query + ")", params).fetchone()[0]
         def report_analysis():
             if progress:
-                progress(stage="analyzing", checked=total, total=ceiling,
-                         message=f"分析浏览记录：已处理 {total:,} / {ceiling:,} 条")
+                progress(stage="analyzing", checked=total, total=ceiling, **message_fields(
+                    "jobMessage.tasteHistory.analyzing", {"checked": f"{total:,}", "total": f"{ceiling:,}"}))
         report_analysis()
         for source_key, visited_at, url, browser, profile, title, bookmark in db.execute(query, params):
             total += 1
@@ -1705,7 +1746,7 @@ def analyze_history(store_path: Path, output_dir: Path, *, since: str | None = N
         report_analysis()
 
     if progress:
-        progress(stage="reporting", checked=0, total=None, message="正在生成口味分析报告与候选清单")
+        progress(stage="reporting", checked=0, total=None, **message_fields("jobMessage.tasteHistory.reporting"))
 
     stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     tag_path = output_dir / f"taste-tag-candidates-{stamp}.csv"
@@ -1714,21 +1755,29 @@ def analyze_history(store_path: Path, output_dir: Path, *, since: str | None = N
     _write_candidates(tag_path, "tag", tag_visits, tag_urls, tag_sources, tag_bookmarks)
     _write_candidates(creator_path, "creator", creator_visits, creator_urls, creator_sources, creator_bookmarks)
 
+    # 报告是写给这台电脑上的人读的文件，与命令行同一个语言判断。
+    language = interface_text.local_language()
+
+    def report_text(key: str, params: dict | None = None) -> str:
+        return taste_text(f"taste.report.{key}", params, language)
+
+    nothing = report_text("none")
     lines = [
-        "# 浏览记录口味分析",
+        f"# {report_text('title')}",
         "",
-        f"- 生成时间：{datetime.now().astimezone().isoformat(timespec='seconds')}",
-        f"- 范围：{min_time or '无'} 至 {max_time or '无'}",
-        f"- 访问记录：{total - bookmarks_count:,}",
-        f"- 浏览器书签：{bookmarks_count:,}",
-        f"- 数据源：{source_count}",
-        "- 隐私：报告不含完整 URL、页面标题或原始搜索记录；所有结论均为 candidate。",
+        "- " + report_text("generatedAt", {"time": datetime.now().astimezone().isoformat(timespec="seconds")}),
+        "- " + report_text("range", {"start": min_time or nothing, "end": max_time or nothing}),
+        "- " + report_text("visits", {"count": f"{total - bookmarks_count:,}"}),
+        "- " + report_text("bookmarks", {"count": f"{bookmarks_count:,}"}),
+        "- " + report_text("sources", {"count": source_count}),
+        "- " + report_text("privacy"),
         "",
     ]
-    _append_ranking(lines, "口味维度候选", category_visits)
-    _append_ranking(lines, "Tag 候选", tag_visits)
-    _append_ranking(lines, "创作者候选", creator_visits)
-    _append_ranking(lines, "高频域名", domains)
+    categories = Counter({taste_text(f"taste.category.{name}", None, language): count
+                          for name, count in category_visits.items()})
+    for key, values in (("categories", categories), ("tags", tag_visits),
+                        ("creators", creator_visits), ("domains", domains)):
+        _append_ranking(lines, report_text, key, values)
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return {
         "visits": total - bookmarks_count,
@@ -1770,12 +1819,14 @@ def _write_candidates(
     )
 
 
-def _append_ranking(lines: list[str], title: str, values: Counter[str], limit: int = 30) -> None:
-    lines.extend([f"## {title}", "", "| 候选 | 信号数 |", "| --- | ---: |"])
+def _append_ranking(lines: list[str], report_text, section: str, values: Counter[str], limit: int = 30) -> None:
+    """报告里的一节排行。`report_text(键)` 渲染 `taste.report.<键>`，节标题在 `taste.report.section.<section>`。"""
+    lines.extend([f"## {report_text(f'section.{section}')}", "",
+                  f"| {report_text('candidate')} | {report_text('signals')} |", "| --- | ---: |"])
     if values:
         lines.extend(f"| {name.replace('|', '\\|')} | {count:,} |" for name, count in values.most_common(limit))
     else:
-        lines.append("| 未提取到 | 0 |")
+        lines.append(f"| {report_text('nothingExtracted')} | 0 |")
     lines.append("")
 
 

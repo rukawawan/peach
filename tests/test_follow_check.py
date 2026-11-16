@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from peach.follow import FollowHistoryEnd, FollowSourceError, FollowSourceRateLimited
+from peach.follow import FollowHistoryEnd, FollowSourceError, FollowSourceRateLimited, internal_error
 from peach.follow_check import plan_check, run_check
 from peach.follow_stream import FollowMediaResolver
 from peach.follow_secrets import CredentialError
@@ -152,7 +152,8 @@ class IncrementalCheckTests(_CheckCase):
 
         def enrich(candidate):
             if candidate.external_id == '2':
-                raise FollowSourceRateLimited('稍后再试', 120)
+                raise FollowSourceRateLimited('errors.followSources.rateLimited', {'provider': 'fanbox'},
+                                              retry_after=120)
             return replace(candidate, partial=False, extra={'post_type': 'image'})
 
         result = self._run(source, self._connector(enrich))
@@ -176,7 +177,7 @@ class IncrementalCheckTests(_CheckCase):
 
         def enrich(candidate):
             if candidate.external_id == '2':
-                raise InterruptedError('任务中断')
+                raise InterruptedError('task interrupted')
             return candidate
 
         with self.assertRaises(InterruptedError):
@@ -387,7 +388,7 @@ class RunCheckTests(_CheckCase):
     def test_the_end_of_history_is_recorded_not_reported_as_a_failure(self):
         source_id = self._register(provider="kemono", ref="fanbox/1",
                                    url="https://kemono.cr/fanbox/user/1")
-        result = self._run(source_id, _Connector(error=FollowHistoryEnd("400")),
+        result = self._run(source_id, _Connector(error=FollowHistoryEnd()),
                            older=True)
         self.assertTrue(result.ok)
         self.assertTrue(result.exhausted)
@@ -399,17 +400,18 @@ class RunCheckTests(_CheckCase):
     def test_a_missing_credential_is_its_own_status(self):
         source_id = self._register()
         result = self._run(source_id,
-                           _Connector(error=CredentialError("需要 user_id 与 api_key")))
+                           _Connector(error=CredentialError("errors.followSources.rule34xxxCredentialsRequired")))
         self.assertFalse(result.ok)
         self.assertEqual(result.status, "unauthorized")
-        self.assertEqual(result.error, "需要 user_id 与 api_key")
+        self.assertEqual(result.error, "rule34xxx 需要 user_id 与 api_key；请把它们写进 peach-data/secrets/follow/rule34xxx.json")
         self.assertEqual(self._row(source_id)["last_status"], "unauthorized")
         self.assertNotIn("api_key", str(result.fetch or ""))
 
     def test_a_source_failure_is_a_return_value_not_an_exception(self):
         """逐条独立成败：一个来源被挡住不该让其余来源的更新一起消失。"""
         source_id = self._register()
-        result = self._run(source_id, _Connector(error=FollowSourceError("HTTP 503")))
+        result = self._run(source_id, _Connector(error=FollowSourceError(
+            "errors.followSources.httpStatus", {"provider": "rule34xxx", "status": 503})))
         self.assertFalse(result.ok)
         self.assertEqual(result.status, "error")
         self.assertEqual(self._row(source_id)["last_status"], "error")
@@ -420,7 +422,8 @@ class RunCheckTests(_CheckCase):
         cooldown = FollowMediaResolver(transport=None, clock=lambda: clock[0])
         first = self._register()
         second = self._register(ref="another", url="https://another.fanbox.cc/")
-        limited = self._run(first, _Connector(error=FollowSourceRateLimited("HTTP 429", 120)),
+        limited = self._run(first, _Connector(error=FollowSourceRateLimited(
+                                "errors.followSources.rateLimited", {"provider": "fanbox"}, retry_after=120)),
                             cooldown=cooldown)
         self.assertFalse(limited.ok)
         self.assertEqual(self._row(first)["last_status"], "error")
@@ -487,7 +490,7 @@ class _PagedConnector(_Connector):
     def fetch(self, ref, *, etag=None, last_modified=None, page=0):
         self.calls.append({"ref": ref, "etag": etag,
                            "last_modified": last_modified, "page": page})
-        value = self.pages.get(page, FollowHistoryEnd("没有更多历史内容"))
+        value = self.pages.get(page, FollowHistoryEnd())
         if isinstance(value, Exception):
             raise value
         return value
@@ -535,7 +538,7 @@ class InitialHistoryTests(_CheckCase):
 
     def test_failed_first_check_retries_with_the_same_history_boundary(self):
         source = self._register()
-        self._run(source, _Connector(error=FollowSourceError('offline')), initial_days=30)
+        self._run(source, _Connector(error=internal_error('offline')), initial_days=30)
         result = self._run(source, _Connector(_fetch(candidates=self.candidates())), initial_days=0)
         self.assertEqual(result.history_skipped, 1)
 
@@ -655,7 +658,7 @@ class InitialHistoryTests(_CheckCase):
 
         def evidence(fetch, moment):
             if fetch.request_url.endswith('/1'):
-                raise FollowSourceError('immutable follow snapshot collision')
+                raise internal_error('immutable follow snapshot collision')
             return persist(fetch, moment)
 
         with mock.patch.object(self.store, '_persist_evidence', evidence):

@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT/'src'))
 from peach import entity_identity_research as research  # noqa: E402
 from peach.config import DATABASE_PATH, GENERATED_DIR, SECRETS_DIR  # noqa: E402
 from peach.fsutil import atomic_write_text  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.performer_alias_followup import WikiSitePages  # noqa: E402
 from peach.scripting import open_readonly  # noqa: E402
 from peach.sources.seesaa import AV_NEME, SEESAA  # noqa: E402
@@ -38,14 +39,14 @@ def targets(connection, entity_ids):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='按页名查日本资料站，产出创作者身份清单')
+    parser = argparse.ArgumentParser(description=t('research_creator_identity_wikis.description'))
     parser.add_argument('--db', type=Path, default=DATABASE_PATH)
-    parser.add_argument('--output', type=Path, required=True, help='身份清单 JSON')
-    parser.add_argument('--entity', type=int, action='append', default=[], help='只查这些实体，可重复')
+    parser.add_argument('--output', type=Path, required=True, help=t('research_creator_identity_wikis.outputHelp'))
+    parser.add_argument('--entity', type=int, action='append', default=[], help=t('research_creator_identity_wikis.entityHelp'))
     parser.add_argument('--cache-dir', type=Path, default=GENERATED_DIR/'provider-cache'/'seesaa-pages',
-                        help='页缓存，缺省与补别名、查创作者身份两条后继共用')
-    parser.add_argument('--cooldown-root', type=Path, default=SECRETS_DIR, help='来源冷却记录，缺省与服务共用')
-    parser.add_argument('--max-requests', type=int, default=80, help='每站本批请求上限')
+                        help=t('research_creator_identity_wikis.cacheDirHelp'))
+    parser.add_argument('--cooldown-root', type=Path, default=SECRETS_DIR, help=t('research_creator_identity_wikis.cooldownRootHelp'))
+    parser.add_argument('--max-requests', type=int, default=80, help=t('research_creator_identity_wikis.maxRequestsHelp'))
     args = parser.parse_args()
     connection = open_readonly(args.db)
     try:

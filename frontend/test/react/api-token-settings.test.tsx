@@ -35,7 +35,7 @@ const render = (node: ReactNode) => mount(<QueryClientProvider client={queryClie
 
 it('确认文案按访问方式说清谁要重新登录', () => {
   expect(rotationEffect('password', false)).toContain('用访问密码登录的浏览器不受影响');
-  expect(rotationEffect('legacy', false)).toContain('其他浏览器现在用这串口令登录，会全部退出');
+  expect(rotationEffect('legacy', false)).toContain('用这串口令登录的其他浏览器会退出');
   expect(rotationEffect('open', false)).toContain('浏览器不需要登录，不受影响');
   expect(rotationEffect('password', true)).toContain('另一台电脑要换成同一份口令文件');
   for (const mode of ['password', 'legacy', 'open'] as const) {

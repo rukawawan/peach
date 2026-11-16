@@ -131,7 +131,7 @@ class ReplaceOriginalTests(unittest.TestCase):
         def flaky(source, target):
             calls.append(Path(target).name)
             if len(calls) == 2:
-                raise OSError("网盘断开")
+                raise OSError("cloud drive disconnected")
             return real(source, target)
 
         with mock.patch.object(mp4recover.os, "replace", flaky), self.assertRaises(OSError):

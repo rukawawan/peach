@@ -171,6 +171,12 @@ body[data-surface="/trash"] .peach-react button[data-media-title] {
   --card-meta-tags: calc(var(--fs-xs) * 1.45 + var(--tag-pad-y) * 2 + 2px);
   --card-meta-block: calc(var(--fs-md) * 2.7 + 12px + var(--card-meta-byline) + var(--card-meta-tags));
 }
+/* 卡宽不到 408px 时署名把日期与体积折到第二行（折行规则见署名行那一节），估计跟着按两行算。 */
+@container media-card (width < 408px) {
+  body:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-follow-item], [data-jav-card], [data-variant="next"]) [data-media-meta] {
+    --card-meta-byline: 38px;
+  }
+}
 .peach-react [data-media-card]:not([data-variant="next"]) :is([data-media-pic], [data-media-meta]) { content-visibility: auto; }
 .peach-react [data-media-card]:not([data-variant="next"]) [data-media-meta] {
   flex-shrink: 0;
@@ -727,10 +733,17 @@ body:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-follo
   -webkit-box-orient: vertical;
 }
 .peach-react [data-media-next-reason]:focus-visible { outline: 2px solid var(--tungsten); outline-offset: 2px; }
-/* 窄卡片把日期与体积移到独立一行，保留署名的截断与完整日期。 */
+/* 窄卡片把日期与体积移到独立一行，保留署名的截断与完整日期。折不折行只看卡宽，不看文字栏宽：
+ * 文字栏宽随叠几个头像而变，屏外卡的元信息区高度却是按卡宽给的固定估计，两者对不上，卡片进视口
+ * 才长高，视口被挤开。单头像卡的文字栏比卡窄 48px，408px 卡宽对应 360px 文字栏；头像多的卡
+ * 卡宽够时也排一行，名字截得短一些。JAV 卡的排版另见 `../jav/jav.css`，仍按文字栏宽折行。 */
+@container media-card (width < 408px) {
+  .peach-react [data-media-card]:not([data-variant="next"], [data-jav-card]) [data-media-byline] { flex-wrap: wrap; row-gap: 2px; }
+  .peach-react [data-media-card]:not([data-variant="next"], [data-jav-card]) [data-media-facts] { flex-basis: 100%; }
+}
 @container media-meta (width < 360px) {
-  .peach-react [data-media-card]:not([data-variant="next"]) [data-media-byline] { flex-wrap: wrap; row-gap: 2px; }
-  .peach-react [data-media-card]:not([data-variant="next"]) [data-media-facts] { flex-basis: 100%; }
+  .peach-react [data-media-card][data-jav-card] [data-media-byline] { flex-wrap: wrap; row-gap: 2px; }
+  .peach-react [data-media-card][data-jav-card] [data-media-facts] { flex-basis: 100%; }
 }
 @container media-meta (width < 200px) {
   .peach-react [data-media-card]:not([data-variant="next"]) [data-media-who-more] { display: none; }
@@ -818,12 +831,11 @@ body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card] [data-media-tags] { flex-wrap: nowrap; align-items: flex-start; height: 38px; overflow: hidden; }
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-text] > [data-media-tags] { margin-top: -4px; }
 body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card] [data-media-tag]:nth-child(n+2) { display: none; }
-/* 密集一档的署名始终一行，窄卡不像宽松档那样把日期折到下一行：屏外卡的高度靠元信息区的固定估计，
-   折不折行取决于文字栏宽，而文字栏宽又随头像叠几个而变，估计跟不上，往回滚时整页会跳。
-   放不下时作者名先省略，再依次让出「等 N 人」、体积，最窄时日期也让出。 */
+/* 密集一档的署名始终一行，窄卡也不像宽松档那样把日期折到下一行，屏外卡按标题、署名、标签
+   各一行估高。放不下时作者名先省略，再依次让出「等 N 人」、体积，最窄时日期也让出。 */
+body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-facts] { flex-basis: auto; }
 @container media-meta (width < 360px) {
   body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) :is([data-media-who-more], [data-media-size]) { display: none; }
-  body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-facts] { flex-basis: auto; }
 }
 @container media-meta (width < 160px) {
   body[data-density="dense"]:not([data-surface="/trash"]) .peach-react [data-media-card]:not([data-variant="next"]) [data-media-facts] { display: none; }

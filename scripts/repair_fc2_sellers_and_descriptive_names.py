@@ -5,7 +5,7 @@
 
 - FC2 番号上厂牌不是 `FC2-PPV` 的作品，厂牌改成 `FC2-PPV`、关系改挂到 `FC2-PPV` 实体；
   改完不再有作品的卖家厂牌实体删掉。卖家名留在候选证据的 `label` 上，账本没有这一列。
-- 规范名是描述性称呼、且全部关系都由自动落库写下的女优实体：连同 `演员:` 标签删掉，
+- 规范名是描述性称呼、且全部关系都由自动落库写下的女优实体：连同 `performer:` 标签删掉，
   那几条自动批准的出演者决定一并撤掉，让这几部片按新判据重新排进人工队列；头像文件
   挪进 `avatars-superseded/`，不删。
 
@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.config import GENERATED_DIR  # noqa: E402
 from peach.field_owners import write_owned_fields  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.metadata_alias_resolve import is_descriptive  # noqa: E402
 from peach.metadata_auto_apply import _fc2_seller_as_label  # noqa: E402
 from peach.scripting import (  # noqa: E402
@@ -63,12 +64,12 @@ def descriptive_performers(connection) -> list[dict]:
 
 
 def repair_sellers(connection, assets: list[dict], stamp: str) -> dict[str, int]:
-    done = {"厂牌改写": 0, "关系改挂": 0, "卖家实体": 0}
+    done = {"studios": 0, "links": 0, "sellers": 0}
     if not assets:
         return done
     ids = [row["id"] for row in assets]
     write = write_owned_fields(connection, ids, {"studio": fc2.STUDIO}, OWNER)
-    done["厂牌改写"] = write.assets if "studio" in write.written else 0
+    done["studios"] = write.assets if "studio" in write.written else 0
     marks = ",".join("?" * len(ids))
     moved = [int(row[0]) for row in connection.execute(
         f"SELECT id FROM asset WHERE id IN ({marks}) AND studio=?", (*ids, fc2.STUDIO))]
@@ -93,12 +94,12 @@ def repair_sellers(connection, assets: list[dict], stamp: str) -> dict[str, int]
             "INSERT OR IGNORE INTO asset_entity(asset_id,entity_id,role,source,confidence,"
             "metadata_json,first_seen_at,last_seen_at) VALUES(?,?,'studio',?,1.0,'{}',?,?)",
             (asset_id, platform_id, OWNER, stamp, stamp))
-        done["关系改挂"] += 1
+        done["links"] += 1
     for entity_id in sorted(sellers):
         connection.execute(
             "DELETE FROM entity WHERE id=? AND kind='studio' "
             "AND NOT EXISTS(SELECT 1 FROM asset_entity WHERE entity_id=?)", (entity_id, entity_id))
-        done["卖家实体"] += connection.execute("SELECT changes()").fetchone()[0]
+        done["sellers"] += connection.execute("SELECT changes()").fetchone()[0]
     return done
 
 
@@ -125,13 +126,13 @@ def move_aside(paths: list[Path], superseded: Path) -> int:
 
 
 def drop_performers(connection, performers: list[dict]) -> dict[str, int]:
-    done = {"女优实体": 0, "演员标签": 0, "撤回决定": 0}
+    done = {"performers": 0, "tags": 0, "decisions": 0}
     for person in performers:
         for asset_id in person["assets"]:
             connection.execute(
                 "DELETE FROM asset_tag WHERE asset_id=? AND tag=? AND source LIKE 'javinizer:%'",
-                (asset_id, f"演员:{person['name']}"))
-            done["演员标签"] += connection.execute("SELECT changes()").fetchone()[0]
+                (asset_id, f"performer:{person['name']}"))
+            done["tags"] += connection.execute("SELECT changes()").fetchone()[0]
             key = f"asset:{asset_id}:performers"
             decision = connection.execute(
                 "SELECT note FROM review_decision WHERE category='metadata_fields' AND item_key=?"
@@ -140,14 +141,14 @@ def drop_performers(connection, performers: list[dict]) -> dict[str, int]:
                 connection.execute(
                     "DELETE FROM review_decision WHERE category='metadata_fields' AND item_key=?",
                     (key,))
-                done["撤回决定"] += 1
+                done["decisions"] += 1
         connection.execute("DELETE FROM entity WHERE id=? AND kind='performer'", (person["id"],))
-        done["女优实体"] += connection.execute("SELECT changes()").fetchone()[0]
+        done["performers"] += connection.execute("SELECT changes()").fetchone()[0]
     return done
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("repair_fc2_sellers_and_descriptive_names.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--generated-root", type=Path, default=GENERATED_DIR)
     return parser
@@ -162,13 +163,15 @@ def main(argv: list[str] | None = None) -> int:
         assets = seller_assets(connection)
         performers = descriptive_performers(connection)
         for row in assets:
-            print(f" - 厂牌 {row['code']:<20} {row['studio']} → {fc2.STUDIO}")
+            print(t("repair_fc2_sellers_and_descriptive_names.studioRow", code=f"{row['code']:<20}",
+                    studio=row['studio'], target=fc2.STUDIO))
         for person in performers:
-            print(f" - 女优 {person['id']:>6} {person['name'][:30]}（{len(person['assets'])} 部）")
+            print(t("repair_fc2_sellers_and_descriptive_names.performerRow", id=f"{person['id']:>6}",
+                    name=person['name'][:30], count=len(person['assets'])))
         files = avatar_files(performers, avatar_roots)
         if not args.apply:
-            print(f"dry-run：厂牌 {len(assets)} 部，女优 {len(performers)} 位，头像文件 "
-                  f"{len(files)} 个；加 --apply --backup <路径> 才真的写。")
+            print(t("repair_fc2_sellers_and_descriptive_names.dryRun", studios=len(assets),
+                    performers=len(performers), files=len(files)))
             return 0
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         before = counts_of(connection, EXTRA_COUNTS)
@@ -178,10 +181,10 @@ def main(argv: list[str] | None = None) -> int:
         done = repair_sellers(connection, assets, stamp)
         done.update(drop_performers(connection, performers))
         connection.commit()
-        done["头像文件"] = move_aside(files, superseded)
+        done["avatars"] = move_aside(files, superseded)
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print("写入：" + "，".join(f"{key} {value}" for key, value in done.items()))
+        print(t("repair_fc2_sellers_and_descriptive_names.written", done))
         for key in sorted(before):
             print(f"  {key}: {before[key]} -> {after[key]}")
         print(f"integrity_check={integrity} foreign_key_check={violations}")

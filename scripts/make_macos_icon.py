@@ -23,6 +23,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import PROJECT_ROOT
+from peach.interface_text import dev as t
 
 
 #: macOS 图标网格：内容占画布的比例，以及圆角半径占内容边长的比例。
@@ -65,7 +66,7 @@ def build(source: Image.Image, destination: Path) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="生成 macOS 风格的 .icns 图标")
+    parser = argparse.ArgumentParser(description=t("make_macos_icon.description"))
     parser.add_argument("--source", type=Path,
                         default=PROJECT_ROOT / "resources" / "peach-logo.png")
     parser.add_argument("--output", type=Path,
@@ -75,9 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> int:
     if not args.source.is_file():
-        raise SystemExit(f"找不到源图：{args.source}")
+        raise SystemExit(t("make_macos_icon.sourceMissing", source=args.source))
     output = build(Image.open(args.source), args.output)
-    print(f"已生成 {output}（{output.stat().st_size // 1024} KB）")
+    print(t("make_macos_icon.done", output=output, size=output.stat().st_size // 1024))
     return 0
 
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .user_messages import UserRuntimeError
 
 MIGRATION_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migration(
@@ -33,7 +34,7 @@ def discover(directory: Path) -> list[Migration]:
     # 直接拒绝。目录缺失的真实原因通常是 `pip install .`（非 editable）——wheel 只装
     # `src/` 下的包，仓库根的 `migrations/` 不在里面。
     if not directory.is_dir():
-        raise FileNotFoundError(f"migration 目录不存在：{directory}")
+        raise FileNotFoundError(f"migration directory does not exist: {directory}")
     migrations: list[Migration] = []
     for path in sorted(directory.glob("[0-9][0-9][0-9][0-9]_*.sql")):
         version, name = path.stem.split("_", 1)
@@ -42,7 +43,7 @@ def discover(directory: Path) -> list[Migration]:
         migrations.append(Migration(version, name, path, sql, checksum))
     versions = [m.version for m in migrations]
     if len(versions) != len(set(versions)):
-        raise ValueError("migration 版本重复")
+        raise ValueError("duplicate migration versions")
     return migrations
 
 
@@ -68,10 +69,10 @@ def plan(db_path: Path, directory: Path) -> tuple[list[Migration], list[Migratio
         connection.close()
     unknown = set(done) - {migration.version for migration in all_migrations}
     if unknown:
-        raise RuntimeError('数据库包含当前程序不支持的迁移，请使用匹配版本或升级前备份')
+        raise UserRuntimeError('errors.migrations.unsupportedMigrations')
     for migration in all_migrations:
         if migration.version in done and done[migration.version] != migration.checksum:
-            raise RuntimeError(f"已应用 migration {migration.version} 的 checksum 已变化")
+            raise UserRuntimeError("errors.migrations.checksumChanged", {"version": migration.version})
     return all_migrations, [m for m in all_migrations if m.version not in done]
 
 
@@ -118,12 +119,27 @@ def needs_foreign_keys_off(sql: str) -> bool:
     return False
 
 
-def upgrade(db_path: Path, directory: Path, backup_path: Path | None = None) -> list[Migration]:
+#: 带进度的迁移前备份每步复制的页数：4 KiB 一页时每步 4 MiB。300 MB 的库在本机 SSD 上分步与整份一次复制
+#: 同样一秒多，每秒回调几十次；慢到 50 MB/s 的盘每秒仍有十来次，页面每 2 秒取一次进度总能看到在走。
+BACKUP_PAGES = 1024
+
+
+def upgrade(db_path: Path, directory: Path, backup_path: Path | None = None, *, progress=None) -> list[Migration]:
+    """执行待做的迁移；给了 `backup_path` 就先整份备份。
+
+    `progress(stage, percent)`：备份时按页报 `("backup", 0–100)`，开始执行迁移脚本时报一次 `("apply", None)`。"""
     _, pending = plan(db_path, directory)
     if not pending:
         return []
     if backup_path is not None:
-        sqlite_backup(db_path, backup_path)
+        if progress is None:
+            sqlite_backup(db_path, backup_path)
+        else:
+            progress("backup", 0)
+            sqlite_backup(db_path, backup_path, pages=BACKUP_PAGES, progress=lambda _status, remaining, total: progress(
+                "backup", (total - remaining) * 100 // total if total else 100))
+    if progress is not None:
+        progress("apply", None)
 
     connection = sqlite3.connect(db_path)
     try:
@@ -148,8 +164,8 @@ def upgrade(db_path: Path, directory: Path, backup_path: Path | None = None) -> 
                     broken = connection.execute("PRAGMA foreign_key_check").fetchall()
                     if broken:
                         raise RuntimeError(
-                            f"migration {migration.version} 关闭外键后留下 {len(broken)} 条"
-                            f"违约行：{broken[:5]}")
+                            f"migration {migration.version} left {len(broken)} foreign key"
+                            f" violations with foreign keys off: {broken[:5]}")
                 connection.commit()
             except BaseException:
                 if connection.in_transaction:

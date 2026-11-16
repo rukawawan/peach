@@ -63,12 +63,12 @@ class PerformerLocalizationTests(unittest.TestCase):
              (10, 21, "r18:performer"), (11, 22, "r18:performer")])
         self.con.executemany(
             "INSERT INTO asset_tag(asset_id,tag,confidence,source) VALUES(?,?,1.0,'r18:performer')",
-            [(1, "演员:Alice Shaku"), (2, "演员:Mio Hayakawa"),
-             (3, "演员:吉川蓮"), (4, "演员:Unknown Roman"),
-             (5, "演员:Hitomi Hoshiya"), (6, "演员:斎藤満里奈"),
-             (7, "演员:野々宮蘭"), (8, "演员:飯岡かなこ"),
-             (9, "演员:安斋拉拉"), (10, "演员:\u200c斋藤亚美里"),
-             (11, "演员:斋藤未来")])
+            [(1, "performer:Alice Shaku"), (2, "performer:Mio Hayakawa"),
+             (3, "performer:吉川蓮"), (4, "performer:Unknown Roman"),
+             (5, "performer:Hitomi Hoshiya"), (6, "performer:斎藤満里奈"),
+             (7, "performer:野々宮蘭"), (8, "performer:飯岡かなこ"),
+             (9, "performer:安斋拉拉"), (10, "performer:\u200c斋藤亚美里"),
+             (11, "performer:斋藤未来")])
         self.con.execute(
             "INSERT INTO entity_external_ref(entity_id,provider,external_kind,external_id) "
             "VALUES(15,'r18','performer_name','星谷瞳')")
@@ -154,11 +154,11 @@ class PerformerLocalizationTests(unittest.TestCase):
             "SELECT alias FROM entity_alias WHERE entity_id=10")}
         self.assertTrue({"Alice Shaku", "釈アリス", "しゃくありす", "釋愛麗絲"} <= aliases)
         tags = dict(self.con.execute("SELECT asset_id,tag FROM asset_tag ORDER BY asset_id"))
-        self.assertEqual(tags[1], "演员:释爱丽丝")
-        self.assertEqual(tags[2], "演员:吉川莲")
-        self.assertEqual(tags[3], "演员:吉川莲")
-        self.assertEqual(tags[4], "演员:未収録花子")
-        self.assertEqual(tags[5], "演员:星谷瞳")
+        self.assertEqual(tags[1], "performer:释爱丽丝")
+        self.assertEqual(tags[2], "performer:吉川莲")
+        self.assertEqual(tags[3], "performer:吉川莲")
+        self.assertEqual(tags[4], "performer:未収録花子")
+        self.assertEqual(tags[5], "performer:星谷瞳")
         self.assertEqual(counts["merged"], 1)
         self.assertEqual(self.con.execute("PRAGMA foreign_key_check").fetchall(), [])
 
@@ -222,8 +222,8 @@ class PerformerLocalizationTests(unittest.TestCase):
         # 旧字形留成别名，否则来源那边再抓一次就又建一个新实体。
         self.assertEqual(aliases["斎藤満里奈"], KANJI_ALIAS_SOURCE)
         tags = dict(self.con.execute("SELECT asset_id,tag FROM asset_tag ORDER BY asset_id"))
-        self.assertEqual(tags[6], "演员:斋藤满里奈")
-        self.assertEqual(tags[7], "演员:野野宫兰")
+        self.assertEqual(tags[6], "performer:斋藤满里奈")
+        self.assertEqual(tags[7], "performer:野野宫兰")
 
     def test_simplified_name_colliding_with_an_existing_entity_is_a_conflict(self):
         """换完字形撞上库里已有的同名实体时不猜，交给人合并。"""
@@ -313,8 +313,8 @@ class PerformerLocalizationTests(unittest.TestCase):
         self.assertEqual(rows[18]["entry_name"], "飯岡かなこ")
         self.assertEqual(rows[18]["name_changed"], 1)
         self.assertIn("/dm3/cn/actresses/", rows[18]["url"])
-        self.assertEqual(rows[18]["cn_status"], "假名规范名，中文来源未取得")
-        self.assertEqual(rows[14]["cn_status"], "非发行艺人，不判中译")
+        self.assertEqual(rows[18]["cn_status"], "kana-name-no-chinese-source")
+        self.assertEqual(rows[14]["cn_status"], "not-release-performer")
         self.assertEqual(rows[14]["url"], "")
 
     def test_entry_audit_uses_the_source_glyphs_for_missav(self):
@@ -328,7 +328,7 @@ class PerformerLocalizationTests(unittest.TestCase):
                          "%E4%B8%83%E6%B2%A2%E3%81%BF%E3%81%82"}]})
         rows = {row["entity_id"]: row for row in audit_entries(self.con, directory)}
         self.assertEqual(rows[18]["entry_name"], "七沢みあ")
-        self.assertEqual(rows[18]["directory_status"], "已匹配")
+        self.assertEqual(rows[18]["directory_status"], "matched")
         self.assertEqual(rows[18]["url"], "https://missav.ws/dm3/cn/actresses/"
                          "%E4%B8%83%E6%B2%A2%E3%81%BF%E3%81%82")
 

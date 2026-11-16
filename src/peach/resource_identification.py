@@ -16,6 +16,8 @@ import time
 from pathlib import Path, PureWindowsPath
 
 from .catalog_rules import is_jav_code, strip_promo_markers
+from .coded_text import Said, parallel
+from .content_words import QUALITY_TAIL_WORDS
 from .entities import canonicalize_entity_name, collapse_repeated_entity_name
 from .library_processing import FIELDS, LABELS
 from .review_csv import read_rows, write_rows
@@ -34,10 +36,9 @@ _SEPARATOR = re.compile(r"[._\-—+]+")
 #: 无空格英文（`YouGetFootjobStandingFromStarttoFinish9`）按大小写与字母数字边界拆词。
 _WORD_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])")
 #: 尾部画质与版本标签可以叠多层（`...-uncensored-HD`、`...MP4-P2P`），循环剥到不动。
-_QUALITY_TAIL = re.compile(
-    r"[-_.\s\[\]()【】]+(?:uncensored|無修正|无码|無碼|破解|中文字幕|中字|中文|完整版|全集|"
-    r"原版|无水印|無水印|4k|2160p|1440p|1080p|720p|hd|fhd|sd|xxx|p2p|mp4|mov|avi|wmv)$",
-    re.I)
+_QUALITY_TAIL = re.compile(rf"[-_.\s\[\]()【】]+(?:{QUALITY_TAIL_WORDS})$", re.I)
+#: 联网识别给出的候选都带这一句提醒。
+ONLINE_WARNING = Said("labels.resourceIdentification.onlineCandidate")
 _TRAILING_BRACKET = re.compile(r"[-_.\s]*(?:\[[^\[\]]{1,24}\]|【[^【】]{1,24}】|\([^()]{1,24}\))$")
 
 
@@ -303,7 +304,7 @@ def ingest_results(
             "value": value,
             "display_value": "、".join(entry["name"] for entry in value)
             if field == "performers" else str(value),
-            "warnings": ["联网识别候选，需核对来源页"],
+            "warnings": [ONLINE_WARNING], **parallel("warning", [ONLINE_WARNING]),
             "catalog_evidence": {},
             "wiki_evidence": {},
             "raw_snapshot": note or source_url,

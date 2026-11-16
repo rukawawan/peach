@@ -241,6 +241,19 @@ class DiscoverTests(_DiscoveryCase):
         kemono = next(c for c in found.candidates if c.provider == "kemono")
         self.assertEqual(kemono.evidence, "创作者名精确匹配")
 
+    def test_why_a_candidate_matched_reads_in_the_interface_language(self):
+        """依据与没标题的线程名都是带 code 的一句，英文界面拿到英文（ADR-0159）。"""
+        from peach import interface_text
+        found = self._discover("LazyProcrastinator", self.ROUTES, providers=("kemono",))
+        reason = found.candidates[0].reason
+        self.assertEqual(interface_text.text(f"server:{reason['code']}", reason["params"], language="en"),
+                         "Exact match on the creator name")
+        routes = {**self.ROUTES, "f95zone.to/threads/50685/": HttpResponse(200, {}, b"<html/>")}
+        thread = self._discover("50685", routes, providers=("f95zone",)).candidates[0]
+        self.assertEqual(thread.label, "线程 50685")
+        self.assertEqual(interface_text.text(f"server:{thread.label_phrase['code']}", thread.label_phrase["params"],
+                                             language="en"), "Thread 50685")
+
     def test_archive_identity_resolves_to_the_official_fanbox_page(self):
         found = self._discover("LazyProcrastinator", self.ROUTES,
                                providers=("kemono", "fanbox"))

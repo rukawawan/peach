@@ -3,7 +3,7 @@ import { apiGet, apiSend } from '../../api';
 import { queryClient } from '../query';
 import { entityPath } from '@peach/legacy/core';
 
-export interface Favorite { key?: string; entity_id?: number; scope?: 'local' | 'online'; tag_id?: string; kind: string; name: string; favorite?: boolean; image_url?: string; image_label?: string; image_fallbacks?: string[] }
+export interface Favorite { key?: string; entity_id?: number; scope?: 'local' | 'online'; tag_id?: string; kind: string; name: string; favorite?: boolean; image_url?: string; image_label?: string; image_label_code?: string; image_label_params?: Record<string, unknown>; image_fallbacks?: string[] }
 export interface SavedFilter { id: string; name: string; href: string }
 export interface Shortcuts { favorites: Favorite[]; filters: SavedFilter[] }
 export const SHORTCUTS_KEY = ['library-shortcuts'] as const;

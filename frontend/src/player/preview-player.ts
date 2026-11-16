@@ -3,6 +3,7 @@ import { mountPlayerQualityControl, mountPlayerSeekPreview, mountPlayerSpinner }
 import { disposePlayer } from './dispose';
 import type { PlayerSource, VjsPlayer } from './types';
 import { ensureVideojs } from './videojs';
+import { interfaceLanguage } from '../i18n';
 
 export function mountPreviewPlayer(video: HTMLVideoElement, source: PlayerSource, failed: () => void): () => void {
   video.controls = false;
@@ -11,7 +12,7 @@ export function mountPreviewPlayer(video: HTMLVideoElement, source: PlayerSource
   void ensureVideojs().then(factory => {
     if (released) return;
     player = factory(video, {
-      controls: true, preload: 'metadata', autoplay: false, language: 'zh-CN', responsive: true,
+      controls: true, preload: 'metadata', autoplay: false, language: interfaceLanguage, responsive: true,
       userActions: { hotkeys: true },
       controlBar: {
         pictureInPictureToggle: true, currentTimeDisplay: false, timeDivider: false,

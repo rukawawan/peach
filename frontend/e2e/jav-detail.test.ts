@@ -477,7 +477,7 @@ describe('库外 JAV 作品详情', () => {
         assert.ok(lines.every(line => line.width === '1px' && line.color === line.expected), JSON.stringify(lines));
         assert.ok(await page.locator('[data-jav-resources]').getByRole('button', { name: '添加下载', exact: true }).first().isDisabled());
         assert.deepEqual(await page.locator('[data-resource-actions]').first().locator('button, a').allTextContents(), ['链接来源', '复制链接', '添加下载']);
-        assert.equal(await page.locator('[data-resource-facts]').first().getByText('高清', { exact: true }).count(), 0);
+        assert.equal(await page.locator('[data-resource-facts]').first().getByText('high-definition', { exact: true }).count(), 0);
         const facts = await page.locator('[data-resource-facts]').first().evaluate(node => {
           const boxes = [...node.children].map(child => child.getBoundingClientRect());
           return boxes.map(box => box.y);

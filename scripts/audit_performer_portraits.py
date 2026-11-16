@@ -72,6 +72,7 @@ from peach.gfriends import (
     parse_filetree as parse_gfriends,
 )
 from peach.http import HttpRequest, HttpTransport, HttpxTransport
+from peach.interface_text import dev as t
 from peach.review_csv import read_rows, write_rows
 from peach.scripting import HostLimiter, USER_AGENT, open_readonly
 
@@ -107,7 +108,7 @@ HEALTH_FIELDS = (
 
 def build_parser() -> argparse.ArgumentParser:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    parser = argparse.ArgumentParser(description="审计女优头像缺口与孤立头像，产出复核 CSV")
+    parser = argparse.ArgumentParser(description=t("audit_performer_portraits.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--avatars", type=Path, default=GENERATED_DIR / "avatars")
     parser.add_argument("--out", type=Path,
@@ -127,13 +128,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--max-candidates", type=int, default=6,
-                        help="每位女优最多实测多少张候选图；按质量档位从优到劣")
+                        help=t("audit_performer_portraits.maxCandidatesHelp"))
     parser.add_argument("--min-long-side", type=int, default=500)
     parser.add_argument("--min-short-side", type=int, default=300)
     parser.add_argument("--resume", action="store_true",
-                        help="跳过 CSV 里已判定的行；error 行重试")
+                        help=t("audit_performer_portraits.resumeHelp"))
     parser.add_argument("--refresh", action="store_true",
-                        help="忽略 Gfriends 索引和图片请求缓存")
+                        help=t("audit_performer_portraits.refreshHelp"))
     return parser
 
 
@@ -229,7 +230,7 @@ def load_gfriends_cached(
             return index, True
         except (OSError, KeyError, TypeError, ValueError):
             pass
-    raise RuntimeError("Gfriends 索引不可用，且没有有效本地缓存")
+    raise RuntimeError(t("audit_performer_portraits.indexUnavailable"))
 
 
 def fetch(transport: HttpTransport, url: str, accept: str,
@@ -364,7 +365,7 @@ def audit_skipped(record: dict) -> dict:
     row["current_name"] = record["canonical"]
     row["policy_version"] = POLICY_VERSION
     row["verdict"] = "skipped_not_jav"
-    row["note"] = "作品里没有 JAV 番号；Gfriends 是 JAV 图库，需要另一个来源"
+    row["note"] = t("audit_performer_portraits.notJav")
     return row
 
 
@@ -395,12 +396,12 @@ def audit_missing(
             # 写成 no_match 会被 --resume 当成已判定，从此再没有重新问一次的时机——
             # 釈アリス 就是这么被固化过一次的。按网络失败处理，下一轮重试。
             row["verdict"] = "error"
-            row["note"] = "Gfriends 索引为过期缓存，本轮未收录不算结论"
+            row["note"] = t("audit_performer_portraits.staleIndex")
             if health is not None:
                 health.error("stale_index_no_match", message=row["current_name"])
             return row
         row["verdict"] = "no_match"
-        row["note"] = "Gfriends 未收录该名字链上的任何写法"
+        row["note"] = t("audit_performer_portraits.noMatch")
         if health is not None:
             health.add("no_match")
         return row
@@ -425,7 +426,7 @@ def audit_missing(
                 if response is None:
                     # 与 fetch 的降级口径一致：网络失败可续跑，不算来源结论。
                     row["verdict"] = "error"
-                    row["note"] = f"下载失败：{category}/{filename}"
+                    row["note"] = t("audit_performer_portraits.downloadFailed", file=f"{category}/{filename}")
                     return row
                 tried += 1
                 continue
@@ -461,13 +462,13 @@ def audit_missing(
             "cache_path": cache_path, "provenance_path": provenance_path,
             "url": url,
             "verdict": "ok",
-            "note": f"{len(entries)} 个来源可选，实测第 {tried + 1} 张合格",
+            "note": t("audit_performer_portraits.accepted", sources=len(entries), index=tried + 1),
         })
         if health is not None:
             health.add("succeeded")
         return row
     row["verdict"] = "rejected"
-    row["note"] = f"前 {tried} 张候选未过完整性或尺寸门槛"
+    row["note"] = t("audit_performer_portraits.allRejected", count=tried)
     if health is not None:
         health.add("rejected")
     return row
@@ -503,7 +504,7 @@ def audit_orphans(connection: sqlite3.Connection, avatar_dir: Path) -> list[dict
             matched_name = ""
         if not matched_name:
             row["verdict"] = "orphan_no_provenance"
-            row["note"] = f"provenance 不可读：{provenance_path.name}"
+            row["note"] = t("audit_performer_portraits.provenanceUnreadable", name=provenance_path.name)
             rows.append(row)
             continue
         hits = name_index.get(normalized(matched_name), set())
@@ -522,20 +523,20 @@ def audit_orphans(connection: sqlite3.Connection, avatar_dir: Path) -> list[dict
         row["policy_version"] = provenance.get("policy_version", "legacy")
         if len(hits) > 1:
             row["verdict"] = "orphan_ambiguous"
-            row["note"] = "provenance 名命中多个当前实体：" + "、".join(
-                str(hit) for hit in sorted(hits))
+            row["note"] = t("audit_performer_portraits.provenanceAmbiguous", ids=list(
+                str(hit) for hit in sorted(hits)))
         elif not hits:
             row["verdict"] = "orphan_no_provenance"
-            row["note"] = "provenance 名在当前 ledger 无唯一命中"
+            row["note"] = t("audit_performer_portraits.provenanceNoMatch")
         else:
             target_id = next(iter(hits))
             row["relink_target_id"] = target_id
             if (avatar_dir / f"performer-{target_id}.img").exists():
                 row["verdict"] = "orphan_target_exists"
-                row["note"] = f"目标 performer-{target_id}.img 已存在，不覆盖"
+                row["note"] = t("audit_performer_portraits.targetExists", id=target_id)
             else:
                 row["verdict"] = "orphan_relink"
-                row["note"] = f"可回链到实体 {target_id}；复制需主 agent 复核后执行"
+                row["note"] = t("audit_performer_portraits.relinkable", id=target_id)
         rows.append(row)
     return rows
 
@@ -616,7 +617,7 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
     health = SourceHealth()
     cache = AvatarCandidateCache(args.cache_dir)
     try:
-        print("拉取 Gfriends 索引…", flush=True)
+        print(t("audit_performer_portraits.fetchingIndex"), flush=True)
         try:
             index, stale_index = load_gfriends_cached(
                 client, args.cache_dir, args.refresh, health)
@@ -624,15 +625,14 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
             health.error("index_unavailable", message=str(error))
             write_health(args.health, health)
             print(str(error), flush=True)
-            print(f"来源健康 → {args.health}", flush=True)
+            print(t("audit_performer_portraits.sourceHealth", path=args.health), flush=True)
             return 2
-        print(f"索引就绪：{len(index)} 个名字键", flush=True)
+        print(t("audit_performer_portraits.indexReady", count=len(index)), flush=True)
         if stale_index:
             # 一行也不能省：旧缓存和新索引跑出来的 CSV 看起来一模一样，不说就没人知道
             # 这一轮的「找不到」只代表快照那天。
             age = index_age(args.cache_dir) or 0
-            print(f"告警：未取到最新 Gfriends 索引，改用 {round(age / 3600)} 小时前的"
-                  f"本地缓存；本轮未收录一律记 error，网络恢复后重跑", flush=True)
+            print(t("audit_performer_portraits.staleIndexWarning", hours=round(age / 3600)), flush=True)
 
         connection = open_readonly(args.db)
         targets = missing_targets(connection, args.avatars, 0)
@@ -645,7 +645,7 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
             prior, done = read_prior(args.out)
             rows = prior
             targets = [t for t in targets if t["entity_id"] not in done]
-            print(f"续跑：已判定 {len(done)} 位，跳过", flush=True)
+            print(t("audit_performer_portraits.resuming", count=len(done)), flush=True)
         if args.limit:
             # limit 表示本轮新处理量；必须在续跑排除已完成对象后截取，否则永远卡在首批。
             targets = targets[:args.limit]
@@ -657,8 +657,8 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
         # 非 JAV 的人不查 JAV 图库，但要在表里留一行说明原因——悄悄消失最糟。
         skipped_rows = [audit_skipped(record)
                         for record in skipped_targets(connection, args.avatars)]
-        print(f"缺口待审 {len(targets)} 位；非 JAV 跳过 {len(skipped_rows)} 位；"
-              f"孤立头像 {len(orphan_rows)} 个", flush=True)
+        print(t("audit_performer_portraits.planned", targets=len(targets), skipped=len(skipped_rows),
+                orphans=len(orphan_rows)), flush=True)
 
         guard = threading.Lock()
         finished = 0
@@ -680,7 +680,8 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
                         write_candidates(args.candidates, partial)
                         write_health(args.health, health)
                         ok = sum(1 for r in rows if r.get("verdict") == "ok")
-                        print(f"  {finished}/{len(targets)} 已判定，命中 {ok}", flush=True)
+                        print(t("audit_performer_portraits.progress", done=finished, total=len(targets), ok=ok),
+                              flush=True)
         rows.extend(orphan_rows)
         rows.extend(skipped_rows)
         mark_duplicate_candidates(rows, installed_hashes)
@@ -693,13 +694,14 @@ def run(args: argparse.Namespace, transport: HttpTransport | None = None) -> int
         connection.close()
 
         summary = Counter(row["verdict"] for row in rows)
-        print(f"审计 CSV → {args.out}")
-        print(f"复核候选 → {args.candidates}")
-        print(f"来源健康 → {args.health}")
-        print("判定分布：" + "、".join(f"{k} {v}" for k, v in summary.most_common()))
+        print(t("audit_performer_portraits.auditCsv", path=args.out))
+        print(t("audit_performer_portraits.candidatesCsv", path=args.candidates))
+        print(t("audit_performer_portraits.sourceHealth", path=args.health))
+        print(t("audit_performer_portraits.verdicts", counts=list(
+            f"{k} {v}" for k, v in summary.most_common())))
         relinks = summary.get("orphan_relink", 0)
         if relinks:
-            print(f"其中 orphan_relink {relinks} 条：仅候选，复制文件须主 agent 复核后执行。")
+            print(t("audit_performer_portraits.relinksPending", count=relinks))
         return 0
     finally:
         if owned:

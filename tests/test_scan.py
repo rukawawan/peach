@@ -118,6 +118,21 @@ class WindowsShapeTests(_ScanCase):
 class PosixShapeTests(_ScanCase):
     """macOS：账本里写 `R:\\media\\...`，遍历的是挂载点，读取侧按挂载表翻回去。"""
 
+    def test_webm_is_registered_as_video_and_full_scan_repairs_existing_rows(self):
+        options = dict(declared_roots={'local': ('R:\\media',)}, mounts={'local': (self.media,)}, windows=False)
+        (self.media / 'clip.WeBM').write_bytes(b'webm')
+        self._scan('R:\\media', **options)
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            asset_id, medium = connection.execute(
+                "SELECT id,medium FROM asset WHERE name='clip.WeBM'").fetchone()
+            self.assertEqual(medium, 'video')
+            connection.execute("UPDATE asset SET medium='other',rating=5 WHERE id=?", (asset_id,))
+        self._scan('R:\\media', **options)
+        with closing(sqlite3.connect(self.db)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT id,medium,rating FROM asset WHERE name='clip.WeBM'").fetchall(),
+                [(asset_id, 'video', 5)])
+
     def test_file_identity_preserves_id_and_personal_fields_after_external_rename(self):
         options = dict(declared_roots={'local': ('R:\\media',)}, mounts={'local': (self.media,)}, windows=False)
         first, _ = self._scan('R:\\media', **options)
@@ -284,7 +299,7 @@ class PosixShapeTests(_ScanCase):
             saved.clear()
             saved.update(json.loads(json.dumps(state)))
             if state.get('files') == 2:
-                raise InterruptedError('模拟服务退出')
+                raise InterruptedError('simulated service exit')
         options = dict(declared_roots={'local': ('R:\\media',)},
                        mounts={'local': (self.media,)}, windows=False)
         with self.assertRaises(InterruptedError):
@@ -329,7 +344,7 @@ class PosixShapeTests(_ScanCase):
         def save(state):
             saved.update(json.loads(json.dumps(state)))
             if state.get('cursor'):
-                raise InterruptedError('模拟文件批次提交后退出')
+                raise InterruptedError('simulated exit after a file batch commit')
         options = dict(declared_roots={'local': ('R:\\media',)}, mounts={'local': (self.media,)}, windows=False)
         with patch.object(scan, 'BATCH_SIZE', 1), self.assertRaises(InterruptedError):
             self._scan('R:\\media', save_checkpoint=save, **options)
@@ -404,6 +419,13 @@ class PosixShapeTests(_ScanCase):
             scan.ledger_root_for("local", "/somewhere/else", declared_roots=self.DECLARED,
                                  mounts={"local": (str(self.media),)}, windows=False)
         self.assertIn("挂载点", str(caught.exception))
+
+    def test_a_directory_outside_every_root_is_refused_before_touching_the_ledger(self):
+        """#591：Windows 挂载表为空时曾在取挂载表时越界（IndexError）。"""
+        with self.assertRaises(scan.ScanTargetError) as caught:
+            self._scan(r"Q:\elsewhere", declared_roots=self.DECLARED, mounts={}, windows=True)
+        self.assertIn("不在任何已配置的媒体目录下", str(caught.exception))
+        self.assertEqual(self._paths(), {})
 
 
 class CaseOnlyRenameTests(_ScanCase):
@@ -628,6 +650,20 @@ class ScanTargetTests(unittest.TestCase):
             scan.check_scan_target("nas", "N:/", declared_roots=self.DECLARED)
         self.assertIn("nas", str(caught.exception))
         self.assertIn("local", str(caught.exception))
+
+    def test_a_subdirectory_maps_to_its_own_root_without_mounts(self):
+        """#591：Windows 挂载表为空、来源有多个根时，根下子目录原样作为扫描目录。"""
+        declared = {"local": (r"R:\media", r"S:\more")}
+        self.assertEqual(scan.walk_root_for("local", r"S:\more\演员\作品", declared_roots=declared,
+                                            mounts={}, windows=True), Path(r"S:\more\演员\作品"))
+
+    def test_a_directory_outside_every_root_is_a_readable_error_not_an_index_error(self):
+        """#591：不在任何根下时报可读错误；挂载表非空时也不能落到最后一个挂载点上。"""
+        for mounts, windows in (({}, True), ({"local": ("/mnt/media",)}, False)):
+            with self.subTest(mounts=mounts), self.assertRaises(scan.ScanTargetError) as caught:
+                scan.walk_root_for("local", r"Q:\elsewhere\作品", declared_roots=self.DECLARED,
+                                   mounts=mounts, windows=windows)
+            self.assertIn("不在任何已配置的媒体目录下", str(caught.exception))
 
     def test_medium_is_decided_by_extension(self):
         self.assertEqual([scan.medium_of(name) for name in

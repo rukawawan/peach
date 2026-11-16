@@ -33,8 +33,8 @@ const payload = (overrides: Partial<StatsData> = {}): StatsData => ({
     { k: '115', n: 1, bytes: 1073741824, videos: 1 }],
   by_medium: [{ k: 'video', n: 4, bytes: 4294967296 }, { k: 'image', n: 6, bytes: 1048576 }],
   by_library: [{ k: 'main', name: '主库', icon: 'film', videos: 4, bytes: 4294967296 }],
-  by_length: [{ k: '速食', n: 1 }, { k: '短', n: 3 }, { k: '中', n: 0 }, { k: '长', n: 0 }],
-  by_quality: [{ k: '4K', n: 0 }, { k: '2K', n: 0 }, { k: '1080P', n: 4 }, { k: '720P', n: 0 }, { k: '低画质', n: 0 }],
+  by_length: [{ k: 'quick', n: 1 }, { k: 'short', n: 3 }, { k: 'medium', n: 0 }, { k: 'long', n: 0 }],
+  by_quality: [{ k: '4K', n: 0 }, { k: '2K', n: 0 }, { k: '1080P', n: 4 }, { k: '720P', n: 0 }, { k: 'low', n: 0, label_code: 'taste.qualityBand.low' }],
   play_activity: {
     timezone: 'UTC+08:00',
     days: [{ date: '2026-09-20', count: 1 }, { date: '2026-09-22', count: 1 }],
@@ -190,8 +190,8 @@ it('库存那一层按时长、画质、文件类型各出一张分布图，页�
 });
 
 it('分布图的分档：时长换成分钟区间，文件类型多的在前，播放次数长尾并档', () => {
-  expect(lengthRows([{ k: '速食', n: 1 }, { k: '长', n: 2 }, { k: '超长', n: 3 }]))
-    .toEqual([{ name: '<5 分钟', value: 1 }, { name: '>40 分钟', value: 2 }, { name: '超长', value: 3 }]);
+  expect(lengthRows([{ k: 'quick', n: 1 }, { k: 'long', n: 2 }, { k: 'extra', n: 3 }]))
+    .toEqual([{ name: '<5 分钟', value: 1 }, { name: '>40 分钟', value: 2 }, { name: 'extra', value: 3 }]);
   expect(mediumRows([{ k: 'video', n: 4, bytes: 0 }, { k: 'account', n: 9, bytes: 0 }, { k: 'x', n: 1, bytes: 0 }]))
     .toEqual([{ name: '账号', value: 9 }, { name: '视频', value: 4 }, { name: 'x', value: 1 }]);
   expect(replayRows([{ k: 1, n: 52 }, { k: 2, n: 13 }, { k: 4, n: 6 }, { k: 7, n: 1 }, { k: 9, n: 1 }, { k: 12, n: 2 }]))

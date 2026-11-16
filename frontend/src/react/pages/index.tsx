@@ -16,6 +16,7 @@ import { ErrorPage } from './error/error-page';
 import { LoginPage } from './login/login-page';
 import type { PageData } from './page-data';
 import { SetupPage } from './setup/setup-page';
+import { InterfaceLocale } from '../interface-locale';
 
 const PAGES: Readonly<Record<string, ComponentType<{ data: PageData }>>> = {
   setup: SetupPage,
@@ -26,4 +27,4 @@ const PAGES: Readonly<Record<string, ComponentType<{ data: PageData }>>> = {
 installErrorReporting();
 const mount = document.getElementById('peach-page');
 const Page = mount ? PAGES[mount.dataset.page ?? ''] : undefined;
-if (mount && Page) createRoot(mount).render(<Page data={{ ...mount.dataset }} />);
+if (mount && Page) createRoot(mount).render(<InterfaceLocale><Page data={{ ...mount.dataset }} /></InterfaceLocale>);

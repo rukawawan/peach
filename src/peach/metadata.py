@@ -20,6 +20,46 @@ from .entities import (
     normalize_entity_name,
 )
 from .metadata_alias_resolve import is_descriptive, is_planning_alias
+from . import interface_text
+from .coded_text import Said, coded, parallel
+from .user_messages import UserFacingError
+
+#: 原样转述上游原文（上游网站与 amane 桥的报错、`HTTP 503` 这类状态说明）时用的 code，模板只有 `{{detail}}`。
+#: 这类文字本来就没有译文；Peach 自己的说法一律有自己的 code。
+RELAYED = "errors.metadata.relayed"
+
+
+def relayed(text: object) -> tuple[str, dict]:
+    """原样转述一句上游原文：展开给 `RelayableError` 一族的构造，`NotFound(*relayed("HTTP 404"))`。"""
+    return RELAYED, {"detail": str(text)}
+
+
+class RelayableError(UserFacingError):
+    """来源与采集链上的失败：给人看的那句是 `server` 命名空间里的 code 与参数。
+
+    转述上游原文要显式写成 `relayed(原文)`；构造时传别的字符串直接抛 `TypeError`，免得一句中文
+    被当成原文透传、英文界面跟着露出中文。`pickle`、`copy` 走 `UserFacingError.__reduce__` 按状态复制，
+    不经过这里。
+    """
+
+    def __init__(self, code: str, params: dict | None = None, *, status_code: int | None = None) -> None:
+        if not (isinstance(code, str) and interface_text.has(f"server:{code}")):
+            raise TypeError(f"{type(self).__name__} takes a server message code, not {code!r}; "
+                            "relay upstream text with relayed(text)")
+        super().__init__(code, params, status_code=status_code)
+
+    @property
+    def response_status(self) -> int:
+        """漏到接口层时的状态：子类的 `status_code` 记的是上游网站的状态，不能当响应状态；
+        按原来的内置基类算，`ValueError` 一族回 400，其余回 500。"""
+        return 400 if isinstance(self, ValueError) else 500
+
+
+def relay_args(error: BaseException) -> tuple[str, dict]:
+    """另一个异常的说法交给 `RelayableError` 的构造参数：带 code 的照搬 code 与参数，别的按原文转述。"""
+    if isinstance(error, UserFacingError):
+        return error.code, dict(error.params)
+    return relayed(str(error))
 
 
 #: 日期式那一支两种分隔符都放行：`_` 是一本道等片商的标识，不是可替换的写法
@@ -33,8 +73,8 @@ CATALOG_EVIDENCE_FIELDS = (
 MAX_EVIDENCE_URLS = 24
 
 
-class MetadataProviderError(RuntimeError):
-    """来源没给出结果的原因。`kind` 是分类，不是措辞。
+class MetadataProviderError(RelayableError, RuntimeError):
+    """来源没给出结果的原因。`kind` 是分类，不是措辞；措辞是 code 与参数（转述上游原文用 `relayed`）。
 
     `auth` 单列一档：登录墙、Cookie 过期和 401/403 与「这次没问出结果」不是一回事，
     和「这部片不存在」更不是。混在 `unavailable` 里的代价有两样：一是每个番号都要为
@@ -47,11 +87,12 @@ class MetadataProviderError(RuntimeError):
     """
 
     def __init__(
-        self, message: str, *, kind: str = "unknown", status_code: int = 0,
+        self, code: str, params: dict | None = None, *, kind: str = "unknown", status_code: int = 0,
         retryable: bool = False, temporary: bool = False, detail: str = "",
     ) -> None:
-        super().__init__(message)
+        super().__init__(code, params)
         self.kind = kind
+        #: 上游答复的 HTTP 状态，不是接口响应的状态码。
         self.status_code = status_code
         self.retryable = retryable
         self.temporary = temporary
@@ -71,8 +112,11 @@ CREDENTIAL_STATUS_CODES = frozenset({401})
 #: 「换一份凭据」这句话只对其中一种。
 AMBIGUOUS_AUTH_STATUS_CODES = frozenset({403})
 
-#: 判据明确时给出的下一步。措辞只有这一处。
-CREDENTIAL_ADVICE = "换一份凭据后重跑"
+#: 判据明确时给出的下一步。措辞只在 `labels.metadata.authWall.credentialAdvice` 一处，各句把它嵌进去。
+CREDENTIAL_ADVICE_CODE = "labels.metadata.authWall.credentialAdvice"
+#: 那一句按 zh-CN 渲染的原文：给还按文字判断的调用方（`reason_blames_credentials` 认旧理由）。
+CREDENTIAL_ADVICE = interface_text.text(f"server:{CREDENTIAL_ADVICE_CODE}")
+_ADVICE = {"code": CREDENTIAL_ADVICE_CODE}
 
 #: 重定向终点落在这些路径上就是登录墙或年龄闸。站方不一定回 401：javdb 对未登录
 #: 用户访问部分详情页直接 302 到 `/login`，DMM 把未过年龄闸的请求送去
@@ -87,12 +131,12 @@ LOGIN_LOCATIONS = re.compile(
 #: 站方自己给出的登录页标记。只认页面身份这种固定结构，不按「正文里出现登录二字」
 #: 猜——搜索结果页和页脚都会出现那两个字。javdb 那条判据留在 `peach.javdb`，
 #: 采集脚本按页判「这一页是不是登录墙」用的是同一份。
-_AUTH_PAGE_MARKERS = ((JAVDB_LOGIN_PAGE, "javdb 登录页"),)
+_AUTH_PAGE_MARKERS = ((JAVDB_LOGIN_PAGE, "labels.metadata.authWall.javdbLoginPage"),)
 
 
-def auth_wall_reason(*, status_code: int = 0, final_url: str = "",
-                     body: bytes | str = b"") -> str:
-    """这次响应是不是「要登录才给看」。是就返回写进错误消息的理由，否则空串。
+def auth_wall(*, status_code: int = 0, final_url: str = "", body: bytes | str = b"") -> dict | None:
+    """这次响应是不是「要登录才给看」。是就返回写进错误消息的理由（`{"code", "params"}`，可以直接
+    当另一句的参数），否则 `None`。
 
     四条判据各自对应真实存在的一种形态，缺一条就有来源漏判：明确的 401、跟完重定向
     后落在登录页或年龄闸、状态 200 但正文就是登录页，以及只剩状态码可看的 403。
@@ -101,35 +145,46 @@ def auth_wall_reason(*, status_code: int = 0, final_url: str = "",
     那就不必按「成因不明」措辞了，直接说换凭据。
     """
     if status_code in CREDENTIAL_STATUS_CODES:
-        return f"来源返回 {status_code}，{CREDENTIAL_ADVICE}"
+        return {"code": "labels.metadata.authWall.status", "params": {"status": status_code, "advice": _ADVICE}}
     path = urlsplit(str(final_url or "")).path
     if path and LOGIN_LOCATIONS.search(path):
-        return f"重定向终点落在 {path}，{CREDENTIAL_ADVICE}"
+        return {"code": "labels.metadata.authWall.redirect", "params": {"path": path, "advice": _ADVICE}}
     text = body_text(body) if isinstance(body, bytes) else str(body)
-    for pattern, label in _AUTH_PAGE_MARKERS:
+    for pattern, page in _AUTH_PAGE_MARKERS:
         if pattern.search(text):
-            return f"{label}，{CREDENTIAL_ADVICE}"
+            return {"code": "labels.metadata.authWall.loginPage", "params": {"page": {"code": page}, "advice": _ADVICE}}
     if status_code in AMBIGUOUS_AUTH_STATUS_CODES:
-        return (f"来源返回 {status_code}：可能是凭据失效，也可能是出口 IP 被封，"
-                "先看站点是否要求登录再决定换凭据还是等")
-    return ""
+        return {"code": "labels.metadata.authWall.ambiguous", "params": {"status": status_code}}
+    return None
 
 
-def reason_blames_credentials(reason: str) -> bool:
+def auth_wall_reason(*, status_code: int = 0, final_url: str = "",
+                     body: bytes | str = b"") -> str:
+    """`auth_wall` 那句按 zh-CN 渲染的原文；不是登录墙时是空串。"""
+    reason = auth_wall(status_code=status_code, final_url=final_url, body=body)
+    return interface_text.text(f"server:{reason['code']}", reason["params"]) if reason else ""
+
+
+def reason_blames_credentials(reason: str | dict | None) -> bool:
     """这条理由有没有把成因锁死在凭据上。
 
     消费方要按这个分叉给出不同的下一步（去官网登录，还是先看站点要不要登录再决定
     换凭据还是等），判据就不能是各自到 `reason` 里找字眼——措辞改一次，找字眼的那
     几处会一起静默失准。
     """
+    if isinstance(reason, dict):
+        return reason.get("params", {}).get("advice") == _ADVICE
     return bool(reason) and CREDENTIAL_ADVICE in reason
 
 
-def auth_error(source: str, reason: str, *, status_code: int = 0,
+def auth_error(source: str, reason: str | dict, *, status_code: int = 0,
                detail: str = "") -> MetadataProviderError:
-    """把一次鉴权失败包成 `kind="auth"` 的错误。措辞只有这一处。"""
+    """把一次鉴权失败包成 `kind="auth"` 的错误。措辞只有这一处。`reason` 是 `auth_wall` 那样的一句
+    （`{"code", "params"}`，按界面语言一起渲染），或上游给的原文。"""
+    if isinstance(source, Said):
+        source = source.phrase
     return MetadataProviderError(
-        f"{source} 需要登录或已被拒绝：{reason}", kind="auth",
+        "errors.metadata.authRequired", {"source": source, "reason": reason}, kind="auth",
         status_code=status_code, retryable=False, temporary=True, detail=detail,
     )
 
@@ -143,7 +198,7 @@ def validate_provider_code(code: str) -> str:
         return tokyo
     value = raw.upper()
     if not _SAFE_CODE.fullmatch(value):
-        raise ValueError("metadata provider 只接受规范化番号，不接受路径、URL 或任意文本")
+        raise ValueError("metadata provider only accepts normalized codes, not paths, URLs, or arbitrary text")
     return value
 
 
@@ -237,7 +292,7 @@ def collapse_repeated_phrase(value: str) -> tuple[str, bool]:
 #: DMM 系来源把改过名的女优写成「现名（旧名）」：r18dev 给的是 `美谷朱音（美谷朱里）`。
 #: 罗马字那一格同一个渲染格式由 `entities.split_composite_person_name` 拆。
 _CURRENT_AND_FORMER = re.compile(r"(.+?)\s*[（(]([^（()）、，,/]+)[）)]")
-_JAPANESE = re.compile(r"[぀-ヿ一-鿿々]")
+_JAPANESE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u3005]")
 
 
 def split_former_name(name: str) -> tuple[str, str]:
@@ -276,7 +331,7 @@ def normalized_performers(raw: object) -> tuple[list[dict], list[str]]:
         name = canonicalize_entity_name("performer", current)
         repeated = bool(name and name != current)
         if repeated:
-            warnings.append(f"来源演员名含重复片段，已规范化：{preferred} → {name}")
+            warnings.append(Said("labels.metadata.warning.performerRepeated", original=preferred, name=name))
         key = normalize_entity_name(name)
         if not name or key in seen:
             continue
@@ -318,8 +373,9 @@ def normalized_release_date(raw: object) -> tuple[str, list[str]]:
     try:
         normalized = date.fromisoformat(candidate).isoformat()
     except ValueError:
-        return "", [f"来源发行日期无效，已忽略：{value}"]
-    warnings = [] if value == normalized else [f"来源发行时间已规范化为日期：{value} → {normalized}"]
+        return "", [Said("labels.metadata.warning.releaseDateInvalid", value=value)]
+    warnings = [] if value == normalized else [
+        Said("labels.metadata.warning.releaseDateNormalized", value=value, normalized=normalized)]
     return normalized, warnings
 
 
@@ -394,7 +450,8 @@ def _runtime_evidence(raw: object) -> dict | None:
     if not 0 < minutes <= 24 * 60:
         return None
     value: int | float = int(minutes) if minutes.is_integer() else round(minutes, 2)
-    return {"value": value, "display_value": f"{value:g} 分钟", "warnings": []}
+    return {"value": value, "display_value": Said("labels.metadata.evidence.runtime", minutes=f"{value:g}"),
+            "warnings": []}
 
 
 def _safe_evidence_url(raw: object) -> str:
@@ -409,15 +466,17 @@ def _safe_evidence_url(raw: object) -> str:
     return value
 
 
-def _url_evidence(raw: object, label: str) -> dict | None:
+def _url_evidence(raw: object, code: str) -> dict | None:
+    """一个链接的证据：`code` 是「海报（主机）」那样的一句。"""
     value = _safe_evidence_url(raw)
     if not value:
         return None
-    host = urlsplit(value).hostname or "外部来源"
-    return {"value": value, "display_value": f"{label}（{host}）", "warnings": []}
+    host = urlsplit(value).hostname or Said("labels.metadata.evidence.externalSource")
+    return {"value": value, "display_value": Said(code, host=host), "warnings": []}
 
 
-def _url_list_evidence(raw: object, label: str) -> dict | None:
+def _url_list_evidence(raw: object) -> dict | None:
+    """截图那一列链接的证据。"""
     if not isinstance(raw, list):
         return None
     values = list(dict.fromkeys(
@@ -427,17 +486,26 @@ def _url_list_evidence(raw: object, label: str) -> dict | None:
         return None
     warnings = []
     if len(values) > MAX_EVIDENCE_URLS:
-        warnings.append(
-            f"来源返回 {len(values)} 个链接；候选只保留前 {MAX_EVIDENCE_URLS} 个，完整值仍在原始快照"
-        )
+        warnings.append(Said("labels.metadata.warning.tooManyLinks", count=len(values), limit=MAX_EVIDENCE_URLS))
         values = values[:MAX_EVIDENCE_URLS]
-    hosts = list(dict.fromkeys(urlsplit(value).hostname or "外部来源" for value in values))
-    host_label = "、".join(hosts[:2]) + (" 等" if len(hosts) > 2 else "")
+    hosts = list(dict.fromkeys(urlsplit(value).hostname or Said("labels.metadata.evidence.externalSource")
+                               for value in values))
+    code = "labels.metadata.evidence.screenshotsMore" if len(hosts) > 2 else "labels.metadata.evidence.screenshots"
     return {
         "value": values,
-        "display_value": f"{len(values)} {label}（{host_label}）",
+        "display_value": Said(code, count=len(values), hosts=hosts[:2]),
         "warnings": warnings,
     }
+
+
+def with_codes(evidence: dict) -> dict:
+    """候选里给人看的两样带上 code：`display_value` 配 `display_value_code`／`_params`，`warnings` 配并行的
+    `warning_codes`／`warning_params`。原句照旧，界面按 code 取当前语言。"""
+    out = dict(evidence)
+    if "display_value" in evidence:
+        out.update(coded("display_value", evidence["display_value"]))
+    out.update(parallel("warning", evidence.get("warnings") or ()))
+    return out
 
 
 def contains_replacement_character(value: object) -> bool:
@@ -490,16 +558,17 @@ def extract_catalog_evidence(payload: dict) -> dict[str, dict]:
     runtime = _runtime_evidence(payload.get("runtime"))
     if runtime is not None:
         out["runtime"] = runtime
-    for field, label in {
-        "poster_url": "海报", "cover_url": "封面", "trailer_url": "预告片",
+    for field, code in {
+        "poster_url": "labels.metadata.evidence.poster", "cover_url": "labels.metadata.evidence.cover",
+        "trailer_url": "labels.metadata.evidence.trailer",
     }.items():
-        evidence = _url_evidence(payload.get(field), label)
+        evidence = _url_evidence(payload.get(field), code)
         if evidence is not None:
             out[field] = evidence
-    screenshots = _url_list_evidence(payload.get("screenshot_urls"), "张截图")
+    screenshots = _url_list_evidence(payload.get("screenshot_urls"))
     if screenshots is not None:
         out["screenshot_urls"] = screenshots
-    return {field: value for field, value in out.items() if candidate_text_is_valid(value)}
+    return {field: with_codes(value) for field, value in out.items() if candidate_text_is_valid(value)}
 
 
 def extract_peach_fields(payload: dict, genre_decisions=None) -> dict[str, dict]:
@@ -530,7 +599,7 @@ def extract_peach_fields(payload: dict, genre_decisions=None) -> dict[str, dict]
             out[field] = {
                 "value": name,
                 "display_value": name,
-                "warnings": ([f"来源值含重复片段，已规范化：{raw_name} → {name}"]
+                "warnings": ([Said("labels.metadata.warning.valueRepeated", original=raw_name, name=name)]
                              if repeated else []),
             }
     release_date, date_warnings = normalized_release_date(payload.get("release_date"))
@@ -552,4 +621,4 @@ def extract_peach_fields(payload: dict, genre_decisions=None) -> dict[str, dict]
             "unmapped_genres": unmapped,
             "warnings": [unmapped_genre_warning(unmapped)] if unmapped else [],
         }
-    return {field: value for field, value in out.items() if candidate_text_is_valid(value)}
+    return {field: with_codes(value) for field, value in out.items() if candidate_text_is_valid(value)}

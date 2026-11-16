@@ -196,7 +196,7 @@ describe('底栏与排序', () => {
   it('组合条按维度撤条件，同一个字符串在两个维度里各算各的', () => {
     const current = view({ author: 'loop', tags: ['loop', 'solo'] });
     const rows = followConditions(current, { authors: new Map([['loop', 'Loop 本人']]), providers: new Map(), works: new Map() });
-    expect(rows.map((row) => `${row.kind}:${row.label}`)).toEqual(['创作者:Loop 本人', '标签:loop', '标签:solo']);
+    expect(rows.map((row) => `${row.kind}:${row.label}`)).toEqual(['creator:Loop 本人', 'tag:loop', 'tag:solo']);
     expect(dropCondition(current, rows[1]!)).toEqual({ ...current, tags: ['solo'] });
     expect(dropCondition(current, rows[0]!)).toEqual({ ...current, author: '' });
   });

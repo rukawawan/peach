@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 import sqlite3
 
+from . import interface_text
 from .catalog_rules import (
     compact_label,
     is_jav_code,
@@ -41,10 +42,12 @@ from .field_owners import write_owned_fields
 _SITE_POST = re.compile(r"^(fantia)[-_](\d{6,10})$", re.I)
 _EXTENSION = re.compile(r"\.(?:mp4|mkv|avi|wmv|ts|mov|m4v|jpg|jpeg|png|webp)$", re.I)
 
-VERDICT_CODE = "番号"
-VERDICT_SITE = "站点作品号"
-VERDICT_UNCLEAR = "存疑"
-VERDICT_KEEP = "保留"
+#: 判定值（ADR-0162 的英文 id）：同一次运行里分拣、交给 `apply_rows`，审计 CSV 照写一份给人看；
+#: 不从文件读回。
+VERDICT_CODE = "release-code"
+VERDICT_SITE = "site-post"
+VERDICT_UNCLEAR = "unclear"
+VERDICT_KEEP = "keep"
 #: 有文件级证据、可以直接清理的判定。
 SETTLED_VERDICTS = (VERDICT_CODE, VERDICT_SITE)
 
@@ -86,17 +89,30 @@ def embedded_code(name: str, assets: list) -> str:
 
 
 def classify(name: str, assets: list) -> tuple[str, str, str]:
-    """返回 (判定, 归一标识, 理由)。只有文件级证据成立才判为可清理。"""
+    """返回 (判定, 归一标识, 理由)。只有文件级证据成立才判为可清理。理由是 zh-CN 原文，code 见 `judge`。"""
+    verdict, identity, reason = judge(name, assets)
+    return verdict, identity, interface_text.text(f"server:{reason['code']}", reason["params"])
+
+
+def _reason(name: str, /, **params) -> dict:
+    return {"code": f"labels.codeCreators.reason.{name}", "params": params}
+
+
+#: 理由的名字（`_reason`），文字在 `server.json` 的 `labels.codeCreators.reason.*`。
+REASONS = ("urlIdentity", "notCodeShaped", "embeddedCode", "noMatchingFile", "sitePost", "matchingCode")
+
+
+def judge(name: str, assets: list) -> tuple[str, str, dict]:
+    """`classify` 的判定，理由是 `{code, params}` 那一句：复核页逐段取译文（`reason_parts`）。"""
     post = site_post_id(name)
     code = canonical_code(name)
     if not all(is_filesystem_path(str(row["path"] or "")) for row in assets):
-        return VERDICT_KEEP, "", "存在 URL 身份（如 pixiv 画师），不是发行目录"
+        return VERDICT_KEEP, "", _reason("urlIdentity")
     if not post and not code:
         embedded = embedded_code(name, assets)
         if not embedded:
-            return VERDICT_KEEP, "", "名字不是番号形态"
-        return (VERDICT_CODE, embedded,
-                f"目录名里嵌着番号 {embedded}，与目录内文件对得上")
+            return VERDICT_KEEP, "", _reason("notCodeShaped")
+        return VERDICT_CODE, embedded, _reason("embeddedCode", code=embedded)
 
     identity = post or code or ""
     hit = any(
@@ -106,11 +122,10 @@ def classify(name: str, assets: list) -> tuple[str, str, str]:
         for row in assets
     )
     if not hit:
-        return (VERDICT_UNCLEAR, identity,
-                "名字像番号，但目录内没有同番号文件；可能是真实账号名")
+        return VERDICT_UNCLEAR, identity, _reason("noMatchingFile")
     if post:
-        return VERDICT_SITE, identity, f"目录与文件同为站点作品号 {identity}"
-    return VERDICT_CODE, identity, f"目录与文件同为番号 {identity}"
+        return VERDICT_SITE, identity, _reason("sitePost", identity=identity)
+    return VERDICT_CODE, identity, _reason("matchingCode", identity=identity)
 
 
 #: 来源片长与本地时长的容差。片源前后常挂一两分钟广告（用户 2026-09-16），来源本身
@@ -132,23 +147,25 @@ def main_video_seconds(assets: list) -> float | None:
 
 def duration_confirms_code(local_seconds: float | None,
                            runtime_minutes: float | None) -> tuple[bool, str]:
-    """来源报的片长认不认这个目录就是这个番号，附一句可读的理由。
+    """来源报的片长认不认这个目录就是这个番号，附一句理由（只给 `scripts/confirm_code_dirs.py` 看，英文）。
 
     目录名像番号、里面的文件却不带番号时，名字本身答不了「这是发行目录还是上传者账号」
     （`banbi_555` 与 `Tokyo-Hot n0780-HD` 同一形态）。片长是本机可核验的第二条证据：
     对得上就是这部片，对不上（`bbsxv.xyz-DOCP-324` 目录里只有一条 90 秒的广告）留人工。
     """
     if local_seconds is None:
-        return False, "目录里没有量到时长的视频"
+        return False, "no measured video in the directory"
     if not runtime_minutes:
-        return False, "来源没有给片长"
+        return False, "the source gave no runtime"
     delta = abs(local_seconds - float(runtime_minutes) * 60)
     verdict = delta <= DURATION_TOLERANCE_SECONDS
-    return verdict, (f"本地 {local_seconds / 60:.1f} 分、来源 {float(runtime_minutes):.0f} 分，"
-                     f"差 {delta:.0f} 秒{'，在容差内' if verdict else '，超出容差'}")
+    return verdict, (f"local {local_seconds / 60:.1f} min, source {float(runtime_minutes):.0f} min, "
+                     f"off by {delta:.0f} s, {'within' if verdict else 'outside'} tolerance")
 
 
-def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
+def collect(connection: sqlite3.Connection, *, with_parts: bool = False) -> list[dict[str, object]]:
+    """番号目录被投影成创作者的那几条。`with_parts` 给复核页：理由另带按段的 code（`reason_parts`）；
+    审计脚本按 `FIELDS` 写 CSV，不带这一列。"""
     # 用独立 cursor 取具名列，不改调用方连接的 row_factory。
     cursor = connection.cursor()
     cursor.row_factory = sqlite3.Row
@@ -165,7 +182,7 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
         ).fetchall()
         if not assets:
             continue
-        verdict, identity, reason = classify(str(creator["canonical_name"]), assets)
+        verdict, identity, reason = judge(str(creator["canonical_name"]), assets)
         if verdict == VERDICT_KEEP:
             continue
         missing = sum(1 for row in assets if not str(row["code"] or "").strip())
@@ -176,9 +193,10 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
             "identity": identity,
             "assets": len(assets),
             "sample_path": str(assets[0]["path"] or ""),
-            "code_action": (f"补 code {identity}（{missing} 条为空）"
+            "code_action": (f"fill code {identity} ({missing} empty)"
                             if verdict == VERDICT_CODE and missing else ""),
-            "reason": reason,
+            "reason": interface_text.text(f"server:{reason['code']}", reason["params"]),
+            **({"reason_parts": [reason]} if with_parts else {}),
         })
     return rows
 

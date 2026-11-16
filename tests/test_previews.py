@@ -388,7 +388,7 @@ class EntityThumbnailTests(unittest.TestCase):
         destination = self.service.thumbnail(self.KEY, self.source)
         original = self.source.read_bytes()
         def deny():
-            raise DiskSpaceDenied('capacity')
+            raise DiskSpaceDenied('errors.storageBudget.cacheWritesStopped', {'reasons': '缓存超限'})
         self.service.capacity_guard = SimpleNamespace(check=deny)
         self.assertEqual(self.service.thumbnail(self.KEY, self.source), destination)
         destination.unlink()
@@ -665,3 +665,20 @@ class ImageSourceGenerationTests(unittest.TestCase):
                         destination = service.path_for('photo')
                 self.assertFalse(destination.exists())
                 self.assertFalse(artifact_rules.current(destination, source=self.source))
+
+
+class UnavailableReasonTests(unittest.TestCase):
+    """取不到图的原因带 code：卡片按 `reason_code` 认是哪一步，英文界面拿到的是英文。"""
+
+    def test_each_reason_keeps_its_protocol_value_and_has_both_languages(self):
+        from peach import interface_text
+        for name, value in previews.REASONS.items():
+            with self.subTest(name=name):
+                error = previews._unavailable(name)
+                self.assertEqual((error.code, error.reason), (f"errors.previews.{name}", value))
+                self.assertTrue(interface_text.has(f"server:{error.code}", "en"))
+        self.assertEqual(interface_text.text("server:errors.previews.snapshotUnavailable", language="en"),
+                         "Preview frame files are missing")
+
+    def test_a_reason_raised_elsewhere_has_no_protocol_value(self):
+        self.assertEqual(PreviewUnavailable("errors.libraryProcessing.ffmpegMissing").reason, "")

@@ -97,15 +97,13 @@ class GofileExpander:
             pass
         api_status = payload.get("status") if isinstance(payload, dict) else None
         if api_status == "error-notPremium":
-            raise FollowSourceError(
-                "Gofile 文件列表 API 需要 Premium 账户；token 有效，"
-                "但当前账户套餐不支持此接口")
+            raise FollowSourceError("errors.followGofile.notPremium")
         if response.status in (401, 403) or api_status == "error-token":
-            raise CredentialError("Gofile 拒绝了 API token")
+            raise CredentialError("errors.followGofile.tokenRejected")
         if response.status != 200:
-            raise FollowSourceError(f"Gofile 返回 HTTP {response.status}")
+            raise FollowSourceError("errors.followGofile.httpStatus", {"status": response.status})
         if not isinstance(payload, dict) or payload.get("status") != "ok":
-            raise FollowSourceError("Gofile 文件列表未取得")
+            raise FollowSourceError("errors.followGofile.listUnavailable")
         return payload
 
     def _get(self, url: str, token: str) -> HttpResponse:
@@ -118,9 +116,9 @@ class GofileExpander:
             response = self.transport(
                 HttpRequest("GET", url, headers), self.timeout, self.max_bytes)
         except (OSError, httpx.HTTPError) as exc:
-            raise FollowSourceError("Gofile 请求失败") from exc
+            raise FollowSourceError("errors.followGofile.requestFailed") from exc
         if len(response.body) > self.max_bytes:
-            raise FollowSourceError("Gofile 响应超出大小上限")
+            raise FollowSourceError("errors.followGofile.responseTooLarge")
         return response
 
     def _collect(self, payload: dict, items: list, seen: set,

@@ -15,6 +15,7 @@ import {
   authorAvatar, authorInitial, errorHeadline, isBroken, sourceIconUrl, statusText,
   type FollowSource,
 } from './follow-manage';
+import { t } from '../../i18n';
 
 /** 关注来源的站标，尺寸与回退和采集来源站标同一枚；站名由旁边的文字或外层的读屏文字说。 */
 export function SourceIcon({ provider }: { provider: string }) {
@@ -31,7 +32,7 @@ export function AuthorAvatar({ group, name }: { group: FollowSource[]; name: str
   const current = chain[at];
   if (!current) {
     return (
-      <span title="没有可用头像"
+      <span title={t('follow:sourceView.noAvatar')}
         className="inline-grid size-8 shrink-0 place-items-center rounded-full bg-background-tertiary-default text-caption-1-semibold text-text-secondary">
         {authorInitial(name)}
       </span>
@@ -55,7 +56,7 @@ export function StatusBadge({ source }: { source: FollowSource }) {
 /** 来源名连到站上的原页面，名字后跟外链字形。新标签页不继承这一页的会话，来源地址也不带走 Peach 自己的地址。 */
 export function SourceLink({ source }: { source: FollowSource }) {
   return (
-    <a href={source.url} target="_blank" rel="noopener noreferrer" title="打开原来源"
+    <a href={source.url} target="_blank" rel="noopener noreferrer" title={t('follow:sourceView.openSource')}
       className="max-w-full min-w-0 self-start text-body-medium wrap-anywhere text-text-primary underline-offset-2 hover:underline">
       {source.label}
       <RiExternalLinkLine aria-hidden className="size-(--icon-inline) shrink-0" />
@@ -89,7 +90,7 @@ export function ErrorLine({ text, prefix = '', tone = 'error' }: { text: string;
       {more ? (
         <Button variant="ghost" size="small" data-error-line-toggle="" data-error-details-toggle="" aria-expanded={open} className="-ml-2"
           onClick={() => setOpen(!open)}>
-          {open ? '收起详情' : '查看详情'}
+          {open ? t('follow:sourceView.hideDetails') : t('follow:sourceView.showDetails')}
         </Button>
       ) : null}
     </span>

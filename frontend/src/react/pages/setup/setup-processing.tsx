@@ -1,5 +1,6 @@
 import { STAGES } from '../../settings/library-policy-settings';
 import type { SetupFolder } from './setup-api';
+import { joinList, t } from '../../../i18n';
 
 export function libraryFields(row?: SetupFolder): Partial<SetupFolder> {
   return row ? {
@@ -9,8 +10,8 @@ export function libraryFields(row?: SetupFolder): Partial<SetupFolder> {
 }
 
 export function processingSummary(row: SetupFolder): string {
-  if (row.library_policy === 'local') return '仅使用本地资料';
-  if (row.library_policy !== 'custom') return '自动补全';
+  if (row.library_policy === 'local') return t('shell:setupProcessing.localOnly');
+  if (row.library_policy !== 'custom') return t('shell:setupProcessing.auto');
   const stages = STAGES.filter(([key]) => row.library_stages?.split(',').includes(key)).map(([, label]) => label);
-  return stages.length ? `自定义：${stages.join('、')}` : '自定义：只读取本地 NFO 和图片';
+  return stages.length ? t('shell:setupProcessing.custom', { stages: joinList(stages) }) : t('shell:setupProcessing.customLocalOnly');
 }

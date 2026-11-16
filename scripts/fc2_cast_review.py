@@ -35,6 +35,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.config import DATABASE_PATH, GENERATED_DIR, SECRETS_DIR, SOURCES_DIR, STATE_DIR  # noqa: E402
 from peach.entities import normalize_entity_name, resolve_entity  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.metadata import extract_catalog_evidence, extract_peach_fields  # noqa: E402
 from peach.library_processing import (LibraryMetadataProvider, PROVIDER_NAMES,  # noqa: E402
                                       _candidate_identity, _MissCache, is_missing)
@@ -150,16 +151,16 @@ def review_row(code: str, current: list[str], payload: dict, snapshot: Path) -> 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--db", type=Path, default=DATABASE_PATH, help="账本路径（只读）")
+    parser = argparse.ArgumentParser(description=t("fc2_cast_review.description"))
+    parser.add_argument("--db", type=Path, default=DATABASE_PATH, help=t("fc2_cast_review.dbHelp"))
     parser.add_argument("--snapshots", type=Path, default=SOURCES_DIR / "library-metadata",
-                        help="来源快照目录")
+                        help=t("fc2_cast_review.snapshotsHelp"))
     parser.add_argument("--output", type=Path, default=GENERATED_DIR / OUTPUT_NAME)
-    parser.add_argument("--offline", action="store_true", help="只看本机快照，不联网")
-    parser.add_argument("--limit", type=int, default=0, help="最多看几个番号，0 为不限")
+    parser.add_argument("--offline", action="store_true", help=t("fc2_cast_review.offlineHelp"))
+    parser.add_argument("--limit", type=int, default=0, help=t("fc2_cast_review.limitHelp"))
     parser.add_argument("--misses", type=Path, default=STATE_DIR / "fc2-cast-misses.json",
-                        help="站上说没有的番号记在这里，一周内不再问")
-    parser.add_argument("--interval", type=float, default=5.0, help="两次联网询问之间停几秒")
+                        help=t("fc2_cast_review.missesHelp"))
+    parser.add_argument("--interval", type=float, default=5.0, help=t("fc2_cast_review.intervalHelp"))
     return parser
 
 
@@ -179,7 +180,7 @@ def run(args: argparse.Namespace, provider=None, sleep=time.sleep) -> dict:
             try:
                 payload = mirror_payload(code, args.snapshots, None if args.offline else provider, misses)
             except Exception as error:  # noqa: BLE001 - 冷却、限流或断网：停下，已问到的快照留着
-                stopped = f"{code}：{error}"
+                stopped = t("fc2_cast_review.stopped", code=code, error=error)
                 break
             if payload is None:
                 absent += 1

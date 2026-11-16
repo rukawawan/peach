@@ -1,4 +1,5 @@
 import type { VjsPlayer } from './types';
+import { t } from '../i18n';
 
 interface PipButton extends HTMLElement {
   disabled: boolean;
@@ -26,7 +27,7 @@ export function mountPlayerPipControl(player: VjsPlayer, button: HTMLElement | n
     pip.disabled = !supported || !!unavailable || (!ready && !active);
     pip.setAttribute('aria-disabled', String(pip.disabled));
     pip.setAttribute('aria-pressed', String(active));
-    setLabel(unavailable || (active ? '退出画中画' : ready ? '画中画' : '画中画（视频加载中）'));
+    setLabel(unavailable || (active ? t('catalog:playerPip.exit') : ready ? t('catalog:playerControls.pictureInPicture') : t('catalog:playerPip.loading')));
   };
   const activate = pip.activate;
   pip.activate = async media => {
@@ -35,10 +36,10 @@ export function mountPlayerPipControl(player: VjsPlayer, button: HTMLElement | n
     } catch (cause) {
       if (player.isDisposed()) return;
       const name = cause instanceof DOMException ? cause.name : '';
-      const message = name === 'InvalidStateError' ? '视频尚未就绪，请稍后开启画中画'
-        : name === 'NotAllowedError' ? '浏览器未允许画中画，请再次点击开启'
-          : name === 'NotSupportedError' || name === 'SecurityError' ? '当前浏览器不支持画中画'
-            : '当前浏览器无法打开画中画';
+      const message = name === 'InvalidStateError' ? t('catalog:playerPip.notReady')
+        : name === 'NotAllowedError' ? t('catalog:playerPip.notAllowed')
+          : name === 'NotSupportedError' || name === 'SecurityError' ? t('catalog:playerPip.unsupported')
+            : t('catalog:playerPip.failed');
       if (name === 'NotSupportedError' || name === 'SecurityError') { unavailable = message; sync() }
       else setLabel(message);
       failure(message);

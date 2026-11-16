@@ -56,13 +56,13 @@ class ProviderSpec:
 
     def __post_init__(self) -> None:
         if self.semantics not in ("work", "release"):
-            raise ValueError(f"{self.key} 的 semantics 只能是 work 或 release")
+            raise ValueError(f"{self.key}: semantics must be work or release")
         if self.public_media_hosts and self.hosts:
-            raise ValueError(f"{self.key} 放行任意公网主机时不能再写 hosts 白名单")
+            raise ValueError(f"{self.key}: a hosts allowlist cannot be combined with public media hosts")
         if self.source_url and not self.url_hosts:
-            raise ValueError(f"{self.key} 是追更来源，必须登记至少一个 url_hosts")
+            raise ValueError(f"{self.key}: a follow source must declare at least one url_hosts entry")
         if self.source_url and "{ref}" not in self.source_url:
-            raise ValueError(f"{self.key} 的 source_url 必须能填入 {{ref}}")
+            raise ValueError(f"{self.key}: source_url must contain {{ref}}")
 
 
 #: 唯一登记处。priority 越小越优先做主条目；未列出的来源排在最后。

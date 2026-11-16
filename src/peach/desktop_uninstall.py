@@ -14,6 +14,7 @@ from filelock import FileLock
 
 from . import desktop_installer, desktop_startup, distribution, settings_file, standalone_update
 from .fsutil import atomic_write_text
+from .user_messages import UserFacingError, UserValueError, message_fields
 
 
 #: Peach 生成的设置备份：`config.toml.<说明>-YYYYMMDD-HHMMSS`，时间戳跟着
@@ -34,22 +35,22 @@ def _generated_backups(root: Path) -> list[Path]:
 
 def plan(config, *, delete_data: bool, program: Path | None = None) -> dict:
     if type(delete_data) is not bool:
-        raise ValueError("请选择是否删除 Peach 数据")
+        raise UserValueError("errors.desktopUninstall.deleteDataChoiceRequired")
     target = (program or Path(sys.executable).parent).resolve()
     root = config.data_root.resolve()
     if not (target / "_internal/standalone.txt").is_file() or not (target / "Peach.exe").is_file():
-        raise ValueError("源码安装请先退出托盘，再手动移除项目；数据目录见下方")
+        raise UserValueError("errors.desktopUninstall.sourceInstall")
     if len(target.parts) < 3 or target == Path.home().resolve() or (target / ".git").exists():
-        raise ValueError("程序目录不适合自动卸载")
+        raise UserValueError("errors.desktopUninstall.programDirectoryUnsuitable")
     if root.is_relative_to(target) or target.is_relative_to(root):
-        raise ValueError("程序与数据目录重叠，请手动卸载")
+        raise UserValueError("errors.desktopUninstall.programDataOverlap")
     directories = [config.directory(key).resolve() for key in settings_file.DIRECTORY_KEYS] if delete_data else []
     if any(path.parent != root or path.is_symlink() or path.is_junction() for path in directories):
-        raise ValueError("数据使用了外部或嵌套目录，请保留数据卸载后按目录清单手动清理")
+        raise UserValueError("errors.desktopUninstall.externalDataDirectories")
     media = [Path(value).resolve() for group in (config.locations, config.mounts) for rows in group.values() for value in rows]
     for path in [target, *directories]:
         if any(item.is_relative_to(path) or path.is_relative_to(item) for item in media):
-            raise ValueError("卸载目录与媒体目录重叠，请手动检查")
+            raise UserValueError("errors.desktopUninstall.mediaOverlap")
     files: list[Path] = []
     if delete_data:
         generated = [config.path.resolve(), root / "config.previous.toml", root / "config.pending.toml",
@@ -61,38 +62,48 @@ def plan(config, *, delete_data: bool, program: Path | None = None) -> dict:
 
 
 def snapshot(config) -> dict:
-    result = {"available": False, "message": "这个系统上先退出 Peach，再手动移除程序与数据目录", "data_root": str(config.data_root),
+    result = {"available": False, **message_fields("labels.desktopUninstall.manual"), "data_root": str(config.data_root),
               "directories": [str(config.directory(key)) for key in settings_file.DIRECTORY_KEYS], "full_available": False}
     if sys.platform == "darwin" and distribution.standalone():
         # macOS 应用按系统惯例拖进废纸篓卸载，不另做卸载器；LaunchAgent 不随应用删除，要先关掉。
-        result["message"] = "先关闭开机自启并退出 Peach，再把「应用程序」中的 Peach 移到废纸篓；完全卸载时一并删除下列数据目录"
+        result.update(message_fields("labels.desktopUninstall.macos"))
     if sys.platform != "win32":
         return result
     try:
         if not distribution.standalone():
-            raise ValueError("源码安装请先关闭开机自启并退出托盘，再手动移除项目与数据目录")
+            raise UserValueError("errors.desktopUninstall.sourceInstallStartup")
         plan(config, delete_data=False)
-        result.update(available=True, message="")
+        result.update(available=True, message="", message_code="", message_params={})
         try:
             plan(config, delete_data=True)
             result["full_available"] = True
         except ValueError as exc:
-            result["message"] = str(exc)
+            result.update(_reason(exc))
     except ValueError as exc:
-        result["message"] = str(exc)
+        result.update(_reason(exc))
     return result
+
+
+def _reason(error: ValueError) -> dict:
+    """卸载不可用的原因：带 code 的照搬，别的照原文。"""
+    if isinstance(error, UserFacingError):
+        return message_fields(error.code, error.params)
+    return {"message": str(error), "message_code": "", "message_params": {}}
 
 
 def request(config, delete_data: bool) -> dict:
     if not distribution.standalone() or sys.platform != "win32":
-        raise ValueError(snapshot(config)["message"])
+        current = snapshot(config)
+        if current.get("message_code"):
+            raise UserValueError(current["message_code"], current.get("message_params"))
+        raise ValueError(current["message"])
     if standalone_update.public().get("state") in standalone_update.ACTIVE | {"ready"}:
-        raise ValueError("更新任务尚未结束，请完成后卸载")
+        raise UserValueError("errors.desktopUninstall.updateRunning")
     data = plan(config, delete_data=delete_data)
     path = config.directory("state") / "uninstall-request.json"
     with FileLock(str(path) + ".lock", timeout=0):
         atomic_write_text(path, json.dumps(dict(data, requested_at=time.time())), mode=0o600)
-    return {"accepted": True, "message": "正在卸载，Peach 将退出。完成后可关闭此页。"}
+    return {"accepted": True, **message_fields("labels.desktopUninstall.accepted")}
 
 
 # 系统助手从 stdin 接受数据，路径不拼进脚本文本；只清理计划中的目录。
@@ -115,14 +126,15 @@ foreach ($peachPath in @($peachJob.directories) + @($peachJob.files)) {
 if ($peachJob.installer_key -and $peachJob.installer_key -notmatch '^Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\{[0-9A-F-]{36}\}_is1$') { exit 2 }
 if ($peachJob.installer_menu -and [IO.Path]::GetFileName($peachJob.installer_menu) -ne 'Peach.lnk') { exit 2 }
 function Stop-PeachProgramProcesses {
-  # 托盘退出时被硬杀的服务会留下自己的子进程：扫描、转码用的可执行文件可能就在
-  # `_internal` 里。按镜像路径清场，只匹配程序目录前缀加一个分隔符，不误伤名字
-  # 相近的其它解压目录。
-  # 读 `Path` 要打开目标进程、枚举它的全部模块，七百多个进程逐个读一遍要七秒以上，
-  # 删除重试时还要再清场。进程名就是镜像文件名去掉 `.exe`，先拿 `$peachImageNames`
-  # 筛出与程序目录里某个 `.exe` 同名的进程，只读这几个的路径。
-  # `Path` 每读一次都现查一次进程：判空和比前缀各读一次的话，进程恰好在两次之间退出，
-  # 第二次读到的就是 Null。只读一次。
+  # A server killed when the tray quits leaves its child processes behind; scanning and
+  # transcoding executables may live under `_internal`. Clear them by image path, matching only
+  # the program directory prefix plus a separator so similarly named folders are untouched.
+  # Reading `Path` opens the process and enumerates all its modules; doing that for 700+
+  # processes takes over seven seconds, and deletion retries clear again. The process name is
+  # the image name without `.exe`, so first keep only processes named like an `.exe` in the
+  # program directory (`$peachImageNames`) and read just their paths.
+  # Each `Path` read queries the process again: reading it twice (null check, prefix check)
+  # can see Null if the process exits in between. Read it once.
   $peachStrays = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
     $peachImageNames.Contains($_.ProcessName)
   } | Where-Object {
@@ -139,7 +151,7 @@ function Stop-PeachProgramProcesses {
 try {
   function Test-PeachTree($peachNode) {
     $peachItem = Get-Item -LiteralPath $peachNode -Force
-    if ($peachItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('卸载目标含有链接：' + $peachNode) }
+    if ($peachItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ($peachJob.text.linkInside + $peachNode) }
     if ($peachItem.PSIsContainer) {
       foreach ($peachChild in Get-ChildItem -LiteralPath $peachNode -Force) { Test-PeachTree $peachChild.FullName }
     }
@@ -147,7 +159,8 @@ try {
   foreach ($peachPath in @($peachJob.directories) + @($peachJob.files) + @($peachProgram)) {
     if (Test-Path -LiteralPath $peachPath) { Test-PeachTree $peachPath }
   }
-  # 名单在链接检查之后收：程序树里有链接的话上一步已经抛出，递归不会走出程序目录。
+  # Collect names after the link check: a link in the program tree has already thrown, so the
+  # recursion can't leave the program directory.
   $peachImageNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   foreach ($peachExecutable in Get-ChildItem -LiteralPath $peachProgram -Recurse -Force -File -Filter '*.exe') {
     [void]$peachImageNames.Add($peachExecutable.BaseName)
@@ -158,11 +171,11 @@ try {
       if (-not (Test-Path -LiteralPath $peachPath)) { break }
       try {
         $peachItem = Get-Item -LiteralPath $peachPath -Force
-        if ($peachItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('卸载目标是链接：' + $peachPath) }
+        if ($peachItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ($peachJob.text.isLink + $peachPath) }
         Remove-Item -LiteralPath $peachPath -Recurse -Force
         break
       } catch {
-        if ($peachAttempt -le 1) { throw ('删除失败：' + $peachPath + '：' + $_.Exception.Message) }
+        if ($peachAttempt -le 1) { throw ($peachJob.text.deleteFailed + $peachPath + $peachJob.text.separator + $_.Exception.Message) }
         Stop-PeachProgramProcesses
         Start-Sleep -Seconds 2
       }
@@ -171,8 +184,9 @@ try {
   if ($peachJob.delete_data -and (Test-Path -LiteralPath $peachData) -and -not (Get-ChildItem -LiteralPath $peachData -Force | Select-Object -First 1)) {
     Remove-Item -LiteralPath $peachData
   }
-  # 安装包装的程序还有「应用和功能」里那一条和开始菜单项，程序目录删掉后它们都指向空处。
-  # 开始菜单项只在仍指向这个程序目录时才删：同名的可能是另一份安装放的。
+  # An installer-installed program also has an Apps & features entry and a Start menu item, both
+  # pointing at nothing once the program directory is gone. Remove the Start menu item only while
+  # it still points at this program directory: one with the same name may belong to another install.
   if ($peachJob.installer_key) {
     Remove-Item -LiteralPath ('HKCU:\' + $peachJob.installer_key) -Recurse -Force -ErrorAction SilentlyContinue
   }
@@ -184,21 +198,30 @@ try {
   }
 } catch {
   $peachReason = $_.Exception.Message
-  # 弹窗只说原因；日志另记出错的那一行，「不能对 Null 值表达式调用方法」单看查不出是哪一步。
+  # The dialog shows only the reason; the log also records the failing line, because a bare
+  # "cannot call a method on a null-valued expression" doesn't say which step failed.
   $peachWhere = $_.InvocationInfo.PositionMessage
   $peachLog = if ($peachJob.log) { $peachJob.log } else { Join-Path ([IO.Path]::GetTempPath()) 'peach-uninstall.log' }
-  $peachDetail = '原因：' + $peachReason
+  $peachDetail = $peachJob.text.reason + $peachReason
   try {
     Add-Content -LiteralPath $peachLog -Value ((Get-Date -Format s) + '  ' + $peachReason + [Environment]::NewLine + $peachWhere) -Encoding UTF8
-    $peachDetail += [Environment]::NewLine + '详情记录在 ' + $peachLog
+    $peachDetail += [Environment]::NewLine + $peachJob.text.logged + $peachLog
   } catch { }
   if (-not $peachJob.quiet) {
     [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
-    [System.Windows.Forms.MessageBox]::Show('卸载未完成，请手动检查：' + [Environment]::NewLine + $peachProgram + [Environment]::NewLine + $peachData + [Environment]::NewLine + $peachDetail, 'Peach') | Out-Null
+    [System.Windows.Forms.MessageBox]::Show($peachJob.text.incomplete + [Environment]::NewLine + $peachProgram + [Environment]::NewLine + $peachData + [Environment]::NewLine + $peachDetail, 'Peach') | Out-Null
   }
   exit 1
 }
 """
+
+
+def script_text() -> dict[str, str]:
+    """卸载脚本的报错与弹窗文字（`tray.uninstallScript.<名字>`），跟本机语言，经 stdin 交给脚本。"""
+    from . import interface_text
+    language = interface_text.local_language()
+    return {name: interface_text.text(f"server:tray.uninstallScript.{name}", None, language)
+            for name in ("linkInside", "isLink", "deleteFailed", "separator", "reason", "logged", "incomplete")}
 
 
 def poll(tray) -> None:
@@ -215,7 +238,7 @@ def poll(tray) -> None:
             return
         checked = plan(config, delete_data=data["delete_data"])
         if any(data.get(key) != value for key, value in checked.items()):
-            raise ValueError("配置已变更，请重新确认卸载")
+            raise UserValueError("errors.desktopUninstall.configChanged")
         shell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
         # 桌面图标和启动项都在 Peach 数据目录之外，`_SCRIPT` 的路径校验只认 Peach 数据目录里的东西，
         # 列进 `files` 会被它 `exit 2`。卸载前先由这一步把两个 `.lnk` 都撤掉。
@@ -223,7 +246,7 @@ def poll(tray) -> None:
         process = subprocess.Popen([str(shell), "-NoProfile", "-NonInteractive", "-EncodedCommand",
                                     base64.b64encode(_SCRIPT.encode("utf-16-le")).decode("ascii")],
                                    stdin=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
-        job = dict(checked, pid=os.getpid())
+        job = dict(checked, pid=os.getpid(), text=script_text())
         if desktop_installer.installed(Path(checked["program"])):
             job.update(installer_key=desktop_installer.UNINSTALL_KEY,
                        installer_menu=str(desktop_installer.menu_shortcut()))
@@ -233,6 +256,9 @@ def poll(tray) -> None:
         tray.exit(reason="uninstall")
     except Exception as exc:
         path.unlink(missing_ok=True)
-        tray.icon.notify(f"卸载未能启动：{exc}", "Peach")
+        from . import interface_text
+        from .user_messages import nested_message
+        tray.icon.notify(interface_text.text("server:tray.uninstallFailed", {"error": nested_message(exc)},
+                                             interface_text.local_language()), "Peach")
     finally:
         tray._action_lock.release()

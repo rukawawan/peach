@@ -54,7 +54,7 @@ export function openFollowTagFromIndex(tag){indexState.controller.openFollowTag(
 export function installIndex16() {
 followState.FOLLOW_MANAGE_TABS = FOLLOW_MANAGE_TABS;
 applicationEffects.listen(document, 'click', event=>{
-  if(event.target.closest?.('[data-empty-settings]')){openConfigurationSection('媒体库与入库');return}
+  if(event.target.closest?.('[data-empty-settings]')){openConfigurationSection('library');return}
 });
 indexState.peopleIndexLayout = ()=>peopleLayoutOf(preferencesState.appSettings.peopleLayout);
 indexState.personAvatar = avatarForPerson;

@@ -26,6 +26,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import link_status   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.review_csv import read_rows   # noqa: E402
 from peach.social_links import canonical_url   # noqa: E402
 from peach.studio_sites import (   # noqa: E402
@@ -71,20 +72,20 @@ def resolve_entity(connection: sqlite3.Connection, row: dict) -> tuple[int | Non
     raw = str(row.get("entity_id") or "").strip()
     if raw:
         found = connection.execute("SELECT id FROM entity WHERE id=?", (int(raw),)).fetchone()
-        return (found[0], "按 entity_id") if found else (None, f"entity_id {raw} 不存在")
+        return (found[0], t("install_entity_links.byEntityId")) if found else (None, t("install_entity_links.entityMissing", raw=raw))
     kind, name = str(row.get("kind") or "").strip(), str(row.get("name") or "").strip()
     if not kind or not name:
-        return None, "既没有 entity_id，也没有 kind+name"
+        return None, t("install_entity_links.noEntityKey")
     found = connection.execute(
         "SELECT id FROM entity WHERE kind=? AND canonical_name=?", (kind, name)).fetchone()
     if found:
-        return found[0], "按规范名"
+        return found[0], t("install_entity_links.byCanonicalName")
     found = connection.execute(
         "SELECT e.id FROM entity e JOIN entity_alias a ON a.entity_id=e.id "
         "WHERE e.kind=? AND a.alias=?", (kind, name)).fetchone()
     if found:
-        return found[0], "按别名"
-    return None, f"{kind} 「{name}」在账本里找不到"
+        return found[0], t("install_entity_links.byAlias")
+    return None, t("install_entity_links.nameNotFound", kind=kind, name=name)
 
 
 def plan(connection: sqlite3.Connection, rows: list[dict]) -> list[dict]:
@@ -115,9 +116,9 @@ def plan(connection: sqlite3.Connection, rows: list[dict]) -> list[dict]:
         elif stored is None:
             item.update(action="insert", reason=note)
         elif stored[0] != item["label"]:
-            item.update(action="relabel", reason=f"已存在，label 对齐复核表（库内「{stored[0]}」）")
+            item.update(action="relabel", reason=t("install_entity_links.relabel", label=stored[0]))
         else:
-            item["reason"] = "已存在，跳过"
+            item["reason"] = t("install_entity_links.existsSkipped")
         planned.append(item)
     return planned
 
@@ -128,11 +129,11 @@ def row_problem(entity_id: int | None, note: str, link_kind: str, url: str,
     if entity_id is None:
         return note
     if link_kind not in LINK_KINDS:
-        return f"link_kind 「{link_kind}」不在 {sorted(LINK_KINDS)} 内"
+        return t("install_entity_links.badLinkKind", linkKind=link_kind, kinds=str(sorted(LINK_KINDS)))
     if not url or urlsplit(url).scheme not in {"http", "https"}:
-        return f"URL 不可用：{url or '空'}"
+        return t("install_entity_links.badUrl", url=url or t("install_entity_links.emptyUrl"))
     if not label:
-        return "没有 label；资料页要拿它当链接文字"
+        return t("install_entity_links.noLabel")
     return ""
 
 
@@ -158,7 +159,7 @@ def resolves(url: str, timeout: float = 12.0,
                                               max_keepalive_connections=0)) as client:
             return client.get(target, headers={"User-Agent": USER_AGENT})
 
-    note = "取不到"
+    note = t("install_entity_links.unreachable")
     for attempt in range(tries):
         try:
             response = get(url)
@@ -166,7 +167,7 @@ def resolves(url: str, timeout: float = 12.0,
             parked = parked_after_certificate_error(url, exc, get)
             if parked:
                 return False, parked
-            note = f"取不到：{type(exc).__name__}"
+            note = t("install_entity_links.unreachableError", error=type(exc).__name__)
             if attempt + 1 < tries:
                 time.sleep(pause)
             continue
@@ -176,7 +177,7 @@ def resolves(url: str, timeout: float = 12.0,
         parked = response_parked_reason(response)
         if parked:
             return False, parked
-        return True, "可打开"
+        return True, t("install_entity_links.reachable")
     return False, note
 
 
@@ -212,7 +213,7 @@ def check_links(planned: list[dict], interval: float = 0.4, probe=None) -> None:
             continue
         ok, note = probe(item["url"])
         if not ok:
-            item.update(action="skip", reason=f"打不开，不写入（{note}）")
+            item.update(action="skip", reason=t("install_entity_links.deadSkipped", note=note))
         if probe is resolves:
             time.sleep(interval)
 
@@ -291,19 +292,18 @@ def relabel(connection: sqlite3.Connection, planned: list[dict]) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("install_entity_links.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--input", type=Path,
-                        help=f"复核表，列：{','.join(FIELDS)}")
+                        help=t("install_entity_links.inputHelp", fields=','.join(FIELDS)))
     parser.add_argument("--prune-dead", action="store_true",
-                        help="改为清理库里已经打不开的链接，不读 --input")
+                        help=t("install_entity_links.pruneDeadHelp"))
     parser.add_argument("--host", default="",
-                        help="配合 --prune-dead：只查这个站和它的子域，例如一家已注销的事务所")
+                        help=t("install_entity_links.hostHelp"))
     parser.add_argument("--retired", action="store_true",
-                        help="配合 --prune-dead：只查已隐退女优的官网链接")
+                        help=t("install_entity_links.retiredHelp"))
     parser.add_argument("--no-check", action="store_true",
-                        help="跳过「地址能不能打开」的检查。只在离线复核时用——"
-                             "首批 703 条就是没验直接装的，事后发现 37%% 是死链")
+                        help=t("install_entity_links.noCheckHelp"))
     return parser
 
 
@@ -320,10 +320,10 @@ def prune(connection: sqlite3.Connection, args) -> int:
         # 留着不删，但必须看得见——静默保留和静默删除一样，都会让人以为库是干净的。
         print(f" ? {item['entity'][:14]:<14} {item['link_kind']:<8} "
               f"{item['label'][:18]:<18} {item['note']:<14} {item['url'][:52]}")
-    print({"库内链接": before, "打不开": len(unreachable),
-           "确证已没了（删除或标记）": len(gone), "取不到但不算证据（保留待复查）": len(unclear)})
+    print({t("install_entity_links.linksInDatabase"): before, t("install_entity_links.unreachableCount"): len(unreachable),
+           t("install_entity_links.confirmedGone"): len(gone), t("install_entity_links.inconclusive"): len(unclear)})
     if not args.apply:
-        print("dry-run；确认无误后加 --apply --backup <路径>")
+        print(t("install_entity_links.dryRun"))
         return 0
 
     # 已隐退女优的留成失效标记，其余删除，取舍见 `link_status`。
@@ -331,11 +331,11 @@ def prune(connection: sqlite3.Connection, args) -> int:
         removed, marked = link_status.settle_gone(connection, gone)
     after = connection.execute("SELECT count(*) FROM entity_link").fetchone()[0]
     integrity, orphans = verify_after_write(connection)
-    print({"删除前": before, "删除后": after, "删除": removed, "标记失效": marked,
+    print({t("install_entity_links.beforeDelete"): before, t("install_entity_links.afterDelete"): after, t("install_entity_links.deleted"): removed, t("install_entity_links.markedGone"): marked,
            "integrity_check": integrity, "foreign_key_check": orphans})
     if (before - after != removed or removed + marked != len(gone)
             or integrity != "ok" or orphans):
-        print("[warn] 前后差值、完整性或外键与预期不符，请人工核对")
+        print(t("install_entity_links.checkMismatch"))
         return 1
     return 0
 
@@ -347,14 +347,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not args.prune_dead and not args.input:
-        print("[stop] 需要 --input（写入复核表）或 --prune-dead（清理死链）")
+        print(t("install_entity_links.needInput"))
         return 2
 
     # dry-run 拿到的是 `mode=ro` 连接，`--apply` 拿到的是「备份已经落好」的可写连接。
     # 备份先于任何写入完成，所以不必再推断「这份备份是写之前还是写之后的」。
     connection = open_for_write(args)
     if args.apply:
-        print(f"已备份：{args.backup}")
+        print(t("install_entity_links.backedUp", backup=args.backup))
     connection.execute("PRAGMA foreign_keys=ON")
     if args.prune_dead:
         try:
@@ -367,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         before = connection.execute("SELECT count(*) FROM entity_link").fetchone()[0]
         planned = plan(connection, rows)
         if args.no_check:
-            print("[warn] 已跳过可达性检查：打不开的地址会照样写进账本")
+            print(t("install_entity_links.checkSkipped"))
         else:
             check_links(planned)
         for item in planned:
@@ -376,11 +376,11 @@ def main(argv: list[str] | None = None) -> int:
                   f"{str(item['url'])[:44]:<44} {item['reason']}")
         inserts = [item for item in planned if item["action"] == "insert"]
         relabels = [item for item in planned if item["action"] == "relabel"]
-        print({"输入": len(rows), "将写入": len(inserts), "将改 label": len(relabels),
-               "跳过": len(planned) - len(inserts) - len(relabels),
-               "写入前 entity_link": before})
+        print({t("install_entity_links.inputRows"): len(rows), t("install_entity_links.toWrite"): len(inserts), t("install_entity_links.toRelabel"): len(relabels),
+               t("install_entity_links.skipped"): len(planned) - len(inserts) - len(relabels),
+               t("install_entity_links.linksBefore"): before})
         if not args.apply:
-            print("dry-run；确认无误后加 --apply --backup <路径>")
+            print(t("install_entity_links.dryRun"))
             return 0
 
         with connection:
@@ -388,11 +388,11 @@ def main(argv: list[str] | None = None) -> int:
             renamed = relabel(connection, planned)
         after = connection.execute("SELECT count(*) FROM entity_link").fetchone()[0]
         integrity, orphans = verify_after_write(connection)
-        print({"实际写入": written, "实际改 label": renamed, "写入后 entity_link": after,
-               "差值": after - before, "integrity_check": integrity,
+        print({t("install_entity_links.written"): written, t("install_entity_links.relabeled"): renamed, t("install_entity_links.linksAfter"): after,
+               t("install_entity_links.delta"): after - before, "integrity_check": integrity,
                "foreign_key_check": orphans})
         if after - before != written or renamed != len(relabels) or integrity != "ok" or orphans:
-            print("[warn] 前后差值、完整性或外键与预期不符，请人工核对")
+            print(t("install_entity_links.checkMismatch"))
             return 1
     finally:
         connection.close()

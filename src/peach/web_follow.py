@@ -22,14 +22,14 @@ from datetime import timedelta
 from pathlib import Path
 from typing import NamedTuple
 
-from . import avatar_face, follow_assets, follow_creators, follow_providers, wants
+from . import avatar_face, follow_assets, follow_creators, follow_providers, interface_text, wants
 from .follow import FollowSourceError
 from .follow_faces import annotate_group
 from .follow_check import plan_check, run_check
 from .follow_covers import fanbox_video_indexes
 from .web_settings import follow_initial_days
 from .follow_discovery import (
-    MAX_SUGGESTIONS, PROFILE_ALIAS_SKIP_SERVICES, archive_suggestions, discover,
+    MAX_SUGGESTIONS, PROFILE_ALIAS_SKIP_SERVICES, TAG_TYPES, archive_suggestions, discover,
     discovery_plan, no_backoff, suggest_term, tag_suggestions,
 )
 from .follow_image_dims import positive_dims
@@ -52,6 +52,8 @@ from .entities import canonicalize_entity_name, normalize_entity_name, prefer_en
 from .taste_history import read_creator_candidates
 from .web_state import path_version
 from .online_tag_management import OnlineTagPolicy, TYPE_RANK, tag_key
+from .user_messages import UserInterruptedError, UserValueError, failure_fields, message_fields
+from .coded_text import coded, restored
 
 
 #: 界面上给每个来源的中文短名。没登记的 provider 直接显示原名。
@@ -1191,12 +1193,20 @@ def _profile_link_suggestions(rows, aliases: dict[str, str]) -> list[dict]:
             suggestions.append({
                 "canonical": canonical,
                 "alias": handle,
-                "evidence": f"{PROVIDER_LABELS.get(row['provider'], row['provider'])}"
-                            f" 首楼的创作者主页链接指向 {service}/{handle}",
+                **_evidence("labels.webFollow.profileLinkEvidence", {
+                    "provider": PROVIDER_LABELS.get(row['provider'], row['provider']),
+                    "service": service, "handle": handle}),
             })
             if len(suggestions) >= MAX_ALIAS_SUGGESTIONS:
                 return suggestions
     return suggestions
+
+
+def _evidence(code: str, params: dict | None = None) -> dict:
+    """别名建议的那句依据：`evidence` 是 zh-CN 原文，`evidence_code` 与 `evidence_params` 给界面取译文。"""
+    values = dict(params or {})
+    return {"evidence": interface_text.text(f"server:{code}", values),
+            "evidence_code": code, "evidence_params": values}
 
 
 def _follow_alias_suggestions(rows, aliases: dict[str, str]) -> list[dict]:
@@ -1235,7 +1245,7 @@ def _follow_alias_suggestions(rows, aliases: dict[str, str]) -> list[dict]:
             suggestions.append({
                 "canonical": shorter["name"],
                 "alias": longer["name"],
-                "evidence": "规范化名称存在包含关系，仅供人工确认",
+                **_evidence("labels.webFollow.nameContainsEvidence"),
             })
             if len(suggestions) >= MAX_ALIAS_SUGGESTIONS:
                 return suggestions
@@ -1280,7 +1290,8 @@ def _source_payload(row, aliases: dict[str, str] | None = None) -> dict:
         "created_at": row["created_at"],
         "last_checked_at": row["last_checked_at"],
         "last_status": "not_modified" if history_exhausted else row["last_status"],
-        "last_error": None if history_exhausted else row["last_error"],
+        **coded("last_error", None if history_exhausted else
+                restored(row["last_error"], row["last_error_code"], row["last_error_params"])),
         "history_exhausted": history_exhausted,
     }
 
@@ -1676,10 +1687,10 @@ def _sorted_groups(groups: tuple, sort: str, direction: str, seed: int = 1) -> t
 #: 建议分组的名字与先后。顺序在这里定，页面照抄——两侧各排一次的话，改了一侧就会
 #: 出现「服务端认为最该先看的组显示在第三位」。
 FOLLOW_SUGGEST_GROUPS = (
-    ("followed", "已关注"),
-    ("archive", "归档站的创作者"),
-    ("tag_artist", "Rule34.xxx 的创作者"),
-    ("tag", "Rule34.xxx 标签"),
+    ("followed", "labels.webFollow.suggestFollowed"),
+    ("archive", "labels.webFollow.suggestArchive"),
+    ("tag_artist", "labels.webFollow.suggestTagArtist"),
+    ("tag", "labels.webFollow.suggestTag"),
 )
 
 
@@ -1751,11 +1762,14 @@ def q_follow_suggest(contract, q: str, limit: int = MAX_SUGGESTIONS,
     # 的才标，`角色`／`作品` 之间的差别正是这一列存在的理由。
     buckets["tag_artist"] = [{"value": row.value, "n": row.count, "matched": ""}
                              for row in tags if row.tag_type == "artist"]
-    buckets["tag"] = [{"value": row.value, "n": row.count, "matched": row.matched}
+    buckets["tag"] = [{"value": row.value, "n": row.count, "matched": row.matched,
+                       **({"matched_code": f"labels.followDiscovery.tagType.{row.tag_type}"}
+                          if row.tag_type in TAG_TYPES else {})}
                       for row in tags if row.tag_type != "artist"]
     return {"q": query, "groups": [
-        {"kind": kind, "label": label, "items": buckets[kind]}
-        for kind, label in FOLLOW_SUGGEST_GROUPS if buckets[kind]
+        {"kind": kind, "label": interface_text.text(f"server:{code}"), "label_code": code,
+         "items": buckets[kind]}
+        for kind, code in FOLLOW_SUGGEST_GROUPS if buckets[kind]
     ]}
 
 
@@ -2100,7 +2114,7 @@ def w_follow_tag(contract, body) -> dict:
         item = _store(contract, connection).item(int(body['id']))
         enabled = {row['id'] for row in _store(contract, connection).sources() if row['enabled']}
         if item is None or item.source_id not in enabled or _excluded_item(item):
-            raise ValueError('关注内容不存在')
+            raise UserValueError('api.follow.itemMissing')
         write_item_tag(connection, item, body)
     contract.cache_bust()
     page = q_follow(contract, {'item': item.id})
@@ -2108,7 +2122,7 @@ def w_follow_tag(contract, body) -> dict:
         for projected in (group['primary'], *group['variants'], *group['duplicates']):
             if projected['id'] == item.id:
                 return {'ok': True, 'item': projected, 'group': group}
-    raise ValueError('关注内容已不可用')
+    raise UserValueError('api.follow.itemUnavailable')
 
 
 def w_follow_status(contract, body) -> dict:
@@ -2167,18 +2181,18 @@ def w_follow_image_dims(contract, body) -> dict:
     """
     entries = body.get("entries")
     if not isinstance(entries, list):
-        raise ValueError("entries 必须是列表")
+        raise UserValueError("api.follow.entriesNotList")
     if len(entries) > IMAGE_DIMS_BATCH_LIMIT:
-        raise ValueError(f"一次最多回写 {IMAGE_DIMS_BATCH_LIMIT} 张")
+        raise UserValueError("api.follow.imageDimsBatchLimit", {"limit": IMAGE_DIMS_BATCH_LIMIT})
     learned = 0
     with contract.database.write_transaction() as connection:
         store = _store(contract, connection)
         for entry in entries:
             if not isinstance(entry, dict):
-                raise ValueError("每一项必须是对象")
+                raise UserValueError("api.follow.entryNotObject")
             dims = positive_dims(entry.get("width"), entry.get("height"))
             if dims is None:
-                raise ValueError("width/height 必须是正整数")
+                raise UserValueError("api.follow.invalidImageDims")
             media = entry.get("media")
             index = int(media) if media is not None else None
             if store.set_image_dims(int(entry["item"]), *dims, media_index=index):
@@ -2341,10 +2355,10 @@ def _check_payload(result) -> dict:
         payload.update({"status": result.status, "error": result.error})
         return payload
     if result.status == "skipped":
-        payload.update({"deferred": True, "message": result.message})
+        payload.update({"deferred": True, **coded("message", result.message)})
         return payload
     if result.exhausted:
-        payload.update({"exhausted": True, "message": result.message})
+        payload.update({"exhausted": True, **coded("message", result.message)})
         return payload
     fetch, outcome = result.fetch, result.outcome
     payload.update({
@@ -2359,7 +2373,7 @@ def _check_payload(result) -> dict:
         # 列表判不出来、额外抓了详情页的条数。这是唯一会放大请求数的路径。
         "probed": fetch.probed,
         # 证据没存下来不算检查失败，但界面必须说出来，不能悄悄少一份原始响应。
-        "evidence_error": outcome.evidence_error,
+        **coded("evidence_error", outcome.evidence_error),
         "author_alias_learned": result.author_alias_learned,
     })
     return payload
@@ -2382,7 +2396,7 @@ class _FollowCheckSession:
 
     def checkpoint(self, **fields):
         if self.job_id and not self.contract.follow_job.checkpoint(self.job_id, **fields):
-            raise InterruptedError('关注检查已停止')
+            raise UserInterruptedError("errors.webFollow.checkStopped")
 
     def remember(self, row, result, *, finished):
         if result.get('deferred'):
@@ -2410,7 +2424,7 @@ class _FollowCheckSession:
         older = bool(self.body.get('older'))
         for round_index in range(501):
             if self.job_id and self.contract.follow_job.snapshot() is None:
-                raise InterruptedError('关注检查已停止')
+                raise UserInterruptedError("errors.webFollow.checkStopped")
             result = _check_payload(run_check(row, credentials=self.credentials, writer=self.writer,
                 connector_factory=build_connector, older=older, progress=progress,
                 initial_days=self.initial_days, cooldown=self.cooldown))
@@ -2593,7 +2607,7 @@ def w_follow_source(contract, body) -> dict:
             store = _store(contract, connection)
             exists = any(row["id"] == source_id for row in store.sources())
             if not exists:
-                raise ValueError("这个关注来源不存在")
+                raise UserValueError("api.follow.sourceMissing")
             store.set_enabled(source_id, enabled)
         return {"ok": True, "source": source_id, "enabled": enabled}
     if action != "add":
@@ -2630,8 +2644,8 @@ def w_follow_source(contract, body) -> dict:
             "source": source_id, "provider": parsed.provider,
             "provider_label": PROVIDER_LABELS.get(parsed.provider, parsed.provider),
             "ref": parsed.ref, "label": label, "ok": True, "deferred": True,
-            "message": ("已登记，等待检查更新" if body.get("defer_check") else
-                        "已登记，另一次检查正在进行，这条稍后再查"),
+            **message_fields("api.follow.addedPendingCheck" if body.get("defer_check") else
+                             "api.follow.addedCheckBusy"),
         }
     return {"ok": True, "source": source_id, "provider": parsed.provider,
             "ref": parsed.ref, "label": label, "checked": outcome,
@@ -2680,7 +2694,7 @@ def w_follow_creator(contract, body) -> dict:
     """资料页上「是同一个人」：把同名等确认的那组关注作者绑到这位创作者名下。"""
     entity_id, key = body.get("entity_id"), str(body.get("key") or "")
     if type(entity_id) is not int or not key.startswith("name:"):
-        raise ValueError("entity_id 与 key 都要给")
+        raise UserValueError("api.follow.creatorBindingIncomplete")
     with contract.database.write_transaction() as connection:
         written = follow_creators.confirm(connection, entity_id, key)
     contract.cache_bust()
@@ -2700,9 +2714,9 @@ def w_follow_author_alias(contract, body) -> dict:
             linked = {int(row["entity_id"]) for row in store.sources()
                       if row["entity_id"] and name_key(row, mapping) == f"name:{key}"}
             if len(linked) > 1:
-                raise ValueError("这组别名关联了多份创作者档案，请先确认档案归属")
+                raise UserValueError("api.follow.aliasGroupSpansProfiles")
             if not chosen:
-                raise ValueError("请填写有效的创作者名称")
+                raise UserValueError("api.follow.creatorNameRequired")
             result = store.rename_author_group(key, chosen)
             for entity_id in linked:
                 connection.execute(
@@ -2737,20 +2751,29 @@ MAX_RESOLVE_LINES = 40
 MAX_DISCOVERY_ALIASES = 8
 
 
+def _phrase_fields(key: str, text: object, phrase: dict | None) -> dict:
+    """`<key>` 放 zh-CN 原文，有 code 时旁边是 `<key>_code`、`<key>_params`（`follow_discovery.phrase` 那一句，
+    或身上带 code 的 `Said`），前端 `codedText` 按当前语言显示。"""
+    if isinstance(phrase, dict):
+        return {key: text, f"{key}_code": phrase["code"], f"{key}_params": dict(phrase.get("params") or {})}
+    return coded(key, text)
+
+
 def _candidate_payload(candidate, *, author: str = "") -> dict:
     return {"provider": candidate.provider,
             "provider_label": PROVIDER_LABELS.get(candidate.provider, candidate.provider),
             "ref": canonical_source_ref(candidate.provider, candidate.ref),
-            "url": candidate.url, "label": candidate.label, "author": author,
-            "aliases": list(getattr(candidate, "aliases", ())),
-            "semantics": candidate.semantics, "evidence": candidate.evidence}
+            "url": candidate.url, **_phrase_fields("label", candidate.label, getattr(candidate, "label_phrase", None)),
+            "author": author, "aliases": list(getattr(candidate, "aliases", ())),
+            "semantics": candidate.semantics,
+            **_phrase_fields("evidence", candidate.evidence, getattr(candidate, "reason", None))}
 
 
 def _external_search_payload(search) -> dict:
     return {"provider": search.provider,
             "provider_label": PROVIDER_LABELS.get(search.provider, search.provider),
-            "label": search.label, "query": search.query,
-            "url": search.url, "evidence": search.evidence}
+            **_phrase_fields("label", search.label, search.label_phrase), "query": search.query,
+            "url": search.url, **_phrase_fields("evidence", search.evidence, search.reason)}
 
 
 def _resolve_follow_line(contract, line, known, on_progress):
@@ -2759,18 +2782,18 @@ def _resolve_follow_line(contract, line, known, on_progress):
         parsed = parse_source_url(line)
     except FollowSourceError as url_error:
         if '://' in line or '/' in line:
-            return {'line': line, 'kind': 'error', 'error': str(url_error)}
+            return {'line': line, 'kind': 'error', **failure_fields(url_error)}
         try:
             found = discover(line, secrets_root=contract.follow_secrets_root,
                              shared_root=contract.follow_shared_root,
                              state_root=contract.follow_state_root, on_progress=on_progress)
         except (FollowSourceError, CredentialError) as term_error:
-            return {'line': line, 'kind': 'error', 'error': str(term_error)}
+            return {'line': line, 'kind': 'error', **failure_fields(term_error)}
         return {'line': line, 'kind': 'term',
                 'candidates': [{**_candidate_payload(c, author=line),
                                 'known': (c.provider, canonical_source_ref(c.provider, c.ref)) in known}
                                for c in found.candidates],
-                'failures': found.failures,
+                'failures': found.failures, 'failure_codes': found.failure_phrases,
                 'external_searches': [_external_search_payload(search) for search in found.external_searches]}
     return {'line': line, 'kind': 'url',
             'candidates': [{**_candidate_payload(parsed),
@@ -2791,7 +2814,7 @@ def w_follow_resolve(contract, body, *, progress=None, checkpoint=None, resume_s
                 progress=lambda **fields: job.update(job_id, **fields),
                 checkpoint=lambda **fields: job.checkpoint(job_id, **fields), resume_state=job.snapshot())
             job.update(job_id, **result, status="complete", completed_at=time.time())
-        return job.start(work, restart=True, initial={"message": "正在准备查找关注来源"},
+        return job.start(work, restart=True, initial=message_fields("jobMessage.webFollow.resolvePreparing"),
                          recovery={'lines': body.get('lines'), 'background': True})
     raw = body.get("lines")
     if isinstance(raw, str):
@@ -2800,9 +2823,9 @@ def w_follow_resolve(contract, body, *, progress=None, checkpoint=None, resume_s
         raise ValueError("lines must be a list of strings")
     lines = [str(line).strip() for line in raw if str(line).strip()]
     if not lines:
-        raise ValueError("没有可解析的内容")
+        raise UserValueError("api.follow.nothingToResolve")
     if len(lines) > MAX_RESOLVE_LINES:
-        raise ValueError(f"一次最多解析 {MAX_RESOLVE_LINES} 行，收到 {len(lines)} 行")
+        raise UserValueError("api.follow.resolveLineLimit", {"limit": MAX_RESOLVE_LINES, "count": len(lines)})
 
     known = {(row["provider"], canonical_source_ref(row["provider"], row["ref"])) for row in
              (_source_payload(r) for r in _existing_sources(contract))}
@@ -2825,11 +2848,14 @@ def w_follow_resolve(contract, body, *, progress=None, checkpoint=None, resume_s
     def source_progress(line_index: int):
         def note(provider: str, position: int, plan_total: int) -> None:
             if progress is not None:
-                label = PROVIDER_LABELS.get(provider, provider)
-                progress(
-                    checked=done_units + position, total=total_units,
-                    message=f"查找关注来源：来源 {done_units + position + 1}/{total_units} · {label}"
-                            + (f"（第 {line_index + 1}/{len(lines)} 行）" if len(lines) > 1 else ""))
+                params = {"current": done_units + position + 1, "total": total_units,
+                          "provider": PROVIDER_LABELS.get(provider, provider)}
+                if len(lines) > 1:
+                    message = message_fields("jobMessage.webFollow.resolveProgressLines",
+                                             {**params, "line": line_index + 1, "lines": len(lines)})
+                else:
+                    message = message_fields("jobMessage.webFollow.resolveProgress", params)
+                progress(checked=done_units + position, total=total_units, **message)
 
         return note
 
@@ -2843,12 +2869,12 @@ def w_follow_resolve(contract, body, *, progress=None, checkpoint=None, resume_s
             results = [row for row in results if row['line'] != line]
             results.append(result)
             if checkpoint and not checkpoint(results=results.copy(), checked=done_units + plan_units(line), total=total_units):
-                raise InterruptedError('关注来源查找已停止')
+                raise UserInterruptedError("errors.webFollow.resolveStopped")
         done_units += plan_units(line)
     if progress is not None and total_units:
         # 每个来源是开查前报一次自己的序号，最后一个报的是 total-1；收尾这一下才走满。
         progress(checked=total_units, total=total_units,
-                 message=f"查找关注来源：{total_units} 个来源已查完")
+                 **message_fields("jobMessage.webFollow.resolveDone", {"total": total_units}))
     return {"ok": True, "results": results}
 
 
@@ -2873,14 +2899,15 @@ def w_follow_credential(contract, body) -> dict:
     provider = str(body.get("provider") or "")
     guide = CREDENTIAL_GUIDE.get(provider)
     if guide is None or not guide.get("fields"):
-        raise ValueError(f"{provider or '(空)'} 不接受凭据")
+        raise (UserValueError("api.follow.credentialsNotAccepted", {"provider": provider}) if provider
+               else UserValueError("api.follow.credentialsProviderMissing"))
     values = body.get("values")
     if not isinstance(values, dict):
         raise ValueError("values must be an object")
     allowed = set(guide["fields"])
     unknown = sorted(set(values) - allowed)
     if unknown:
-        raise ValueError(f"{provider} 不认识这些字段：{', '.join(unknown)}")
+        raise UserValueError("api.follow.unknownCredentialFields", {"provider": provider, "fields": ", ".join(unknown)})
     cleaned = {name: str(values[name]).strip() for name in guide["fields"]
                if str(values.get(name) or "").strip()}
     store = _credential_store(contract)
@@ -2890,9 +2917,10 @@ def w_follow_credential(contract, body) -> dict:
         # `load()` 会从共享副本把 key 重新拼回来，而共享副本还会跟着 peach-sync
         # 传到另一台，变成哪台都撤不掉。共享盘不在就如实说，不静默跳过。
         outcome = store.clear(provider)
+        note = CLEAR_NOTES.get(str(outcome["shared"]))
         return {"ok": True, "provider": provider, "cleared": True,
                 "shared_cleared": outcome["shared"],
-                "note": CLEAR_NOTES.get(str(outcome["shared"]), ""),
+                "note": interface_text.text(f"server:{note}") if note else "", "note_code": note or "",
                 "saved": store.describe(provider)}
     _write_secret(path, cleaned)
     shared_written = _write_shared(store, provider, cleaned)
@@ -2907,7 +2935,7 @@ def w_follow_credential(contract, body) -> dict:
 #: 撤销后要不要多说一句。共享副本删掉了或压根没有都不必打扰用户；
 #: 只有「盘不在、这次只撤掉了本机」必须说出来，否则用户以为撤干净了。
 CLEAR_NOTES = {
-    "offline": "共享盘不在，只撤掉了本机这份。等盘回来要再撤一次，否则会被同步回来。",
+    "offline": "labels.webFollow.sharedOfflineNote",
 }
 
 
@@ -2964,9 +2992,9 @@ def q_follow_credentials(contract, _args) -> dict:
             "requirement": guide["requirement"],
             "needs": fields,
             "missing": [name for name in fields if name not in described["fields"]],
-            "why": guide.get("why", ""),
+            "why": guide.get("why", ""), "why_code": guide.get("why_code", ""),
             "where": guide.get("where", ""),
-            "howto": guide.get("howto", ""),
+            "howto": guide.get("howto", ""), "howto_code": guide.get("howto_code", ""),
             "path": str(store.path_for(provider)),
             "example": (json.dumps({name: "…" for name in fields}, ensure_ascii=False)
                         if fields else ""),

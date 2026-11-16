@@ -157,6 +157,7 @@ export async function visit(browser: Browser, path: string, viewport: Viewport,
   prepare?: (page: Page) => Promise<void>): Promise<Visit> {
   const origin = requiredEnv('PEACH_E2E_ORIGIN');
   const context: BrowserContext = await browser.newContext({
+    locale: 'zh-CN',
     viewport: { width: viewport.width, height: viewport.height },
     isMobile: viewport.mobile,
     hasTouch: viewport.mobile,

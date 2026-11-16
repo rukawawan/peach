@@ -28,7 +28,13 @@ def _collision(connection: sqlite3.Connection, entity_id: int, part: str) -> str
         "SELECT id, kind, canonical_name FROM entity "
         "WHERE normalized_name=? AND id<>?",
         (normalize_entity_name(part), entity_id)).fetchone()
-    return "" if row is None else f"撞 entity {row[0]}（{row[1]}）{row[2]}"
+    return "" if row is None else _said("collision", entity=row[0], kind=row[1], name=row[2])
+
+
+def _said(name: str, /, **params) -> str:
+    """判定说明，写进拆分复核 CSV 的 `note` 列；按 zh-CN 资源渲染（`server:labels.compositeAliasRepair.<名字>`）。"""
+    from . import interface_text
+    return interface_text.text(f"server:labels.compositeAliasRepair.{name}", params)
 
 
 def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
@@ -48,11 +54,11 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
             # 判据是「签名匹配上了」，不是「拆出几段」。`Rei Mizuna (Rei Mizuna)` 去重后
             # 只剩一段，但它照样是那个打包字段，照样得换成干净的一行。
             if parts == [value.strip()]:
-                note = "不是罗马字复合人名"
+                note = _said("notComposite")
             elif kind not in PERSON_KINDS:
-                note = f"{kind} 的括号不是艺名"
+                note = _said("notStageName", kind=kind)
             elif field == "canonical":
-                note = "规范名要人工定留哪一个"
+                note = _said("canonicalNeedsReview")
             else:
                 collisions = [c for c in (_collision(connection, int(entity_id), part)
                                           for part in parts) if c]

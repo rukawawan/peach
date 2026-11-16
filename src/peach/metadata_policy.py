@@ -259,7 +259,7 @@ def sort_candidates(field: str, candidates: Iterable[Mapping[str, object]], *,
                     code: str | None = None) -> list[dict]:
     """同一字段的候选按来源顺序表排，同位次按置信度，再按来源名兜底保证确定。"""
     if field not in PEACH_FIELDS:
-        raise ValueError("未知 Peach 元数据字段：" + field)
+        raise ValueError("unknown Peach metadata field: " + field)
     rows = [dict(candidate) for candidate in candidates]
     for row in rows:
         row["field_rank"] = field_rank(field, str(row.get("source") or ""), code=code)

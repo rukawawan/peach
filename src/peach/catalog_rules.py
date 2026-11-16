@@ -15,10 +15,17 @@ from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import PureWindowsPath
 
+#: 规则给出的几种取值（ADR-0162 的英文 id）。本模块是最底层纯规则、不依赖别的 Peach 模块，定义放在这里，
+#: `catalog_vocabulary` 从这里导入后对外提供，含义与用法见那边的说明。
+PERFORMER_TAG_PREFIX = "performer:"
+CHINESE_SUBTITLES = "chinese-subtitles"
+UNCENSORED, UNCENSORED_LEAK, UNCENSORED_CRACK = "uncensored", "uncensored-leak", "uncensored-crack"
+FC2_MAIN_PART, FC2_BONUS_PREFIX = "main", "bonus-"
+
 
 VIDEO_EXTENSIONS = frozenset({
     '.mp4', '.m4v', '.mkv', '.avi', '.wmv', '.mov', '.ts', '.flv', '.rmvb', '.mpg',
-    '.m2ts', '.strm', '.iso',
+    '.m2ts', '.strm', '.iso', '.webm',
 })
 AUDIO_EXTENSIONS = frozenset({'.mp3', '.flac', '.wav', '.m4a', '.ogg', '.opus'})
 _EXTRA_SUFFIXES = {
@@ -965,8 +972,17 @@ def _tokyo_hot_from_text(text: str) -> str:
     return ""
 
 
+class CodePatternError(ValueError):
+    """番号识别规则写错了。`code`、`params` 是给用户看的那句的语言资源键与参数，调用方据此转成带 code 的报错
+    （本模块是最底层的纯规则，不依赖 Peach 的其他模块）。"""
+
+    def __init__(self, code: str, params: dict | None = None) -> None:
+        self.code, self.params = code, dict(params or {})
+        super().__init__(f"invalid code pattern ({code})")
+
+
 def compile_code_patterns(raw) -> tuple[re.Pattern, ...]:
-    """把用户写的番号识别规则编译成正则；写错的规则抛 `ValueError`，消息给用户看。
+    """把用户写的番号识别规则编译成正则；写错的规则抛 `CodePatternError`（`ValueError`），带给用户看的 code。
 
     每条规则是一个对完整文件名做搜索的正则。番号取命名组 `code`，没有就取第一个
     括号，再没有就取整段匹配。`(?<code>…)` 是多数在线正则工具的写法，Python 写作
@@ -975,18 +991,20 @@ def compile_code_patterns(raw) -> tuple[re.Pattern, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, (list, tuple)):
-        raise ValueError("番号识别规则要写成一组正则表达式")
+        raise CodePatternError("errors.catalogRules.codePatternsNotList")
     rules = [str(rule).strip() for rule in raw if str(rule or "").strip()]
     if len(rules) > CODE_PATTERN_LIMIT:
-        raise ValueError(f"番号识别规则最多 {CODE_PATTERN_LIMIT} 条")
+        raise CodePatternError("errors.catalogRules.codePatternsTooMany", {"limit": CODE_PATTERN_LIMIT})
     compiled = []
     for index, rule in enumerate(rules, 1):
         if len(rule) > CODE_PATTERN_MAX_LENGTH:
-            raise ValueError(f"第 {index} 条规则超过 {CODE_PATTERN_MAX_LENGTH} 个字符")
+            raise CodePatternError("errors.catalogRules.codePatternTooLong",
+                                   {"index": index, "limit": CODE_PATTERN_MAX_LENGTH})
         try:
             compiled.append(re.compile(_PCRE_NAMED_GROUP.sub("(?P<", rule), re.I))
         except re.error as error:
-            raise ValueError(f"第 {index} 条规则不是有效的正则表达式：{error}") from None
+            raise CodePatternError("errors.catalogRules.codePatternInvalid",
+                                   {"index": index, "error": str(error)}) from None
     return tuple(compiled)
 
 
@@ -1170,13 +1188,15 @@ def jav_edition_badges(name: str | None, code: str | None,
                        source_names: tuple[str, ...] | list[str] = ()) -> list[str]:
     """Project filename/tag evidence into compact edition badges beside the code.
 
+    给出的是版次 id（`catalog_vocabulary` 的 `CHINESE_SUBTITLES`、`UNCENSORED` 等），界面按语言显示。
+
     `source_names` 是这个文件来源处的名字：云下载的种子名与网盘任务名。网盘离线下载
     落地的文件名常常只剩番号，`SONE-804ch` 里的 `ch` 只留在任务名上。来源名按同一套
     判据读，和文件名的关系是：
     - 中字只有「有」这一个方向，任何一边有就算；
     - 无码类版次以文件侧（文件名、番号形状、标签）为准；文件侧什么都没说，或只有泛泛的
       `-U`／标签「无码」时，才用来源名里明说的那一档。文件名写 `-U`、种子名写「流出」，
-      结果是「无码流出」。
+      结果是无码流出（`UNCENSORED_LEAK`）。
     几个来源名之间不分先后，各取所说最具体的一档（`UNCENSORED_EDITIONS` 的次序）。
     """
     subtitled, kind, generic = _edition_evidence(name, code, tags)
@@ -1191,12 +1211,12 @@ def jav_edition_badges(name: str | None, code: str | None,
             kind = min(candidates, key=UNCENSORED_EDITIONS.index)
     if re.sub(r"\.[A-Za-z0-9]{1,5}$", "", (name or "").strip()).endswith("-去码"):
         # 本机 Jasna 去码的成品（`jasna_restore.output_name`）。
-        kind = "AI去码"
-    return (["中字"] if subtitled else []) + ([kind] if kind else [])
+        kind = "ai-restored"
+    return ([CHINESE_SUBTITLES] if subtitled else []) + ([kind] if kind else [])
 
 
 #: 无码类版次，按「谁说得更具体」排：破解 > 流出 > 无码（同 mdcz `bc4e8828`）。
-UNCENSORED_EDITIONS = ("无码破解", "无码流出", "无码")
+UNCENSORED_EDITIONS = (UNCENSORED_CRACK, UNCENSORED_LEAK, UNCENSORED)
 #: 有码片商的番号：字母段加 2–5 位序号，含 MGS 素人系的三位数字前缀。这类片商不出无码版，
 #: 文件名上的 `-U`／`uncensored` 说的只能是事后的去码版本。
 _CENSORED_RELEASE = re.compile(r"^(?:\d{3})?[A-Z]{2,8}-\d{2,5}$")
@@ -1259,13 +1279,13 @@ def _edition_evidence(name: str | None, code: str | None,
     )
     # 无码片商的片本身就是无码，不需要文件名里另有 `-U`／`Uncen` 标记。
     if is_uncensored_release(name, code):
-        return subtitled, "无码", False
+        return subtitled, UNCENSORED, False
     if cracked:
-        return subtitled, "无码破解", False
+        return subtitled, UNCENSORED_CRACK, False
     if leaked:
-        return subtitled, "无码流出", False
+        return subtitled, UNCENSORED_LEAK, False
     if marked:
-        return subtitled, "无码破解" if _censored_release(code) else "无码", True
+        return subtitled, UNCENSORED_CRACK if _censored_release(code) else UNCENSORED, True
     return subtitled, "", False
 
 
@@ -1394,7 +1414,7 @@ def face_focus(ratio: float, cx: float, cy: float) -> dict | None:
 
 def tag_cat(tag: str) -> str:
     """Classify one tag for the web surface."""
-    if tag.startswith("演员:"):
+    if tag.startswith(PERFORMER_TAG_PREFIX):
         return "artist"
     if tag in LENGTH_TAGS or tag in TECH_TAGS or tag in ATTRIBUTE_TAGS:
         return "meta"
@@ -1492,17 +1512,17 @@ def ordered_multipart_items(items: list[dict]) -> list[dict]:
 
 
 def fc2_collection_label(item: dict) -> str:
-    """明确的 FC2 本篇、数字集数和特典标签；不根据时长猜序号。"""
+    """明确的 FC2 本篇、数字集数和特典的卷 id（`main`、`2`、`bonus-1`）；不根据时长猜序号。"""
     code = normalise_code_key(item.get("code"))
     match = _FC2_COLLECTION_NAME.match(str(item.get("name") or ""))
     if not code.startswith("FC2-PPV-") or not match or f"FC2-PPV-{match[1]}" != code:
         return ""
     tail = match[2]
     if not tail:
-        return "本篇"
+        return FC2_MAIN_PART
     bonus = _BONUS_PART.fullmatch(tail)
     if bonus:
-        return "特典 " + str(int(bonus[1] or 1))
+        return FC2_BONUS_PREFIX + str(int(bonus[1] or 1))
     number = re.fullmatch(r"[-_ ](\d{1,2})", tail)
     return str(int(number[1])) if number else ""
 
@@ -1512,13 +1532,15 @@ def _fc2_bonus_collection(items: list[dict]) -> list[dict]:
     labels = [fc2_collection_label(item) for item in items]
     if (len(items) < 2 or not all(labels) or len(set(labels)) != len(labels)
             or len({normalise_code_key(item.get("code")) for item in items}) != 1
-            or not any(label.startswith("特典 ") for label in labels)):
+            or not any(label.startswith(FC2_BONUS_PREFIX) for label in labels)):
         return []
-    if "本篇" in labels and any(label.isdigit() for label in labels):
+    if FC2_MAIN_PART in labels and any(label.isdigit() for label in labels):
         return []  # 本篇与数字分卷并存，可能是完整版和切片。
     def key(pair):
         label = pair[0]
-        return (1, int(label[3:])) if label.startswith("特典 ") else (0, int(label) if label.isdigit() else -1)
+        if label.startswith(FC2_BONUS_PREFIX):
+            return (1, int(label[len(FC2_BONUS_PREFIX):]))
+        return (0, int(label) if label.isdigit() else -1)
     return [item for _, item in sorted(zip(labels, items), key=key)]
 
 
@@ -1650,10 +1672,12 @@ GENERIC_PHOTO_DIRS = frozenset({
 
 
 def photo_set_title(directory: str) -> str:
-    """图集标题：叶子目录名；叶子只是 `P`、`图片` 这类通用名时用上一级。"""
+    """图集标题：叶子目录名；叶子只是 `P`、`图片` 这类通用名时用上一级。
+
+    取不到目录名时是空串，接口里由 `web_entity.photo_set_heading` 换成带 code 的固定说法。"""
     parts = [part for part in str(directory).replace("/", "\\").split("\\") if part]
     if not parts:
-        return "未命名图集"
+        return ""
     leaf = parts[-1]
     if leaf.casefold() in GENERIC_PHOTO_DIRS and len(parts) > 1:
         return parts[-2]

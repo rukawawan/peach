@@ -28,7 +28,9 @@ from peach.repository import LedgerDatabase
 from peach.review_csv import read_rows
 from peach.scraping_access import paused_until
 from peach.sources import avbase
+from peach.task_outcomes import said
 from support.ledger import fresh_ledger
+from support.outcomes import told
 
 ROOT = Path(__file__).resolve().parents[1]
 STAMP = "2026-09-25T00:00:00.000Z"
@@ -402,7 +404,7 @@ class MinnanoLandingTests(Case):
         found = self.profile(meguri)
         self.assertEqual((found["birth_date"], found["height_cm"], found["cup"], found["debut_year"]),
                          ("2001-12-08", 156, "E", 2021))
-        self.assertEqual((found["source"], found["source_url"]),
+        self.assertEqual((told(found)["source"], found["source_url"]),
                          (f"{followup.SOURCE}@7", MINNANO_URL))
         self.assertEqual(found["tags"], ["美乳", "美人"])
         self.assertEqual(self.minnano.calls, [MINNANO_URL], "有编号就不检索")
@@ -416,7 +418,7 @@ class MinnanoLandingTests(Case):
         self.run_followup(meguri, run_id=9)
         self.assertEqual(self.profile(meguri)["birth_date"], "2001-12-08")
         number, metadata = self.refs(meguri)[alias.MINNANO]
-        self.assertEqual((number, metadata["source"], metadata["batch"]),
+        self.assertEqual((number, told(metadata)["source"], metadata["batch"]),
                          ("387589", followup.SOURCE, f"{followup.SOURCE}@9"))
 
     def test_an_alias_on_the_page_anchors_her_too(self):
@@ -434,7 +436,7 @@ class MinnanoLandingTests(Case):
         summary = self.run_followup(other)
         self.assertIsNone(self.profile(other))
         self.assertTrue(summary["sites"][followup.MINNANO].startswith(followup.MISS))
-        self.assertEqual(summary["outcome"], "哪一站都没对上她")
+        self.assertEqual(told(summary)["outcome"], "未找到与该人物相符的资料页")
 
     def test_a_hand_written_row_is_left_alone(self):
         meguri = self.entity("美ノ嶋めぐり")
@@ -445,7 +447,7 @@ class MinnanoLandingTests(Case):
                           source_url="", fetched_at="2020-01-01T00:00:00Z")
         self.run_followup(meguri)
         found = self.profile(meguri)
-        self.assertEqual((found["birth_date"], found["source"]), ("2001-12-09", "user:manual"))
+        self.assertEqual((found["birth_date"], told(found)["source"]), ("2001-12-09", "user:manual"))
 
     def test_a_fresh_profile_is_not_fetched_again_and_a_stale_one_is(self):
         meguri = self.entity("美ノ嶋めぐり")
@@ -454,7 +456,7 @@ class MinnanoLandingTests(Case):
         self.run_followup(meguri, run_id=7)
         self.run_followup(meguri, run_id=8)
         self.assertEqual(self.minnano.calls, [MINNANO_URL], "取回不到 30 天，第二轮一次都不问")
-        self.assertEqual(self.profile(meguri)["source"], f"{followup.SOURCE}@7")
+        self.assertEqual(told(self.profile(meguri))["source"], f"{followup.SOURCE}@7")
         old = "2026-01-01T00:00:00Z"
         with self.database.write_transaction(notify=False) as connection:
             connection.execute("UPDATE performer_profile SET fetched_at=?", (old,))
@@ -463,7 +465,7 @@ class MinnanoLandingTests(Case):
             os.utime(cached, (stale, stale))
         self.run_followup(meguri, run_id=11)
         self.assertEqual(self.minnano.calls, [MINNANO_URL, MINNANO_URL], "缓存也过期，重取资料页")
-        self.assertEqual(self.profile(meguri)["source"], f"{followup.SOURCE}@11")
+        self.assertEqual(told(self.profile(meguri))["source"], f"{followup.SOURCE}@11")
 
     def test_a_rate_limited_site_is_paused_and_the_mark_expires_in_a_day(self):
         meguri = self.entity("美ノ嶋めぐり")
@@ -471,7 +473,7 @@ class MinnanoLandingTests(Case):
         self.ref(meguri, alias.MINNANO, "387589")
         self.minnano.pages[MINNANO_URL] = (429, "")
         summary = self.run_followup(meguri)
-        self.assertEqual(summary["outcome"], followup.UNFETCHED)
+        self.assertEqual(told(summary)["outcome"], followup.UNFETCHED)
         self.assertTrue(paused_until(self.cooldown, alias.MINNANO))
         record = json.loads(next((attempts_root(self.generated)).glob("performer-profile-*.json"))
                             .read_text(encoding="utf-8"))
@@ -586,7 +588,7 @@ class AvbaseTests(Case):
         summary = self.run_followup(nano, run_id=5)
         found = self.profile(nano)
         self.assertEqual((found["birth_date"], found["height_cm"], found["cup"]), ("2005-04-12", 159, "I"))
-        self.assertEqual((found["source"], found["source_url"]), (f"{followup.SOURCE}@5", self.NANO_URL))
+        self.assertEqual((told(found)["source"], found["source_url"]), (f"{followup.SOURCE}@5", self.NANO_URL))
         number, metadata = self.refs(nano)[followup.AVBASE]
         self.assertEqual((number, metadata["batch"], metadata["names"]),
                          ("69214", f"{followup.SOURCE}@5", ["小笠原菜乃"]))
@@ -639,7 +641,7 @@ class AvbaseTests(Case):
         self.work(1, nano)
         summary = self.run_followup(nano)
         self.assertTrue(summary["sites"][followup.AVBASE].startswith(followup.MISS))
-        self.assertEqual(summary["outcome"], "哪一站都没对上她")
+        self.assertEqual(told(summary)["outcome"], "未找到与该人物相符的资料页")
         self.assertIsNone(self.profile(nano))
 
     def assert_nothing_written(self, page: str) -> None:
@@ -726,7 +728,7 @@ class JavdbTests(Case):
         self.assertEqual({metadata["batch"] for _number, metadata in found}, {f"{followup.SOURCE}@4"})
         # 记下哪页是無碼那条：日后作品署名了其中一类，同类的另一页才分得出来（#271）。
         self.assertEqual([metadata["uncensored"] for _number, metadata in found], [False, True])
-        self.assertIn("javdb 绑定", summary["outcome"])
+        self.assertIn("已关联 javdb 资料页", told(summary)["outcome"])
 
     def test_two_people_sharing_her_name_are_left_unbound(self):
         self.search("美ノ嶋めぐり", ("Ab12", "美ノ嶋めぐり", ""), ("Ef56", "美ノ嶋めぐり", ""))
@@ -799,8 +801,8 @@ class RevertTests(Case):
                 "--source", followup.SOURCE]
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(revert.main(base), 0)
-        self.assertIn("'资料': 1", printed.getvalue())
-        self.assertIn("'编号': 1", printed.getvalue())
+        self.assertIn("'profiles': 1", printed.getvalue())
+        self.assertIn("'refs': 1", printed.getvalue())
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(revert.main([*base, "--apply", "--backup", str(self.root / "b.db")]), 0)
         self.assertIsNone(self.profile(meguri))
@@ -879,17 +881,17 @@ class SweepTests(unittest.TestCase):
 
     def test_consecutive_unfetched_stops_the_sweep_instead_of_stamping_everyone(self):
         sweep = load_sweep()
-        with mock.patch.object(followup, "run", return_value={"outcome": followup.UNFETCHED}) as run:
+        with mock.patch.object(followup, "run", return_value=said("unfetched")) as run:
             tally = sweep.sweep(None, self.items(20), "manual-test", out=io.StringIO(), stop_after=3)
         self.assertEqual(run.call_count, 3)
         self.assertEqual(tally["停在"], 3)
 
     def test_one_failure_is_hers_alone_and_the_sweep_goes_on(self):
         sweep = load_sweep()
-        outcomes = [RuntimeError("坏页"), {"outcome": "minnano-av 写入"}, {"outcome": "资料未过期"}]
+        outcomes = [RuntimeError("bad page"), {"outcome": "minnano-av 写入"}, {"outcome": "现有资料仍在有效期内"}]
         with mock.patch.object(followup, "run", side_effect=outcomes):
             tally = sweep.sweep(None, self.items(3), "manual-test", out=io.StringIO())
-        self.assertEqual(tally, {"出错：RuntimeError: 坏页": 1, "minnano-av 写入": 1, "资料未过期": 1})
+        self.assertEqual(tally, {"出错：RuntimeError: bad page": 1, "minnano-av 写入": 1, "现有资料仍在有效期内": 1})
 
     def test_the_batch_carries_the_manual_run_id(self):
         sweep = load_sweep()

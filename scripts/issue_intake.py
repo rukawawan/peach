@@ -2,9 +2,9 @@
 
 网页「New issue」按模板提交时，即使删光模板文字也会带上模板的 Issue Type；用 `gh` 或 API
 提交则不经过模板。作者不是维护者的新 issue 均检查正文：含有某个模板的章节时保留已有类型，
-没有类型则补上那个模板的 Issue Type；缺少模板章节则关闭；按模板补齐章节后重开并补上类型。
-GitHub 写操作由 `.github/workflows/issue-intake.yml` 完成，
-本脚本只输出 `keep`、`close`、`type <类型>` 或 `reopen <类型>`。
+没有类型则补上那个模板的 Issue Type；缺少模板章节则关闭；按模板补齐章节后重开并补上类型，
+关闭时留下的提示评论折叠为「已过时」。GitHub 写操作由 `.github/workflows/issue-intake.yml` 完成，
+本脚本只输出 `keep`、`close`、`type <类型>`、`reopen <类型>` 或待折叠评论的 node ID。
 """
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from peach.interface_text import dev as t  # noqa: E402
+
 TEMPLATES = ROOT / ".github/ISSUE_TEMPLATE"
 LABEL = "status:needs-template"
 MAINTAINERS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -33,6 +38,8 @@ behavior) in plain technical language, and it will reopen. You can also pick a t
 [New issue](https://github.com/peach-mitao/peach/issues/new/choose), or submit with `gh` as shown in \
 [CONTRIBUTING](https://github.com/peach-mitao/peach/blob/master/CONTRIBUTING.md#开-issue).
 """
+NOTICE_AUTHOR = "github-actions[bot]"
+NOTICE_MARK = NOTICE.split("，", 1)[0]
 
 Template = tuple[str, list[tuple[str, ...]]]
 
@@ -79,16 +86,28 @@ def verdict(payload: dict, templates: list[Template] | None = None) -> str:
     return "close" if action == "opened" else "keep"
 
 
+def notice_ids(comments: list[dict]) -> list[str]:
+    """issue 重开后要折叠的提示评论：本工作流以 Actions 身份发出、以提示开头的那几条。"""
+    return [comment["node_id"] for comment in comments
+            if (comment.get("user") or {}).get("login") == NOTICE_AUTHOR
+            and (comment.get("body") or "").lstrip().startswith(NOTICE_MARK)]
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("issue_intake.description"))
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--event", type=Path, help="GitHub issues 事件载荷文件")
-    group.add_argument("--notice", action="store_true", help="输出关闭时的说明")
+    group.add_argument("--event", type=Path, help=t("issue_intake.eventHelp"))
+    group.add_argument("--notice", action="store_true", help=t("issue_intake.noticeHelp"))
+    group.add_argument("--notice-ids", type=Path, help=t("issue_intake.noticeIdsHelp"))
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     if args.notice:
         sys.stdout.write(NOTICE)
+        return 0
+    if args.notice_ids:
+        for node_id in notice_ids(json.loads(args.notice_ids.read_text(encoding="utf-8"))):
+            print(node_id)
         return 0
     print(verdict(json.loads(args.event.read_text(encoding="utf-8"))))
     return 0

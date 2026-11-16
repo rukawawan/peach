@@ -1,5 +1,6 @@
 import { initialCatalogFilters, resetCatalogFilters, homeCatalogState, homePath as pathForCatalog, onlineDefaultLoc as defaultLocations, resolveSort } from '../react/catalog-grid/catalog-state';
 import { CatalogController } from '../react/catalog-grid/catalog-controller';
+import { completeReveal } from '../react/components/server-path-dialog';
 import { nextRating, ratingStars } from '../react/components/rating-values';
 /* catalog 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { censorOn, preferencesState, refreshAll, replaceCatalogAddress, sidebarFacets, wireDrag } from './preferences.js';
@@ -15,6 +16,7 @@ import { buildManageBar, cardLayout, homeLayoutActive, javActive, layoutState, s
 import { selectionState, setSelectMode, toggleSelection } from './selection.js';
 import { javDisplayName, javTitleHtml } from '../core/jav-title';
 import { tagLabel } from '../core/tags';
+import { PORTRAIT } from '../core/stored-values';
 import { entityDisplayName } from '../core/entity-names';
 import { loadStage, stageApi } from '../react/application-residents';
 import { currentBarsContext, entityState, openEntity, pushEntityPage, routeEntityPage, sortKeys } from './entity.js';
@@ -35,6 +37,7 @@ import { catalogEmptyHtml } from './../catalog-onboarding';
 import { junkRoute } from './../junk-queue';
 import { wallAddress } from '../react/video-wall/wall-route';
 import { restoringPage } from '../history/page-navigation';
+import { joinList, t as tr } from '../i18n';
 export const catalogState = { homeHasFeed: undefined, barsRequestSeq: undefined, barsPendingSeq: undefined, barsRendered: undefined, catalogFilterProps: undefined, catalogFilterMounting: undefined, catalogTagRows: undefined, catalogTopsPages: undefined, initialParams: undefined, resolveSort: undefined, initialCatalogUrl: undefined, initialParam: undefined, HOME_QUERY_KEYS: undefined, searchValueSnapshot: undefined, cancelSearchDissolve: undefined, rememberSearchValue: undefined, clearSearchField: undefined, mixRelatedCache: undefined, reduceMotion: undefined, tagList: undefined, tagPressed: undefined, withTagToggled: undefined, gridHelpers: undefined, gridActions: undefined, topsQueryParams: undefined, facetCountsSeq: undefined, VIEW_PILLS: undefined, catalogViews: undefined, TAGS_FIRST: undefined, catalogOnScreen: undefined, COMBO_LABELS: undefined, hideCatalogCombo: undefined, junkQueueHelpers: undefined, junkQueueActions: undefined };
 
 export function dropOfflineFromDefaultLoc(){
@@ -89,11 +92,11 @@ export async function toggleWatchLater(it,onChange){
   try{
     const r=await api('/api/watch-later',{method:'POST',body:JSON.stringify({id:it.id})});
     it.watch_later=r.watch_later;onChange(!!r.watch_later);
-    receiptsState.actionReceipt(r.watch_later?'已加入稍后看':'已移出稍后看',{undo:async()=>{
+    receiptsState.actionReceipt(r.watch_later?tr('shell:watchLater.added'):tr('shell:watchLater.removed'),{undo:async()=>{
       const restored=await api('/api/watch-later',{method:'POST',body:JSON.stringify({id:it.id})});
       it.watch_later=restored.watch_later;onChange(!!restored.watch_later);
     }});
-  }catch(error){receiptsState.actionFailure('更新稍后看',error)}
+  }catch(error){receiptsState.actionFailure(tr('shell:watchLater.updateAction'),error)}
 }
 
 export async function runResourceOperation(it,operation){
@@ -101,12 +104,12 @@ export async function runResourceOperation(it,operation){
     await api('/api/batch',{method:'POST',body:JSON.stringify({ids:[it.id],operation})});
     await loadCatalog();
     const inverse=operation==='restore'?'dispose':'restore';
-    receiptsState.actionReceipt(operation==='restore'?'已还原':'已移入回收站',{undo:async()=>{
+    receiptsState.actionReceipt(operation==='restore'?tr('shell:trash.restored'):tr('shell:trash.movedToTrash'),{undo:async()=>{
       await api('/api/batch',{method:'POST',body:JSON.stringify({ids:[it.id],operation:inverse,
         ...(inverse==='dispose'?{disposal_reason:it.disposal_reason??null}:{})})});
       await loadCatalog();
     }});
-  }catch(error){receiptsState.actionFailure('操作',error);throw error}
+  }catch(error){receiptsState.actionFailure(tr('shell:receipt.genericAction'),error);throw error}
 }
 
 export async function rateCatalogItem(it,star,onChange,signal){
@@ -117,8 +120,8 @@ export async function rateCatalogItem(it,star,onChange,signal){
   };
   try{
     const rating=await save(value,signal);
-    receiptsState.actionReceipt(rating?`已评 ${ratingStars(rating)} 星`:'已取消评分',{undo:()=>save(before)});
-  }catch(error){if(!signal?.aborted)receiptsState.actionFailure('评分',error);throw error}
+    receiptsState.actionReceipt(rating?tr('shell:ratingAction.rated', { count: ratingStars(rating) }):tr('shell:ratingAction.cleared'),{undo:()=>save(before)});
+  }catch(error){if(!signal?.aborted)receiptsState.actionFailure(tr('shell:ratingAction.label'),error);throw error}
 }
 
 export async function getBarsData(context){
@@ -247,8 +250,8 @@ export function catalogFilterActions(){
 }
 
 export function catalogLayoutProp(){
-  if(javActive())return {name:'jav-layout',label:'JAV 卡片版式',value:javLayout(),options:JAV_LAYOUTS};
-  if(homeLayoutActive())return {name:'home-layout',label:'首页卡片版式',value:cardLayout(),options:JAV_LAYOUTS};
+  if(javActive())return {name:'jav-layout',label:tr('shell:cardLayout.jav'),value:javLayout(),options:JAV_LAYOUTS};
+  if(homeLayoutActive())return {name:'home-layout',label:tr('shell:cardLayout.home'),value:cardLayout(),options:JAV_LAYOUTS};
   return null;
 }
 
@@ -364,14 +367,14 @@ export function paintCatalogCount(nextTotal,n){
 }
 
 export function emptyTrash(){
-  return confirmModal({title:'清空回收站',body:'回收站中的全部文件和馆藏记录将永久删除，无法恢复。',confirmLabel:'清空回收站',danger:true,onConfirm:async()=>{
+  return confirmModal({title:tr('shell:trash.empty'),body:tr('shell:trash.emptyConfirm'),confirmLabel:tr('shell:trash.empty'),danger:true,onConfirm:async()=>{
     try{
       const r=await api('/api/trash/empty',{method:'POST'});
       /* 删不掉的文件（占用中、网盘离线）会连同数据库行一起留在回收站，必须说出来，
          否则用户看到条目还在会以为清空又没生效。 */
-      if(r.blocked&&r.blocked.length)throw new Error(`已永久删除 ${r.purged} 项；${r.blocked.length} 项未能删除，仍在回收站：\n`
-        +r.blocked.slice(0,5).map(x=>`${x.path}（${x.reason}）`).join('\n'));
-      receiptsState.actionReceipt(`已永久删除 ${r.purged} 项`);
+      if(r.blocked&&r.blocked.length)throw new Error(`${tr('shell:trash.partlyPurged', { purged: r.purged, count: r.blocked.length })}\n`
+        +r.blocked.slice(0,5).map(x=>tr('shell:trash.blockedItem', { path: x.path, reason: x.reason })).join('\n'));
+      receiptsState.actionReceipt(tr('shell:trash.purged', { count: r.purged }));
     }finally{await loadCatalog()}
   }});
 }
@@ -382,8 +385,8 @@ export function comboItems(filters){
   const items=[];
   if(filters.creator)items.push({kind:'clear',key:'creator',label:`${catalogState.COMBO_LABELS.creator} ${filters.creator}`});
   if(filters.studio)items.push({kind:'clear',key:'studio',label:`${catalogState.COMBO_LABELS.studio} ${filters.studio}`});
-  if(filters.owner==='none')items.push({kind:'clear',key:'owner',label:`${catalogState.COMBO_LABELS.owner} 未归属`});
-  if(filters.year)items.push({kind:'clear',key:'year',label:`发行年份 ${filters.year.split(',').map(year=>year==='none'?'未知年份':year).join('、')}`});
+  if(filters.owner==='none')items.push({kind:'clear',key:'owner',label:tr('shell:catalogFilter.uncreditedChip', { label: catalogState.COMBO_LABELS.owner })});
+  if(filters.year)items.push({kind:'clear',key:'year',label:tr('shell:catalogFilter.yearChip', { years: joinList(filters.year.split(',').map(year=>year==='none'?tr('shell:catalogFilter.unknownYear'):year)) })});
   catalogState.tagList(filters.tag).forEach(t=>items.push({kind:'untag',key:t,label:tagLabel(t)}));
   return items;
 }
@@ -448,10 +451,10 @@ export function paintGridPage(page,propsFor,surface,options={}) {
 
 export function catalogGridLayout(){
   const home=homeLayoutActive();
-  return gridLayout({active:javActive()||home,home,portrait:state.orient==='竖屏'});
+  return gridLayout({active:javActive()||home,home,portrait:state.orient===PORTRAIT});
 }
 
-export function catalogSkeletonHtml(label='正在读取作品'){
+export function catalogSkeletonHtml(label=tr('shell:skeleton.loadingVideos')){
   return catalogContentSkeletonHtml(label,catalogCardRatio());
 }
 
@@ -485,10 +488,10 @@ export function catalogGridProps(){
     excludeVertical:(home&&path!=='/wall'&&!state.q&&!state.orient&&state.browse!=='folders')||state.jav==='1',
     mix:home&&path!=='/wall'&&!trash&&state.browse!=='folders',
     /* JAV 模式不插竖屏带：主列表的 exclude_vertical 管不到它，它是独立请求、独立插入的。 */
-    shorts:home&&path!=='/wall'&&!javActive()&&state.orient!=='竖屏'&&!trash&&state.browse!=='folders',
+    shorts:home&&path!=='/wall'&&!javActive()&&state.orient!==PORTRAIT&&!trash&&state.browse!=='folders',
     countRow:$('#count'),onCount:paintCatalogCount,onCountFailed:()=>paintCatalogFilter({count:false}),
     emptyHtml:({trash:inTrash,libraryEmpty})=>inTrash
-      ?preferencesState.emptyState('trash','回收站是空的','删掉的内容会先到这里；确认不再需要后再清空。')
+      ?preferencesState.emptyState('trash',tr('shell:trash.emptyTitle'),tr('shell:trash.emptyHint'))
       :catalogEmptyHtml({jav:javActive()&&!libraryEmpty,configurable:runtimeConfigurable,filtered:!libraryEmpty}),
     canLoadMore:()=>$('#stats').hidden&&$('#index').hidden,
   };
@@ -498,7 +501,7 @@ export function loadJunk(surface){
   const count=$('#count');
   const live=catalogState.controller.page==='/junk-files'&&gridPainted()&&!catalogState.controller.pending
     &&count.querySelector(':scope > .peach-react:not([data-junk-count-skeleton])');
-  if(!live){clearCatalogGrid();renderCatalogLoading('正在读取垃圾文件')}
+  if(!live){clearCatalogGrid();renderCatalogLoading(tr('shell:skeleton.loadingJunkFiles'))}
   showHomeSurfaces();
   renderCombo();
   // 垃圾文件是逐项处置队列，计数只是当前队列说明，不是需要跟随浏览的排序工具。
@@ -514,11 +517,11 @@ export async function runJunkOperation(it,operation){
       ...(disposed?{disposal_reason:'junk'}:{})})});
     await loadCatalog();
     const inverse=disposed?'restore':reconsidered?'dismiss-junk':'reconsider-junk';
-    receiptsState.actionReceipt(disposed?'已移入回收站':reconsidered?'已重新加入垃圾判断':'已标记为不是垃圾',{undo:async()=>{
+    receiptsState.actionReceipt(disposed?tr('shell:trash.movedToTrash'):reconsidered?tr('shell:batchJunk.reconsidered'):tr('shell:batchJunk.dismissed'),{undo:async()=>{
       await api('/api/batch',{method:'POST',body:JSON.stringify({ids,operation:inverse})});
       await loadCatalog();
     }});
-  }catch(error){receiptsState.actionFailure('操作',error);throw error}
+  }catch(error){receiptsState.actionFailure(tr('shell:receipt.genericAction'),error);throw error}
 }
 
 export function junkQueueProps(){
@@ -526,7 +529,7 @@ export function junkQueueProps(){
     ...junkRoute(location.search),helpers:catalogState.junkQueueHelpers,actions:catalogState.junkQueueActions,
     batchSize:preferencesState.appSettings.batchSize,revision:catalogState.controller.revision,selectMode,selected:new Set(selected),
     countRow:$('#count'),settled:settleCatalog,
-    skeletonHtml:()=>pageSkeletonHtml('正在读取垃圾文件',{cards:true,className:'catalog-skeleton postercard-skeleton'}),
+    skeletonHtml:()=>pageSkeletonHtml(tr('shell:skeleton.loadingJunkFiles'),{cards:true,className:'catalog-skeleton postercard-skeleton'}),
     canLoadMore:()=>$('#stats').hidden&&$('#index').hidden,
   };
 }
@@ -601,8 +604,8 @@ catalogState.topsQueryParams = (context,page=0)=>{
   return params;
 };
 catalogState.facetCountsSeq = 0;
-catalogState.VIEW_PILLS = [{k:'',label:'全部'},{k:'fresh',label:'没看过'},
-                  {k:'later',label:'稍后看'},{k:'flagged',label:'已标记'}];
+catalogState.VIEW_PILLS = [{k:'',label:tr('shell:shared.all')},{k:'fresh',label:tr('shell:catalogView.unwatched')},
+                  {k:'later',label:tr('shell:catalogView.watchLater')},{k:'flagged',label:tr('shell:catalogView.flagged')}];
 catalogState.catalogViews = ()=>catalogState.VIEW_PILLS.map(v=>({...v,href:v.k?STATE_ROUTES[v.k]:'/'}));
 catalogState.TAGS_FIRST = 26;
 applicationEffects.listen($('#catalogFilter'), 'click', event=>{
@@ -611,7 +614,7 @@ applicationEffects.listen($('#catalogFilter'), 'click', event=>{
   event.preventDefault();catalogFilterActions().setView(view.dataset.catalogView);
 });
 catalogState.catalogOnScreen = ()=>$('#index').hidden&&$('#stats').hidden;
-catalogState.COMBO_LABELS = {creator:'创作者',studio:'厂牌',owner:'归属'};
+catalogState.COMBO_LABELS = {creator:tr('shell:shared.creators'),studio:tr('shell:shared.studios'),owner:tr('shell:catalogFilter.credit')};
 catalogState.hideCatalogCombo = ()=>{if(catalogState.catalogFilterProps)paintCatalogFilter({comboHidden:true})};
 }
 
@@ -625,7 +628,7 @@ catalogState.junkQueueActions = {
     ?window.open('/photo?id='+it.id,'_blank','noopener'):openItem(it.id,true,null,anchor),
   /* 定位成功由 Toast 报，卡上状态行留空；失败把原因写回状态行。 */
   reveal:async it=>{
-    try{await api('/api/reveal',{method:'POST',body:JSON.stringify({id:it.id})});receiptsState.toast({text:'已在资源管理器中显示'});return ''}
+    try{const result=await api('/api/reveal',{method:'POST',body:JSON.stringify({id:it.id})});await completeReveal(result,()=>receiptsState.toast({text:tr('shell:sourceTools.revealed')}));return ''}
     catch(error){return entityState.sourceHint(error.message)}
   },
   operate:(it,operation)=>runJunkOperation(it,operation),

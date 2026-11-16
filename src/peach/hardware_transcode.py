@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from .task_control import run as run_task_process
+from .user_messages import UserValueError
 
 logger = logging.getLogger(__name__)
 CUDA_DECODE_CODECS = frozenset({"h264", "hevc", "vp9", "av1"})
@@ -65,10 +66,10 @@ def _run_probe(ffmpeg: Path, label: str, arguments: tuple[str, ...]) -> bool:
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("转码硬件探测失败 %s：%s", label, exc)
+        logger.warning("Transcode hardware probe failed %s: %s", label, exc)
         return False
     if result.returncode:
-        logger.warning("转码硬件探测失败 %s：%s", label,
+        logger.warning("Transcode hardware probe failed %s: %s", label,
                        result.stderr.decode("utf-8", "replace")[-1000:])
     return result.returncode == 0
 
@@ -197,7 +198,7 @@ class HardwareTranscoder:
         self.state_root = state_root
         self.backend = os.environ.get("PEACH_TRANSCODE_BACKEND", "auto").strip().lower()
         if self.backend not in BACKENDS:
-            raise ValueError("PEACH_TRANSCODE_BACKEND 必须为 " + "、".join(BACKENDS))
+            raise UserValueError("errors.hardwareTranscode.backendInvalid", {"backends": list(BACKENDS)})
         self.device = os.environ.get("PEACH_VAAPI_DEVICE", "").strip()
         self._encoders: dict[Path, tuple[HardwareEncoder, ...]] = {}
         self._lock = threading.Lock()
@@ -249,7 +250,7 @@ class HardwareTranscoder:
                         if encoder.backend == "vaapi":
                             break
                 self._encoders[ffmpeg] = tuple(available)
-                logger.info("转码硬件后端：%s", ", ".join(
+                logger.info("Transcode hardware backend: %s", ", ".join(
                     item.backend + (f" ({item.device})" if item.device else "")
                     for item in available) or "software")
             return self._encoders[ffmpeg]

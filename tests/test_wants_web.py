@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from peach import feed_followup, wants, web_wants  # noqa: E402
 from peach.web_contract import WebContract  # noqa: E402
 from peach.web_router import dispatch_api_get, dispatch_api_post  # noqa: E402
+from peach.user_messages import UserValueError
 from support.ledger import fresh_ledger  # noqa: E402
 
 
@@ -93,6 +94,23 @@ class MagnetLookupTests(unittest.TestCase):
             path.write_text(payload, encoding='utf-8')
             self.assertEqual(MagnetSearch(self.root, fetcher=fetcher).query('DEMO-001')['state'], 'ready')
         self.assertEqual(fetcher.call_count, 2)
+
+    def test_resources_saved_by_older_versions_read_back_with_english_ids(self):
+        from peach.wants_magnets import MagnetSearch
+        from unittest.mock import Mock
+        now = 1_800_000_000.0
+        fetcher = Mock(return_value={'items': []})
+        path = self.root / 'cache' / 'want-resources.json'
+        path.parent.mkdir()
+        legacy = [{**self.items[0], 'attributes': ['中字', '高清', '4K']},
+                  {**self.items[0], 'protocol': 'url', 'uri': 'https://example.test/a', 'source': 'JavDB 评论'}]
+        path.write_text(json.dumps({'version': 1, 'entries': [{'code': 'DEMO-001', 'saved': now - 60,
+                        'result': {'state': 'ready', 'items': legacy}}]}, ensure_ascii=False), encoding='utf-8')
+        items = MagnetSearch(self.root, fetcher=fetcher, wallclock=lambda: now).query(
+            'DEMO-001', released='2020-01-01')['items']
+        self.assertEqual(fetcher.call_count, 0)
+        self.assertEqual(items[0]['attributes'], ['chinese-subtitles', 'high-definition', '4K'])
+        self.assertEqual(items[1]['source'], 'javdb-comments')
 
     def test_expired_success_keeps_its_resources_and_uses_the_failure_cooldown(self):
         from peach.wants_magnets import MagnetSearch
@@ -171,7 +189,7 @@ class MagnetLookupTests(unittest.TestCase):
         from peach.wants_magnets import MagnetSearch
         from peach.sources import SourceFailure, FailureReason
         def refused(root, code):
-            raise SourceFailure(FailureReason.AUTH_REQUIRED, 'javdb 要求登录')
+            raise SourceFailure(FailureReason.AUTH_REQUIRED, 'errors.javdb.loginRequired')
         result = MagnetSearch(self.root, fetcher=refused).query('DEMO-001')
         self.assertEqual(result['state'], 'error')
         self.assertIn('登录', result['error'])
@@ -246,7 +264,7 @@ class WantWebFixture(unittest.TestCase):
     def _collect(self, provider, code):
         self.collected.append(code)
         if code in self.collect_misses:
-            raise ValueError("来源链上都没有这个番号的资料")
+            raise UserValueError("errors.feedFollowup.noMetadata", {"chain": "r18dev、javdb"})
         return ({"title": f"{code} 的标题", "studio": "示例厂牌", "release_date": "2026-09-20",
                  "performers": [{"name": "深田えいみ"}]}, "https://images.example.test/cover.jpg")
 
@@ -319,7 +337,7 @@ class WantListTests(WantWebFixture):
         self.post("/api/wants", {"action": "add", "code": "SSIS-951"})
         self.settle()
         item = self.get()["items"][0]
-        self.assertEqual(item["scrape_error"], "来源链上都没有这个番号的资料")
+        self.assertEqual(item["scrape_error"], "来源链 r18dev、javdb 上都没有这个番号的资料")
         self.assertEqual(self.contract.task_runs.query(task_key='want-scrape')[0].result_summary['incomplete'], 1)
         with self.contract.database.read_connection() as connection:
             self.assertEqual(web_wants.backlog(connection, self.contract.cover_root), [])

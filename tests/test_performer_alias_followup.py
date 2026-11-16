@@ -27,7 +27,9 @@ from peach.review_csv import read_rows
 from peach.scraping_access import paused_until
 from peach.sources.base import Page
 from peach.sources.seesaa import person_profile, renamed_to, search_results, split_names
+from peach.task_outcomes import parts
 from support.ledger import fresh_ledger
+from support.outcomes import told
 
 ROOT = Path(__file__).resolve().parents[1]
 STAMP = "2026-09-24T00:00:00.000Z"
@@ -321,7 +323,7 @@ class LandingTests(Case):
     def test_her_other_stage_names_are_registered_from_both_sites(self):
         momoka = self.entity("神山ももか")
         summary = self.run_followup(momoka)
-        self.assertEqual(summary["outcome"], "登记 4 个别名")
+        self.assertEqual(told(summary)["outcome"], "登记 4 个别名")
         batch = f"{alias.SOURCE}@7"
         self.assertEqual(self.aliases(momoka), {
             "雲母そら": batch, "雫つむぎ": batch, "朝霧いのり": batch, "美雲そら": batch})
@@ -347,7 +349,7 @@ class LandingTests(Case):
         momoka = self.entity("神山ももか")
         other = self.entity("雫つむぎ")
         summary = self.run_followup(momoka)
-        self.assertEqual(summary["outcome"], "雫つむぎ 并入 神山ももか")
+        self.assertEqual(told(summary)["outcome"], "雫つむぎ 并入 神山ももか")
         self.assertEqual(summary["merged"]["into"], momoka)
         self.assertEqual(summary["merged"]["from"], other)
         self.assertNotIn("taken", summary)
@@ -394,7 +396,7 @@ class LandingTests(Case):
         self.work(2, other)
         self.work(3, other)
         summary = self.run_followup(momoka)
-        self.assertEqual(summary["outcome"], "神山ももか 并入 雫つむぎ")
+        self.assertEqual(told(summary)["outcome"], "神山ももか 并入 雫つむぎ")
         self.assertFalse(self.exists(momoka))
         names = self.aliases(other)
         self.assertEqual(names["神山ももか"], f"merge:{alias.SOURCE}@7")
@@ -402,13 +404,13 @@ class LandingTests(Case):
         self.assertEqual(names["雲母そら"], f"{alias.SOURCE}@7")
         with self.database.read_connection() as connection:
             self.assertEqual(alias._works(connection, other), 3)
-        self.assertEqual(self.run_followup(momoka, run_id=8)["outcome"], "档案已不存在")
+        self.assertEqual(told(self.run_followup(momoka, run_id=8))["outcome"], "资料记录已不存在")
 
     def test_the_page_main_name_breaks_a_tie(self):
         momoka = self.entity("神山ももか")
         kirara = self.entity("雲母そら")
         summary = self.run_followup(momoka)
-        self.assertEqual(summary["outcome"], "神山ももか 并入 雲母そら")
+        self.assertEqual(told(summary)["outcome"], "神山ももか 并入 雲母そら")
         self.assertFalse(self.exists(momoka))
         self.assertIn("神山ももか", self.aliases(kirara))
 
@@ -440,19 +442,19 @@ class LandingTests(Case):
     def test_the_page_named_after_her_is_read_before_any_search(self):
         """站上人物页就叫她的名字，直取一次；改名页跟一跳到现页。两种都不检索。"""
         momoka = self.entity("神山ももか")
-        self.assertEqual(self.run_followup(momoka)["outcome"], "登记 4 个别名")
+        self.assertEqual(told(self.run_followup(momoka))["outcome"], "登记 4 个别名")
         # 改名页指向的 `美雲そら` 站上没有这一页：回到检索，站上没有的页记下，下一轮不再问。
         self.assertEqual(self.av_neme.calls[:3], [wiki_url("神山ももか"), wiki_url("美雲そら"),
                                                   wiki_search_url("神山ももか")])
         asked = len(self.av_neme.calls)
-        self.assertEqual(self.run_followup(momoka, run_id=8)["outcome"], "没有新写法")
+        self.assertEqual(told(self.run_followup(momoka, run_id=8))["outcome"], "未发现新别名")
         self.assertEqual(len(self.av_neme.calls), asked)
         minami = self.entity("初川みなみ")
         self.av_neme.pages[wiki_url("初川みなみ")] = (200, wiki_page(wiki_section(
             "プロフィール", '<pre class="BOX">\n名前(女優名)：初川みなみ（はつかわみなみ）\n生年月日：\n</pre>'
         )).encode("euc_jp"))
         summary = self.run_followup(minami)
-        self.assertEqual(summary["outcome"], "没有新写法")
+        self.assertEqual(told(summary)["outcome"], "未发现新别名")
         self.assertTrue(summary["sites"][alias.AV_NEME].startswith("命中 " + wiki_url("初川みなみ")))
         self.assertNotIn(wiki_search_url("初川みなみ"), self.av_neme.calls)
 
@@ -465,7 +467,7 @@ class LandingTests(Case):
         for title, _text in YUKINA_SEARCH[:5]:
             self.av_neme.pages[wiki_url(title)] = (200, AV_NEME_LISTING.encode("euc_jp"))
         summary = self.run_followup(yukina)
-        self.assertEqual(summary["outcome"], "登记 3 个别名")
+        self.assertEqual(told(summary)["outcome"], "登记 3 个别名")
         self.assertEqual(set(self.aliases(yukina)), {"桜美ゆきな", "夢原まみ", "尾上さら"})
         self.assertIn(wiki_url("叶芽ゆきな"), self.av_neme.calls)
         self.assertNotIn(wiki_url("2020年2月"), self.av_neme.calls)
@@ -475,7 +477,7 @@ class LandingTests(Case):
         self.minnano.pages[minnano_av.search_url("佐々木ゆうか")] = (
             200, MINNANO_PROFILE.encode("utf-8"))
         summary = self.run_followup(stranger)
-        self.assertEqual(summary["outcome"], "两站都没对上她")
+        self.assertEqual(told(summary)["outcome"], "两个来源均未找到与该人物相符的资料页")
         self.assertEqual(self.aliases(stranger), {})
 
     def test_a_known_minnano_id_is_read_without_searching(self):
@@ -527,7 +529,7 @@ class Fc2cmadbTests(Case):
         her = self.nicknamed({"id": 77, "name": "佐々木ゆうか", "alias_name": "別の人"})
         summary = self.run_followup(her)
         self.assertEqual(self.aliases(her), {})
-        self.assertEqual(summary["outcome"], "三站都没对上她")
+        self.assertEqual(told(summary)["outcome"], "三个来源均未找到与该人物相符的资料页")
         self.assertIn("FC2-PPV-1234567 的女优栏是 佐々木ゆうか", summary["sites"][alias.FC2CMADB])
 
     def test_two_people_on_the_cast_list_claiming_her_is_ambiguous(self):
@@ -550,7 +552,7 @@ class Fc2cmadbTests(Case):
         her = self.nicknamed()
         self.fc2cmadb.status = 403
         summary = self.run_followup(her)
-        self.assertEqual(summary["outcome"], "未取得")
+        self.assertEqual(told(summary)["outcome"], "未取得")
         self.assertTrue(paused_until(self.cooldown, alias.FC2CMADB))
         asked = len(self.fc2cmadb.calls)
         self.run_followup(her, run_id=8)
@@ -571,7 +573,7 @@ class RepeatTests(Case):
         first = dict(self.aliases(momoka))
         requests = len(self.minnano.calls) + len(self.av_neme.calls)
         summary = self.run_followup(momoka, run_id=8)
-        self.assertEqual(summary["outcome"], "没有新写法")
+        self.assertEqual(told(summary)["outcome"], "未发现新别名")
         self.assertEqual(self.aliases(momoka), first)
         self.assertEqual(len(self.minnano.calls) + len(self.av_neme.calls), requests)
 
@@ -619,7 +621,7 @@ class RepeatTests(Case):
             return sorted(keys), len(statements)
 
         with self.database.read_connection() as connection:
-            attempts.record(alias.followup_key(tried), alias.fingerprint(connection, tried), "写入")
+            attempts.record(alias.followup_key(tried), alias.fingerprint(connection, tried), parts("noNewAliases"))
             expected = sorted(alias.followup_key(entity_id) for entity_id in (momoka, tried, fc2, unreachable)
                               if alias.has_entry(connection, entity_id)
                               and not attempts.settled(alias.followup_key(entity_id),
@@ -674,13 +676,13 @@ class RepeatTests(Case):
         self.minnano.pages[minnano_av.search_url("神山ももか")] = (429, b"")
         self.av_neme.pages[wiki_search_url("神山ももか")] = (429, b"")
         summary = self.run_followup(momoka)
-        self.assertEqual(summary["outcome"], "未取得")
+        self.assertEqual(told(summary)["outcome"], "未取得")
         self.assertIn("429", summary["sites"][alias.MINNANO])
         self.assertIn("429", summary["sites"][alias.AV_NEME])
         self.assertTrue(paused_until(self.cooldown, alias.MINNANO))
         self.assertTrue(paused_until(self.cooldown, alias.AV_NEME))
         requests = len(self.minnano.calls) + len(self.av_neme.calls)
-        self.assertEqual(self.run_followup(momoka, run_id=8)["outcome"], "未取得")
+        self.assertEqual(told(self.run_followup(momoka, run_id=8))["outcome"], "未取得")
         self.assertEqual(len(self.minnano.calls) + len(self.av_neme.calls), requests)
         self.assertEqual(self.aliases(momoka), {})
 
@@ -690,10 +692,10 @@ class RepeatTests(Case):
         self.work(1, momoka)
         settled = self.entity("有本紗世")
         self.work(2, settled)
-        self.assertEqual(self.run_followup(settled)["outcome"], "两站都没对上她")
+        self.assertEqual(told(self.run_followup(settled))["outcome"], "两个来源均未找到与该人物相符的资料页")
         self.minnano.pages[minnano_av.search_url("神山ももか")] = (429, b"")
         self.av_neme.pages[wiki_url("神山ももか")] = (429, b"")
-        self.assertEqual(self.run_followup(momoka)["outcome"], "未取得")
+        self.assertEqual(told(self.run_followup(momoka))["outcome"], "未取得")
         now = time.time()
 
         def planned(clock):
@@ -770,10 +772,10 @@ class RevertTests(Case):
                 "--source", alias.SOURCE]
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(revert.main([*base, "--batch", f"{alias.SOURCE}@8"]), 0)
-        self.assertIn("'别名': 0", printed.getvalue())
+        self.assertIn("'aliases': 0", printed.getvalue())
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(revert.main(base), 0)
-        self.assertIn("'别名': 4", printed.getvalue())
+        self.assertIn("'aliases': 4", printed.getvalue())
         self.assertEqual(len(self.aliases(momoka)), 5)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(revert.main(

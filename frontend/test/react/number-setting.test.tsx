@@ -100,8 +100,8 @@ it('读回的偏好只认区间内的整数', () => {
 });
 
 it('以分钟计的间隔满一天时在单位旁换算成天，不满一天或不是分钟时不说', () => {
-  expect(dayReading(10080, '分钟')).toBe('7 天');
-  expect(dayReading(2160, '分钟')).toBe('约 1.5 天');
-  expect(dayReading(1439, '分钟')).toBe('');
-  expect(dayReading(10080, '秒')).toBe('');
+  expect(dayReading(10080, 'minutes')).toBe('7 天');
+  expect(dayReading(2160, 'minutes')).toBe('约 1.5 天');
+  expect(dayReading(1439, 'minutes')).toBe('');
+  expect(dayReading(10080, 'seconds')).toBe('');
 });

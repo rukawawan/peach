@@ -25,6 +25,7 @@ from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+from peach.interface_text import dev as t
 from peach.user_agent import USER_AGENT
 DEFAULT_REGISTRY = ROOT / "docs" / "reference-sources.json"
 CADENCES = ("weekly", "monthly", "quarterly", "manual")
@@ -69,7 +70,7 @@ def ls_remote(label: str, repository: str, ref: str, *, timeout: float = 20.0) -
     )
     lines = result.stdout.strip().splitlines()
     if len(lines) != 1:
-        raise RuntimeError(f"{label} 无法唯一解析 {ref}")
+        raise RuntimeError(t("check_reference_updates.refNotUnique", label=label, ref=ref))
     return lines[0].split()[0]
 
 
@@ -79,7 +80,7 @@ def pinned_revision(root: Path, pin: dict) -> str:
     pattern = re.escape(web) + r"@([0-9a-f]{40})\b"
     found = set(re.findall(pattern, (root / pin["manifest"]).read_text(encoding="utf-8")))
     if len(found) != 1:
-        raise ValueError(f"{pin['id']} 在 {pin['manifest']} 里应恰好钉住一个 sha，实际 {len(found)} 个")
+        raise ValueError(t("check_reference_updates.pinCount", id=pin['id'], manifest=pin['manifest'], count=len(found)))
     return found.pop()
 
 
@@ -108,31 +109,33 @@ def validate_registry(root: Path, registry: dict) -> list[str]:
     for source in registry.get("sources", []):
         source_id = source.get("id", "<missing>")
         if source_id in seen:
-            problems.append(f"来源 id 重复：{source_id}")
+            problems.append(t("check_reference_updates.duplicateId", id=source_id))
         seen.add(source_id)
         snapshot = root / source.get("snapshot", "")
         if not snapshot.is_file():
-            problems.append(f"{source_id} 缺少锁定快照：{snapshot}")
+            problems.append(t("check_reference_updates.snapshotMissing", id=source_id, path=snapshot))
             continue
         actual = sha256_bytes(snapshot.read_bytes())
         if actual != source.get("sha256"):
             problems.append(
-                f"{source_id} 快照校验失败：登记 {source.get('sha256')}，实际 {actual}"
+                t("check_reference_updates.snapshotMismatch", id=source_id, recorded=source.get('sha256'), actual=actual)
             )
         git = source.get("git")
         if git and len(git.get("revision", "")) != 40:
-            problems.append(f"{source_id} 的 Git revision 不是完整 40 位提交")
+            problems.append(t("check_reference_updates.revisionNotFull", id=source_id))
         if source.get("cadence") not in CADENCES:
-            problems.append(f"{source_id} 的 cadence 必须是 {'、'.join(CADENCES)} 之一")
+            problems.append(t("check_reference_updates.badCadence", id=source_id,
+                                  cadences=list(CADENCES)))
         if source.get("volatile") and not git and source.get("cadence") != "manual":
-            problems.append(f"{source_id} 每次取回都不同又没有 Git revision，只能是 manual")
+            problems.append(t("check_reference_updates.volatileManual", id=source_id))
     for pin in registry.get("pins", []):
         if pin.get("cadence") not in CADENCES:
-            problems.append(f"{pin.get('id')} 的 cadence 必须是 {'、'.join(CADENCES)} 之一")
+            problems.append(t("check_reference_updates.badCadence", id=pin.get('id'),
+                                  cadences=list(CADENCES)))
         try:
             pinned_revision(root, pin)
         except (OSError, KeyError, ValueError) as exc:
-            problems.append(f"钉住的依赖登记有误：{exc}")
+            problems.append(t("check_reference_updates.pinInvalid", error=exc))
     return problems
 
 
@@ -199,33 +202,28 @@ def command_check(args: argparse.Namespace) -> int:
     problems = validate_registry(root, registry)
     if problems:
         for problem in problems:
-            print(f"错误：{problem}", file=sys.stderr)
+            print(t("check_reference_updates.error", problem=problem), file=sys.stderr)
         return 2
 
     pins = selected_sources(registry, args.source, args.cadence, key="pins")
     sources = selected_sources(registry, args.source, args.cadence)
     if args.source is not None and not pins and not sources:
-        raise ValueError(f"未知来源：{args.source}")
+        raise ValueError(t("check_reference_updates.unknownSource", source=args.source))
     changed = False
     for pin in pins:
         result = inspect_pin(root, pin)
         if result["changed"]:
             changed = True
-            print(
-                f"上游已前移：{result['id']}\n"
-                f"  钉住 {result['pinned_revision']}，上游 {result['live_revision']}\n"
-                f"  差异 {result['compare']}"
-            )
+            print(t("check_reference_updates.pinMoved", id=result['id'], pinned=result['pinned_revision'],
+                    live=result['live_revision'], compare=result['compare']))
         else:
-            print(f"未变化：{result['id']}，钉住的就是上游 {result['live_revision']}")
+            print(t("check_reference_updates.pinUnchanged", id=result['id'], live=result['live_revision']))
     for source in sources:
         result = inspect_source(root, source)
         if result["changed"]:
             changed = True
-            print(
-                f"有更新：{result['id']}\n"
-                f"  SHA-256 {result['pinned_sha256']} -> {result['live_sha256']}"
-            )
+            print(t("check_reference_updates.sourceChanged", id=result['id'], pinned=result['pinned_sha256'],
+                    live=result['live_sha256']))
             if result["pinned_revision"] is not None:
                 print(
                     f"  revision {result['pinned_revision']} -> {result['live_revision']}"
@@ -235,10 +233,10 @@ def command_check(args: argparse.Namespace) -> int:
         else:
             suffix = ""
             if result["revision_moved"]:
-                suffix = f"，内容相同，revision 已前移到 {result['live_revision']}"
+                suffix = t("check_reference_updates.revisionMovedSuffix", revision=result['live_revision'])
             elif result["live_revision"] is not None:
-                suffix = f"，revision {result['live_revision']}"
-            print(f"未变化：{result['id']}，SHA-256 {result['live_sha256']}{suffix}")
+                suffix = t("check_reference_updates.revisionSuffix", revision=result['live_revision'])
+            print(t("check_reference_updates.sourceUnchanged", id=result['id'], sha256=result['live_sha256'], suffix=suffix))
     return 1 if changed else 0
 
 
@@ -248,15 +246,15 @@ def command_accept(args: argparse.Namespace) -> int:
     registry = load_registry(registry_path)
     selected = selected_sources(registry, args.source)
     if not selected:
-        raise ValueError(f"未知来源：{args.source}；钉住的依赖改清单升级，不走 accept")
+        raise ValueError(t("check_reference_updates.unknownAcceptSource", source=args.source))
     source = selected[0]
     result = inspect_source(root, source)
     if result["live_sha256"] != args.expected_sha256.lower():
-        print("拒绝接受：线上 SHA-256 与 --expected-sha256 不一致", file=sys.stderr)
+        print(t("check_reference_updates.sha256Mismatch"), file=sys.stderr)
         return 2
     if result["live_revision"] is not None:
         if result["live_revision"] != args.expected_revision:
-            print("拒绝接受：线上 revision 与 --expected-revision 不一致", file=sys.stderr)
+            print(t("check_reference_updates.revisionMismatch"), file=sys.stderr)
             return 2
 
     (root / source["snapshot"]).write_bytes(result["live"])
@@ -267,20 +265,20 @@ def command_accept(args: argparse.Namespace) -> int:
     registry_path.write_text(
         json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
-    print(f"已锁定 {source['id']}；这一步没有修改任何 Peach 实现。")
+    print(t("check_reference_updates.locked", id=source['id']))
     return 0
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description=__doc__)
+    result = argparse.ArgumentParser(description=t("check_reference_updates.description"))
     result.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     sub = result.add_subparsers(dest="command", required=True)
-    check = sub.add_parser("check", help="只读检查上游是否变化")
+    check = sub.add_parser("check", help=t("check_reference_updates.helpCheck"))
     check.add_argument("--source")
-    check.add_argument("--cadence", choices=CADENCES, help="只查这一档；缺省查 manual 以外的全部")
-    check.add_argument("--diff", action="store_true", help="显示与锁定快照的差异")
+    check.add_argument("--cadence", choices=CADENCES, help=t("check_reference_updates.helpCadence"))
+    check.add_argument("--diff", action="store_true", help=t("check_reference_updates.helpDiff"))
     check.set_defaults(func=command_check)
-    accept = sub.add_parser("accept", help="在人工审阅后更新快照和锁文件")
+    accept = sub.add_parser("accept", help=t("check_reference_updates.helpAccept"))
     accept.add_argument("--source", required=True)
     accept.add_argument("--expected-sha256", required=True)
     accept.add_argument("--expected-revision")
@@ -293,7 +291,7 @@ def main() -> int:
     try:
         return args.func(args)
     except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
-        print(f"检查失败：{exc}", file=sys.stderr)
+        print(t("check_reference_updates.failed", error=exc), file=sys.stderr)
         return 2
 
 

@@ -12,9 +12,10 @@ from peach import face_detect, face_match, face_models, web_router
 from peach.jobs import BackgroundJob
 from peach.repository import LedgerDatabase
 from peach.task_runs import DEFAULT_KEEP, TaskRunStore, task_label
+from support.outcomes import told
 
 TASK = face_models.TASK_KEY
-DOWN = face_detect.FaceModelUnavailable("取人脸模型失败：getaddrinfo failed")
+DOWN = face_detect.FaceModelUnavailable("errors.faceDetect.faceModelFetchFailed", {"error": "getaddrinfo failed"})
 
 
 class FaceModelsCase(unittest.TestCase):
@@ -60,7 +61,7 @@ class ReporterTests(FaceModelsCase):
         self.report("人脸模型", None)
         latest, failed = self.rows()
         self.assertEqual((latest.status, failed.status), ("succeeded", "failed"))
-        self.assertEqual(latest.result_summary["outcome"], "已取得人脸模型")
+        self.assertEqual(told(latest.result_summary)["outcome"], "已取得人脸模型")
         # 恢复之后再断，是新的一次失败。
         self.report("人脸模型", DOWN)
         self.assertEqual([run.status for run in self.rows()], ["failed", "succeeded", "failed"])
@@ -89,7 +90,7 @@ class ReporterTests(FaceModelsCase):
 
     def test_a_broken_task_table_does_not_reach_the_model_caller(self):
         broken = face_models.Reporter(SimpleNamespace(
-            enabled=True, query=mock.Mock(side_effect=RuntimeError("库坏了"))))
+            enabled=True, query=mock.Mock(side_effect=RuntimeError("database disk image is malformed"))))
         with self.assertLogs("peach.face_models", "WARNING"):
             broken("人脸模型", DOWN)
 
@@ -106,7 +107,7 @@ class FetchObserverTests(FaceModelsCase):
                                        allow_download=True, label="人脸模型")
 
     def test_a_network_failure_is_reported_and_still_raised(self):
-        with mock.patch.object(face_detect, "read_url", side_effect=OSError("断网")), \
+        with mock.patch.object(face_detect, "read_url", side_effect=OSError("Network is unreachable")), \
                 self.assertRaises(face_detect.FaceModelUnavailable) as caught:
             self.fetch("0" * 64)
         self.assertEqual(self.seen, [("人脸模型", caught.exception)])
@@ -156,14 +157,14 @@ class RetryEndpointTests(ModelFilesCase):
     """「立即重试」：一轮普通的后台任务，记录只有它自己那一行。"""
 
     def test_a_failed_retry_is_one_failed_manual_row(self):
-        self.retry(side_effect=OSError("断网"))
+        self.retry(side_effect=OSError("Network is unreachable"))
         [run] = self.rows()
         self.assertEqual((run.status, run.trigger), ("failed", "manual"))
         self.assertIn("取人脸模型失败", run.error)
         self.assertIn("取人脸比对模型失败", run.error)
 
     def test_a_successful_retry_is_one_succeeded_row(self):
-        self.retry(side_effect=OSError("断网"))
+        self.retry(side_effect=OSError("Network is unreachable"))
         self.retry(return_value=self.payload)
         self.assertEqual([run.status for run in self.rows()], ["succeeded", "failed"])
         self.assertTrue((self.root / "tools" / "sface.onnx").is_file())
@@ -186,7 +187,7 @@ class StatusTests(ModelFilesCase):
             "error": "", "run_id": None, "retry_url": face_models.RETRY_URL})
 
     def test_the_latest_failure_is_reported_with_its_card(self):
-        self.retry(side_effect=OSError("断网"))
+        self.retry(side_effect=OSError("Network is unreachable"))
         [run] = self.rows()
         current = self.status()
         self.assertEqual((current["state"], current["available"]), ("failed", False))
@@ -199,7 +200,7 @@ class StatusTests(ModelFilesCase):
         self.assertEqual((self.status()["state"], self.status()["run_id"]), ("downloading", run.id))
 
     def test_both_models_on_disk_after_a_recovery_is_ready(self):
-        self.retry(side_effect=OSError("断网"))
+        self.retry(side_effect=OSError("Network is unreachable"))
         self.retry(return_value=self.payload)
         current = self.status()
         self.assertEqual((current["state"], current["available"], current["error"]),

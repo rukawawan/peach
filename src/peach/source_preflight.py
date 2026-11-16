@@ -7,7 +7,9 @@ from typing import Callable
 import time
 
 from .scraping_access import SOURCES
+from .coded_text import Said, coded
 from .source_checks import check_source
+from .user_messages import UserValueError
 
 #: 检查原因（`check_source` 落下的 `reason`）归到报告口径。命令行与网页都读这一张表。
 OUTCOMES = {
@@ -17,8 +19,12 @@ OUTCOMES = {
     "proxy": "network", "timeout": "network", "network": "network",
     "needs_code": "skipped",
 }
-OUTCOME_LABELS = {"ok": "可连接", "auth": "登录或人机验证", "http": "HTTP 错误",
-                  "cooldown": "冷却", "network": "网络失败", "skipped": "未检查"}
+#: 口径的说法，`outcome_label` 是 zh-CN 原文，`outcome_label_code` 给界面取译文。
+OUTCOME_LABEL_CODES = {
+    "ok": "labels.sourcePreflight.outcome.ok", "auth": "labels.sourcePreflight.outcome.auth",
+    "http": "labels.sourcePreflight.outcome.http", "cooldown": "labels.sourcePreflight.outcome.cooldown",
+    "network": "labels.sourcePreflight.outcome.network", "skipped": "labels.sourcePreflight.outcome.skipped",
+}
 
 
 def outcome(target: dict) -> str:
@@ -37,15 +43,15 @@ def check_sources(secrets_root: Path, sources: list[str] | None = None, *,
     后台任务的进度登记依赖调用方线程上下文；返回的 `sources` 仍按选择顺序排。"""
     selected = list(dict.fromkeys(sources if sources is not None else default_sources()))
     if not selected or any(source not in SOURCES for source in selected):
-        raise ValueError("请选择已登记的资料源 ID")
+        raise UserValueError("errors.sourcePreflight.unknownSource")
 
     def check(source):
         result = check_source(secrets_root, source, preflight=True)
         targets = []
         for target in result["results"]:
             key = outcome(target)
-            targets.append({**target, "outcome": key, "outcome_label": OUTCOME_LABELS[key]})
-        return {"source": source, "label": SOURCES[source]["label"],
+            targets.append({**target, "outcome": key, **coded("outcome_label", Said(OUTCOME_LABEL_CODES[key]))})
+        return {"source": source, **coded("label", SOURCES[source]["label"]),
                 "results": targets, "session_verified": False}
 
     started = time.monotonic()

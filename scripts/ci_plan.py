@@ -12,6 +12,10 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "scripts"
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(1, str(ROOT / "src"))
+from peach.interface_text import dev as t  # noqa: E402
+
 AUTO_SHARD_FILES = 150
 
 
@@ -21,7 +25,7 @@ def browser_matrix(root: Path = ROOT, count: int = 6) -> dict:
     timings = json.loads(timing_file.read_text(encoding="utf-8"))["seconds"] if timing_file.is_file() else {}
     files = [path.relative_to(root).as_posix() for path in (root / "frontend/e2e").rglob("*.test.ts")]
     if not files or count < 1:
-        raise ValueError("浏览器矩阵须包含用例且分片数为正整数")
+        raise ValueError(t("ci_plan.badBrowserMatrix"))
     groups = [[] for _ in range(min(count, len(files)))]
     totals = [0.0 for _ in groups]
     for name in sorted(files, key=lambda name: (-timings.get(name, 30.0), name)):
@@ -41,15 +45,15 @@ def validate_results(results: dict, required: list[str], *, phase: str = "comple
     elif phase == "complete":
         mandatory = {"plan", "python", "workflow-lint", "frontend-ready"}
     else:
-        raise ValueError(f"未知验证阶段：{phase}")
+        raise ValueError(t("ci_plan.unknownPhase", phase=phase))
     if not mandatory.issubset(required):
-        raise ValueError("验证计划缺少必需任务")
+        raise ValueError(t("ci_plan.missingRequiredJobs"))
     bad = {name: results.get(name, {}).get("result", "missing")
            for name in required if results.get(name, {}).get("result") != "success"}
     bad.update({name: item["result"] for name, item in results.items()
                 if item["result"] not in {"success", "skipped"}})
     if bad:
-        raise ValueError(f"验证任务未通过：{bad}")
+        raise ValueError(t("ci_plan.jobsFailed", jobs=bad))
 
 
 def runtime_paths(paths: list[str], contents: dict | None) -> list[str]:
@@ -95,7 +99,7 @@ def plan(event: str, paths: list[str], contents: dict | None = None, *, root: Pa
                              or path == "scripts/copy-rules.json" for path in effective)
     vendor = shared or any(path.startswith(("web/vendor/", ".github/workflows/test.yml"))
                            or path in {"package.json", "package-lock.json", "web/index.html",
-                                       "scripts/vendor_web_dependencies.mjs"} for path in effective)
+                                       "scripts/vendor_web_dependencies.ts"} for path in effective)
     wheel = shared or "packaging" in scopes or any(path.startswith(("src/", "migrations/", "web/", "resources/"))
                                                  for path in effective)
     required = ["plan", "python", "workflow-lint", "frontend-ready"]
@@ -120,23 +124,27 @@ def github_verified_base(root: Path) -> str:
     current = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True, encoding='utf-8').strip()
     base = verified_base(rows, current, ancestor_of_head(root))
     if base is None:
-        raise ValueError('最近成功的主线 Test 中没有当前提交的祖先')
+        raise ValueError(t("ci_plan.noVerifiedAncestor"))
     return base
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("ci_plan.description"))
     parser.add_argument("--event", choices=("push", "pull_request", "workflow_dispatch"))
     parser.add_argument("--base")
     parser.add_argument("--verify-results", action="store_true")
     parser.add_argument("--phase", choices=("complete", "frontend"), default="complete")
     args = parser.parse_args()
     if args.verify_results:
-        validate_results(json.loads(os.environ["RESULTS"]), json.loads(os.environ["REQUIRED_JOBS"]),
-                         phase=args.phase)
+        results = json.loads(os.environ["RESULTS"])
+        if not os.environ.get("REQUIRED_JOBS", "").strip():
+            # plan 没跑到（上游失败或取消）时这里是空串；报出真正失败的上游，而不是 JSON 解析错误。
+            upstream = {name: item.get("result") for name, item in results.items() if item.get("result") != "success"}
+            raise SystemExit(t("ci_plan.noPlan", jobs=upstream))
+        validate_results(results, json.loads(os.environ["REQUIRED_JOBS"]), phase=args.phase)
         return
     if not args.event or not args.base:
-        parser.error("生成计划需要 --event 与 --base")
+        parser.error(t("ci_plan.eventAndBaseRequired"))
     from . import test_runner as runner
     root = Path(__file__).resolve().parents[1]
     base = args.base
@@ -147,7 +155,7 @@ def main() -> None:
         result = plan(args.event, paths, runner.changed_contents(root, base, paths), root=root)
     except (OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
         # 首次推送、浅克隆或已删除基线：扩大验证，不能把无 diff 当成无需测试。
-        print(f'已验证基线未取得，使用全量：{error}', file=sys.stderr)
+        print(t("ci_plan.noVerifiedBase", error=error), file=sys.stderr)
         result = plan("workflow_dispatch", [], root=root)
     result['base'] = base
     print(json.dumps(result, ensure_ascii=False, indent=2))

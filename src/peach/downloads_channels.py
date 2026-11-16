@@ -8,7 +8,7 @@ from pathlib import PureWindowsPath
 
 from google.protobuf.empty_pb2 import Empty
 
-from .downloads import CLOUDDRIVE_CREDENTIAL, PIKPAK_CREDENTIAL, DownloadError
+from .downloads import CLOUDDRIVE_CREDENTIAL, PIKPAK_CREDENTIAL, DownloadError, Problem
 from .downloads_clouddrive import CloudDriveClient, PROBE_TIMEOUT
 from .media_sources import SOURCES
 from .clouddrive_proxy import media_remote_path
@@ -42,13 +42,13 @@ class LibraryChannels:
             cloud = service.credentials.load(CLOUDDRIVE_CREDENTIAL)
         except CredentialError:
             cloud = None
-            problems.append("CloudDrive2 令牌无法读取，请重新填写。")
+            problems.append(Problem("labels.downloadsChannels.clouddriveTokenUnreadable"))
         token = str(cloud.values.get("token", "")) if cloud else ""
         try:
             pikpak = service.credentials.describe(PIKPAK_CREDENTIAL)
         except CredentialError:
             pikpak = {"fields": []}
-            problems.append("PikPak 登录信息无法读取，请重新登录。")
+            problems.append(Problem("labels.downloadsChannels.pikpakSignInUnreadable"))
         logged_in = "refresh_token" in pikpak["fields"]
         fingerprint = (repr(config.payload()), repr(roots), repr(prefixes), repr(names),
                        repr(getattr(service.landing, "mounts", {})), logged_in,
@@ -75,12 +75,12 @@ class LibraryChannels:
                     phase = 'token_permissions'
                     permissions = client.token_info().permissions
                     if not (permissions.allow_add_offline_download and permissions.allow_list_offline_downloads):
-                        problems.append("CloudDrive2 令牌需要提交和查看离线任务权限。")
+                        problems.append(Problem("labels.downloadsChannels.tokenNeedsOffline"))
                     else:
                         mounts = []
                         if getattr(permissions, "allow_get_mounts", False):
                             try:
-                                mounts = client.call("GetMountPoints", Empty(), "读取媒体库挂载点").mountPoints
+                                mounts = client.call("GetMountPoints", Empty(), "readLibraryMounts").mountPoints
                             except DownloadError as error:
                                 local_event('download-channel-probe', error, operation='mount_points',
                                             source='clouddrive', failure=error.failure)
@@ -100,11 +100,13 @@ class LibraryChannels:
                             except DownloadError as error:
                                 local_event('download-channel-probe', error, operation='folder_capabilities',
                                             source=source, failure=error.failure)
-                                problems.append(f"{names.get(root_key(root)) or SOURCES[source].name}的云下载能力未取得。")
+                                name = names.get(root_key(root)) or SOURCES[source].name
+                                problems.append(Problem("labels.downloadsChannels.libraryCapabilityUnavailable",
+                                                        {"name": name}))
             except DownloadError as error:
                 local_event('download-channel-probe', error, operation=phase,
                             source='clouddrive', failure=error.failure)
-                problems.append("CloudDrive2 云下载能力未取得，请检查连接与令牌。")
+                problems.append(Problem("labels.downloadsChannels.clouddriveCapabilityUnavailable"))
         return {"providers": rows, "problems": list(dict.fromkeys(problems))}
 
     def _candidates(self, roots, prefixes, mounts, direct, names, problems):
@@ -118,7 +120,8 @@ class LibraryChannels:
             mount = mapped[index] if index < len(mapped) else root
             remote = media_remote_path(root, mount, prefixes, mounts)
             if not remote:
-                problems.append(f"{names.get(root_key(root)) or SOURCES[source].name}尚未关联云端目录，请检查挂载或推送发现配置。")
+                problems.append(Problem("labels.downloadsChannels.libraryNotMapped",
+                                         {"name": names.get(root_key(root)) or SOURCES[source].name}))
                 continue
             prefix = normalise_prefix(remote)
             target = self.service.config.targets.get(source, "")

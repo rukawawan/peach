@@ -36,6 +36,7 @@ if str(SRC_DIR) not in sys.path:
 from peach import brand_marks
 from peach.config import GENERATED_DIR
 from peach.follow_assets import sniff
+from peach.interface_text import dev as t
 from peach.previews import LOGO_VARIANTS
 
 #: 嗅探出的 MIME → 落盘扩展名。`brand_marks.CONTENT_TYPES` 是它的反查表，两边必须
@@ -142,7 +143,7 @@ def write(taken: list[dict], target: Path) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=t("sync_brand_marks.description"))
     parser.add_argument("--source", type=Path, default=GENERATED_DIR / "logos")
     parser.add_argument("--target", type=Path, default=brand_marks.MARKS_ROOT)
     parser.add_argument("--apply", action="store_true")

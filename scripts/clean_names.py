@@ -31,6 +31,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from peach.interface_text import dev as t, dev_log
 from peach.review_csv import write_rows
 from peach.catalog_rules import is_jav_code, normalise_code_key
 from peach.config import DATABASE_PATH, GENERATED_DIR, LOG_DIR
@@ -54,11 +55,12 @@ def configure_log(log_dir: str | Path) -> None:
     _logf = path.open("w", encoding="utf-8", buffering=1)
 
 
-def log(msg: str) -> None:
-    line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-    print(line, flush=True)
+def log(key: str, **params) -> None:
+    """控制台一行跟本机语言，日志文件一行固定英文。"""
+    stamp = f"[{time.strftime('%H:%M:%S')}] "
+    print(stamp + t(key, **params), flush=True)
     if _logf is not None:
-        _logf.write(line + "\n")
+        _logf.write(stamp + dev_log(key, **params) + "\n")
 
 
 def close_log() -> None:
@@ -198,7 +200,7 @@ def verify_backup(backup: Path) -> None:
         connection.close()
     if integrity != "ok" or foreign_keys:
         raise RuntimeError(
-            f"备份校验失败：integrity={integrity} foreign_keys={foreign_keys}"
+            t("clean_names.backupCheckFailed", integrity=integrity, foreignKeys=foreign_keys)
         )
 
 
@@ -304,20 +306,23 @@ def run(args_ns: argparse.Namespace) -> int:
         f"SELECT id,location,path,name,code,CASE WHEN {release_evidence} "
         f"THEN 1 ELSE 0 END FROM asset {where}", sql_args,
     ).fetchall()
-    log(f"扫描 {len(rows)} 条" + (f"（location={args_ns.location}）" if args_ns.location else ""))
+    if args_ns.location:
+        log("clean_names.logScannedAt", count=len(rows), location=args_ns.location)
+    else:
+        log("clean_names.logScanned", count=len(rows))
 
     plan = build_plan(rows)
     ready = [p for p in plan if p["status"].startswith("ready")]
     suffixed = sum(p["status"] == "ready-suffixed" for p in plan)
-    log(f"待规范 {len(plan)} 条，其中可执行 {len(ready)}，撞名保留双份 {suffixed}")
+    log("clean_names.logPlan", total=len(plan), ready=len(ready), suffixed=suffixed)
     write_plan(args_ns.out, plan)
 
     if args_ns.apply:
         before = _database_health(conn)
         if before[0] != "ok" or before[1]:
-            raise RuntimeError(f"写入前 ledger 校验失败：integrity={before[0]} foreign_keys={before[1]}")
+            raise RuntimeError(t("clean_names.checkBeforeWriteFailed", integrity=before[0], foreignKeys=before[1]))
         verify_backup(args_ns.backup)
-        log(f"数据库备份 → {args_ns.backup}")
+        log("clean_names.logBackup", path=args_ns.backup)
         ok = fail = gone = 0
         for item in ready:
             src = _join(item["dir"], item["old"])
@@ -337,7 +342,7 @@ def run(args_ns: argparse.Namespace) -> int:
                     _rename_path(src, dst)
             except Exception as exc:
                 item["status"] = f"error:{type(exc).__name__}"
-                log(f"  失败 {src} -> {item['new']} : {exc}")
+                log("clean_names.logRenameFailed", source=src, target=item['new'], error=exc)
                 fail += 1
                 continue
             try:
@@ -354,7 +359,7 @@ def run(args_ns: argparse.Namespace) -> int:
                     item["status"] = f"db-error-rolled-back:{type(exc).__name__}"
                 except Exception:
                     item["status"] = f"db-error-manual-repair:{type(exc).__name__}"
-                log(f"  数据库失败 {src} -> {item['new']} : {exc}")
+                log("clean_names.logDatabaseFailed", source=src, target=item['new'], error=exc)
                 fail += 1
                 continue
             item["status"] = "done"
@@ -362,16 +367,16 @@ def run(args_ns: argparse.Namespace) -> int:
         after = _database_health(conn)
         if after[0] != "ok" or after[1] or after[2] != before[2]:
             raise RuntimeError(
-                f"写入后 ledger 校验失败：integrity={after[0]} foreign_keys={after[1]} "
-                f"assets={before[2]}->{after[2]}"
+                t("clean_names.checkAfterWriteFailed", integrity=after[0], foreignKeys=after[1],
+                  assetsBefore=before[2], assetsAfter=after[2])
             )
-        log(f"改名完成 {ok}，失败 {fail}，源已不存在 {gone}")
+        log("clean_names.logRenamed", ok=ok, failed=fail, gone=gone)
     conn.close()
 
     write_plan(args_ns.out, plan)
-    log(f"→ {args_ns.out}")
+    log("clean_names.logPlanPath", path=args_ns.out)
     if not args_ns.apply:
-        log("未加 --apply，只出清单未改名。")
+        log("clean_names.logDryRun")
     return 2 if args_ns.apply and any(
         not str(item["status"]).startswith("done") for item in plan
     ) else 0

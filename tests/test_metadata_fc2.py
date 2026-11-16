@@ -5,13 +5,16 @@ import urllib.parse
 
 from peach.http import HttpResponse
 from peach.sources import FailureReason, Page, Session, SourceFailure
-from peach.sources.fc2 import FC2, STUDIO, UNRECOGNISED, Fc2Source, canonical_code, runtime_minutes, video_id
+from peach.sources.fc2 import FC2, STUDIO, Fc2Source, canonical_code, runtime_minutes, video_id
 from peach.sources.fc2cmadb import COMPONENT as MIRROR_COMPONENT
 from peach.sources.fc2cmadb import FC2CMADB, Fc2cmadbSource, parse_actresses, partial_headers
 from peach.sources.fc2ppvdb import FC2PPVDB, Fc2ppvdbSource, japanese_date
 from peach.sources.javarchive import JAVARCHIVE, JavArchiveSource, links
 from peach.sources import javten as javten_module
 from peach.sources.javten import JAVTEN, JavtenSource
+
+#: 认不出商品号时那句话（`errors.fc2.unrecognizedCode` 的 zh-CN 原句）。
+UNRECOGNISED = "这个番号认不出 FC2 商品号"
 
 CHALLENGE = ('<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title></head>'
              '<body><div id="challenge-body-text">Verifying you are human.</div></body></html>')

@@ -20,10 +20,13 @@ import psutil
 
 from .fsutil import atomic_write_text
 from .update_tasks import state_for
+from .user_messages import UserPermissionError, UserValueError
 
 CURRENT = ContextVar('peach_task_control', default=None)
 _LIVE = {}
 _LOCK = threading.RLock()
+#: 暂停期间多久重读一次控制文件。本进程的请求会立刻叫醒停点，这个间隔只管命令行等别的进程发来的继续。
+PAUSED_POLL_SECONDS = 1.0
 
 
 class Cancelled(KeyboardInterrupt):
@@ -71,14 +74,18 @@ def speed_mode(db, run_id, ancestors=(), *, default='standard'):
     return command.get('speed_mode', default)
 
 
-def initialize_speed(store, run_id, parent=None):
-    from .processing_control import default_mode
+def initialize_speed(store, run_id, parent=None, *, task_key=None):
+    from .processing_control import MODES, default_mode
     from .update_tasks import _mutex
     db = store.database.db_path
     with _mutex(state_for(db)):
         path = _root(db) / f'{run_id}.speed.json'
         mode = (speed_mode(db, parent.id, (parent.parent_run_id, parent.root_run_id))
                 if parent is not None else default_mode(store.database))
+        if parent is None and task_key == 'upgrade-repairs':
+            saved = _read(_root(db) / 'upgrade-repairs.speed.json').get('speed_mode')
+            if saved in MODES:
+                mode = saved
         atomic_write_text(path, json.dumps({'speed_mode': mode, 'at': time.time_ns()}))
 
 
@@ -121,7 +128,7 @@ def _unlink(paths):
             path.unlink(missing_ok=True)
             removed += 1
         except OSError:
-            logging.getLogger(__name__).warning('任务控制文件清退失败：%s', path, exc_info=True)
+            logging.getLogger(__name__).warning('Failed to clean up task control files: %s', path, exc_info=True)
     return removed
 
 
@@ -156,33 +163,51 @@ def projection(store, run, *, descendants_active=None):
 def request(store, run_id, action, *, mode=None):
     from .update_tasks import _mutex
     with _mutex(state_for(store.database.db_path)):
-        return _request(store, run_id, action, mode=mode)
+        result = _request(store, run_id, action, mode=mode)
+    # 后代的停点也可能在等这条请求，叫醒同一数据库下的全部停点，各自重读控制文件。
+    database, _run = _key(store.database.db_path, run_id)
+    with _LOCK:
+        for (path, _identity), control in _LIVE.items():
+            if path == database:
+                control.wakeup.set()
+    return result
 
 
 def _request(store, run_id, action, *, mode=None):
     if action not in ('pause', 'resume', 'cancel', 'set_speed'):
-        raise ValueError('请选择暂停、继续、取消或调整速度')
+        raise UserValueError('errors.taskControl.actionInvalid')
     if action == 'set_speed':
         from .processing_control import valid_mode
         mode = valid_mode(mode)
     run = store.get(run_id)
     if run is None:
-        raise KeyError('任务未取得，请刷新后重试')
+        from .jobs import TaskRunMissing
+        raise TaskRunMissing('errors.taskControl.runMissing')
     if not store.enabled or run.host != store.host:
-        raise PermissionError('请在执行这轮任务的写入端操作')
+        raise UserPermissionError('errors.taskControl.otherHost')
     if projection(store, run) is None:
-        raise ValueError('这轮任务已经结束')
+        raise UserValueError('errors.taskControl.runFinished')
     db = store.database.db_path
     current = requested(db, run.id, (run.parent_run_id, run.root_run_id))
     if current == 'cancel':
         if action != 'cancel':
-            raise ValueError('任务正在取消，不能再暂停或继续')
+            raise UserValueError('errors.taskControl.cancelling')
         return run
     if current == action:
         return run
     if action == 'set_speed':
         command = json.dumps({'speed_mode': mode, 'at': time.time_ns()})
-        for child in (run, *store.active_descendants(run.id)):
+        children = (run, *store.active_descendants(run.id))
+        if run.task_key in ('upgrade-repairs', 'upgrade-library'):
+            # 自动修复由多次独立派发组成；当前批次的选择也用于已排队和之后派发的批次。
+            atomic_write_text(_root(db) / 'upgrade-repairs.speed.json', command)
+            with store.database.read_connection() as connection:
+                pending = connection.execute(
+                    "SELECT id FROM task_run WHERE task_key='upgrade-library' "
+                    "AND host=? AND status IN ('pending','running')", (store.host,)).fetchall()
+            for row in pending:
+                atomic_write_text(_root(db) / f'{row[0]}.speed.json', command)
+        for child in children:
             if child.host == store.host:
                 atomic_write_text(_root(db) / f'{child.id}.speed.json', command)
         return run
@@ -237,6 +262,8 @@ class Control:
         self.recoverable = recoverable
         self.db = store.database.db_path
         self.stopping = threading.Event()
+        #: 本进程发出控制请求或要停服务时叫醒暂停中的停点，不必等满 `PAUSED_POLL_SECONDS`。
+        self.wakeup = threading.Event()
         self.lock = threading.RLock()
         self.operations = {}
         self.owners = {}
@@ -291,13 +318,14 @@ class Control:
         parked = []
         try:
             while True:
+                self.wakeup.clear()
                 self.usage.publish()
                 from .update_tasks import check_pause
                 check_pause(self.db if self.recoverable else None)
                 if self.stopping.is_set():
                     from .jobs import JobPaused
                     if self.recoverable:
-                        raise JobPaused('服务正在关闭，已保存的进度留待恢复')
+                        raise JobPaused('errors.taskControl.shuttingDown')
                     raise Cancelled()
                 command = intent(self.db, self.run_id, self.ancestors)
                 action = command.get('action', 'resume')
@@ -327,7 +355,8 @@ class Control:
                     quiet = all(self.operations.values())
                 self._publish(command, 'paused' if quiet else 'pausing')
                 self.store.heartbeat(self.run_id)
-                self.stopping.wait(.1)
+                # 还有线程没停稳时照旧勤看，好尽快报「已暂停」；停稳之后只等继续，放慢重读控制文件。
+                self.wakeup.wait(PAUSED_POLL_SECONDS if quiet else .1)
         finally:
             for child in reversed(suspended):
                 try:
@@ -369,6 +398,7 @@ def shutdown(db, run_id):
         control = _LIVE.get(_key(db, run_id))
     if control is not None:
         control.stopping.set()
+        control.wakeup.set()
 
 
 def checkpoint(kind='work'):
@@ -530,7 +560,7 @@ def run(command, *, capture_output=False, timeout=None, check=False, input=None,
                               check=check, input=input, **kwargs)
     checkpoint()
     if (idle_timeout is not None or on_stdout is not None) and not capture_output:
-        raise ValueError('输出活动监测需要 capture_output=True')
+        raise ValueError('idle_timeout and on_stdout require capture_output=True')
     capture = _OutputCapture() if idle_timeout is not None or on_stdout is not None else None
     if capture_output:
         kwargs.update(stdout=capture.writers[0] if capture else subprocess.PIPE,

@@ -32,6 +32,10 @@ import json
 import re
 from urllib.parse import quote, urljoin, urlsplit
 
+from .content_words import RAW_NAME_KEY
+from .source_page_words import (MINNANO_BLOOD, MINNANO_DATE, MINNANO_FIELDS, MINNANO_FORMER_NOTES,
+                                MINNANO_NOTE_SUFFIX, MINNANO_PERIOD, MINNANO_REMARK_NOTE)
+
 SEARCH = "https://www.minnano-av.com/search_result.php?search_scope=actress&search_word="
 SITE = "https://www.minnano-av.com/"
 ACTRESS_PAGE = re.compile(r"/actress(\d+)\.html")
@@ -124,15 +128,15 @@ def profile_names(html: str) -> tuple[str, list[str]]:
     block = _ACT_PROFILE.search(html)
     aliases = []
     for match in FIELD.finditer(block.group(1) if block else ""):
-        if _text(match.group(1)) == "別名":
+        if _text(match.group(1)) == MINNANO_FIELDS["aliases"]:
             aliases.append(_text(match.group(2)))
     return main, [alias for alias in aliases if alias]
 
 
-_DATE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
-_PERIOD = re.compile(r"(\d{4})\s*年?\s*[-－~〜～]\s*(?:(\d{4})\s*年?)?")
+_DATE = re.compile(MINNANO_DATE)
+_PERIOD = re.compile(MINNANO_PERIOD)
 _SIZE = re.compile(r"([TBWH])\s*(\d{2,3})(?:\s*[(（]\s*([A-Z]{1,2})\s*カップ\s*[)）])?")
-_BLOOD = re.compile(r"^(AB|A|B|O)\s*型$")
+_BLOOD = re.compile(MINNANO_BLOOD)
 _TRAILING_NOTE = re.compile(r"[（(][^（()）]*[）)]\s*$")
 _ANCHOR_TEXT = re.compile(r"<a[^>]*>(.*?)</a>", re.S)
 #: `profile` 交回的固定列；解析不到的一律是 None，不猜。
@@ -206,34 +210,34 @@ def profile(html: str) -> dict | None:
         label, value = _text(match.group(1)), match.group(2)
         if not label:
             continue
-        if label == "別名":
+        if label == MINNANO_FIELDS["aliases"]:
             raw.setdefault(label, []).append(_text(value))
             continue
         cells.setdefault(label, value)
         raw.setdefault(label, _text(value))
     name = _text(_SPAN.sub("", heading.group(1))) if heading else ""
     if name:
-        raw["名前"] = name
+        raw[RAW_NAME_KEY] = name
     result: dict = {"actress_id": found_id, "name": name,
                     "kana": kana or None, "romaji": romaji or None}
-    result["birth_date"] = _iso_date(_text(cells.get("生年月日", "")))
+    result["birth_date"] = _iso_date(_text(cells.get(MINNANO_FIELDS["birth_date"], "")))
     result.update(dict.fromkeys(("height_cm", "bust_cm", "cup", "waist_cm", "hip_cm")))
-    result.update(_sizes(_text(cells.get("サイズ", ""))))
-    blood = _BLOOD.match(_text(cells.get("血液型", "")))
+    result.update(_sizes(_text(cells.get(MINNANO_FIELDS["sizes"], ""))))
+    blood = _BLOOD.match(_text(cells.get(MINNANO_FIELDS["blood_type"], "")))
     result["blood_type"] = blood.group(1) if blood else None
-    result["birthplace"] = _text(cells.get("出身地", "")) or None
-    result["hobbies"] = _text(cells.get("趣味・特技", "")) or None
-    periods = list(_PERIOD.finditer(_text(cells.get("AV出演期間", ""))))
+    result["birthplace"] = _text(cells.get(MINNANO_FIELDS["birthplace"], "")) or None
+    result["hobbies"] = _text(cells.get(MINNANO_FIELDS["hobbies"], "")) or None
+    periods = list(_PERIOD.finditer(_text(cells.get(MINNANO_FIELDS["active_period"], ""))))
     result["debut_year"] = min(int(period.group(1)) for period in periods) if periods else None
     latest = max(periods, key=lambda period: int(period.group(1))) if periods else None
     result["active_until"] = int(latest.group(2)) if latest and latest.group(2) else None
-    debut = _text(cells.get("デビュー作品", ""))
+    debut = _text(cells.get(MINNANO_FIELDS["debut"], ""))
     result["debut_date"] = _iso_date(debut)
     title = _TRAILING_NOTE.sub("", debut).strip() if result["debut_date"] else debut
     result["debut_title"] = title or None
-    result["blog_url"] = _external(cells.get("ブログ", ""))
-    result["site_url"] = _external(cells.get("公式サイト", ""))
-    result["tags"] = [tag for tag in (_text(text) for text in _ANCHOR_TEXT.findall(cells.get("タグ", "")))
+    result["blog_url"] = _external(cells.get(MINNANO_FIELDS["blog"], ""))
+    result["site_url"] = _external(cells.get(MINNANO_FIELDS["site"], ""))
+    result["tags"] = [tag for tag in (_text(text) for text in _ANCHOR_TEXT.findall(cells.get(MINNANO_FIELDS["tags"], "")))
                       if tag]
     result["raw"] = raw
     return result
@@ -251,11 +255,11 @@ def profile_text(html: str, label: str) -> str:
 _PAREN = re.compile(r"[（(【]([^（()）【】]*)[）)】]")
 _KANA_READING = re.compile(r"^[぀-ゟ゠-ヿ\s]*$")
 #: 这些注记说的是「这是她的旧名字」，不是哪个渠道：归到旧名义，不单列一组。
-_FORMER_NOTES = {"旧名", "旧名義", "旧芸名", "旧"}
+_FORMER_NOTES = MINNANO_FORMER_NOTES
 
 
 def _note(text: str) -> str:
-    note = re.sub(r"\s+", " ", text).strip().removesuffix("名義").strip()
+    note = re.sub(r"\s+", " ", text).strip().removesuffix(MINNANO_NOTE_SUFFIX).strip()
     return "" if note in _FORMER_NOTES else note
 
 
@@ -275,7 +279,7 @@ def name_entries(cell: str) -> list[dict]:
     text = _text(cell)
     groups = list(_PAREN.finditer(text))
     # 「別名」栏也放以 (注) 开头的更名、复出说明；整格是注释，原文仍留在资料快照中。
-    if groups and groups[0].start() == 0 and groups[0].group(1).strip() == "注":
+    if groups and groups[0].start() == 0 and groups[0].group(1).strip() == MINNANO_REMARK_NOTE:
         return []
     reading_at = next((index for index in range(len(groups) - 1, -1, -1)
                        if "/" in groups[index].group(1)), -1)
@@ -320,7 +324,7 @@ def production_ref(html: str) -> tuple[str, str]:
     只凭一个数字装上去，装错了在复核件上看不出来。
     """
     for match in FIELD.finditer(html):
-        if re.sub(r"<[^>]+>", "", match.group(1)).strip() != "所属事務所":
+        if re.sub(r"<[^>]+>", "", match.group(1)).strip() != MINNANO_FIELDS["production"]:
             continue
         found = _PRODUCTION.search(match.group(2))
         if not found:

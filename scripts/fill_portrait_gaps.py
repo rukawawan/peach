@@ -40,12 +40,14 @@ from peach.avatar_provider import (   # noqa: E402
     MIN_LONG_SIDE, MIN_SHORT_SIDE, acceptable_avatar)
 from peach.config import (DATABASE_PATH, GENERATED_DIR, SERVE_PORT,   # noqa: E402
                           STATE_DIR)
+from peach.interface_text import dev as t   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
 from peach.previews import entity_image_key   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
 from peach.scripting import open_readonly   # noqa: E402
 
-INSTALL, MANY, NONE, SMALL, FAILED = "装上", "多张（认不准）", "无候选", "图太小", "取图失败"
+#: 对照表 `action` 列：装上、多张认不准、图库没有候选、图太小、取图失败。
+INSTALL, MANY, NONE, SMALL, FAILED = "install", "several", "no-candidate", "too-small", "fetch-failed"
 
 FIELDS = ("entity_id", "name", "assets", "candidates", "action", "file", "size",
           "profile_url", "detail")
@@ -89,7 +91,7 @@ def works(connection: sqlite3.Connection, entity_id: int, limit: int = 12) -> li
         " GROUP BY a.id ORDER BY COALESCE(a.release_date,'') DESC, a.id DESC LIMIT ?",
         (int(entity_id), int(limit))).fetchall()
     return [{"id": int(row["id"]),
-             "label": str(row["code"] or row["catalog_title"] or f"作品 {row['id']}"),
+             "label": str(row["code"] or row["catalog_title"] or t("fill_portrait_gaps.workLabel", id=row['id'])),
              "date": str(row["release_date"] or "")} for row in rows]
 
 
@@ -123,9 +125,10 @@ def sheet_html(rows: list[dict], base_url: str) -> str:
         blocks.append(
             f'<section><h2><a href="{html.escape(profile_url(base_url, row["name"]))}">'
             f'{html.escape(row["name"])}</a>'
-            f'<small>{row["assets"]} 部 · {len(row["candidates"])} 张候选</small></h2>'
+            f'<small>{html.escape(t("fill_portrait_gaps.sheetCounts", assets=row["assets"], candidates=len(row["candidates"])))}</small></h2>'
             f'<div class="shots">{shots}</div><ol class="works">{links}</ol></section>')
-    return ("<!doctype html><meta charset=\"utf-8\"><title>头像候选对照</title>"
+    return ("<!doctype html><meta charset=\"utf-8\">"
+            f"<title>{html.escape(t('fill_portrait_gaps.sheetTitle'))}</title>"
             "<style>body{font:15px/1.6 system-ui,sans-serif;margin:24px;max-width:1100px}"
             "h1{font-size:20px}section{border-top:1px solid #ddd;padding:16px 0}"
             "h2{font-size:17px;display:flex;gap:10px;align-items:baseline}"
@@ -136,8 +139,8 @@ def sheet_html(rows: list[dict], base_url: str) -> str:
             "figcaption{font-size:12px;color:#555;display:flex;justify-content:space-between;"
             "gap:6px}.works{margin:10px 0 0;padding-left:20px;columns:2;font-size:13px}"
             ".works span{color:#888}</style>"
-            f"<h1>头像候选对照 · {len(blocks)} 人</h1>"
-            "<p>图库按名字存图，同名的是不同的人。对着作品认出是谁，再去资料页换图。</p>"
+            f"<h1>{html.escape(t('fill_portrait_gaps.sheetHeading', count=len(blocks)))}</h1>"
+            f"<p>{html.escape(t('fill_portrait_gaps.sheetIntro'))}</p>"
             + "".join(blocks))
 
 
@@ -162,7 +165,7 @@ def run(args: argparse.Namespace) -> int:
                     "candidates": len(found),
                     "profile_url": profile_url(args.base_url, name)}
             if not found:
-                rows.append({**base, "action": NONE, "detail": "图库里没有这个名字"})
+                rows.append({**base, "action": NONE, "detail": t("fill_portrait_gaps.notInGallery")})
                 continue
             if len(found) == 1:
                 rows.append(install_one(connection, transport, providers_root,
@@ -177,7 +180,7 @@ def run(args: argparse.Namespace) -> int:
             sheets.append({**base, "candidates": shots,
                            "works": works(connection, entity_id)})
             rows.append({**base, "action": MANY,
-                         "detail": "；".join(choice["detail"] for choice in found)})
+                         "detail": t("common.clauseSeparator").join(choice["detail"] for choice in found)})
     finally:
         connection.close()
         close = getattr(transport, "close", None)
@@ -189,12 +192,12 @@ def run(args: argparse.Namespace) -> int:
         (sheet_dir / "index.html").write_text(sheet_html(sheets, args.base_url),
                                               encoding="utf-8")
     counts = Counter(str(row["action"]) for row in rows)
-    print(f"缺头像 {len(rows)} 人；复核 CSV：{args.out}")
-    print("  动作分布：", dict(counts))
+    print(t("fill_portrait_gaps.missing", count=len(rows), path=args.out))
+    print(t("fill_portrait_gaps.actions", counts=dict(counts)))
     if sheets:
-        print(f"  对照表：{sheet_dir / 'index.html'}（{len(sheets)} 人）")
+        print(t("fill_portrait_gaps.sheetWritten", path=sheet_dir / 'index.html', count=len(sheets)))
     if not args.apply:
-        print("  未装图（加 --apply 才装）")
+        print(t("fill_portrait_gaps.dryRun"))
     return 0
 
 
@@ -210,12 +213,13 @@ def install_one(connection, transport, providers_root: Path, avatar_root: Path,
     size = f"{inspected.width}×{inspected.height}"
     if not acceptable_avatar(inspected, args.min_long_side, args.min_short_side):
         return {**base, "action": SMALL, "file": choice["detail"], "size": size,
-                "detail": f"低于 {args.min_long_side}×{args.min_short_side} 那一档"}
+                "detail": t("fill_portrait_gaps.belowMinimum", long=args.min_long_side, short=args.min_short_side)}
     if args.apply:
         avatar_picker.install(providers_root, avatar_root, "performer",
                               base["entity_id"], body, origin)
     return {**base, "action": INSTALL, "file": choice["detail"], "size": size,
-            "detail": f"图库 {choice['label']}" + ("" if args.apply else "（未装）")}
+            "detail": t("fill_portrait_gaps.galleryChoice", label=choice['label'])
+            + ("" if args.apply else t("fill_portrait_gaps.notInstalled"))}
 
 
 def save_candidate(connection, transport, providers_root: Path, shots_dir: Path,
@@ -235,7 +239,7 @@ def save_candidate(connection, transport, providers_root: Path, shots_dir: Path,
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="补图库里认得准的女优头像，其余产对照表")
+    parser = argparse.ArgumentParser(description=t("fill_portrait_gaps.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--avatar-root", type=Path, default=GENERATED_DIR / "avatars")
     parser.add_argument("--providers-root", type=Path,
@@ -243,13 +247,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path,
                         default=GENERATED_DIR / "portrait-gaps.csv")
     parser.add_argument("--sheet", type=Path, required=True,
-                        help="对照表目录，候选图存在它下面的 candidates/")
+                        help=t("fill_portrait_gaps.sheetHelp"))
     parser.add_argument("--base-url", default=f"http://localhost:{SERVE_PORT}",
-                        help="对照表里链接指向的实例")
+                        help=t("fill_portrait_gaps.baseUrlHelp"))
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--min-long-side", type=int, default=MIN_LONG_SIDE)
     parser.add_argument("--min-short-side", type=int, default=MIN_SHORT_SIDE)
-    parser.add_argument("--apply", action="store_true", help="真的装图；默认只看不装")
+    parser.add_argument("--apply", action="store_true", help=t("fill_portrait_gaps.applyHelp"))
     parser.add_argument("--lock", type=Path, default=STATE_DIR / ".portrait-gaps.lock")
     return parser
 

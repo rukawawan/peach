@@ -6,8 +6,8 @@ from unittest.mock import Mock, patch
 
 from peach.http import HttpResponse
 from peach.jav_cover_fetch import R18_COMBINED, R18_DETAIL, NotFound, Unavailable
-from peach.library_processing import LibraryMetadataProvider, describe_failure, is_missing
-from peach.metadata import extract_catalog_evidence, extract_peach_fields, original_wording
+from peach.library_processing import LibraryMetadataProvider, describe_failure, is_missing, phrase_text
+from peach.metadata import extract_catalog_evidence, extract_peach_fields, original_wording, relayed
 from peach.scraping_access import SourcePaused
 from peach.sources import R18DEV, FailureReason, Page, R18DevSource, Session, SourceFailure
 from peach.sources.r18dev import ACTRESS_IMAGE, actresses, with_japanese
@@ -150,7 +150,7 @@ class R18DevSourceTests(unittest.TestCase):
         english = dict(EXPECTED, title="", series="", actresses=[], genres=["Slender", "Variety"])
         english.pop("translations")
         english.pop("combined")
-        for body in (Unavailable("HTTP 503"), NotFound("HTTP 404"), b"<html>maintenance</html>"):
+        for body in (Unavailable(*relayed("HTTP 503")), NotFound(*relayed("HTTP 404")), b"<html>maintenance</html>"):
             with self.subTest(body=body):
                 transport = serve({DETAIL_URL: encoded(DETAIL), COMBINED_URL: body})
                 self.assertEqual(R18DevSource().query("ABW-358", session=Session(transport)).payload(), english)
@@ -174,13 +174,13 @@ class R18DevSourceTests(unittest.TestCase):
             self.assertEqual((caught.exception.reason, str(caught.exception)),
                              (FailureReason.PARSE_ERROR, "r18.dev 返回的不是作品 JSON"))
         with self.assertRaises(SourceFailure) as caught:
-            R18DevSource().query("ABW-358", session=Session(serve({DETAIL_URL: Unavailable("HTTP 503")})))
+            R18DevSource().query("ABW-358", session=Session(serve({DETAIL_URL: Unavailable(*relayed("HTTP 503"))})))
         self.assertEqual((caught.exception.reason, caught.exception.status_code), (FailureReason.SERVER_ERROR, 503))
         with self.assertRaises(SourcePaused):
-            R18DevSource().query("ABW-358", session=Session(serve({DETAIL_URL: SourcePaused("来源正在冷却")})))
+            R18DevSource().query("ABW-358", session=Session(serve({DETAIL_URL: SourcePaused("errors.scrapingAccess.coolingDown")})))
         with self.assertRaises(SourceFailure) as caught:
-            R18DevSource().query("ABW-358", session=Session(serve({DETAIL_URL: Unavailable("本趟对外请求配额已用完")})))
-        self.assertEqual((caught.exception.reason, str(caught.exception)), (FailureReason.NETWORK, "本趟对外请求配额已用完"))
+            R18DevSource().query("ABW-358", session=Session(serve({DETAIL_URL: Unavailable("errors.scrapingAccess.requestBudgetSpent")})))
+        self.assertEqual((caught.exception.reason, str(caught.exception)), (FailureReason.NETWORK, "本趟采集次数已用完，再跑一次接着采；已有图片保留"))
 
 
 class OriginalWordingTests(unittest.TestCase):
@@ -250,21 +250,22 @@ class FailureWordingTests(unittest.TestCase):
     """`is_missing` 与 `describe_failure` 对契约异常给出的分档与措辞，和传输层那两个异常一致。"""
 
     def test_is_missing_recognises_the_not_found_tier_only(self):
-        self.assertTrue(is_missing(NotFound("HTTP 404")))
-        self.assertTrue(is_missing(SourceFailure(FailureReason.NOT_FOUND, "AVBase 没有这个番号")))
-        self.assertTrue(is_missing(SourceFailure(FailureReason.GONE, "已下架")))
-        self.assertFalse(is_missing(SourceFailure(FailureReason.AUTH_REQUIRED, "javdb 要求登录")))
-        self.assertFalse(is_missing(Unavailable("HTTP 503")))
+        self.assertTrue(is_missing(NotFound(*relayed("HTTP 404"))))
+        self.assertTrue(is_missing(SourceFailure(FailureReason.NOT_FOUND, "errors.avbase.notFound")))
+        self.assertTrue(is_missing(SourceFailure(FailureReason.GONE, *relayed("HTTP 410"), status_code=410)))
+        self.assertFalse(is_missing(SourceFailure(FailureReason.AUTH_REQUIRED, "errors.javdb.loginRequired")))
+        self.assertFalse(is_missing(Unavailable(*relayed("HTTP 503"))))
         self.assertFalse(is_missing(ValueError("x")))
 
     def test_describe_failure_words_a_source_failure_like_an_unavailable(self):
-        self.assertEqual(describe_failure(SourceFailure(FailureReason.SERVER_ERROR, "HTTP 503", status_code=503)),
+        said = lambda error: phrase_text(describe_failure(error))
+        self.assertEqual(said(SourceFailure(FailureReason.SERVER_ERROR, *relayed("HTTP 503"), status_code=503)),
                          "来源返回 HTTP 503")
-        self.assertEqual(describe_failure(SourceFailure(FailureReason.AUTH_REQUIRED, "javdb 要求登录")), "javdb 要求登录")
-        self.assertEqual(describe_failure(SourceFailure(FailureReason.PARSE_ERROR, "来源返回的番号不匹配")),
+        self.assertEqual(said(SourceFailure(FailureReason.AUTH_REQUIRED, "errors.javdb.loginRequired")), "javdb 要求登录")
+        self.assertEqual(said(SourceFailure(FailureReason.PARSE_ERROR, "errors.base.codeMismatch")),
                          "来源返回的番号不匹配")
-        self.assertEqual(describe_failure(Unavailable("HTTP 503")), "来源返回 HTTP 503")
-        self.assertEqual(describe_failure(ValueError("x")), "处理出错（ValueError）")
+        self.assertEqual(said(Unavailable(*relayed("HTTP 503"))), "来源返回 HTTP 503")
+        self.assertEqual(said(ValueError("x")), "处理出错（ValueError）")
 
 
 if __name__ == "__main__":

@@ -25,7 +25,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import performer_profile_followup as profiles  # noqa: E402
+from peach import task_outcomes  # noqa: E402
 from peach.followups import Attempts, attempts_root  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.migrations import sqlite_backup  # noqa: E402
 from peach.scripting import (BACKUP_REQUIRED, add_ledger_write_args, open_readonly,  # noqa: E402
                              verify_after_write)
@@ -57,16 +59,16 @@ def sweep(contract, items, run_id: str, *, out=sys.stdout,
         try:
             summary = profiles.run(contract, item.key, handle)
         except Exception as error:  # 一位出错只算她自己，接着跑下一位。
-            summary = {"outcome": f"出错：{type(error).__name__}: {error}"}
-        outcome = str(summary.get("outcome", ""))
-        head = outcome.split("；")[0] or "无结论"
+            summary = {"outcome": t("run_performer_profiles.errored", kind=type(error).__name__, error=error)}
+        outcome = str(task_outcomes.rendered(summary).get("outcome", ""))
+        head = outcome.split("；")[0] or t("run_performer_profiles.noOutcome")
         tally[head] = tally.get(head, 0) + 1
-        print(f"{index}/{len(items)} {summary.get('name', item.label)}：{outcome}", file=out, flush=True)
-        streak = streak + 1 if outcome == profiles.UNFETCHED else 0
+        print(t("run_performer_profiles.progress", index=index, total=len(items),
+                name=summary.get('name', item.label), outcome=outcome), file=out, flush=True)
+        streak = streak + 1 if task_outcomes.is_outcome(summary, "unfetched") else 0
         if streak >= stop_after:
-            print(f"连续 {streak} 位未取得，停下：多半是站点冷却或网络断了，稍后原样重跑即可接着来",
-                  file=out, flush=True)
-            tally["停在"] = index
+            print(t("run_performer_profiles.stopped", count=streak), file=out, flush=True)
+            tally[t("run_performer_profiles.stoppedAt")] = index
             break
     return tally
 
@@ -74,9 +76,9 @@ def sweep(contract, items, run_id: str, *, out=sys.stdout,
 def main(argv=None) -> int:
     # 原地改编码：`sweep` 的默认输出在定义时就绑着这个对象。中文控制台是 GBK，名字里的生僻字会让打印抛错。
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=t("run_performer_profiles.description"))
     add_ledger_write_args(parser)
-    parser.add_argument("--limit", type=int, help="这一趟最多跑几位")
+    parser.add_argument("--limit", type=int, help=t("run_performer_profiles.helpLimit"))
     args = parser.parse_args(argv)
     if args.apply and not args.backup:
         raise SystemExit(BACKUP_REQUIRED)
@@ -84,20 +86,22 @@ def main(argv=None) -> int:
     contract = WebContract(args.db)
     with open_readonly(args.db) as connection:
         items = pending(connection, contract.candidate_root, args.limit)
-    print(f"待补资料的女优：{len(items)} 位")
+    print(t("run_performer_profiles.pending", count=len(items)))
     if not args.apply:
         for item in items[:10]:
             print(f"  {item.label}")
         return 0
     sqlite_backup(Path(args.db), Path(args.backup))
-    print(f"备份：{args.backup}")
+    print(t("run_performer_profiles.backup", path=args.backup))
     run_id = f"manual-{time.strftime('%Y%m%dT%H%M%S')}"
     tally = sweep(contract, items, run_id)
-    print("结论：" + "，".join(f"{key} {value}" for key, value in tally.items()))
-    print(f"批次：{profiles.SOURCE}@{run_id}；判词：{contract.candidate_root / profiles.REVIEW_FILE}")
+    print(t("run_performer_profiles.tally", tally=t("common.commaSeparator").join(
+        f"{key} {value}" for key, value in tally.items())))
+    print(t("run_performer_profiles.batch", source=profiles.SOURCE, run_id=run_id,
+            path=contract.candidate_root / profiles.REVIEW_FILE))
     with open_readonly(args.db) as connection:
         integrity, violations = verify_after_write(connection)
-    print(f"integrity_check：{integrity}；外键违规：{violations}")
+    print(t("run_performer_profiles.integrity", integrity=integrity, violations=violations))
     return 0 if integrity == "ok" and not violations else 1
 
 

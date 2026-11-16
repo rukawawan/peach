@@ -22,31 +22,32 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.code_creators import FIELDS, apply_rows, collect
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.migrations import sqlite_backup
 from peach.review_csv import write_rows
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="清理被投影成创作者的番号目录名")
+    parser = argparse.ArgumentParser(description=t("audit_code_creators.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "code-creator-review.csv")
-    parser.add_argument("--apply", action="store_true", help="写 ledger；默认只出 CSV")
-    parser.add_argument("--backup", type=Path, help="--apply 必需：写库前的 SQLite 备份路径")
+    parser.add_argument("--apply", action="store_true", help=t("audit_code_creators.applyHelp"))
+    parser.add_argument("--backup", type=Path, help=t("audit_code_creators.backupHelp"))
     return parser
 
 
 def run(args: argparse.Namespace) -> int:
     if args.apply and not args.backup:
-        raise SystemExit("--apply 必须同时给 --backup")
+        raise SystemExit(t("audit_code_creators.applyNeedsBackup"))
     connection = sqlite3.connect(args.db)
     rows = collect(connection)
-    print(f"命中番号形态的创作者 {len(rows)} 个")
-    print("  判定分布：", dict(Counter(str(row["verdict"]) for row in rows)))
+    print(t("audit_code_creators.matched", count=len(rows)))
+    print(t("audit_code_creators.verdicts", counts=dict(Counter(str(row["verdict"]) for row in rows))))
 
     if args.apply:
         sqlite_backup(args.db, args.backup)
-        print(f"已备份 → {args.backup}")
+        print(t("audit_code_creators.backedUp", path=args.backup))
         connection.execute("BEGIN IMMEDIATE")
         try:
             counts = apply_rows(connection, rows)
@@ -54,14 +55,14 @@ def run(args: argparse.Namespace) -> int:
         except Exception:
             connection.rollback()
             raise
-        print(f"已写入：删创作者关系 {counts['links']} 条、删实体 {counts['entities']} 个、"
-              f"补 code {counts['codes']} 条、清扁平字段 {counts['flat']} 条")
+        print(t("audit_code_creators.written", links=counts['links'], entities=counts['entities'],
+                codes=counts['codes'], flat=counts['flat']))
     connection.close()
 
     write_rows(args.review_csv, FIELDS, rows)
-    print(f"复核 CSV → {args.review_csv}")
+    print(t("audit_code_creators.reviewCsv", path=args.review_csv))
     if not args.apply:
-        print("这是预览：未写 ledger。确认后再加 --apply --backup。")
+        print(t("audit_code_creators.previewOnly"))
     return 0
 
 

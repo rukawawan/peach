@@ -2,6 +2,7 @@
 import { api } from '@peach/legacy/core';
 import type { CaptionStyle } from './subtitle-style';
 import type { VjsPlayer } from './types';
+import { t } from '../i18n';
 
 export interface PlayerMemoryValue {
   selected: string | null;
@@ -54,7 +55,7 @@ class PlayerMemory {
       return value;
     })().catch(error => {
       this.reading = undefined;
-      if (!this.cleanup.signal.aborted) { this.error = '播放记忆未读取，请重试'; this.changed() }
+      if (!this.cleanup.signal.aborted) { this.error = t('catalog:playerMemory.loadFailed'); this.changed() }
       throw error;
     });
   }
@@ -68,12 +69,12 @@ class PlayerMemory {
           body: JSON.stringify(patch), keepalive: !patch.track });
         if (!response.ok) {
           const body = await response.json().catch(() => null);
-          throw new Error(body?.error || body?.detail || '播放记忆未保存，请重试');
+          throw new Error(body?.error || body?.detail || t('catalog:playerMemory.saveFailed'));
         }
         this.unsaved = {}; this.error = '';
       } catch (error) {
         this.unsaved = patch;
-        this.error = error instanceof Error ? error.message : '播放记忆未保存，请重试';
+        this.error = error instanceof Error ? error.message : t('catalog:playerMemory.saveFailed');
         throw error;
       } finally { this.changed() }
     });

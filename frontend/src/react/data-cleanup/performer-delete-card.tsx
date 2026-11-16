@@ -22,6 +22,7 @@ import {
   deletePerformerVideos, fetchDeletePerformers, fetchDeletePlan, PERFORMER_DELETE_KEY,
   type DeletePerformer, type PerformerDeleteResult,
 } from './performer-delete';
+import { serverLabel } from '../../core/server-text';
 import { t } from '../../i18n';
 
 function PerformerName({ person }: { person: DeletePerformer }) {
@@ -112,7 +113,8 @@ export function PerformerDeleteCard({ toast }: { toast(message: string): void })
   };
 
   const failures = result ? [
-    ...result.blocked, ...result.cleanup_pending,
+    ...result.blocked.map(item => ({ path: item.path, reason: serverLabel(item.reason_code ?? '', item.reason, item.reason_params) })),
+    ...result.cleanup_pending,
     ...result.cache_blocked.map(item => ({ path: item.name, reason: item.reason })),
   ] : [];
   return <section id="batch-delete" className="flex min-w-0 scroll-mt-20 flex-col gap-3" aria-label={t('cleanup:tools.bulkDelete')}>
@@ -131,7 +133,7 @@ export function PerformerDeleteCard({ toast }: { toast(message: string): void })
     {error ? <Note tone="error" title={t('cleanup:performerDelete.planFailed')}>{error}</Note> : null}
     {result ? <Note tone={failures.length ? 'warning' : 'info'} title={t('cleanup:performerDelete.purged', { count: result.purged })}
       extra={failures.length ? <div className="flex flex-col gap-2 text-body-2-regular wrap-anywhere">
-        {failures.slice(0, 5).map((item, index) => <p key={index}>{item.path}（{item.reason}）</p>)}
+        {failures.slice(0, 5).map((item, index) => <p key={index}>{t('shell:format.withNote', { text: item.path, note: item.reason })}</p>)}
       </div> : null}>
       {failures.length
         ? t('cleanup:performerDelete.partialFailure', { count: result.blocked.length, quarantined: result.cleanup_pending.length, cacheFiles: result.cache_blocked.length })

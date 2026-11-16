@@ -7,6 +7,7 @@ import { Select, SelectItem } from '../components/select';
 import { apiSend } from '../../api';
 import { queryClient } from '../query';
 import { showToast } from '../toaster';
+import { joinList, quoted, t } from '../../i18n';
 
 export type TagId = number | string;
 export type TagScope = 'local' | 'online';
@@ -16,8 +17,13 @@ export type Operation = 'rename' | 'merge' | 'hide' | 'restore' | 'repair' | 'bl
 export interface Command { operation: Operation; ids: TagId[]; name?: string; target_id?: TagId; scope?: TagScope }
 interface Plan { token: string; name?: string; assets: number; overlap: number; tags: ManagedTag[] }
 export const TAG_ACTION_LABELS: Record<Operation, string> = {
-  rename: '重命名标签', merge: '合并标签', hide: '隐藏标签', restore: '恢复标签', repair: '整理重复标签',
-  block: '屏蔽内容', unblock: '恢复内容',
+  rename: t('catalog:tagOperations.renameTag'), merge: t('catalog:tagOperations.mergeTags'), hide: t('catalog:tagOperations.hideTags'), restore: t('catalog:tagOperations.unhideTags'), repair: t('catalog:tagManager.mergeDuplicates'),
+  block: t('catalog:tagManager.blockContent'), unblock: t('catalog:tagManager.unblockContent'),
+};
+/** 操作做完后的提示，每种操作一句完成态。 */
+const TAG_ACTION_DONE: Record<Operation, string> = {
+  rename: t('catalog:tagOperations.doneRename'), merge: t('catalog:tagOperations.doneMerge'), hide: t('catalog:tagOperations.doneHide'), restore: t('catalog:tagOperations.doneUnhide'),
+  repair: t('catalog:tagOperations.doneRepair'), block: t('catalog:tagOperations.doneBlock'), unblock: t('catalog:tagOperations.doneUnblock'),
 };
 
 export const previewTagOperation = (command: Command, signal?: AbortSignal) =>
@@ -25,18 +31,19 @@ export const previewTagOperation = (command: Command, signal?: AbortSignal) =>
 
 export async function confirmTagOperation(command: Command, plan: Plan, signal?: AbortSignal) {
   if (signal?.aborted) return false;
-  const names = plan.tags.map(tag => `「${tag.k}」`).join('、');
+  const names = joinList(plan.tags.map(tag => quoted(tag.k)));
   const consequence = command.operation === 'merge' || command.operation === 'repair'
-    ? `合并 ${plan.tags.length} 个标签，涉及 ${plan.assets} 个资源，重叠关联 ${plan.overlap} 个。旧名称保留为别名。此操作无法直接撤销。`
-    : command.operation === 'rename' ? `${names}将更名为「${plan.name || command.name}」，涉及 ${plan.assets} 个资源。旧名称保留为别名。`
-      : command.operation === 'block' ? `屏蔽带有${names}任一标签的内容及其其它版本，涉及 ${plan.assets} 个资源。可在「已屏蔽内容」中恢复。`
-        : command.operation === 'unblock' ? `解除${names}的内容屏蔽，涉及 ${plan.assets} 个资源。`
-          : `${command.operation === 'hide' ? '隐藏' : '恢复'} ${plan.tags.length} 个标签，涉及 ${plan.assets} 个资源。${command.operation === 'hide' ? '可在“已隐藏”中恢复。' : ''}`;
+    ? t('catalog:tagOperations.mergeConfirm', { count: plan.tags.length, assets: plan.assets, overlap: plan.overlap })
+    : command.operation === 'rename' ? t('catalog:tagOperations.renameConfirm', { names, newName: quoted(plan.name || command.name || ''), count: plan.assets })
+      : command.operation === 'block' ? t('catalog:tagOperations.blockConfirm', { names, count: plan.assets })
+        : command.operation === 'unblock' ? t('catalog:tagOperations.unblockConfirm', { names, count: plan.assets })
+          : command.operation === 'hide' ? t('catalog:tagOperations.hideConfirm', { count: plan.tags.length, assets: plan.assets })
+            : t('catalog:tagOperations.unhideConfirm', { count: plan.tags.length, assets: plan.assets });
   const done = await confirmModal({ title: TAG_ACTION_LABELS[command.operation], body: consequence,
     confirmLabel: TAG_ACTION_LABELS[command.operation], onConfirm: () => apiSend('/api/tag-management', { ...command, token: plan.token }, 'POST', signal) });
   if (!done.confirmed || signal?.aborted) return false;
   await queryClient.invalidateQueries();
-  showToast(`tag-management-${Date.now()}`, { html: `已${TAG_ACTION_LABELS[command.operation]}`, alert: false, timeout: 6000, action: null });
+  showToast(`tag-management-${Date.now()}`, { html: TAG_ACTION_DONE[command.operation], alert: false, timeout: 6000, action: null });
   return true;
 }
 
@@ -50,7 +57,7 @@ export function TagEditor({ operation, selected, close, done, scope = 'local' }:
   useEffect(() => {
     const controller = new AbortController();
     const given = initial.current;
-    const dialog = formModal({ title: TAG_ACTION_LABELS[given.operation], confirmLabel: '预览影响范围', confirmDisabled: true,
+    const dialog = formModal({ title: TAG_ACTION_LABELS[given.operation], confirmLabel: t('catalog:tagOperations.previewImpact'), confirmDisabled: true,
       body: '<div class="peach-react" data-tag-editor-fields></div>',
       onConfirm: async () => {
         const command: Command = { operation: given.operation, ids: given.selected.map(managedTagId), ...(given.scope === 'online' ? { scope: given.scope } : {}),
@@ -83,8 +90,8 @@ function TagFields({ operation, selected, dialog, update }: {
     update({ name, target_id: target });
     dialog.confirmButton.disabled = operation === 'rename' && (!name.trim() || name.trim() === selected[0]?.k);
   }, [name, target, dialog, operation, selected, update]);
-  return operation === 'rename' ? <Input autoFocus aria-label="标签名称" value={name} onChange={setName} maxLength={80} />
-    : <Select aria-label="保留的标签" prefix="保留" selectedKey={String(target)} onSelectionChange={key => {
+  return operation === 'rename' ? <Input autoFocus aria-label={t('catalog:tagOperations.tagName')} value={name} onChange={setName} maxLength={80} />
+    : <Select aria-label={t('catalog:tagOperations.tagToKeep')} prefix={t('catalog:tagOperations.keep')} selectedKey={String(target)} onSelectionChange={key => {
       const row = selected.find(tag => String(managedTagId(tag)) === String(key)); if (row) setTarget(managedTagId(row));
     }}>
       {selected.map(row => <SelectItem key={managedTagId(row)} id={String(managedTagId(row))}>{row.k}</SelectItem>)}

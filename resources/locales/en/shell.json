@@ -1,0 +1,884 @@
+{
+  "accessSetup": {
+    "enterWithoutPassword": "Continue without sign-in",
+    "lanPasswordHint": "Recommended for LAN access. Without one, any device on the same network can get in.",
+    "lede": "Choose whether opening Peach requires sign-in.",
+    "passwordHelp": "When on, Peach requires sign-in.",
+    "passwordLength": "Use 8–256 characters.",
+    "saveFailed": "Couldn't save access settings. Try again.",
+    "setPasswordAndEnter": "Set password and continue",
+    "title": "Access settings",
+    "unreachable": "Can't reach Peach. Make sure it's still running, then try again."
+  },
+  "artworkGap": {
+    "coverFileMissing": "Cover file is missing",
+    "coverNotFound": "Cover not found",
+    "coverPending": "No official cover yet",
+    "fetchCover": "Fetch cover",
+    "fetching": "Fetching",
+    "ffmpegMissing": "FFmpeg not found",
+    "fillInIncomplete": "Fill-in didn't finish",
+    "fillInPreviews": "Fill in previews",
+    "fillingIn": "Filling in",
+    "frameFilesMissing": "Preview frame files are missing",
+    "framesPending": "Frames not extracted yet",
+    "framesUpdating": "Preview frames are updating",
+    "isoSkipped": "No frame extraction for ISO",
+    "loadInterrupted": "Image loading was interrupted",
+    "meteredSkipped": "Data saver · No frame extraction during sync",
+    "noCover": "No cover",
+    "noOfficialCover": "No usable official cover found",
+    "noPreview": "No preview",
+    "onlineSkipped": "No frame extraction for online storage",
+    "previewFailed": "Couldn't generate preview images",
+    "previewNotFound": "Preview not found",
+    "previewsBusy": "Can be filled in after the current task finishes",
+    "previewsOff": "Turn on preview generation in library settings first",
+    "probeFailed": "Probe failed, no frames extracted",
+    "serverStatus": "Server returned {{status}}",
+    "serviceUnreachable": "Can't reach the Peach service",
+    "siteNoImage": "The source site returned no image",
+    "strmSkipped": "No frame extraction for STRM"
+  },
+  "batchCatalog": {
+    "addToWatchLater": "Add to watch later",
+    "confirmBody_one": "This applies to the {{count, number}} selected item.",
+    "confirmBody_other": "This applies to the {{count, number}} selected items.",
+    "confirmDelete_one": "Files and collection records for the {{count, number}} selected item will be deleted permanently. This can't be undone.",
+    "confirmDelete_other": "Files and collection records for the {{count, number}} selected items will be deleted permanently. This can't be undone.",
+    "confirmDispose_one": "The {{count, number}} selected item will move to the trash, where you can restore it.",
+    "confirmDispose_other": "The {{count, number}} selected items will move to the trash, where you can restore them.",
+    "deleteSelected": "Delete selected permanently",
+    "doneDelete_one": "Deleted {{count, number}} item permanently",
+    "doneDelete_other": "Deleted {{count, number}} items permanently",
+    "doneDispose_one": "Moved {{count, number}} item to trash",
+    "doneDispose_other": "Moved {{count, number}} items to trash",
+    "doneLater_one": "Added {{count, number}} item to watch later",
+    "doneLater_other": "Added {{count, number}} items to watch later",
+    "doneLike_one": "Liked {{count, number}} item",
+    "doneLike_other": "Liked {{count, number}} items",
+    "doneRestore_one": "Restored {{count, number}} item",
+    "doneRestore_other": "Restored {{count, number}} items",
+    "doneSeen_one": "Marked {{count, number}} item as watched",
+    "doneSeen_other": "Marked {{count, number}} items as watched",
+    "likeSelected": "Like selected",
+    "markWatched": "Mark as watched",
+    "restoreSelected": "Restore selected"
+  },
+  "batchFollow": {
+    "confirmBody_one": "This applies to the {{count, number}} selected video from Following.",
+    "confirmBody_other": "This applies to the {{count, number}} selected videos from Following.",
+    "doneIgnored_one": "Ignored {{count, number}} item",
+    "doneIgnored_other": "Ignored {{count, number}} items",
+    "doneSave_one": "Saved {{count, number}} item to the database",
+    "doneSave_other": "Saved {{count, number}} items to the database",
+    "doneSeen_one": "Marked {{count, number}} item as seen",
+    "doneSeen_other": "Marked {{count, number}} items as seen",
+    "ignoreSelected": "Ignore selected videos",
+    "saveSelected": "Save selected videos"
+  },
+  "batchJunk": {
+    "confirmBody_one": "This applies to the {{count, number}} selected file.",
+    "confirmBody_other": "This applies to the {{count, number}} selected files.",
+    "dismissed": "Set as not junk",
+    "doneDispose_one": "Moved {{count, number}} item to trash",
+    "doneDispose_other": "Moved {{count, number}} items to trash",
+    "doneNotJunk_one": "Marked {{count, number}} item as not junk",
+    "doneNotJunk_other": "Marked {{count, number}} items as not junk",
+    "doneRecheck_one": "Sent {{count, number}} item back for junk check",
+    "doneRecheck_other": "Sent {{count, number}} items back for junk check",
+    "markNotJunk": "Mark as not junk",
+    "recheckFiles": "Recheck files",
+    "reconsidered": "Sent back for junk check"
+  },
+  "batchRegion": {
+    "cleared_one": "Cleared the region for {{count, number}} item",
+    "cleared_other": "Cleared the region for {{count, number}} items",
+    "hint_one": "The {{count, number}} selected item will get this region, and scraping and auto-detection won't change it afterward.",
+    "hint_other": "The {{count, number}} selected items will share one region, and scraping and auto-detection won't change it afterward.",
+    "pickFirst": "Choose a region first",
+    "set_one": "Set to {{region}}: {{count, number}} item",
+    "set_other": "Set to {{region}}: {{count, number}} items",
+    "title": "Set region"
+  },
+  "boardTabs": {
+    "defaultLabel": "Views"
+  },
+  "cardLayout": {
+    "home": "Home card layout",
+    "jav": "JAV card layout"
+  },
+  "catalogFilter": {
+    "credit": "Credit",
+    "uncreditedChip": "{{label}}: Uncredited",
+    "unknownYear": "Unknown year",
+    "yearChip": "Release year: {{years}}"
+  },
+  "catalogView": {
+    "flagged": "Flagged",
+    "junkFiles": "Junk files",
+    "unwatched": "Unwatched",
+    "watchLater": "Watch later"
+  },
+  "chrome": {
+    "densityToggle": "Toggle card density",
+    "exitSearch": "Exit search",
+    "immersiveTitle": "Immersive mode · Shuffle play",
+    "navigationTitle": "Navigation and filters",
+    "openPreferences": "Open preferences",
+    "openTutorial": "Open tutorial",
+    "openWall": "Open video wall",
+    "searchLabel": "Search videos, actresses, studios, or tags",
+    "selectMode": "Selection mode",
+    "selectTitle": "Select (Ctrl for one, Shift for a range)",
+    "skipToContent": "Skip to content"
+  },
+  "clientUpdate": {
+    "available": "An update is available.",
+    "later": "Later",
+    "migrating": "Updating the local database.",
+    "migratingApply": "Updating the local database · Applying migrations",
+    "migratingBackup": "Updating the local database · Backing up {{percent}}%",
+    "refreshPage": "Refresh page",
+    "refreshReady": "Peach has been updated. Refresh the page to use it.",
+    "restartReady": "An update is ready. Restart to install it.",
+    "updating": "Updating to Peach {{version}} · {{step}} {{percent}}%",
+    "updatingUnversioned": "Updating Peach · {{step}} {{percent}}%",
+    "updatingStep": "Updating to Peach {{version}} · {{step}}",
+    "updatingStepUnversioned": "Updating Peach · {{step}}",
+    "viewProgress": "View progress",
+    "viewUpdate": "View update"
+  },
+  "codeBlock": {
+    "copyAll": "Copy full content",
+    "copyCode": "Copy code",
+    "copyFailed": "Copy failed. Select the text and copy it manually."
+  },
+  "confirmModal": {
+    "actionFailed": "Couldn't complete the action",
+    "selectedItems": "Selected items"
+  },
+  "connectionStatus": {
+    "notChecked": "Not checked",
+    "offline": "Offline"
+  },
+  "coverQueue": {
+    "prioritizeAll": "Prioritize all",
+    "progress_one": "Fetching covers · {{done}} / {{count, number}}. If you leave this page, the rest stay queued in the background.",
+    "progress_other": "Fetching covers · {{done}} / {{count, number}}. If you leave this page, the rest stay queued in the background.",
+    "waiting_one": "{{scope}}, {{count, number}} new release is still waiting for its cover. Fetch it now.",
+    "waiting_other": "{{scope}}, {{count, number}} new releases are still waiting for covers. Fetch them all now."
+  },
+  "dataTable": {
+    "bulkActions": "{{label}} bulk actions",
+    "clearSelection": "Clear selection",
+    "empty": "No records",
+    "recordUnit": "records",
+    "selectAll": "Select all {{label}}",
+    "selectColumn": "Select",
+    "selectRow": "Select {{name}}",
+    "selectedCount_one": "{{count, number}} {{unit}} selected",
+    "selectedCount_other": "{{count, number}} {{unit}} selected",
+    "spacerColumn": "Empty space",
+    "toolbar": "{{label}} toolbar"
+  },
+  "detailTags": {
+    "hideTag": "Hide this tag on this video",
+    "moreCount_one": "{{count, number}} more",
+    "moreCount_other": "{{count, number}} more",
+    "optionsLoadFailed": "Couldn't load tag suggestions",
+    "removeTagNamed": "Remove tag {{tag}}",
+    "renameTag": "Rename tag",
+    "renameTagNamed": "Rename tag {{tag}}",
+    "tagChanged": "This tag has changed. Reopen the details."
+  },
+  "documentTitle": {
+    "fallback": "Peach"
+  },
+  "downloadChannels": {
+    "notConfigured": "No download channels yet.",
+    "settingsLink": "Download settings"
+  },
+  "duration": {
+    "daysHours_one": "{{days}} days {{count, number}} hour",
+    "daysHours_other": "{{days}} days {{count, number}} hours",
+    "days_one": "{{count, number}} day",
+    "days_other": "{{count, number}} days"
+  },
+  "entityAlias": {
+    "add": "Add alias",
+    "added": "Added alias {{alias}}",
+    "addedByYou": "Added by you",
+    "exists": "{{alias}} is already a name in this profile",
+    "fieldLabel": "Alias",
+    "hint": "Aliases help the gallery find more images, and an alias can be set as the display name.",
+    "placeholder": "Another spelling or stage name",
+    "removeAction": "Alias removal",
+    "removeNamed": "Remove alias {{alias}}",
+    "removed": "Removed alias {{alias}}"
+  },
+  "entityMissing": {
+    "agency": "This agency couldn't be found",
+    "backToList": "Back to {{title}}",
+    "hint": "The name may be misspelled or merged into another name. Look for it in the list.",
+    "item": "This item couldn't be found",
+    "performer": "This performer couldn't be found",
+    "seller": "This seller couldn't be found",
+    "series": "This series couldn't be found",
+    "studio": "This studio couldn't be found",
+    "tag": "This tag couldn't be found"
+  },
+  "entitySort": {
+    "ariaLabel": "Sort by {{label}} {{direction}}"
+  },
+  "errorPage": {
+    "conflict": "Can't do that right now",
+    "forbidden": "Can't open this page",
+    "generic": "Something went wrong",
+    "goHome": "Back to Home",
+    "notFound": "404"
+  },
+  "errorReport": {
+    "appUnmounted": "App unmounted",
+    "browserSnapshot": "Browser environment snapshot",
+    "cleanupIncomplete": "Some app resources weren't cleaned up",
+    "hostMissing": "Main view host element is missing",
+    "mediaPlaybackFailed": "Media playback failed ({{code}})",
+    "unhandledRejection": "Unhandled promise rejection"
+  },
+  "expandableRanking": {
+    "collapse": "Collapse ranking",
+    "expand": "Expand ranking"
+  },
+  "feedNew": {
+    "configureConnection": "Configure connection",
+    "dmmUnreachable_one": "The cover for {{count, number}} new release can't reach the DMM image host. Set DMM / FANZA to use the Peach proxy and it'll be fetched again next round.",
+    "dmmUnreachable_other": "Covers for {{count, number}} new releases can't reach the DMM image host. Set DMM / FANZA to use the Peach proxy and they'll be fetched again next round.",
+    "ignore": "Not interested",
+    "ignoreNamed": "Not interested in {{name}}",
+    "markRead": "Mark as seen",
+    "markReadNamed": "Mark {{name}} as seen",
+    "metadataPending": "No metadata yet",
+    "openDetails": "Open details for {{name}}",
+    "sectionLabel": "New releases not in your collection",
+    "untitled": "Untitled release",
+    "viewAll": "View all new releases",
+    "wantNamed": "Want {{name}}"
+  },
+  "fileSize": {
+    "unknown": "Unknown size"
+  },
+  "firstAccess": {
+    "denied": "Open Peach on the computer running it or from the same LAN to finish setup, or set PEACH_ACCESS_PASSWORD when starting the container."
+  },
+  "followRange": {
+    "anyTime": "Any time",
+    "last30Days": "Last 30 days",
+    "last7Days": "Last 7 days",
+    "last90Days": "Last 90 days"
+  },
+  "followSort": {
+    "duration": "Duration",
+    "popular": "Popular",
+    "updated": "Updated"
+  },
+  "followTable": {
+    "lastChecked": "Last checked",
+    "site": "Site",
+    "source": "Source",
+    "status": "Status"
+  },
+  "format": {
+    "clauseSeparator": ", ",
+    "labelPrefix": "{{label}}: ",
+    "labelValue": "{{label}}: {{value}}",
+    "listSeparator": ", ",
+    "period": ".",
+    "quoted": "“{{text}}”",
+    "semicolonSeparator": "; ",
+    "sentenceGap": " ",
+    "withNote": "{{text}} ({{note}})"
+  },
+  "glowPicker": {
+    "title": "Glow colors"
+  },
+  "ingestToast": {
+    "burst_one": "{{count, number}} video imported",
+    "burst_other": "{{count, number}} videos imported",
+    "downloadDone": "“{{name}}” imported and organized",
+    "fallbackName": "A video",
+    "newFile": "New file imported: “{{name}}”"
+  },
+  "keyboardShortcut": {
+    "needsModifier": "Include at least one modifier key; a single letter conflicts with player shortcuts",
+    "reservedByBrowser": "The browser reserves this combination, so the page can't receive it",
+    "unsupportedKey": "Only letters, numbers, and F1–F12 can be the main key"
+  },
+  "libraryPicker": {
+    "allLibraries": "All libraries",
+    "choose": "Choose library"
+  },
+  "loadingSkeleton": {
+    "content": "Loading content",
+    "index": "Loading index"
+  },
+  "login": {
+    "accessToken": "Access token",
+    "signIn": "Sign in",
+    "staySignedIn": "Stay signed in",
+    "tokenHintDocker": "Run {{command}} on the host to view it.",
+    "tokenHintLocal": "Run {{command}} where Peach is running to view it.",
+    "wrongPassword": "Incorrect access password",
+    "wrongToken": "Incorrect access token"
+  },
+  "managedPage": {
+    "readOnly": "This device is read-only"
+  },
+  "mediaCard": {
+    "checkingCause": "Checking the cause",
+    "disposalDuplicate": "Duplicate",
+    "disposalJunk": "Junk",
+    "disposalManual": "Manual",
+    "disposalMissing": "File missing",
+    "disposalReason": "Trash reason: {{reason}}",
+    "disposalUnknown": "No reason recorded",
+    "editionCount_one": "{{count, number}} edition",
+    "editionCount_other": "{{count, number}} editions",
+    "flagLiked": "Liked",
+    "flaggedBy": "Flagged: {{reasons}}",
+    "hasOCount": "O count recorded",
+    "movingToTrash": "Moving to trash…",
+    "openActressNamed": "Open actress page: {{name}}",
+    "openActressPage": "Open actress page",
+    "openDetails": "Open details",
+    "openDetailsNamed": "Open details for {{name}}",
+    "openEditionsNamed": "Open editions of {{name}}",
+    "openPartsNamed": "Open parts of {{name}}",
+    "openPerformerNamed": "Open performer page: {{name}}",
+    "openPerformerPage": "Open performer page",
+    "openPreview": "Open preview",
+    "openProfile": "Open profile",
+    "operationFailed": "Action failed. Try again.",
+    "partCount_one": "{{count, number}} part",
+    "partCount_other": "{{count, number}} parts",
+    "performerTotal_one": "{{count, number}} person",
+    "performerTotal_other": "{{count, number}} people",
+    "resourceArchive": "Archive",
+    "resourceAudio": "Audio",
+    "resourceImage": "Image",
+    "resourceOther": "Other file",
+    "restoring": "Restoring…",
+    "seekBack_one": "Back {{count, number}} second",
+    "seekBack_other": "Back {{count, number}} seconds",
+    "seekForward_one": "Forward {{count, number}} second",
+    "seekForward_other": "Forward {{count, number}} seconds",
+    "untitledResource": "Untitled file",
+    "untitledVideo": "Untitled video",
+    "urlShortcut": "Internet shortcut",
+    "watchProgress": "Watch progress"
+  },
+  "mediaCarousel": {
+    "imageCount_one": "{{count, number}} image",
+    "imageCount_other": "{{count, number}} images",
+    "mediaCount_one": "{{count, number}} item",
+    "mediaCount_other": "{{count, number}} items",
+    "next": "Next",
+    "nextImage": "Next image",
+    "nextItem": "Next item",
+    "position": "Item {{index}}",
+    "positionOfTotal": "{{index}} of {{total}}",
+    "previous": "Previous",
+    "previousImage": "Previous image",
+    "previousItem": "Previous item",
+    "switchToNamed": "Show {{name}}",
+    "switchToPosition": "Show item {{index}}",
+    "thumbnails": "Media thumbnails"
+  },
+  "mixCard": {
+    "openProfile": "Open profile: {{name}}",
+    "videoCount_one": "{{count, number}} video",
+    "videoCount_other": "{{count, number}} videos"
+  },
+  "navigationOrder": {
+    "group": "Navigation group",
+    "librarySyncFailed": "Couldn't sync library order. {{error}}",
+    "manageMenu": "Manage menu",
+    "menuLabel": "{{group}} order settings",
+    "moveDown": "Move {{name}} down",
+    "moveUp": "Move {{name}} up",
+    "resetDone": "This group's order was reset",
+    "resetGroup": "Reset this group's order",
+    "syncFailed": "Order saved on this device, but sync failed. {{error}}"
+  },
+  "networkBanner": {
+    "checkProxy": "Check Peach proxy",
+    "offline": "Peach can't reach the internet. Fetching, Following updates, and online sources are unavailable; local media still works."
+  },
+  "objectOrder": {
+    "save": "Save order"
+  },
+  "orientation": {
+    "landscape": "Horizontal",
+    "portrait": "Vertical"
+  },
+  "pathLine": {
+    "reveal": "Show file location"
+  },
+  "pendingWork": {
+    "running": "Filling in: {{tasks}}",
+    "waiting": "Waiting to fill in: {{tasks}}"
+  },
+  "playlistDialog": {
+    "addHint": "Select playlists to add to, or enter a name to create one.",
+    "addTitle": "Add to playlist",
+    "added_one": "Added to {{count, number}} playlist",
+    "added_other": "Added to {{count, number}} playlists",
+    "emptyHint": "No playlists yet. Enter a name to create one.",
+    "existingLists": "Existing playlists",
+    "nameLabel": "Name",
+    "nameRequired": "Playlist name can't be empty",
+    "saveAsTitle": "Save as playlist",
+    "saveMixHint_one": "The {{count, number}} video in this Mix will be saved as a playlist you can keep playing.",
+    "saveMixHint_other": "The {{count, number}} videos in this Mix will be saved as a playlist you can keep playing.",
+    "saved": "Saved as playlist"
+  },
+  "rating": {
+    "clearCurrent_one": "Clear rating (currently {{count, number}} star)",
+    "clearCurrent_other": "Clear rating (currently {{count, number}} stars)",
+    "clearHint": "Click again to clear rating",
+    "rateStars_one": "Rate {{count, number}} star",
+    "rateStars_other": "Rate {{count, number}} stars",
+    "saving": "Saving rating",
+    "stars_one": "{{count, number}} star",
+    "stars_other": "{{count, number}} stars",
+    "unrated": "Unrated"
+  },
+  "ratingAction": {
+    "cleared": "Rating cleared",
+    "label": "Rating",
+    "rated_one": "Rated {{count, number}} star",
+    "rated_other": "Rated {{count, number}} stars"
+  },
+  "receipt": {
+    "actionFailed": "{{action}} failed: {{message}}",
+    "genericAction": "Action",
+    "tryAgain": "Try again.",
+    "undoFailed": "Couldn't undo: {{message}}",
+    "undone": "Undone"
+  },
+  "recommendationReason": {
+    "sharedTags": "Shared tags: {{tags}}",
+    "title": "Why recommended",
+    "viewReason": "Why this is recommended: {{reason}}"
+  },
+  "region": {
+    "china": "China",
+    "clear": "Clear region",
+    "japan": "Japan",
+    "korea": "Korea",
+    "other": "Other",
+    "western": "Western"
+  },
+  "releaseNotice": {
+    "automatic": "Runs automatically after update",
+    "changelog": "Full changelog",
+    "close": "Close what's new",
+    "dialogLabel": "What's new",
+    "dismiss": "Got it",
+    "goToSettings": "Go to settings",
+    "itemCount_one": "{{count, number}} item",
+    "itemCount_other": "{{count, number}} items",
+    "missed": "You also missed {{versions}}",
+    "recentVersions": "Recent versions",
+    "saveFailed": "Couldn't save. Try again later.",
+    "viewItem": "View {{title}}"
+  },
+  "requestError": {
+    "badGateway": "The Peach service didn't return a result. Try again later; if it keeps failing, check the Peach log.",
+    "badRequest": "The submitted data is invalid. Check your input and try again.",
+    "clientTimeout": "Timed out waiting for the service. Check your connection and try again.",
+    "conflict": "This action isn't allowed right now. Refresh and try again.",
+    "fallback": "The action didn't finish. Try again; if it keeps failing, check the Peach log.",
+    "forbidden": "This device isn't allowed to do this. Use the device running Peach.",
+    "gatewayTimeout": "Timed out waiting for the service. Try again later.",
+    "notFound": "The requested item no longer exists. Refresh the list.",
+    "rateLimited": "Too many requests. Try again later.",
+    "serverError": "The Peach service couldn't process this. Try again; if it keeps failing, check the Peach log.",
+    "sessionExpired": "Your session has expired. Refresh the page to sign in again.",
+    "timeout": "The request timed out. Try again later.",
+    "tooLarge": "The submission is too large. Select fewer items and try again.",
+    "unavailable": "The Peach service is temporarily unavailable. Try again later.",
+    "unreachable": "Can't connect to the Peach service. Check your network connection and make sure Peach is running."
+  },
+  "routeTitle": {
+    "agencies": "Agencies",
+    "duplicates": "Duplicates",
+    "following": "Following",
+    "hdUpgrades": "HD upgrades",
+    "immersive": "Immersive mode",
+    "javVideo": "JAV video",
+    "libraryTools": "Library tools",
+    "mediaDetails": "Media details",
+    "performers": "Performers",
+    "playlists": "Playlists",
+    "preferences": "Preferences",
+    "profileFallback": "Profile",
+    "repair": "Repair",
+    "review": "Review",
+    "sellers": "Sellers",
+    "settings": "Settings",
+    "sources": "Sources",
+    "stats": "Stats",
+    "subscriptions": "Subscriptions",
+    "tags": "Tags",
+    "tasks": "Tasks",
+    "taste": "Taste",
+    "videoWall": "Video wall"
+  },
+  "router": {
+    "chunkNotLoaded": "Page code hasn't loaded yet",
+    "unknownRoute": "No route for this page: {{path}}"
+  },
+  "scroller": {
+    "defaultLabel": "Scrollable content"
+  },
+  "searchTitle": {
+    "results": "Search results: “{{query}}”"
+  },
+  "selectionPopover": {
+    "empty": "No options"
+  },
+  "setupDone": {
+    "addMediaLater": "Add media directories and start a scan in Settings > Library.",
+    "documentTitle": "Peach · Setup complete",
+    "enter": "Open Peach",
+    "eyebrow": "Setup complete",
+    "importHistory": "Import browser history",
+    "installInSettings": "Install it in Settings > Maintenance.",
+    "ready": "Your Peach is ready.",
+    "restored": "Connected to your existing data directory.",
+    "runtime": "Runtime",
+    "scanLater": "Start a library scan later in Settings.",
+    "scanQueued": "The first scan is queued and runs in the background. You can keep using Peach meanwhile.",
+    "title": "You're all set"
+  },
+  "setupErrors": {
+    "pickFolderFailed": "Couldn't open the directory picker",
+    "questionsFailed": "Couldn't load setup",
+    "requestFailed": "Request failed. Try again.",
+    "restoreFailed": "Couldn't use this data directory",
+    "submitFailed": "Couldn't finish setup"
+  },
+  "setupForm": {
+    "accessLede": "Choose who can access Peach, and optionally set a password.",
+    "accessLedeDocker": "Set an access password and choose how Peach connects to fetch metadata.",
+    "accessScope": "Access",
+    "accessTitle": "Where will you use Peach?",
+    "accessTitleDocker": "Access and network",
+    "addDirectoryTo": "Add a directory to {{name}}",
+    "addFolder": "Add directory",
+    "addLater": "Add later",
+    "addLibrariesLater": "Add libraries later",
+    "addLibrariesLaterHint": "After setup, add your media directories in Settings > Library.",
+    "addLibrary": "Add library",
+    "address": "Address: {{address}}",
+    "advanced": "Advanced",
+    "confirmLede": "Confirm your choices and Peach handles the rest.",
+    "confirmTitle": "Ready to go",
+    "connectionMode": "Connection mode",
+    "continue": "Continue",
+    "dataDirectory": "Data directory",
+    "dataSaverHint": "Directories with Data saver on don't read videos or make previews automatically; videos are read only when played.",
+    "defaultLibraryName": "My library",
+    "diagnostics": "Diagnostics",
+    "directoryCount_one": "{{count, number}} directory",
+    "directoryCount_other": "{{count, number}} directories",
+    "directoryLibrary": "Library for directory {{index}}",
+    "eyebrow": "First-time setup",
+    "finish": "Finish setup",
+    "firstScan": "First scan",
+    "firstScanSkipped": "Add media directories first, then choose processing and start a scan.",
+    "libraryCount_one": "{{count, number}} library",
+    "libraryCount_other": "{{count, number}} libraries",
+    "libraryDirectoriesNamed": "Directories in {{name}}",
+    "libraryIconNamed": "{{name}} icon",
+    "libraryName": "Library name",
+    "libraryNameNamed": "{{name}} name",
+    "libraryNumbered": "Library {{number}}",
+    "localOnlyHint": "Only the computer running Peach can access it. With a password, opening Peach still requires sign-in.",
+    "loopbackProxyBody": "Loopback addresses point to the container itself. For a proxy on the host, use a host address the container can reach.",
+    "loopbackProxyTitle": "Use a proxy address the container can reach",
+    "mediaDirectories": "Media directories",
+    "mediaLede": "Connect existing directories, or look around first.",
+    "mediaTitle": "Where's your media?",
+    "moveToLibrary": "Move to library",
+    "notFilled": "Not set",
+    "peachProxy": "Peach proxy",
+    "pickDataDirectory": "Choose data directory",
+    "presetPassword": "Access password set from PEACH_ACCESS_PASSWORD. Change it in Settings > Network.",
+    "progress": "Setup, step {{step}} of 4",
+    "proxyHelp": "Used for fetching metadata, covers, and tool downloads. Change it in Settings.",
+    "proxySelectionBody": "Your existing sources use different proxy addresses. Choose one connection mode for all of them.",
+    "proxySelectionTitle": "Choose a connection mode",
+    "readPolicyRequired": "Choose a read policy",
+    "reportingHint": "Uploading collection and taste details is off by default. Review it in Settings > Maintenance.",
+    "reportingOn": "On (change above)",
+    "reportingTitle": "Version stats and error reports",
+    "scanAfterFinish": "Starts after setup",
+    "scanAfterSetup": "Scan media directories after setup",
+    "scanFoldersAfterSetup_one": "Scan {{count, number}} directory after setup",
+    "scanFoldersAfterSetup_other": "Scan {{count, number}} directories after setup",
+    "scanLaterHint": "Processing choices are saved; start a scan later in Settings > Library.",
+    "scanManually": "Start manually later",
+    "scanNowHint": "The scan starts in the background; you can use Peach meanwhile.",
+    "scopeCompose": "Per Compose port mapping",
+    "scopeLan": "Devices on the same LAN",
+    "scopeLocal": "Only the computer running Peach",
+    "scopePasswordOff": "No access password",
+    "scopePasswordOn": "Access password on",
+    "scopePresetPassword": "Access password set from PEACH_ACCESS_PASSWORD",
+    "start": "Get started",
+    "summaryTitle": "Review settings",
+    "useExistingData": "Use existing data",
+    "welcomeFind": "Find what you want faster",
+    "welcomeFindBody": "Browse your collection with search, tags, and favorites.",
+    "welcomeLede": "Take a moment to make Peach yours.",
+    "welcomeLibraries": "Connect your libraries",
+    "welcomeLibrariesBody": "Local folders and mounted cloud drives both work.",
+    "welcomePlay": "Play your way",
+    "welcomePlayBody": "Adjust playback and appearance anytime in Preferences.",
+    "welcomeTitle": "Welcome to Peach"
+  },
+  "setupPage": {
+    "loading": "Loading setup",
+    "openOnServer": "Open setup on the computer running Peach."
+  },
+  "setupProcessing": {
+    "auto": "Fill in automatically",
+    "custom": "Custom: {{stages}}",
+    "customLocalOnly": "Custom: local NFO and images only",
+    "localOnly": "Local metadata only"
+  },
+  "setupRestore": {
+    "backToSetup": "Back to setup",
+    "connecting": "Connecting data directory…",
+    "dataDirectory": "Existing data directory",
+    "dataDirectoryHint": "Choose the data directory that contains config.toml and the database directory.",
+    "eyebrow": "Connect existing data",
+    "lede": "Connect a Peach data directory to keep your settings and collection.",
+    "useDirectory": "Use this directory"
+  },
+  "setupScene": {
+    "accessBody": "Computer and phone, connected to the same Peach.",
+    "accessTitle": "From your desk to your pocket.",
+    "confirmBody": "Confirm to save; scanning starts as you chose.",
+    "confirmTitle": "All set.",
+    "doneBody": "Open Peach and start exploring your collection.",
+    "doneTitle": "Your collection, ready to open.",
+    "libraryBadge": "Your library",
+    "mediaBody": "Grouped by library; files stay where they are.",
+    "mediaTitle": "Turn files into a collection.",
+    "restoreBody": "Keep your settings and history, and carry on.",
+    "restoreTitle": "Pick up where you left off.",
+    "welcomeBody": "Gather what you love into a collection of your own.",
+    "welcomeTitle": "Your private media space."
+  },
+  "shared": {
+    "accessPassword": "Access password",
+    "all": "All",
+    "back": "Back",
+    "cancel": "Cancel",
+    "close": "Close",
+    "collapse": "Collapse",
+    "completed": "Completed",
+    "copied": "Copied",
+    "creators": "Creators",
+    "home": "Home",
+    "library": "Library",
+    "moveToTrash": "Move to trash",
+    "notFound": "Not found",
+    "off": "Off",
+    "open": "Open",
+    "processing": "Processing",
+    "restore": "Restore",
+    "retry": "Retry",
+    "retryNow": "Retry now",
+    "save": "Save",
+    "series": "Series",
+    "sort": "Sort",
+    "studios": "Studios",
+    "trash": "Trash",
+    "undo": "Undo",
+    "untitledLibrary": "Untitled library",
+    "view": "View"
+  },
+  "sidebar": {
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
+  },
+  "skeleton": {
+    "loadingCollection": "Loading collection",
+    "loadingFollowing": "Loading Following",
+    "loadingJunkFiles": "Loading junk files",
+    "loadingRecommendations": "Loading recommendations",
+    "loadingSettings": "Loading settings",
+    "loadingVideos": "Loading videos"
+  },
+  "sourceLink": {
+    "blog": "Blog",
+    "officialSite": "Official site"
+  },
+  "sourcePicture": {
+    "coverAlt": "{{code}} cover",
+    "imageNotFound": "Image not found",
+    "loadingImage": "Loading image",
+    "loadingPreview": "Loading preview",
+    "previewAlt": "{{code}} preview {{index}}"
+  },
+  "sourceTools": {
+    "allPresent_one": "{{count, number}} item is still in the directory. Nothing to change.",
+    "allPresent_other": "All {{count, number}} items are still in the directory. Nothing to change.",
+    "checkAction": "Directory check",
+    "checkedSummaryUnreadable_one": "{{summary}} Checked {{count, number}} item; {{unreadable, number}} couldn't be read.",
+    "checkedSummaryUnreadable_other": "{{summary}} Checked {{count, number}} items; {{unreadable, number}} couldn't be read.",
+    "checkedSummary_one": "{{summary}} Checked {{count, number}} item.",
+    "checkedSummary_other": "{{summary}} Checked {{count, number}} items.",
+    "checking": "Checking directory…",
+    "fileMissing": "Source file not found. Click the scan button on the right to recheck the directory.",
+    "libraryOffline": "The library isn't reachable, so files can't be checked. Try again once it's back.",
+    "noChanges": "Directory check complete. Nothing to change.",
+    "notMapped": "This storage isn't mounted on the device running Peach.",
+    "reattached_one": "Moved activity for {{count, number}} item to another version in the library.",
+    "reattached_other": "Moved activity for {{count, number}} items to another version in the library.",
+    "resultSeparator": " ",
+    "revealFailed": "Couldn't open the file manager. Try again.",
+    "revealed": "Shown in the file manager",
+    "trashed_one": "Moved {{count, number}} item to trash.",
+    "trashed_other": "Moved {{count, number}} items to trash.",
+    "unreadable_one": "{{count, number}} item in the directory can't be read right now. Nothing was changed.",
+    "unreadable_other": "{{count, number}} items in the directory can't be read right now. Nothing was changed.",
+    "unsupportedPlatform": "The server's operating system can't reveal files directly.",
+    "vanished_one": "Kept your activity and marked {{count, number}} item as missing.",
+    "vanished_other": "Kept your activity and marked {{count, number}} items as missing."
+  },
+  "spinner": {
+    "loading": "Loading",
+    "loadingMore": "Loading"
+  },
+  "storageLabel": {
+    "metered": "{{label}} · Metered",
+    "online": "Online",
+    "localLabel": "Local"
+  },
+  "storageOffline": {
+    "drive115": "Can't read the 115 media directory. Check directory permissions and that the cloud drive mount tool is running.",
+    "hint": "Media directory isn't reachable. Check the directory, read permissions, and cloud drive mount.",
+    "other": "Can't read this storage's media directory. Check directory permissions and mount status.",
+    "pikpak": "Can't read the PikPak media directory. Check directory permissions and that the cloud drive mount tool is running.",
+    "localLabel": "Can't read the media directory. Check that it exists and is readable."
+  },
+  "tableColumns": {
+    "columns": "Columns",
+    "defaultLabel": "Table",
+    "reset": "Reset",
+    "resetWidths": "Reset widths",
+    "resize": "Resize {{column}} column",
+    "settings": "{{table}} column settings",
+    "showAll": "Show all columns",
+    "visibleColumns": "{{table}} visible columns"
+  },
+  "tablePagination": {
+    "followingDefault": "Following list pagination",
+    "label": "{{table}} pagination",
+    "next": "Next",
+    "page": "Page {{page}}",
+    "pageSize": "Items per page",
+    "pageUnit": "items",
+    "perPage_one": "{{count, number}} {{unit}} per page",
+    "perPage_other": "{{count, number}} {{unit}} per page",
+    "previous": "Previous"
+  },
+  "tableSort": {
+    "defaultOrder": "Default order",
+    "label": "Sort {{table}}",
+    "toAscending": "Sort {{table}} ascending",
+    "toDescending": "Sort {{table}} descending"
+  },
+  "tagPicker": {
+    "addTag": "Add tag",
+    "allTags": "All tags",
+    "createNamed": "Create “{{tag}}”",
+    "loading": "Loading tags",
+    "recent": "Recently used",
+    "results": "Search results",
+    "searchPlaceholder": "Search or enter a new tag"
+  },
+  "themeToggle": {
+    "dark": "Dark theme",
+    "group": "Light or dark theme",
+    "light": "Light theme"
+  },
+  "toaster": {
+    "backgroundTasks": "Background tasks",
+    "closeTaskToast": "Close task notification",
+    "closeToast": "Close notification",
+    "notifications": "Notifications"
+  },
+  "trash": {
+    "blockedItem": "{{path}} ({{reason}})",
+    "empty": "Empty trash",
+    "emptyConfirm": "Files and collection records in the trash will be deleted permanently. This can't be undone.",
+    "emptyHint": "Deleted items stay here until you empty the trash.",
+    "emptyTitle": "Trash is empty",
+    "movedToTrash": "Moved to trash",
+    "partlyPurged_one": "Permanently deleted: {{purged, number}}. {{count, number}} item couldn't be deleted and is still in the trash:",
+    "partlyPurged_other": "Permanently deleted: {{purged, number}}. {{count, number}} items couldn't be deleted and are still in the trash:",
+    "purged_one": "Deleted {{count, number}} item permanently",
+    "purged_other": "Deleted {{count, number}} items permanently",
+    "restored": "Restored"
+  },
+  "uiSounds": {
+    "unknownSound": "Unknown UI sound \"{{name}}\""
+  },
+  "upNext": {
+    "backToFollowing": "Back to Following",
+    "browseCollection": "Browse collection",
+    "emptyHint": "Go back to the list to pick something else.",
+    "emptyTitle": "Nothing up next",
+    "title": "Up next"
+  },
+  "watchLater": {
+    "added": "Added to watch later",
+    "removed": "Removed from watch later",
+    "updateAction": "Watch later update"
+  },
+  "serverPath": {
+    "dataTitle": "Data directory",
+    "dataField": "Data directory on the server",
+    "dataContainer": "The container's data location is set by the host's data volume. Configure it in the NAS container manager.",
+    "dataManual": "Enter the data directory on the server that runs Peach. It is checked when you save.",
+    "useFolder": "Use this directory",
+    "close": "Close",
+    "cancel": "Cancel",
+    "readFailed": "Couldn't read the directory. Try again.",
+    "pickTitle": "Choose a directory on the server",
+    "pickHelp": "Paths here are on the NAS or inside the container. Type a path and press Enter to read it. A newly mounted directory can also be typed straight into the media directory field.",
+    "pathField": "Directory path on the server",
+    "roots": "Mounted directories",
+    "parent": "Up one level",
+    "reading": "Reading the directory",
+    "noSubfoldersYet": "No subdirectories in this batch. You can read more.",
+    "noSubfolders": "This directory has no subdirectories to choose.",
+    "readMore": "Read more",
+    "noRoots": "No media directory is mounted yet. Enter the path inside the container first.",
+    "choose": "Choose this directory",
+    "locationTitle": "File location",
+    "locationContainer": "In the NAS file manager, open the share mounted for Peach, then find the file by its location in the directory. Container paths can differ from NAS share paths.",
+    "locationServer": "The file is on the server that runs Peach. Copy the path and find it there.",
+    "containerPath": "Path in the container",
+    "serverPath": "Path on the server",
+    "locationField": "File location on the server",
+    "mediaRoot": "Media directory",
+    "relativePath": "Location in the directory"
+  }
+}

@@ -22,7 +22,8 @@ export interface PerformerDeletePlan {
 
 export interface PerformerDeleteResult {
   purged: number;
-  blocked: { id: number; path: string; reason: string }[];
+  /** 删不掉的那几条；带 code 的原因有译文时显示译文。 */
+  blocked: { id: number; path: string; reason: string; reason_code?: string; reason_params?: Record<string, unknown> }[];
   cleanup_pending: { path: string; reason: string }[];
   cache_blocked: { name: string; reason: string }[];
 }

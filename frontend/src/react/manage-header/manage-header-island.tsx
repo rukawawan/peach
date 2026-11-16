@@ -23,6 +23,7 @@ import { Icon } from '../settings-panel/icon';
 import { PillTabList } from '../components/pill-tabs';
 import { NavigationOrderMenu } from '../components/navigation-order';
 import type { ManageHeaderApi, ManageHeaderHost } from './manage-header-api';
+import { t } from '../../i18n';
 import './manage-header.css';
 
 let host: ManageHeaderHost | null = null;
@@ -89,7 +90,7 @@ function ManageBar({ host: at, pressed: key, menu }: Pick<ManageHeaderProps, 'me
   }, [key, menu, order.join(",")]);
 
   return (
-    <nav data-manage-bar="" aria-label="管理">
+    <nav data-manage-bar="" aria-label={t('manage:manageHeader.barLabel')}>
       <PillTabList ref={row} data-manage-menu="" data-pill-nav="" data-reordering={reorder.picked ? '' : undefined}
         onClickCapture={reorder.clickCapture}>
         {items.map(([entry, label, glyph]) => {
@@ -113,7 +114,7 @@ function ManageBar({ host: at, pressed: key, menu }: Pick<ManageHeaderProps, 'me
         {reorder.hint ? <span data-manage-drop-line="" aria-hidden="true"
           style={{ '--manage-line-left': `${reorder.linePosition}px` } as CSSProperties}><span /></span> : null}
       </PillTabList>
-      <NavigationOrderMenu order={{ label: '管理顶部菜单', keys: order, defaults: MANAGE_MENU_SECTIONS, commit }} />
+      <NavigationOrderMenu order={{ label: t('manage:manageHeader.menuOrderLabel'), keys: order, defaults: MANAGE_MENU_SECTIONS, commit }} />
       <span data-manage-order-status="" role="status" aria-live="polite">{reorder.announcement}</span>
     </nav>
   );
@@ -129,7 +130,7 @@ function Crumb({ host: at, label, parent }: { host: ManageHeaderHost; label: str
     at.openPath(parent.href);
   };
   return (
-    <nav data-manage-crumb="" aria-label="当前位置">
+    <nav data-manage-crumb="" aria-label={t('manage:manageHeader.breadcrumbLabel')}>
       <ol>
         <li><a href={parent.href} onClick={follow}>{parent.label}</a><Icon name="chevron-right" /></li>
         <li aria-current="true"><span>{label}</span></li>
@@ -153,8 +154,8 @@ function TrashLede({ host: at, lede }: { host: ManageHeaderHost; lede: Lede }) {
           <>
             <LedeText text={lede.text} />
             {lede.total ? (
-              <button type="button" data-empty-trash="" data-danger="" title="永久删除回收站内容"
-                onClick={() => at.emptyTrash()}>清空回收站</button>
+              <button type="button" data-empty-trash="" data-danger="" title={t('manage:manageHeader.emptyTrashTitle')}
+                onClick={() => at.emptyTrash()}>{t('manage:shared.emptyTrash')}</button>
             ) : null}
           </>
         )}

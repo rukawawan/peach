@@ -19,27 +19,30 @@ import {
   fetchFollowSchedule, fetchSettings, fetchThumbnailJobs, schedulePollInterval, useRunSchedule,
   useSaveFollowSchedule, useSaveSettings, useSaveThumbnailMode, type FollowScheduleStatus,
 } from '../settings-panel/settings-data';
-import { ErrorText, Help, Rows, Section, Stack, TaskCenterLink } from './section';
+import { ErrorText, Rows, Section, Stack, TaskCenterLink } from './section';
+import { TaskProgress } from '../components/task-progress';
+import { activityKind } from '../../activity-kinds';
 import { busyProps } from './use-action';
 import { ProcessingMode } from '../library-processing/processing-effort';
+import { t } from '../../i18n';
 
-const THUMBNAIL_OPTIONS = [['off', '关闭'], ['precise', '每 10 秒一张'], ['coarse', '每 30 秒一张']] as const;
+const THUMBNAIL_OPTIONS = [['off', t('settings:timelineThumbnails.off')], ['precise', t('settings:timelineThumbnails.precise')], ['coarse', t('settings:timelineThumbnails.coarse')]] as const;
 
 export function TaskSpeedSettings({ receipt }: { receipt(message: string): void }) {
   const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: ({ signal }) => fetchSettings(signal) });
   const save = useSaveSettings();
   const error = save.error || settings.error;
-  return <Section title="后台任务">
-    <Rows><SettingsRow label="默认处理速度" description="新任务使用此档位。运行中的任务可在活动页单独调整。">
+  return <Section title={t('settings:taskSpeed.title')}>
+    <Rows><SettingsRow label={t('settings:taskSpeed.defaultSpeed')} description={t('settings:taskSpeed.defaultSpeedHelp')}>
       <ProcessingMode value={settings.data?.taskSpeedMode || 'standard'} busy={!settings.data || save.isPending}
-        onChange={(mode) => save.mutate({ taskSpeedMode: mode }, { onSuccess: () => receipt('已保存默认处理速度') })} />
+        onChange={(mode) => save.mutate({ taskSpeedMode: mode }, { onSuccess: () => receipt(t('settings:taskSpeed.saved')) })} />
     </SettingsRow></Rows>
     {error ? <Stack divided><ErrorText>{errorMessage(error)}</ErrorText></Stack> : null}
   </Section>;
 }
 
 export function VideoThumbnailRow({ epoch = 0 }: { epoch?: number }) {
-  return <Section guide="timeline" title="时间轴缩略图"><VideoThumbnailControls epoch={epoch} /></Section>;
+  return <Section guide="timeline" title={t('settings:timelineThumbnails.title')}><VideoThumbnailControls epoch={epoch} /></Section>;
 }
 
 export function VideoThumbnailControls({ epoch = 0, disabled = false }: { epoch?: number; disabled?: boolean }) {
@@ -52,9 +55,9 @@ export function VideoThumbnailControls({ epoch = 0, disabled = false }: { epoch?
   return (
     <>
       <Rows>
-        <SettingsRow label="时间轴预览" description="按所选间隔抽帧，仅处理本机磁盘上的视频。">
+        <SettingsRow label={t('settings:videoPreviews.timeline')} description={t('settings:videoPreviews.timelineHelp')}>
           <div id="videoThumbnailSetting">
-            <Select aria-label="缩略图采集间隔" selectedKey={data?.mode || 'off'}
+            <Select aria-label={t('settings:timelineThumbnails.interval')} selectedKey={data?.mode || 'off'}
               isDisabled={disabled || !data || status.isFetching || save.isPending}
               onSelectionChange={(key) => { if (key !== null) save.mutate(String(key)) }}>
               {THUMBNAIL_OPTIONS.map(([key, label]) => <SelectItem key={key} id={key}>{label}</SelectItem>)}
@@ -64,7 +67,8 @@ export function VideoThumbnailControls({ epoch = 0, disabled = false }: { epoch?
       </Rows>
       {save.isPending || data?.status === 'running'
         ? <Stack divided>
-            <Help role="status">{save.isPending ? '正在保存…' : '正在采集。'}</Help>
+            {save.isPending ? <TaskProgress embedded kind="gather" label={t('settings:shared.saving')} />
+              : <TaskProgress embedded kind={activityKind('timeline-thumbnails')} label={t('settings:timelineThumbnails.generating')} />}
             {save.isPending ? null : <TaskCenterLink />}
           </Stack>
         : null}
@@ -81,28 +85,28 @@ export function FollowPreferenceRows({ receipt }: { receipt(message: string): vo
   const initialDays = settings.data?.followInitialDays ?? store.value.followInitialDays;
   const error = initial.error || settings.error;
   return (
-    <Section guide="follow-options" title="关注采集">
+    <Section guide="follow-options" title={t('settings:followFetch.title')}>
       <Rows>
         <FollowScheduleRow />
         <FeedScheduleRow />
-        <SettingsRow label="首次采集范围" description="新关注的来源第一次回看多久以前的内容。">
+        <SettingsRow label={t('settings:followFetch.initialRange')} description={t('settings:followFetch.initialRangeHelp')}>
           <div id="followInitialDaysSetting" className="shrink-0">
-            <Select aria-label="首次采集范围" selectedKey={String(initialDays)}
+            <Select aria-label={t('settings:followFetch.initialRange')} selectedKey={String(initialDays)}
               isDisabled={settings.isFetching || initial.isPending}
               onSelectionChange={(key) => {
                 if (key === null) return;
                 initial.mutate({ followInitialDays: Number(key) }, { onSuccess: (saved) => {
                   if (typeof saved.followInitialDays === 'number') store.value.followInitialDays = saved.followInitialDays;
                   store.save();
-                  receipt('已保存首次采集范围');
+                  receipt(t('settings:followSchedule.initialRangeSaved'));
                 } });
               }}>
               {FOLLOW_INITIAL_RANGE_OPTIONS.map(([key, label]) => <SelectItem key={key} id={key}>{label}</SelectItem>)}
             </Select>
           </div>
         </SettingsRow>
-        <SettingsRow label="头像刷新" description="重新获取关注创作者的头像。"><span className="shrink-0">每 3 个月</span></SettingsRow>
-        <SettingsRow label="favicon 刷新" description="重新获取来源站点的图标。"><span className="shrink-0">每年</span></SettingsRow>
+        <SettingsRow label={t('settings:followFetch.avatarRefresh')} description={t('settings:followFetch.avatarRefreshHelp')}><span className="shrink-0">{t('settings:followSchedule.avatarRefresh')}</span></SettingsRow>
+        <SettingsRow label={t('settings:followFetch.faviconRefresh')} description={t('settings:followFetch.faviconRefreshHelp')}><span className="shrink-0">{t('settings:followSchedule.faviconRefresh')}</span></SettingsRow>
       </Rows>
       {error ? <Stack divided><ErrorText>{errorMessage(error)}</ErrorText></Stack> : null}
     </Section>
@@ -136,29 +140,30 @@ function FollowScheduleRow() {
   const error = save.error || status.error;
   return (
     <>
-      <SettingsRow label="自动检查更新" description="近 7 天有更新的来源按这个间隔检查，久未更新的逐级放慢，最长一天一次">
+      <SettingsRow label={t('settings:followFetch.autoCheck')} description={t('settings:followSchedule.autoCheckHelp')}>
         {/* 间隔框只在开着时出现；这一行按有框的高度留位，读回状态时下面几行不跟着动。
             控件这一侧不收缩：窄屏上让左边的说明换行，不让开关与间隔框压到说明上。 */}
         <div id="followScheduleSetting" className="flex min-h-9 shrink-0 flex-wrap items-center justify-end gap-2">
-          <Switch aria-label="自动检查更新" isSelected={data?.enabled === true} isDisabled={blocked}
+          <Switch aria-label={t('settings:followFetch.autoCheck')} isSelected={data?.enabled === true} isDisabled={blocked}
             onChange={(on) => {
               localStorage.setItem('peach.number.followScheduleSetting', String(remembered.current));
               save.mutate(on ? remembered.current : 0);
             }} />
           {data?.enabled ? <div className="flex items-center gap-2">
             <Input type="number" inputMode="numeric" name="follow-interval" autoComplete="off"
-              aria-label="自动检查间隔" className="w-21 sm:w-24"
+              aria-label={t('settings:followSchedule.autoCheckInterval')} className="w-21 sm:w-24"
               value={draft} onChange={(value) => { setDraft(value); setInvalid(false) }} onBlur={commit}
               onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit() } }}
               isDisabled={blocked} isInvalid={invalid} />
-            <span className="text-body-2-regular text-text-secondary">分钟</span>
+            <span className="text-body-2-regular text-text-secondary">{t('settings:numberSetting.unitMinutes')}</span>
           </div> : null}
         </div>
       </SettingsRow>
-      {invalid ? <Stack><ErrorText>请输入 15–10080 的整数（分钟）。</ErrorText></Stack> : null}
+      {invalid ? <Stack><ErrorText>{t('settings:followSchedule.invalidInterval')}</ErrorText></Stack> : null}
       {save.isPending || data?.running
-        ? <Stack><Help role="status">{save.isPending ? '正在保存…' : '正在检查来源更新…'}</Help></Stack> : null}
-      <ScheduleFailure kind="follow" status={data} title="上次自动检查失败" />
+        ? <Stack>{save.isPending ? <TaskProgress embedded kind="gather" label={t('settings:shared.saving')} />
+          : <TaskProgress embedded kind={activityKind('follow-check')} label={t('settings:followSchedule.checking')} />}</Stack> : null}
+      <ScheduleFailure kind="follow" status={data} title={t('settings:followSchedule.lastCheckFailed')} />
       {error ? <Stack><ErrorText>{errorMessage(error)}</ErrorText></Stack> : null}
     </>
   );
@@ -171,20 +176,20 @@ function FeedScheduleRow() {
   const data = status.data;
   /* 首次读取时先占住这一行：读数回来再填字，下面的行不往下跳。 */
   if (!data) {
-    return status.isPending ? <SettingsRow label="订阅源拉取">
-      <span data-skeleton aria-busy="true" aria-label="正在读取订阅源拉取间隔"
+    return status.isPending ? <SettingsRow label={t('settings:followFetch.feedSchedule')}>
+      <span data-skeleton aria-busy="true" aria-label={t('settings:followSchedule.loadingFeedInterval')}
         className="block h-4 w-16 rounded-2lg bg-background-tertiary-default" />
     </SettingsRow> : null;
   }
   const minutes = data.interval_minutes;
-  const interval = minutes % 60 ? `每 ${minutes} 分钟` : `每 ${minutes / 60} 小时`;
+  const interval = minutes % 60 ? t('settings:followSchedule.everyMinutes', { count: minutes }) : t('settings:followSchedule.everyHours', { count: minutes / 60 });
   return (
     <>
-      <SettingsRow label="订阅源拉取">
-        <span id="feedScheduleSetting">{!data.available ? '只在写入端可用' : data.enabled ? interval : '已关闭'}</span>
+      <SettingsRow label={t('settings:followFetch.feedSchedule')}>
+        <span id="feedScheduleSetting">{!data.available ? t('settings:followSchedule.primaryOnly') : data.enabled ? interval : t('settings:followSchedule.feedOff')}</span>
       </SettingsRow>
-      {data.running ? <Stack><Help role="status">正在拉取订阅源…</Help></Stack> : null}
-      <ScheduleFailure kind="feed" status={data} title="上次自动拉取失败" />
+      {data.running ? <Stack><TaskProgress embedded kind={activityKind('feed-check')} label={t('settings:followSchedule.fetchingFeeds')} /></Stack> : null}
+      <ScheduleFailure kind="feed" status={data} title={t('settings:followSchedule.lastFetchFailed')} />
     </>
   );
 }
@@ -198,14 +203,14 @@ function ScheduleFailure({ kind, status, title }: {
   if (!status?.enabled || status.running || !status.last_error) return null;
   const failures = status.consecutive_failures ?? 0;
   const next = momentText(status.next_run_at);
-  const detail = [failures > 1 ? `已连续失败 ${failures} 次` : '', next ? `下一轮 ${next}` : '']
-    .filter(Boolean).join('，');
-  const reason = [status.last_error, detail, run.error ? `没有重试：${errorMessage(run.error)}` : '']
+  const detail = [failures > 1 ? t('settings:followSchedule.consecutiveFailures', { count: failures }) : '', next ? t('settings:followSchedule.nextRun', { time: next }) : '']
+    .filter(Boolean).join(t('shell:format.clauseSeparator'));
+  const reason = [status.last_error, detail, run.error ? t('settings:followSchedule.retryFailed', { error: errorMessage(run.error) }) : '']
     .filter(Boolean).join('\n');
   return (
     <Stack>
       <Note tone="error" title={title} action={<Button variant="secondary" size="small"
-        disabled={!status.available} {...busyProps(run.isPending)} onClick={() => run.mutate()}>立即重试</Button>}>
+        disabled={!status.available} {...busyProps(run.isPending)} onClick={() => run.mutate()}>{t('settings:shared.retryNow')}</Button>}>
         {reason}
       </Note>
     </Stack>

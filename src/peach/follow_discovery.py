@@ -18,6 +18,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from . import interface_text
 from .follow import FollowSourceError
 from .follow_avatar import resolve_official_profile
 from .follow_secrets import Credential, CredentialError, credential_store_for
@@ -25,6 +26,7 @@ from .follow_sources import (
     F95ZoneConnector, KemonoConnector, Rule34VideoConnector, Rule34XxxConnector,
     SimpCityConnector, canonical_source_ref,
 )
+from .user_messages import UserFacingError
 
 #: 创作者索引的缓存有效期。索引是几 MB 的整站清单，不该每次发现都重下一遍。
 CREATOR_INDEX_TTL_SECONDS = 24 * 3600
@@ -67,6 +69,16 @@ def spelling_variants(term: str) -> tuple[str, ...]:
     return tuple(variants)
 
 
+def phrase(code: str, **params) -> dict:
+    """一句给人看的话：`server` 命名空间的 code 与参数（ADR-0159）。参数可以是另一句 `phrase`，也可以是列表。"""
+    return {"code": code, "params": params}
+
+
+def render(phrase: dict) -> str:
+    """按 zh-CN 渲染 `phrase` 的一句，给不认 code 的调用方兜底；列表参数按资源里的列表分隔符连起来。"""
+    return interface_text.text(f"server:{phrase['code']}", phrase.get("params", {}))
+
+
 @dataclass(frozen=True)
 class Candidate:
     """一个查到的、可以登记的来源。"""
@@ -76,31 +88,43 @@ class Candidate:
     url: str
     label: str
     semantics: str
-    #: 为什么认为它命中了。界面照实显示，不要替用户断言「就是这个」。
-    evidence: str
+    #: 为什么认为它命中了：一句 `phrase`。界面照实显示，不要替用户断言「就是这个」。
+    reason: dict
     #: 作者名片上与检索词不同的手柄。人勾选登记这一条时，它们随之记成检索词的别名。
     aliases: tuple[str, ...] = ()
+    #: `label` 是站上的标题；站上没给标题时是一句 `phrase`（「线程 123」），界面按它取当前语言。
+    label_phrase: dict | None = None
+
+    @property
+    def evidence(self) -> str:
+        """`reason` 按 zh-CN 渲染的原句。"""
+        return render(self.reason)
 
 
 @dataclass(frozen=True)
 class ExternalSearch:
-    """站内索引没命中时，交给人继续核对的外部搜索入口。"""
+    """站内索引没命中时，交给人继续核对的外部搜索入口。`label`、`evidence` 是 zh-CN 原句，
+    `label_phrase`、`reason` 是它们的 code 与参数（`phrase` 的一句），界面按它取当前语言。"""
 
     provider: str
     label: str
     query: str
     url: str
     evidence: str
+    label_phrase: dict | None = None
+    reason: dict | None = None
 
 
 @dataclass(frozen=True)
 class Discovery:
     term: str
     candidates: tuple[Candidate, ...] = ()
-    #: 逐来源的失败原因；界面要显示，否则「没查到」和「没查成」分不开。
+    #: 逐来源的失败原因（zh-CN 原句）；界面要显示，否则「没查到」和「没查成」分不开。
     failures: dict[str, str] = field(default_factory=dict)
     #: 搜索引擎只提供继续核对的入口，不伪装成可直接登记的来源。
     external_searches: tuple[ExternalSearch, ...] = ()
+    #: `failures` 里带 code 的那几条：来源 → `phrase` 的一句，界面按它取当前语言。
+    failure_phrases: dict[str, dict] = field(default_factory=dict)
 
 
 #: 建议用的名字表，按清单文件缓存在进程里，值带着它的 mtime。清单一天刷一次，
@@ -179,7 +203,7 @@ class CreatorIndex:
                                     max_bytes=48 * 1024 * 1024)
         payload = connector.fetch_json(f"https://{connector.host}/api/v1/creators")
         if not isinstance(payload, list):
-            raise FollowSourceError(f"{provider} 的创作者清单格式不符")
+            raise FollowSourceError("errors.followDiscovery.creatorListMalformed", {"provider": provider})
         rows = [
             {"id": str(row.get("id") or ""), "name": str(row.get("name") or ""),
              "service": str(row.get("service") or "")}
@@ -214,10 +238,10 @@ def _kemono_candidates(provider: str, term: str, index: CreatorIndex) -> list[Ca
                                       len(row["name"]), row["name"].casefold()))
     host = KemonoConnector.HOSTS[provider]
     picked, seen = [], set()
-    for row, why in ([(r, "站内 id 精确匹配") for r in exact_id]
-                     + [(r, "创作者名精确匹配") for r in by_name]
-                     + [(r, "创作者名以该词开头" if r["name"].casefold().startswith(folded)
-                         else "创作者名包含该词") for r in partial]):
+    for row, why in ([(r, phrase("labels.followDiscovery.idExact")) for r in exact_id]
+                     + [(r, phrase("labels.followDiscovery.nameExact")) for r in by_name]
+                     + [(r, phrase("labels.followDiscovery.namePrefix") if r["name"].casefold().startswith(folded)
+                         else phrase("labels.followDiscovery.nameContains")) for r in partial]):
         key = (row["service"], row["id"])
         if key in seen:
             continue
@@ -245,7 +269,7 @@ def _fanbox_candidates(archive_candidates: list[Candidate], transport) -> list[C
         profile = resolve_official_profile("fanbox", user_id, transport=transport)
         candidates.append(Candidate(
             "fanbox", profile.creator_id, profile.url,
-            profile.name, "work", "FANBOX 官方资料与归档身份一致", aliases,
+            profile.name, "work", phrase("labels.followDiscovery.fanboxOfficial"), aliases,
         ))
     return candidates
 
@@ -277,7 +301,8 @@ def _rule34video_candidates(term: str, transport) -> list[Candidate]:
     for slug in rule34video_slugs(term):
         url = f"https://rule34video.com/models/{slug}/"
         if connector.probe(url, headers={"Accept": "text/html"}).status == 200:
-            return [Candidate("rule34video", slug, url, term.strip(), "work", "作者页存在")]
+            return [Candidate("rule34video", slug, url, term.strip(), "work",
+                              phrase("labels.followDiscovery.authorPage"))]
     return []
 
 
@@ -334,15 +359,16 @@ def _rule34xxx_candidates(term: str, transport, credential: Credential | None) -
     picked: list[Candidate] = []
     for tag, count, is_exact in hits:
         if count is None:
-            evidence = f"站内标签 {tag} 下有作品"
+            evidence = phrase("labels.followDiscovery.tagHasWorks", tag=tag)
         elif is_exact:
-            evidence = f"站内标签 {tag} 下有 {count} 件作品" if count else f"站内存在标签 {tag}"
+            evidence = (phrase("labels.followDiscovery.tagCount", tag=tag, count=count) if count
+                        else phrase("labels.followDiscovery.tagExists", tag=tag))
         else:
-            evidence = (f"站内标签以该词开头：{tag} 下有 {count} 件作品" if count
-                        else f"站内存在以该词开头的标签 {tag}")
+            evidence = (phrase("labels.followDiscovery.tagPrefixCount", tag=tag, count=count) if count
+                        else phrase("labels.followDiscovery.tagPrefixExists", tag=tag))
         kind = types.get(tag, "")
         if kind and kind != "general":
-            evidence += f"，站上归为{TAG_TYPE_LABELS.get(kind, kind)}"
+            evidence = phrase("labels.followDiscovery.withTagType", evidence=evidence, kind=tag_type_phrase(kind))
         picked.append(Candidate("rule34xxx", tag, _rule34xxx_tag_url(tag),
                                 tag.replace("_", " "), "work", evidence))
     return picked
@@ -391,13 +417,25 @@ def forum_queries(term: str) -> tuple[str, ...]:
 def _f95_external_search(term: str) -> ExternalSearch:
     """Google 由浏览器打开；Peach 不抓结果页，也不绕验证码。"""
     query = f"{term} f95zone"
+    label = phrase("labels.followDiscovery.googleSearch")
+    reason = phrase("labels.followDiscovery.googleSearchReason")
     return ExternalSearch(
         provider="f95zone",
-        label="用 Google 继续查找 F95zone",
+        label=render(label),
         query=query,
         url="https://www.google.com/search?" + urllib.parse.urlencode({"q": query}),
-        evidence="F95zone 站内索引未命中，请核对搜索结果里的真实线程链接",
+        evidence=render(reason),
+        label_phrase=label,
+        reason=reason,
     )
+
+
+def _thread_candidate(provider: str, thread: str, url: str, title, reason: dict) -> Candidate:
+    """论坛线程那一条：站上没给标题时，标题是「线程 <id>」那一句。"""
+    if title:
+        return Candidate(provider, thread, url, str(title), "release", reason)
+    title = phrase("labels.followDiscovery.threadTitle", thread=thread)
+    return Candidate(provider, thread, url, render(title), "release", reason, label_phrase=title)
 
 
 def _forum_candidates(provider: str, host: str, term: str, connector) -> list[Candidate]:
@@ -410,17 +448,19 @@ def _forum_candidates(provider: str, host: str, term: str, connector) -> list[Ca
     picked: list[Candidate] = []
     seen: set[str] = set()
     for query in forum_queries(term):
-        how = "按标题开头命中" if query.endswith("*") else "按标题命中"
+        how = ("labels.followDiscovery.searchTitlePrefix" if query.endswith("*")
+               else "labels.followDiscovery.searchTitle")
         for row in connector.search_threads(query):
             thread = str(row.get("thread_id") or "")
             if not thread or thread in seen:
                 continue
             seen.add(thread)
-            labels = "、".join(str(label) for label in row.get("labels") or () if label)
-            picked.append(Candidate(
-                provider, thread, f"https://{host}/threads/{thread}/",
-                str(row.get("title") or f"线程 {thread}"), "release",
-                f"站内搜索{how}「{query}」" + (f"，版块标签 {labels}" if labels else "")))
+            labels = [str(label) for label in row.get("labels") or () if label]
+            evidence = phrase(how, query=query)
+            picked.append(_thread_candidate(
+                provider, thread, f"https://{host}/threads/{thread}/", row.get("title"),
+                phrase("labels.followDiscovery.withForumLabels", evidence=evidence, labels=labels)
+                if labels else evidence))
             if len(picked) >= MAX_CANDIDATES_PER_SOURCE:
                 return picked
         if picked:
@@ -450,9 +490,8 @@ def _f95_candidates(term: str, transport,
         response = connector.probe(f"https://f95zone.to/threads/{term}/",
                                    headers={"Accept": "text/html"})
         if response.status == 200:
-            picked.append(Candidate("f95zone", term,
-                                    f"https://f95zone.to/threads/{term}/",
-                                    f"线程 {term}", "release", "线程存在"))
+            picked.append(_thread_candidate("f95zone", term, f"https://f95zone.to/threads/{term}/",
+                                            "", phrase("labels.followDiscovery.threadExists")))
         return picked
     seen: set[str] = set()
     for query in search_variants(term):
@@ -463,10 +502,11 @@ def _f95_candidates(term: str, transport,
                     continue
                 seen.add(thread)
                 version = str(row.get("version") or "").strip()
-                picked.append(Candidate(
-                    "f95zone", thread, f"https://f95zone.to/threads/{thread}/",
-                    str(row.get("title") or f"线程 {thread}"), "release",
-                    f"{category} 分类命中" + (f"，当前版本 {version}" if version else "")))
+                evidence = phrase("labels.followDiscovery.categoryHit", category=category)
+                picked.append(_thread_candidate(
+                    "f95zone", thread, f"https://f95zone.to/threads/{thread}/", row.get("title"),
+                    phrase("labels.followDiscovery.withVersion", evidence=evidence, version=version)
+                    if version else evidence))
                 if len(picked) >= MAX_CANDIDATES_PER_SOURCE:
                     return picked
         if picked:
@@ -560,17 +600,18 @@ def discover(term: str, *, secrets_root: Path, state_root: Path,
     """
     text = (term or "").strip()
     if not text:
-        raise FollowSourceError("请先输入要查找的名字或 id")
+        raise FollowSourceError("errors.followDiscovery.termRequired")
     if len(text) > MAX_TERM_LENGTH:
-        raise FollowSourceError(f"名字或 id 最长 {MAX_TERM_LENGTH} 个字符")
+        raise FollowSourceError("errors.followDiscovery.termTooLong", {"limit": MAX_TERM_LENGTH})
     if _TERM_FORBIDDEN_RE.search(text):
-        raise FollowSourceError("名字或 id 里不能包含 / \\ ? # & < > 引号或控制字符")
+        raise FollowSourceError("errors.followDiscovery.termForbiddenCharacters")
 
     credentials = credential_store_for(secrets_root, shared_root=shared_root)
     index = CreatorIndex(state_root, transport=transport)
     tasks = discovery_plan(text, providers)
     found: list[Candidate] = []
     failures: dict[str, str] = {}
+    failure_phrases: dict[str, dict] = {}
     external_searches: list[ExternalSearch] = []
 
     handles: list[str] = []
@@ -580,6 +621,8 @@ def discover(term: str, *, secrets_root: Path, state_root: Path,
             found.extend(fn(text))
         except (FollowSourceError, CredentialError) as error:
             failures[name] = str(error)
+            if isinstance(error, UserFacingError):
+                failure_phrases[name] = phrase(error.code, **error.params)
         if name not in _HANDLE_SEARCH_PROVIDERS:
             return
         for handle in handles:
@@ -592,7 +635,8 @@ def discover(term: str, *, secrets_root: Path, state_root: Path,
                 continue
             known = {(row.provider, canonical_source_ref(row.provider, row.ref)) for row in found}
             found.extend(
-                replace(hit, evidence=f"F95 首楼名片上的手柄 {handle}：{hit.evidence}",
+                replace(hit, reason=phrase("labels.followDiscovery.profileHandle", handle=handle,
+                                         evidence=hit.reason),
                         aliases=(handle,))
                 for hit in hits
                 if (hit.provider, canonical_source_ref(hit.provider, hit.ref)) not in known)
@@ -622,7 +666,7 @@ def discover(term: str, *, secrets_root: Path, state_root: Path,
         run(name, runners[name])
     if "f95zone" in tasks and not any(row.provider == "f95zone" for row in found):
         external_searches.append(_f95_external_search(text))
-    return Discovery(text, tuple(found), failures, tuple(external_searches))
+    return Discovery(text, tuple(found), failures, tuple(external_searches), failure_phrases)
 
 
 #: 一组建议最多给多少条。下拉是给人扫一眼的，不是把命中全倒出来。
@@ -640,9 +684,20 @@ TAG_TYPE_WORKERS = 8
 #: 而敲字时前缀越敲越长，后面几下要问的名字前一下刚问过，缓存省掉的就是这些。
 #: 问不出来的也记（空串），免得每敲一下都为同一个名字再赌一次网络。
 _TAG_TYPES: dict[str, str] = {}
-#: 分类给人看的说法。站方的 `general` 落回「标签」——那一档就是「不是人」。
-TAG_TYPE_LABELS = {"artist": "作者", "character": "角色", "copyright": "作品",
-                   "metadata": "元数据", "general": "标签"}
+#: 站方的标签分类；给人看的说法在 `labels.followDiscovery.tagType.<分类>`。站方的 `general`
+#: 落回「标签」——那一档就是「不是人」。
+TAG_TYPES = ("artist", "character", "copyright", "metadata", "general")
+
+
+def tag_type_phrase(kind: str) -> dict | str:
+    """站方分类的说法：认得的分类是一句 `phrase`，认不出的照站方原词。"""
+    return phrase(f"labels.followDiscovery.tagType.{kind}") if kind in TAG_TYPES else kind
+
+
+def tag_type_label(kind: str) -> str:
+    """站方分类按 zh-CN 渲染的说法；没有分类是空串。"""
+    kind_phrase = tag_type_phrase(kind) if kind else ""
+    return render(kind_phrase) if isinstance(kind_phrase, dict) else kind_phrase
 
 
 def no_backoff(_seconds: float) -> None:
@@ -741,7 +796,7 @@ def tag_suggestions(prefix: str, *, transport=None,
         return ()
     types = _tag_types(connector, [tag for tag, _count in rows[:limit]])
     return tuple(Suggestion("rule34xxx", tag, count,
-                            TAG_TYPE_LABELS.get(types.get(tag, ""), ""),
+                            tag_type_label(types.get(tag, "")),
                             types.get(tag, ""))
                  for tag, count in rows[:limit])
 

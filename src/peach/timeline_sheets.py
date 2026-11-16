@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .frame_capture import capture_with_retry, tile_frames
 from .fsutil import atomic_path
+from .coded_text import Said
 from .jobs import DiskSpaceDenied
 from .media import resolve_case_insensitive
 
@@ -181,7 +182,7 @@ LOCAL_LOCATIONS = ("local",)
 
 #: 用户按停时写进 `stopped` 的那句话。调用方按它区分「人停的」和「机器停的」：
 #: 前者不是故障，后者要把原因摆到页面上。
-STOPPED_BY_USER = "已按停"
+STOPPED_BY_USER = Said("labels.timelineSheets.stoppedByUser")
 
 
 def pending(db_path: Path | str, interval: int, *, limit: int = 0) -> list[tuple]:
@@ -242,7 +243,7 @@ def generate_library(db_path: Path | str, root: Path, interval: int, *, ffmpeg: 
             try:
                 guard.check()
             except DiskSpaceDenied as exc:
-                state["stopped"] = str(exc)
+                state["stopped"] = Said(exc.code, exc.params)
                 break
         state["done"] += 1
         if is_current(root, asset_id, interval):
@@ -274,7 +275,7 @@ def generate_library(db_path: Path | str, root: Path, interval: int, *, ffmpeg: 
                          interval, active=frame_active)
         except DiskSpaceDenied as exc:
             state['done'] -= 1
-            state['stopped'] = str(exc)
+            state['stopped'] = Said(exc.code, exc.params)
             report(**state)
             break
         if made:

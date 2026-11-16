@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 from . import entities
 from .jav_browser import code_key
 from .previews import PreviewUnavailable
+from .user_messages import UserValueError
 from .web_jav_detail import visible_actors
 
 
@@ -21,16 +22,16 @@ def _snapshots(contract, codes):
     path = contract.cover_root.parent / 'jav-discovery-metadata.json'
     try:
         if path.stat().st_size > 16 * 1024 * 1024:
-            raise ValueError('本地人物快照过大')
+            raise UserValueError("api.javBrowserPeople.snapshotTooLarge")
         payload = json.loads(path.read_text(encoding='utf-8'))
         if payload.get('version') != 1 or not isinstance(payload.get('records'), dict):
-            raise ValueError('本地人物快照格式无效')
+            raise UserValueError("api.javBrowserPeople.snapshotInvalid")
         records = payload['records']
         return {code: records.get(code, {}).get('movie', {}) for code in codes}
     except FileNotFoundError:
         return {}
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError('本地人物快照未取得') from error
+        raise UserValueError("api.javBrowserPeople.snapshotUnavailable") from error
 
 
 #: 用户脚本的人物头像是 24 CSS px 圆框，返回 64 px 图；取景沿用 `frontend/src/card-art/face-frame.ts`。
@@ -90,7 +91,7 @@ def _page_names(performers) -> list[str]:
     """详情页出演者原文：去掉 ♀ 标记，男演员（♂）不参与；只在查询单个番号时使用。"""
     names = [str(name).strip() for name in performers or ()]
     if len(names) > 10 or any(not name or len(name) > 60 for name in names):
-        raise ValueError('出演者最多 10 位，每位不超过 60 个字符')
+        raise UserValueError("api.javBrowserPeople.performersLimit")
     return [name.replace('♀', '').strip() for name in names if '♂' not in name]
 
 
@@ -107,11 +108,11 @@ def _page_person(connection, name: str) -> dict:
 def cached_people(contract, preview, value: str, performers=()) -> dict:
     raw = value.split(',')
     if not 1 <= len(raw) <= 50:
-        raise ValueError('每次最多查询 50 个番号')
+        raise UserValueError("api.javBrowserPeople.codesLimit")
     codes = list(dict.fromkeys(code_key(code) for code in raw))
     page_names = _page_names(performers)
     if page_names and len(codes) != 1:
-        raise ValueError('出演者只能随单个番号查询')
+        raise UserValueError("api.javBrowserPeople.performersNeedSingleCode")
     items, avatars = {}, {}
     snapshots = _snapshots(contract, codes)
     with contract.database.read_connection() as connection:

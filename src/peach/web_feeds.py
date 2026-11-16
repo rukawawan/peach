@@ -15,15 +15,17 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from . import (
-    avatar_followup, entities, entry_links, feed_followup, feeds, javdb,
+    avatar_followup, entities, entry_links, feed_followup, feeds, interface_text, javdb,
     performer_alias_followup as alias, performer_profile_followup, wants, web_catalog,
     web_settings, web_wants,
 )
 from .catalog_rules import normalise_code_key
+from .coded_text import Said, from_error
 from .followups import Attempts, attempts_root
 from .jobs import TaskRunConflict
 from .http import HttpRequest, public_https_url
 from .task_runs import MAX_FOLLOWUPS
+from .user_messages import UserFacingError, UserInterruptedError, UserValueError
 
 #: 一次拉取的超时与体积上限。JavDB 演员页 78 KB；2 MiB 之外的东西不是演员页，
 #: 是被替换成了别的页面。
@@ -67,10 +69,10 @@ def _paused_by_source(error: Exception) -> bool:
 def _parse_source(kind: str, body: bytes, url: str):
     """演员页受登录限制时返回可操作的原因。"""
     if kind == feeds.KIND_JAVDB_ACTOR and javdb.LOGIN.search(body.decode("utf-8", "replace")):
-        raise ValueError("JavDB 返回登入页，请在「来源和凭证」为 JavDB 配置有效 Cookie 后重试")
+        raise UserValueError("api.feeds.javdbLoginRequired")
     parsed = feeds.parse(kind, body, url)
     if parsed is None:
-        raise ValueError("这一页解不出任何条目")
+        raise UserValueError("api.feeds.pageUnparsable")
     return parsed
 
 
@@ -87,13 +89,25 @@ def fetch(transport, url: str, *, etag: str | None = None,
           last_modified: str | None = None):
     """取一次订阅地址。304 不是失败，原样交给调用方判。"""
     if not public_https_url(url):
-        raise ValueError("订阅地址必须是解析到公网的 HTTPS 地址")
+        raise UserValueError("api.feeds.publicHttpsRequired")
     headers = {"Accept": "text/html"}
     if etag:
         headers["If-None-Match"] = etag
     if last_modified:
         headers["If-Modified-Since"] = last_modified
     return transport(HttpRequest("GET", url, headers), FETCH_TIMEOUT, FETCH_MAX_BYTES)
+
+
+def _reason(code: str, **params) -> dict:
+    """结果行上的一句失败原因：`error` 是 zh-CN 原文，`error_code` 与 `error_params` 给界面取译文。"""
+    return {"error": interface_text.text(f"server:{code}", params), "error_code": code, "error_params": params}
+
+
+def _failure(error: BaseException) -> dict:
+    """异常写成结果行的失败原因：带 code 的连同 code 一起给，别的只给原文。"""
+    if isinstance(error, UserFacingError):
+        return {"error": error.message, "error_code": error.code, "error_params": dict(error.params)}
+    return {"error": str(error)}
 
 
 def poll_source(contract, transport, source) -> dict:
@@ -114,13 +128,13 @@ def poll_source(contract, transport, source) -> dict:
         response = fetch(transport, source["url"], etag=source["etag"],
                          last_modified=source["last_modified"])
     except Exception as error:  # noqa: BLE001 - 原因写到源那一行上给人看
-        report.update(ok=False, error=str(error))
+        report.update(ok=False, **_failure(error))
         # 整站冷却挡回来的，冷却一过就重拉，不跟着间隔再等一整轮。
         retry_at = _cooling_until(contract, source["url"]) if _paused_by_source(error) else None
         if retry_at is not None:
             report["paused"] = True
         with contract.database.write_transaction() as connection:
-            feeds.settle(connection, source_id, error=str(error),
+            feeds.settle(connection, source_id, error=from_error(error),
                          interval_minutes=interval, retry_at=retry_at)
         return report
     if response.status == _NOT_MODIFIED:
@@ -130,16 +144,16 @@ def poll_source(contract, transport, source) -> dict:
         _backfill_solo_works(contract, transport, source, report)
         return report
     if response.status != 200:
-        message = f"来源回了 HTTP {response.status}"
-        report.update(ok=False, error=message)
+        failure = Said("api.feeds.sourceHttpStatus", status=response.status)
+        report.update(ok=False, error=str(failure), error_code=failure.code, error_params=dict(failure.params))
         with contract.database.write_transaction() as connection:
-            feeds.settle(connection, source_id, error=message, interval_minutes=interval)
+            feeds.settle(connection, source_id, error=failure, interval_minutes=interval)
         return report
     try:
         parsed = _parse_source(source["kind"], response.body, source["url"])
     except ValueError as error:
-        message = str(error)
-        report.update(ok=False, error=message)
+        message = from_error(error)
+        report.update(ok=False, **_failure(error))
         with contract.database.write_transaction() as connection:
             feeds.settle(connection, source_id, error=message, interval_minutes=interval)
         return report
@@ -178,8 +192,8 @@ def _poll_dmm(contract, transport, source, report: dict) -> dict:
             works = site.actress_works(feeds.dmm_actress_id(source["url"]), session=session,
                                        known=known, limit=feeds.MAX_ENTRIES)
     except Exception as error:  # noqa: BLE001 - 原因写到源那一行上给人看
-        message = error.message if isinstance(error, SourceFailure) else str(error)
-        report.update(ok=False, error=message,
+        message = from_error(error)
+        report.update(ok=False, **{**_failure(error), "error": message},
                       reason=str(error.reason) if isinstance(error, SourceFailure) else None)
         # 和演员页同一条：整站冷却挡回来的，冷却一过就重拉（ADR-0134）。
         retry_at = _cooling_until(contract, source["url"]) if _paused_by_source(error) else None
@@ -228,7 +242,7 @@ def _backfill_solo_works(contract, transport, source, report: dict) -> None:
     try:
         response = fetch(transport, url)
         if response.status != 200:
-            raise ValueError(f"来源回了 HTTP {response.status}")
+            raise UserValueError("api.feeds.sourceHttpStatus", {"status": response.status})
         parsed = _parse_source(source["kind"], response.body, url)
     except Exception as error:  # noqa: BLE001 - 主页已经落库，补拉只记原因
         report["backfill_error"] = str(error)
@@ -269,7 +283,7 @@ def _execute_check(contract, body, job_id: str) -> dict:
     completed = {row['source'] for row in results if row.get('ok') and not row.get('backfill_error')}
     codes = [code for row in results for code in row.get('codes') or []]
     if not contract.feed_job.checkpoint(job_id, source_ids=[int(row['id']) for row in rows]):
-        raise InterruptedError('订阅检查已停止')
+        raise UserInterruptedError("errors.webFeeds.checkStopped")
     deferred, held = 0, set()
     try:
         for index, source in enumerate(rows):
@@ -285,18 +299,18 @@ def _execute_check(contract, body, job_id: str) -> dict:
                 held.update(int(row['id']) for row in pending)
                 if not contract.feed_job.checkpoint(job_id, results=results, checked=len(results),
                                                     total=len(rows), added=len(set(codes))):
-                    raise InterruptedError('订阅检查已停止')
+                    raise UserInterruptedError("errors.webFeeds.checkStopped")
                 continue
             if not contract.feed_job.update(job_id, checked=len(results), total=len(rows),
                                             current=source["name"] or source["url"]):
-                raise InterruptedError('订阅检查已停止')
+                raise UserInterruptedError("errors.webFeeds.checkStopped")
             report = poll_source(contract, transport, source)
             results = [row for row in results if row['source'] != report['source']]
             results.append(report)
             codes.extend(report.get("codes") or [])
             if not contract.feed_job.checkpoint(job_id, results=results, checked=len(results),
                                                 total=len(rows), added=len(set(codes))):
-                raise InterruptedError('订阅检查已停止')
+                raise UserInterruptedError("errors.webFeeds.checkStopped")
     finally:
         close = getattr(transport, "close", None)
         if close:
@@ -356,14 +370,20 @@ def _defer_round(contract, pending, until: datetime, results: list) -> tuple[lis
     if trigger is None:
         from .scraping_access import SOURCES, source_for
         first = pending[0]
-        label = SOURCES.get(source_for(first["url"]) or "", {}).get("label", "来源")
+        label = SOURCES.get(source_for(first["url"]) or "", {}).get("label")
         trigger = {"source": int(first["id"]), "name": first["name"] or first["url"],
                    "ok": False, "seen": 0, "added": 0, "without_code": 0, "paused": True,
-                   "error": f"{label} 正在冷却，这一轮没有拉"}
+                   **(_reason("labels.webFeeds.sourceCooling", source=label) if label
+                      else _reason("labels.webFeeds.cooling"))}
         results.append(trigger)
         rest -= 1
     if rest:
-        trigger["error"] = f"{trigger['error']}；其余 {rest} 个源顺延到冷却结束后再拉"
+        # 顺延了几个另成一句：前面的原因可能是别处的报错，两句各带各的 code。`error` 仍是连起来的原文，
+        # 读 `error_code` 的界面要把 `deferred_note` 接在后面。
+        note = _reason("labels.webFeeds.deferredRest", count=rest)
+        trigger.update(deferred_note=note["error"], deferred_note_code=note["error_code"],
+                       deferred_note_params=note["error_params"])
+        trigger["error"] = f"{trigger['error']}{interface_text.text('server:outcome.semicolon')}{note['error']}"
     return results, len(pending)
 
 
@@ -428,7 +448,7 @@ def w_feed_schedule_run(contract, _body) -> dict:
     """让订阅源定时拉取立刻跑一轮，结果照常记进调度状态。"""
     scheduler = contract.feed_scheduler
     if scheduler is None:
-        raise ValueError("订阅源拉取没有启用")
+        raise UserValueError("api.feeds.scheduleDisabled")
     return scheduler.run_now()
 
 
@@ -485,7 +505,7 @@ def subscribe_performer(connection, entity_id: int, canonical_name: str) -> list
     pages = [*entry_links.javdb_actor_pages(canonical_name, refs),
              *feeds.dmm_actress_pages(connection, entity_id)]
     if not pages:
-        raise ValueError("这位在 JavDB 与 DMM 上都没有编号")
+        raise UserValueError("api.feeds.noSourceIds")
     return feeds.follow_entity(connection, entity_id, pages)
 
 
@@ -513,7 +533,7 @@ def _follow_entity(contract, body) -> dict:
             "SELECT canonical_name FROM entity WHERE id=? AND kind='performer'",
             (entity_id,)).fetchone()
         if row is None:
-            raise ValueError("找不到这位女优")
+            raise UserValueError("api.feeds.performerMissing")
         if not enabled:
             feeds.unfollow_entity(connection, entity_id)
             ids: list[int] = []
@@ -543,7 +563,7 @@ def q_feed_lookup(contract, args) -> dict:
     """
     name = entities.canonicalize_entity_name("performer", str(args.get("q") or ""))
     if not name:
-        raise ValueError("要先给一个女优名")
+        raise UserValueError("api.feeds.nameRequired")
     url = javdb.SEARCH.format(quote(name))
     with contract.database.read_connection() as connection:
         # 账本里按这个名字认得出谁：登记时没人持有所勾的卡就挂到她名下（`_follow_by_name`），
@@ -556,7 +576,9 @@ def q_feed_lookup(contract, args) -> dict:
         # 她已有 JavDB 或 DMM 编号时不必靠这一趟搜索，按库里的她直接订；原因照样告诉页面。
         if known and known["subscribable"]:
             return {"ok": True, "q": name, "url": url, "candidates": [], "suggested": [],
-                    "known": known, "unavailable": str(error)}
+                    "known": known, "unavailable": str(error),
+                    **({"unavailable_code": error.code, "unavailable_params": dict(error.params)}
+                       if isinstance(error, UserFacingError) else {})}
         raise
     cards = javdb.search_cards(html)
     wanted = alias.match_key(name)
@@ -575,12 +597,12 @@ def _search_javdb(contract, url: str) -> str:
         response = _transport(contract)(HttpRequest("GET", url, {"Accept": "text/html"}),
                                         LOOKUP_TIMEOUT, FETCH_MAX_BYTES)
     except Exception as error:  # noqa: BLE001 - 冷却、限流还是断网，原因原样交给页面
-        raise ValueError(f"JavDB 没有搜成：{error}") from error
+        raise UserValueError("api.feeds.javdbSearchFailed", {"error": str(error)}) from error
     if response.status != 200:
-        raise ValueError(f"JavDB 回了 HTTP {response.status}")
+        raise UserValueError("api.feeds.javdbHttpStatus", {"status": response.status})
     html = response.body.decode("utf-8", "replace")
     if javdb.LOGIN.search(html):
-        raise ValueError("JavDB 回的是登入页，这一趟搜不了；稍后再试")
+        raise UserValueError("api.feeds.javdbSearchLogin")
     return html
 
 
@@ -645,12 +667,12 @@ def _follow_by_name(contract, body) -> dict:
     """
     name = entities.canonicalize_entity_name("performer", str(body.get("name") or ""))
     if not name:
-        raise ValueError("女优名不能为空")
+        raise UserValueError("api.feeds.nameEmpty")
     raw = body.get("ids")
     ids = [value for value in (raw if isinstance(raw, list) else [])
            if isinstance(value, str) and ACTOR_ID.match(value)]
     if not ids:
-        raise ValueError("要先勾选至少一张演员卡")
+        raise UserValueError("api.feeds.cardRequired")
     with contract.database.write_transaction() as connection:
         holders: dict[int, str] = {}
         for actor_id in ids:
@@ -661,7 +683,7 @@ def _follow_by_name(contract, body) -> dict:
             if held is not None:
                 holders[int(held[0])] = str(held[1])
         if len(holders) > 1:
-            raise ValueError("这几张卡分属数据库里不同的人：" + "、".join(holders.values()))
+            raise UserValueError("api.feeds.cardsSpanPeople", {"names": "、".join(holders.values())})
         created = False
         if holders:
             [(entity_id, canonical)] = holders.items()
@@ -745,10 +767,9 @@ def _discovery_performers(connection, contract, rows) -> dict[int, list[dict]]:
 
 
 def cover_state_fields(states: dict, code: str) -> dict:
-    """新作卡封面格的两个字段：`cover_state`（`fetching`／`queued`／`missing`，有封面时为 None）与原因。
-    首页这一行和 JAV 页「新作」「发现」两个分区共用同一份口径。"""
-    state, reason = states.get(normalise_code_key(code), (None, ""))
-    return {"cover_state": state, "cover_reason": reason}
+    """新作卡封面格的字段：`cover_state`（`fetching`／`queued`／`missing`，有封面时为 None）与原因
+    （`feed_followup.cover_state_fields`）。首页这一行和 JAV 页「新作」「发现」两个分区共用同一份口径。"""
+    return feed_followup.cover_state_fields(states, code)
 
 
 def q_feed_discoveries(contract, args) -> dict:

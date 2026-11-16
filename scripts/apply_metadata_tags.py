@@ -30,6 +30,7 @@ if str(SRC_DIR) not in sys.path:
 
 from peach.config import DATABASE_PATH
 from peach.field_owners import script_owner
+from peach.interface_text import dev as t
 from peach.metadata_auto_apply import _apply_metadata_candidate
 from peach.migrations import sqlite_backup
 from peach.review_csv import read_rows
@@ -95,32 +96,33 @@ def _record_decision(connection, group: dict, candidate: dict, note: str, now: s
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="把字段候选里的标签直接写进 ledger")
-    parser.add_argument("candidates", type=Path, help="scrape_codes 产出的字段候选 CSV")
+    parser = argparse.ArgumentParser(description=t("apply_metadata_tags.description"))
+    parser.add_argument("candidates", type=Path, help=t("apply_metadata_tags.candidatesHelp"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
-    parser.add_argument("--source", default="javbus", help="只写这个来源的候选值")
-    parser.add_argument("--field", default="tags", help="只写这个字段")
-    parser.add_argument("--apply", action="store_true", help="写库；默认只统计")
-    parser.add_argument("--backup", type=Path, help="--apply 必需：写库前的 SQLite 备份路径")
+    parser.add_argument("--source", default="javbus", help=t("apply_metadata_tags.sourceHelp"))
+    parser.add_argument("--field", default="tags", help=t("apply_metadata_tags.fieldHelp"))
+    parser.add_argument("--apply", action="store_true", help=t("apply_metadata_tags.applyHelp"))
+    parser.add_argument("--backup", type=Path, help=t("apply_metadata_tags.backupHelp"))
     parser.add_argument("--skip-codes", default="",
-                        help="逗号分隔的番号，留在 CSV 里但不写库")
+                        help=t("apply_metadata_tags.skipCodesHelp"))
     parser.add_argument("--note", default="批量直接写入（用户当轮授权）",
-                        help="写进 review_decision 留痕的说明")
+                        help=t("apply_metadata_tags.noteHelp"))
     return parser
 
 
 def run(args: argparse.Namespace) -> int:
     if args.apply and not args.backup:
-        raise SystemExit("--apply 必须同时给 --backup")
+        raise SystemExit(t("apply_metadata_tags.applyNeedsBackup"))
     rows = list(read_rows(args.candidates))
     skip = frozenset(str(args.skip_codes or "").split(","))
     selected = plan(rows, args.source, args.field, skip)
-    print(f"候选 {len(rows)} 组，来源 {args.source} 的 {args.field} 候选 {len(selected)} 组"
-          + (f"，跳过番号 {args.skip_codes}" if args.skip_codes else ""))
+    print(t("apply_metadata_tags.planned", total=len(rows), source=args.source, field=args.field,
+            selected=len(selected))
+          + (t("apply_metadata_tags.skippedCodes", codes=args.skip_codes) if args.skip_codes else ""))
     if not selected:
         return 0
     if not args.apply:
-        print("  未写库（加 --apply --backup 才执行）")
+        print(t("apply_metadata_tags.dryRun"))
         return 0
 
     connection = sqlite3.connect(args.db)
@@ -131,7 +133,7 @@ def run(args: argparse.Namespace) -> int:
         ).fetchone()[0]
         connection.close()
         sqlite_backup(args.db, args.backup)
-        print(f"  已备份到 {args.backup}")
+        print(t("apply_metadata_tags.backedUp", path=args.backup))
         connection = sqlite3.connect(args.db)
         connection.row_factory = sqlite3.Row
 
@@ -153,12 +155,12 @@ def run(args: argparse.Namespace) -> int:
             "SELECT count(*) FROM asset_tag WHERE source LIKE 'javinizer:%:tag'"
         ).fetchone()[0]
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-        tag_delta = (f"javinizer 标签行 {before} -> {after}；"
+        tag_delta = (t("apply_metadata_tags.tagDelta", before=before, after=after)
                      if args.field == "tags" else "")
-        print(f"  写入 {applied} 组、覆盖资产 {assets} 条；"
-              f"{tag_delta}integrity_check {integrity}")
+        print(t("apply_metadata_tags.written", groups=applied, assets=assets, tagDelta=tag_delta,
+                integrity=integrity))
         if failures:
-            print(f"  跳过 {len(failures)} 组：")
+            print(t("apply_metadata_tags.skipped", count=len(failures)))
             for line in failures[:10]:
                 print(f"    {line}")
         return 0 if integrity == "ok" else 1

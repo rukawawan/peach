@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import studio_icons as icons  # noqa: E402
 from peach.config import GENERATED_DIR, REVIEW_DIR, STATE_DIR  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.review_csv import write_rows  # noqa: E402
 
 ORDER = {icons.OK: 0, icons.PADDED: 1, icons.TOOSMALL: 2, icons.SHARED: 3,
@@ -57,40 +58,40 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
     rows.sort(key=lambda row: (ORDER.get(row["verdict"], 9), row["safe"], row["variant"]))
     write_rows(args.output, icons.FIELDS, rows)
-    stats: dict[str, object] = {"目标厂牌": len(targets), "复核行": len(rows)}
+    stats: dict[str, object] = {t("harvest_studio_icons.targets"): len(targets), t("harvest_studio_icons.reviewRows"): len(rows)}
     stats.update({verdict: sum(1 for row in rows if row["verdict"] == verdict)
                   for verdict in ORDER})
-    stats["logo 行"] = sum(1 for row in rows if row["variant"] == icons.LOGO)
-    stats["人像闸退回"] = faces.rejected
+    stats[t("harvest_studio_icons.logoRows")] = sum(1 for row in rows if row["variant"] == icons.LOGO)
+    stats[t("harvest_studio_icons.portraitRejected")] = faces.rejected
     if faces.unavailable:
         # 这一轮没人拦照片。写进统计，别让它看起来像「查过了，都不是照片」。
-        stats["人像闸未生效"] = faces.unavailable
+        stats[t("harvest_studio_icons.portraitGateOff")] = faces.unavailable
     stats["output"] = str(args.output)
     if args.install:
-        stats["已安装"] = icons.install(rows, logo_root)
+        stats[t("harvest_studio_icons.installed")] = icons.install(rows, logo_root)
     return stats
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("harvest_studio_icons.description"))
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--output", type=Path,
                         default=REVIEW_DIR / "studio-icons.csv")
     parser.add_argument("--logo-root", type=Path, default=GENERATED_DIR / "logos")
     parser.add_argument("--avatars", type=Path, default=STATE_DIR / "agency-avatars.json",
-                        help="人在登录态解出来的社媒头像地址，按账本名")
+                        help=t("harvest_studio_icons.avatarsHelp"))
     parser.add_argument("--candidate-dir", type=Path,
                         default=REVIEW_DIR / "studio-icons")
     parser.add_argument("--only", nargs="*", default=[],
-                        help="只处理这几个，按 canonical_name 给")
+                        help=t("harvest_studio_icons.onlyHelp"))
     parser.add_argument("--kind", default="studio", choices=("studio", "agency"),
-                        help="这一趟补的是哪一类公司的标识")
+                        help=t("harvest_studio_icons.kindHelp"))
     parser.add_argument("--interval", type=float, default=1.5)
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--no-face-gate", action="store_true",
-                        help="不检人脸；只在没法取模型又必须出一轮复核件时用")
+                        help=t("harvest_studio_icons.noFaceGateHelp"))
     parser.add_argument("--install", action="store_true",
-                        help="把可装的候选写成 <safe>.icon.img / <safe>.logo.img")
+                        help=t("harvest_studio_icons.installHelp"))
     args = parser.parse_args(argv)
     print(run(args))
     return 0

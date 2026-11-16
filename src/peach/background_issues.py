@@ -27,16 +27,20 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
+from . import interface_text
+
 LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class Issue:
     key: str
+    #: 标题与链接文案的 code（`labels.backgroundIssues.*`）；接口出口按 zh-CN 渲染成 `title`、`link_label`，
+    #: 原 code 放在 `title_code`、`link_label_code` 给界面取当前语言。链接文案写具体去处（「打开推送设置」）。
     title: str
     href: str
-    #: 链接文案写具体去处（「打开推送设置」），界面直接用。
     link_label: str
+    title_params: dict | None = None
     since: str | None = None
     #: 能一键重试时的 POST 地址；只给自成一体、不需要表单与修订号的动作。
     retry: str | None = None
@@ -58,9 +62,9 @@ def _push_discovery(state, _contract, _config) -> list[Issue]:
     href = "/settings/library#pushDiscovery"
     issues = []
     if snapshot["queue"].get("last_error"):
-        issues.append(Issue("push-discovery", "自动发现新文件入库失败", href, "打开推送设置"))
+        issues.append(Issue("push-discovery", "labels.backgroundIssues.pushDiscovery.title", href, "labels.backgroundIssues.pushDiscovery.link"))
     if snapshot.get("watch_local") and not snapshot.get("local_running") and snapshot.get("local_message"):
-        issues.append(Issue("push-discovery-watch", "本机文件夹监视没有运行", href, "打开推送设置"))
+        issues.append(Issue("push-discovery-watch", "labels.backgroundIssues.pushDiscoveryWatch.title", href, "labels.backgroundIssues.pushDiscoveryWatch.link"))
     return issues
 
 
@@ -76,7 +80,8 @@ def _downloads(_state, contract, _config) -> list[Issue]:
             "AND coalesce(failure_detail, '') <> ''", tuple(TRACKED_STATES)).fetchone()
     if not count:
         return []
-    return [Issue("downloads", f"{count} 个云下载任务对账暂时失败", "/tasks#cloudDownloads", "查看云下载")]
+    return [Issue("downloads", "labels.backgroundIssues.downloads.title", "/tasks#cloudDownloads", "labels.backgroundIssues.downloads.link",
+                  title_params={"count": count})]
 
 
 def _scheduler(attribute: str, key: str, title: str, href: str, link_label: str, retry: str):
@@ -99,7 +104,7 @@ def _tunnel(state, _contract, config) -> list[Issue]:
         return []
     if not manager.snapshot().error:
         return []
-    return [Issue("tunnel", "公网入口连接失败", "/settings/network#tunnel", "打开公网入口设置")]
+    return [Issue("tunnel", "labels.backgroundIssues.tunnel.title", "/settings/network#tunnel", "labels.backgroundIssues.tunnel.link")]
 
 
 def _library_sharing(_state, _contract, config) -> list[Issue]:
@@ -108,14 +113,16 @@ def _library_sharing(_state, _contract, config) -> list[Issue]:
     from . import library_sharing
     if library_sharing.snapshot(config)["last_attempt"].get("status") != "failed":
         return []
-    return [Issue("library-sharing", "馆藏分享上传失败", "/settings/maintenance#librarySharing", "打开数据上传设置")]
+    return [Issue("library-sharing", "labels.backgroundIssues.librarySharing.title", "/settings/maintenance#librarySharing",
+                  "labels.backgroundIssues.librarySharing.link")]
 
 
 def _automatic_updates(state, _contract, _config) -> list[Issue]:
     service = getattr(state, "automatic_updates", None)
     if service is None or not service.snapshot().get("error"):
         return []
-    return [Issue("automatic-updates", "自动更新出错", "/settings/maintenance#automaticUpdates", "打开自动更新设置")]
+    return [Issue("automatic-updates", "labels.backgroundIssues.automaticUpdates.title", "/settings/maintenance#automaticUpdates",
+                  "labels.backgroundIssues.automaticUpdates.link")]
 
 
 def _amane_bridge(state, contract, _config) -> list[Issue]:
@@ -130,7 +137,7 @@ def _amane_bridge(state, contract, _config) -> list[Issue]:
     building = bool(job and (job.snapshot() or {}).get("status") == "running")
     sync = getattr(state, "sync", None)
     writer = sync is None or not sync.read_only
-    return [Issue("amane-bridge", "amane 桥未安装", "/sources#amane", "打开 amane 设置",
+    return [Issue("amane-bridge", "labels.backgroundIssues.amaneBridge.title", "/sources#amane", "labels.backgroundIssues.amaneBridge.link",
                   retry="/api/scraping/amane-bridge/rebuild", retry_available=writer and not building)]
 
 
@@ -139,7 +146,7 @@ def _network(state, _contract, _config) -> list[Issue]:
     # 只读快照，不在这里启动探测：探测线程由页面读 `/api/network-status` 时拉起。
     if monitor is None or monitor.summary().get("state") != "offline":
         return []
-    return [Issue("network", "网络不通", "/settings/network#peachProxy", "打开 Peach 代理设置",
+    return [Issue("network", "labels.backgroundIssues.network.title", "/settings/network#peachProxy", "labels.backgroundIssues.network.link",
                   retry="/api/network-status/check", retry_available=True)]
 
 
@@ -155,7 +162,7 @@ def _face_models(_state, contract, _config) -> list[Issue]:
     if status["state"] != "failed":
         return []
     # 模型存在本机工具目录、不碰账本，只读端同样可以重取。
-    return [Issue("face-models", "人脸模型下载失败", f"/tasks#run-{status['run_id']}", "查看失败记录",
+    return [Issue("face-models", "labels.backgroundIssues.faceModels.title", f"/tasks#run-{status['run_id']}", "labels.backgroundIssues.faceModels.link",
                   since=status["failed_at"], retry=status["retry_url"], retry_available=True)]
 
 
@@ -164,10 +171,10 @@ Provider = Callable[[Any, Any, Any], Iterable[Issue]]
 PROVIDERS: tuple[Provider, ...] = (
     _network,
     _tunnel,
-    _scheduler("follow_scheduler", "follow-schedule", "关注自动检查失败",
-               "/settings/subscriptions#followScheduleSetting", "打开关注调度", "/api/follow/schedule/run"),
-    _scheduler("feed_scheduler", "feed-schedule", "订阅源自动拉取失败",
-               "/settings/subscriptions#feedScheduleSetting", "打开订阅源调度", "/api/feeds/schedule/run"),
+    _scheduler("follow_scheduler", "follow-schedule", "labels.backgroundIssues.followSchedule.title",
+               "/settings/subscriptions#followScheduleSetting", "labels.backgroundIssues.followSchedule.link", "/api/follow/schedule/run"),
+    _scheduler("feed_scheduler", "feed-schedule", "labels.backgroundIssues.feedSchedule.title",
+               "/settings/subscriptions#feedScheduleSetting", "labels.backgroundIssues.feedSchedule.link", "/api/feeds/schedule/run"),
     _push_discovery,
     _downloads,
     _automatic_updates,
@@ -191,7 +198,7 @@ class IssueLog:
             try:
                 issues.extend(provider(state, contract, config))
             except Exception:  # 一个服务读坏了不该让整块消失
-                LOGGER.exception("读取后台问题失败：%s", getattr(provider, "__name__", provider))
+                LOGGER.exception("Failed to read background issues: %s", getattr(provider, "__name__", provider))
         now = _stamp(self.clock())
         with self._lock:
             current = {issue.key for issue in issues}
@@ -200,5 +207,10 @@ class IssueLog:
             rows = []
             for issue in issues:
                 noticed = self._noticed.setdefault(issue.key, now)
-                rows.append({**asdict(issue), "noticed_at": noticed})
+                row = asdict(issue)
+                params = row.pop("title_params") or {}
+                rows.append({**row, "title": interface_text.text(f"server:{issue.title}", params),
+                             "title_code": issue.title, "title_params": params,
+                             "link_label": interface_text.text(f"server:{issue.link_label}"),
+                             "link_label_code": issue.link_label, "noticed_at": noticed})
         return rows

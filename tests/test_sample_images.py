@@ -21,6 +21,8 @@ from peach.jav_cover_fetch import NotFound
 from peach.repository import LedgerDatabase
 from peach.scraping_access import SourcePaused
 from support.ledger import fresh_ledger
+from support.outcomes import told
+from peach.metadata import relayed
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -179,7 +181,8 @@ class PendingTests(LedgerCase):
         self.work(1, "SSIS-057")
         self.assertEqual(sample_followup.plan(self.database, config, self.covers),
                          [{"key": sample_followup.FOLLOWUP_KEY, "task_key": sample_followup.TASK_KEY,
-                           "label": sample_followup.TASK_LABEL}])
+                           "label": sample_followup.TASK_LABEL, "label_code": "taskRun.progress.item",
+                           "label_params": {"name": ""}}])
 
 
 class FollowupTests(LedgerCase):
@@ -219,16 +222,16 @@ class FollowupTests(LedgerCase):
         self.work(3, "300MIUM-1000")
 
         def dmm_fetch(_transport, code, *, deadline=None):
-            raise NotFound("HTTP 404")
+            raise NotFound(*relayed("HTTP 404"))
 
         def mgs_fetch(_transport, code, *, deadline=None):
-            raise SourcePaused("mgstage", 0.0, "冷却中")
+            raise SourcePaused("errors.scrapingAccess.coolingDown")
 
         summary = self.run_followup({"dmm": dmm_fetch, "mgstage": mgs_fetch})
         self.assertEqual((summary["landed"], summary["absent"]), (0, 2))
         self.assertEqual(summary["paused"], ["mgstage"])
         self.assertEqual(summary["skipped"]["paused"], 1)
-        self.assertEqual(summary["outcome"], "这一轮没有补上样张；跳过 1 部因来源冷却；还有 1 部待补，接着排下一轮")
+        self.assertEqual(told(summary)["outcome"], "这一轮没有补上样张；跳过 1 部因来源冷却；还有 1 部待补，接着排下一轮")
         misses = sample_images.Misses(sample_images.misses_path(self.generated))
         self.assertTrue(misses.fresh("dmm", "SSIS-057"))
         self.assertFalse(misses.fresh("mgstage", "300MIUM-1000"), "冷却不是没有")
@@ -255,21 +258,21 @@ class FollowupTests(LedgerCase):
         self.assertEqual(asked, ["SSIS-058"])
         self.assertEqual((summary["landed"], summary["deferred"], summary["remaining"]), (4, 1, 1))
         self.assertTrue(summary["continue"])
-        self.assertEqual(summary["outcome"], "补上 4 部的样张（4 张）；跳过 1 部联网名额用完留到下一轮；还有 1 部待补，接着排下一轮")
+        self.assertEqual(told(summary)["outcome"], "补上 4 部的样张（4 张）；跳过 1 部联网名额用完留到下一轮；还有 1 部待补，接着排下一轮")
         with mock.patch.object(sample_followup, "BATCH", 1):
             last = self.run_followup({"dmm": fetch}, run_id=8)
         self.assertEqual((last["landed"], last["remaining"], last["continue"]), (1, 0, False))
-        self.assertEqual(last["outcome"], "补上 1 部的样张（1 张）")
+        self.assertEqual(told(last)["outcome"], "补上 1 部的样张（1 张）")
 
     def test_a_round_held_up_only_by_a_cooldown_waits_for_the_next_processing(self):
         self.work(1, "300MIUM-1000")
 
         def mgs_fetch(_transport, code, *, deadline=None):
-            raise SourcePaused("mgstage", 0.0, "冷却中")
+            raise SourcePaused("errors.scrapingAccess.coolingDown")
 
         summary = self.run_followup({"mgstage": mgs_fetch})
         self.assertEqual((summary["landed"], summary["remaining"], summary["continue"]), (0, 1, False))
-        self.assertEqual(summary["outcome"], "这一轮没有补上样张；跳过 1 部因来源冷却；还有 1 部待补，等下一次处理")
+        self.assertEqual(told(summary)["outcome"], "这一轮没有补上样张；跳过 1 部因来源冷却；还有 1 部待补，等下一次处理")
 
     def test_a_snapshot_seen_without_samples_counts_as_progress_only_once(self):
         """快照看过没样张只在第一次算推进：那一站一直冷却时，第二轮不能再说接着跑，否则接续空转不停。"""
@@ -277,13 +280,13 @@ class FollowupTests(LedgerCase):
         self.snapshot("SSIS-057", "r18dev", {"title": "x"})
 
         def dmm_fetch(_transport, code, *, deadline=None):
-            raise SourcePaused("dmm", 0.0, "冷却中")
+            raise SourcePaused("errors.scrapingAccess.coolingDown")
 
         first = self.run_followup({"dmm": dmm_fetch}, run_id=7)
         self.assertEqual((first["remaining"], first["continue"]), (1, True))
         second = self.run_followup({"dmm": dmm_fetch}, run_id=8)
         self.assertEqual((second["remaining"], second["continue"]), (1, False))
-        self.assertEqual(second["outcome"], "这一轮没有补上样张；跳过 1 部因来源冷却；还有 1 部待补，等下一次处理")
+        self.assertEqual(told(second)["outcome"], "这一轮没有补上样张；跳过 1 部因来源冷却；还有 1 部待补，等下一次处理")
 
     def test_codes_nobody_can_be_asked_about_are_counted_in_the_summary(self):
         """快照里没样张、又没有官方样张站的番号（FC2）不联网也不算「没有」，摘要说清跳过了几部、为什么。"""
@@ -293,7 +296,7 @@ class FollowupTests(LedgerCase):
         summary = self.run_followup({"dmm": lambda _t, _code, *, deadline=None: [dmm("ssis00057", 1, small=True)]})
         self.assertEqual((summary["landed"], summary["deferred"]), (1, 0))
         self.assertEqual(summary["skipped"], {"no_site": 1, "recent_miss": 0, "paused": 0})
-        self.assertEqual(summary["outcome"], "补上 1 部的样张（1 张）；跳过 1 部没有可问的官方站")
+        self.assertEqual(told(summary)["outcome"], "补上 1 部的样张（1 张）；跳过 1 部没有可问的官方站")
 
     def test_a_landed_batch_is_reverted_by_the_script_and_not_landed_twice(self):
         self.work(1, "SSIS-057")
@@ -308,11 +311,11 @@ class FollowupTests(LedgerCase):
                 "--source", sample_images.SOURCE]
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(revert.main(base), 0)
-        self.assertIn("'样张': 1", printed.getvalue())
+        self.assertIn("'samples': 1", printed.getvalue())
         self.assertEqual(len(self.rows()), 1, "只列计划不删")
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(revert.main([*base, "--apply", "--backup", str(self.root / "backup.db")]), 0)
-        self.assertIn("'删除样张': 1", printed.getvalue())
+        self.assertIn("'deleted_samples': 1", printed.getvalue())
         self.assertEqual(self.rows(), [])
 
 

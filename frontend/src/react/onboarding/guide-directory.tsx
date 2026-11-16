@@ -10,6 +10,7 @@ import { RiCheckboxCircleLine } from '@remixicon/react';
 import { Disclosure } from '../settings/section';
 import { EmptyState } from '../components/empty-state';
 import { cardClass } from '../components/card';
+import { t } from '../../i18n';
 
 type Glyph = RemixiconComponentType;
 const ICONS: Record<string, Glyph> = {
@@ -48,13 +49,13 @@ function ChapterRow({ chapter, progress, loading, start }: {
   return <button type="button" disabled={loading} data-guide-completed={completed || undefined} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left outline-none hover:bg-background-tertiary-default focus-visible:ring-2 focus-visible:ring-border-focus-ring disabled:cursor-wait" onClick={() => start(chapter, resume)}>
     <span className="peach-guide-topic-icon"><ChapterIcon chapter={chapter.id} /></span>
     <span className="flex min-w-0 flex-1 flex-col gap-1"><strong className="text-body-medium text-text-primary">{chapter.title}</strong><span className="text-body-2-regular text-text-secondary">{chapter.summary}</span></span>
-    {completed ? <CompletedLabel /> : <span className="shrink-0 text-caption-1-regular tabular-nums text-text-secondary">{resume ? '继续 · ' : ''}{chapter.steps.length} 步</span>}
+    {completed ? <CompletedLabel /> : <span className="shrink-0 text-caption-1-regular tabular-nums text-text-secondary">{t(resume ? 'onboarding:guideDirectory.resumeStepCount' : 'onboarding:guideDirectory.stepCount', { count: chapter.steps.length })}</span>}
     <RiArrowRightSLine aria-hidden className="size-(--icon-inline) shrink-0 text-text-secondary" />
   </button>;
 }
 
 function CompletedLabel() {
-  return <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-notification-success-background px-2 py-1 text-caption-1-medium text-notification-success-foreground"><RiCheckboxCircleLine aria-hidden className="size-4" /><span data-copy-key="guide.chapter.completed">已完成</span></span>;
+  return <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-notification-success-background px-2 py-1 text-caption-1-medium text-notification-success-foreground"><RiCheckboxCircleLine aria-hidden className="size-4" /><span data-copy-key="guide.chapter.completed">{t('onboarding:shared.completed')}</span></span>;
 }
 
 export function GuideDirectory({ kind, query, setQuery, context, progress, loading, start }: {
@@ -68,14 +69,14 @@ export function GuideDirectory({ kind, query, setQuery, context, progress, loadi
   const search = query.trim().toLowerCase();
   const matches = GUIDE_CHAPTERS.filter(item => item.kind === kind && `${item.title} ${item.summary} ${item.steps.map(step => `${step.title} ${step.body} ${(step.details || []).flat().join(' ')}`).join(' ')}`.toLowerCase().includes(search));
   return <div className="flex flex-col gap-4">
-    <GuideBanner completed={completed} icon={kind === 'interface' ? RiCompass3Line : RiSettings3Line} title={kind === 'interface' ? '先认识 Peach' : '按习惯调整 Peach'} description={kind === 'interface' ? '先用 4 步认识常用入口，其余功能用到时再看。' : '先了解外观与导航，其余设置按需要查看。'}>
-      {completed ? <CompletedLabel /> : <span className="text-body-2-regular text-text-secondary">{quick.steps.length} 步 · 随时可以退出</span>}
-      <Button variant={completed ? 'secondary' : 'primary'} disabled={loading} onClick={() => start(quick, resume)}><span data-copy-key={`guide.${kind}.${loading ? 'loading' : completed ? 'replay' : resume ? 'resume' : 'start'}`}>{loading ? '正在准备…' : completed ? '再看一遍' : kind === 'interface' ? resume ? '继续快速导览' : '开始快速导览' : resume ? '继续设置导览' : '了解常用设置'}</span></Button>
+    <GuideBanner completed={completed} icon={kind === 'interface' ? RiCompass3Line : RiSettings3Line} title={kind === 'interface' ? t('onboarding:guideDirectory.interfaceTitle') : t('onboarding:guideDirectory.settingsTitle')} description={kind === 'interface' ? t('onboarding:guideDirectory.interfaceSummary', { count: quick.steps.length }) : t('onboarding:guideDirectory.settingsSummary')}>
+      {completed ? <CompletedLabel /> : <span className="text-body-2-regular text-text-secondary">{t('onboarding:guideDirectory.stepCountExitAnytime', { count: quick.steps.length })}</span>}
+      <Button variant={completed ? 'secondary' : 'primary'} disabled={loading} onClick={() => start(quick, resume)}><span data-copy-key={`guide.${kind}.${loading ? 'loading' : completed ? 'replay' : resume ? 'resume' : 'start'}`}>{loading ? t('onboarding:guideDirectory.preparing') : completed ? t('onboarding:guideDirectory.replay') : kind === 'interface' ? resume ? t('onboarding:guideDirectory.resumeQuickTour') : t('onboarding:guideDirectory.startQuickTour') : resume ? t('onboarding:guideDirectory.resumeSettingsTour') : t('onboarding:guideDirectory.learnSettings')}</span></Button>
     </GuideBanner>
-    <TextField aria-label="搜索教程" value={query} onChange={setQuery}><InputBase type="search" placeholder={kind === 'settings' ? '搜索设置名称或用途' : '搜索功能或页面'} leadingIcon={RiSearchLine} /></TextField>
+    <TextField aria-label={t('onboarding:guideDirectory.searchLabel')} value={query} onChange={setQuery}><InputBase type="search" placeholder={kind === 'settings' ? t('onboarding:guideDirectory.searchSettings') : t('onboarding:guideDirectory.searchFeatures')} leadingIcon={RiSearchLine} /></TextField>
     {!search ? <>
-      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-body-medium text-text-primary">按需了解</h3>
-        {context.kind === kind && context.id !== 'basics' ? <Button variant="ghost" size="small" disabled={loading} onClick={() => start(context, false)}>当前页面：{context.title}</Button> : null}
+      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-body-medium text-text-primary">{t('onboarding:guideDirectory.byTopic')}</h3>
+        {context.kind === kind && context.id !== 'basics' ? <Button variant="ghost" size="small" disabled={loading} onClick={() => start(context, false)}>{t('onboarding:guideDirectory.currentPageTour', { title: context.title })}</Button> : null}
       </div>
       <div className="peach-guide-topics">{GUIDE_TOPICS.filter(topic => topic.kind === kind).map(topic => {
         const Icon = ICONS[topic.id];
@@ -86,6 +87,6 @@ export function GuideDirectory({ kind, query, setQuery, context, progress, loadi
         </div>;
       })}</div>
     </> : matches.length ? <div className="peach-guide-chapters">{matches.map(item => <ChapterRow key={item.id} chapter={item} progress={progress} loading={loading} start={start} />)}</div>
-      : <EmptyState icon={RiSearchLine} title="没有匹配的教程" size="compact">试试功能名或设置名称。</EmptyState>}
+      : <EmptyState icon={RiSearchLine} title={t('onboarding:guideDirectory.noMatches')} size="compact">{t('onboarding:guideDirectory.noMatchesHint')}</EmptyState>}
   </div>;
 }

@@ -307,7 +307,7 @@ class PlaybackTrackers:
         try:
             self._track(session)
         except Exception:
-            LOGGER.debug("外部播放器进度跟踪中止：asset=%s", session.asset_id, exc_info=True)
+            LOGGER.debug("External player progress tracking stopped: asset=%s", session.asset_id, exc_info=True)
         finally:
             with self.lock:
                 self.threads.discard(threading.current_thread())
@@ -331,7 +331,7 @@ class PlaybackTrackers:
     def _track(self, session: Session) -> None:
         probe = self._connect(session)
         if probe is None:
-            LOGGER.info("外部播放器的进度接口未连上，本次不记观看：asset=%s", session.asset_id)
+            LOGGER.info("External player progress interface not reachable; not recording this view: asset=%s", session.asset_id)
             return
         progress = Progress(session.asset_id)
         started = last_flush = self.clock()
@@ -343,7 +343,7 @@ class PlaybackTrackers:
                     break
                 except Exception:
                     # 意料之外的回答也只结束跟踪，已经看过的部分照常落库。
-                    LOGGER.debug("外部播放器进度读取异常：asset=%s", session.asset_id, exc_info=True)
+                    LOGGER.debug("Error reading external player progress: asset=%s", session.asset_id, exc_info=True)
                     break
                 if snap.finished and progress.last is not None:
                     # 停下或换片后的位置不属于这个文件；VLC 刚起来、还没开始放时也报 stopped。
@@ -369,4 +369,4 @@ class PlaybackTrackers:
         try:
             progress.flush(session.report)
         except Exception:
-            LOGGER.warning("外部播放器观看记录写入失败：asset=%s", session.asset_id, exc_info=True)
+            LOGGER.warning("Failed to write external player watch record: asset=%s", session.asset_id, exc_info=True)

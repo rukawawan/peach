@@ -250,7 +250,7 @@ class ApplyTests(LedgerFixture):
         self.con.commit()
         held = dict(self.con.execute(
             "SELECT member_id, agency_id FROM entity_membership").fetchall())
-        self.assertEqual(done["归属"], 1)
+        self.assertEqual(done["memberships"], 1)
         self.assertEqual(held[12], 30)
         # 神雪 在账本里属于 T-POWERS，名册说她属于 KRONE：留给人判，不改。
         self.assertEqual(held[13], 31)

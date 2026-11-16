@@ -5,6 +5,8 @@ param(
     [switch]$Fresh,
     [switch]$Resume,
     [string[]]$Focus = @(),
+    # 定向运行失败后把失败文件单独重跑一次；CI 浏览器分片用它消化负载偶发。
+    [switch]$RerunFailures,
     [string]$Base = 'master',
     [int]$ShardIndex = 0,
     [int]$ShardCount = 1,
@@ -68,6 +70,7 @@ try {
     $PeachTestExtra = @()
     if ($Fresh) { $PeachTestExtra += '--fresh' }
     if ($Resume) { $PeachTestExtra += '--resume' }
+    if ($RerunFailures) { $PeachTestExtra += '--rerun-failures' }
     foreach ($PeachFocusSelector in $Focus) { $PeachTestExtra += @('--focus', $PeachFocusSelector) }
     & $Python scripts\test_runner.py --scope $Scope --base $Base --shard-index $ShardIndex --shard-count $ShardCount --jobs $Jobs @PeachTestExtra
     exit $LASTEXITCODE

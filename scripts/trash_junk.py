@@ -33,6 +33,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import DATABASE_PATH, GENERATED_DIR, LOCATION_ROOT_DECLARATIONS
+from peach.interface_text import dev as t
 from peach.media_sources import SCANNABLE_LOCATIONS
 from peach.personal_records import record_holders
 from peach.platform import root_online, translate_ledger_path, within_root
@@ -58,12 +59,12 @@ def load_review(path: Path) -> list[dict]:
     for row in selected:
         asset_id = int(row["id"])
         if asset_id in seen or not row.get("path") or not row.get("why"):
-            raise ValueError("删除清单缺少路径、证据或包含重复资产")
+            raise ValueError(t("trash_junk.reviewIncomplete"))
         confidence = float(row.get("confidence") or 0)
         if not math.isfinite(confidence) or not .95 <= confidence <= 1:
-            raise ValueError("删除清单的确认置信度不足 0.95")
+            raise ValueError(t("trash_junk.reviewLowConfidence"))
         if int(row["size"]) < 0:
-            raise ValueError("删除清单的文件体积不能为负")
+            raise ValueError(t("trash_junk.reviewNegativeSize"))
         seen.add(asset_id)
     return selected
 
@@ -87,16 +88,16 @@ def skip_reason(connection, row, path: Path, candidates: set[int], holders: set[
     if connection.execute(
             "SELECT 1 FROM review_decision WHERE category='junk_file' AND status='rejected' "
             "AND item_key=?", (str(row["id"]),)).fetchone():
-        return "用户已标为不是垃圾"
+        return t("trash_junk.skipUserKept")
     if int(row["id"]) not in candidates:
-        return "已不在垃圾复核队列里"
+        return t("trash_junk.skipLeftQueue")
     if int(row["id"]) in holders:
-        return "带个人记录"
+        return t("trash_junk.skipPersonalRecords")
     if connection.execute("SELECT 1 FROM asset_subtitle WHERE asset_id=?", (row["id"],)).fetchone():
-        return "登记了字幕"
+        return t("trash_junk.skipSubtitles")
     sidecars = sidecar_files(path)
     if sidecars:
-        return "盘上有同名字幕或资料：" + "、".join(sidecars)
+        return t("trash_junk.skipSidecars", files=sidecars)
     return ""
 
 
@@ -115,15 +116,15 @@ def purge_reviewed(connection, reviews: list[dict], candidates: set[int]) -> dic
         for review in reviews:
             row = connection.execute("SELECT * FROM asset WHERE id=?", (int(review["id"]),)).fetchone()
             if row is None or row["location"] not in TRASHABLE_LOCATIONS or row["path"] != review["path"]:
-                raise ValueError("删除清单已失效：资产来源或路径不一致")
+                raise ValueError(t("trash_junk.reviewStaleSource"))
             path = translate_ledger_path(row["path"])
             roots = [translate_ledger_path(root) for root in LOCATION_ROOT_DECLARATIONS.get(row["location"], ())]
             if not any(root_online(root) and within_root(path, root) for root in roots):
-                raise ValueError("删除路径不在已挂载的来源根内")
+                raise ValueError(t("trash_junk.pathOutsideRoot"))
             if path.suffix.casefold() in MEDIA_SIDECAR_SUFFIXES:
-                raise ValueError("媒体资料与字幕不能进入垃圾永久删除")
+                raise ValueError(t("trash_junk.sidecarNotJunk"))
             if path.is_symlink() or not path.is_file() or path.stat().st_size != int(review["size"]):
-                raise ValueError("删除清单已失效：文件不存在、类型或体积变化")
+                raise ValueError(t("trash_junk.reviewStaleFile"))
             reason = skip_reason(connection, row, path, candidates, holders)
             if reason:
                 skipped.append({"id": row["id"], "path": row["path"], "reason": reason})
@@ -133,7 +134,7 @@ def purge_reviewed(connection, reviews: list[dict], candidates: set[int]) -> dic
         integrity, _ = verify_after_write(connection)
         violations = {tuple(row) for row in connection.execute("PRAGMA foreign_key_check")}
         if integrity != "ok" or violations - baseline:
-            raise RuntimeError("删除后账本校验失败")
+            raise RuntimeError(t("trash_junk.verifyAfterPurgeFailed"))
         connection.commit()
     except BaseException:
         connection.rollback()
@@ -178,17 +179,16 @@ def trash_assets(connection, asset_ids: list[int]) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="把高置信广告残留移入回收站")
+    parser = argparse.ArgumentParser(description=t("trash_junk.description"))
     add_ledger_write_args(parser, db_default=DATABASE_PATH)
     parser.add_argument("--min-score", type=int, default=AUTO_TRASH_SCORE,
-                        help=f"垃圾评分下限；默认 {AUTO_TRASH_SCORE}（整个名字都是推广语一档，"
-                             "固定命名与未探测时长视频的目录证据单独到不了）")
+                        help=t("trash_junk.minScoreHelp", score=AUTO_TRASH_SCORE))
     parser.add_argument("--location", action="append", choices=TRASHABLE_LOCATIONS)
     parser.add_argument("--kind", choices=("video", "image", "audio", "archive", "url", "other"),
                         default="")
     parser.add_argument("--out", type=Path)
-    parser.add_argument("--review-csv", type=Path, help="含 id、path、size、decision、confidence、why 的逐文件复核清单")
-    parser.add_argument("--purge", action="store_true", help="永久删除清单中确认的垃圾，必须给 --review-csv；默认仍只出计划")
+    parser.add_argument("--review-csv", type=Path, help=t("trash_junk.reviewCsvHelp"))
+    parser.add_argument("--purge", action="store_true", help=t("trash_junk.purgeHelp"))
     return parser
 
 
@@ -196,10 +196,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.purge:
         if not args.review_csv:
-            raise SystemExit("--purge 必须同时给 --review-csv")
+            raise SystemExit(t("trash_junk.purgeNeedsReview"))
         reviewed = load_review(args.review_csv)
         if not args.apply:
-            print(f"清单确认删除 {len(reviewed)} 条；未加 --apply，只核对清单。")
+            print(t("trash_junk.purgeDryRun", count=len(reviewed)))
             return 0
         candidates = candidate_ids(args.db)
         connection = open_for_write(args)
@@ -224,17 +224,17 @@ def main(argv: list[str] | None = None) -> int:
     counts: dict[str, int] = {}
     for item in selected:
         counts[item["location"]] = counts.get(item["location"], 0) + 1
-    print(f"评分≥{args.min_score} 的候选 {len(selected)} 条 / {total_gb:.2f} GB，"
-          f"按来源 {counts or '无'} → {output}")
+    print(t("trash_junk.selected", score=args.min_score, count=len(selected), size=f"{total_gb:.2f}",
+            locations=str(counts) if counts else t("trash_junk.none"), output=output))
     for item in selected[:15]:
         print(f"  {item['score']:>3} {item['location']:<6} {item['medium']:<6} "
               f"{(item.get('size') or 0)/1048576:>9.1f}MB {str(item.get('name'))[:44]!r}"
               f" | {item.get('why')}")
     if len(selected) > 15:
-        print(f"  …… 其余 {len(selected) - 15} 条见 CSV")
+        print(t("trash_junk.moreInCsv", count=len(selected) - 15))
 
     if not args.apply:
-        print("未加 --apply，只出清单；文件仍在原处。")
+        print(t("trash_junk.dryRun"))
         return 0
 
     connection = open_for_write(args)
@@ -250,9 +250,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         connection.close()
     if integrity != "ok" or foreign_keys:
-        raise RuntimeError(f"写入后 ledger 校验失败：integrity={integrity} foreign_keys={foreign_keys}")
-    print(f"已移入回收站 {changed} 条；回收站 {before['trash']} → {after['trash']}。"
-          f"备份 {args.backup}；文件未删除，清空回收站才会真正删除。")
+        raise RuntimeError(t("trash_junk.verifyAfterWriteFailed", integrity=integrity, foreignKeys=foreign_keys))
+    print(t("trash_junk.trashed", count=changed, before=before["trash"], after=after["trash"], backup=args.backup))
     return 0
 
 

@@ -69,8 +69,11 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # 本地组合 action 里引用的第三方 action 也要升级，目录要单独登记。
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/setup-ffmpeg
     schedule:
       interval: weekly
       day: monday

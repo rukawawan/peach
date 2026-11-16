@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .fsutil import atomic_write_bytes
 from .http import HttpRequest, HttpTransport
+from .user_messages import UserValueError
 
 #: 图库的 raw 根。索引和图片都挂在它下面。
 GFRIENDS_RAW = "https://raw.githubusercontent.com/gfriends/gfriends/master/"
@@ -138,9 +139,9 @@ def fetch_index(transport: HttpTransport, cache_dir: Path) -> dict[str, list[tup
     response = transport(HttpRequest("GET", INDEX_URL, {"Accept": "application/json"}),
                          INDEX_TIMEOUT, INDEX_MAX_BYTES)
     if response.status != 200:
-        raise ValueError(f"Gfriends 索引 HTTP {response.status}")
+        raise UserValueError("errors.gfriends.indexHttpStatus", {"status": response.status})
     if len(response.body) > INDEX_MAX_BYTES:
-        raise ValueError("Gfriends 索引超过大小上限")
+        raise UserValueError("errors.gfriends.indexTooLarge")
     index = parse_filetree(response.body)
     atomic_write_bytes(cache_dir / INDEX_NAME, response.body)
     return index

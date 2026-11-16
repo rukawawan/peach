@@ -1,6 +1,8 @@
 """保存扫描已登记、尚未交给资料处理的新影片范围。"""
 from contextlib import closing
 import json
+import logging
+import os
 from pathlib import Path
 import sqlite3
 
@@ -8,9 +10,42 @@ from filelock import FileLock
 from .fsutil import atomic_write_text
 from .update_tasks import state_for
 
+LOGGER = logging.getLogger(__name__)
+
 
 def _path(db):
     return state_for(Path(db)).parent/'library-new-assets.json'
+
+
+def _valid(ids):
+    return isinstance(ids,list) and all(type(value) is int and value>0 for value in ids)
+
+
+def _set_aside(path):
+    """损坏或无效的范围文件改名留证，之后按没有待处理的新影片继续；下次扫描重新登记。"""
+    target = path.with_name(path.name+'.invalid')
+    try:
+        os.replace(path, target)
+    except OSError as error:
+        LOGGER.warning('Invalid new-asset scope file, and renaming it for inspection failed: %s', error)
+        return
+    LOGGER.warning('Invalid new-asset scope file, renamed to %s; rescanning the library registers new videos again', target.name)
+
+
+def _legacy(path):
+    """旧版处理状态里的扫描检查点；读不出或结构不对就当没有。"""
+    try:
+        state = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(state, dict) or (state.get('status') == 'complete'
+                                           and state.get('requested_stage') != 'scan'):
+            return set()
+        ids = [value for checkpoint in state.get('scan_checkpoints', {}).values()
+               for value in checkpoint.get('result', {}).get('new_ids', [])]
+        completed = {int(key.split(':',1)[0]) for key in state.get('completed_metadata', [])}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return set()
+    ids = [value for value in ids if value not in completed]
+    return set(ids) if _valid(ids) else set()
 
 
 def _read(db):
@@ -18,19 +53,12 @@ def _read(db):
     try:
         ids = json.loads(path.read_text(encoding='utf-8'))
     except FileNotFoundError:
-        legacy = path.with_name('library-processing.json')
-        try:
-            state = json.loads(legacy.read_text(encoding='utf-8'))
-        except FileNotFoundError:
-            return set()
-        if state.get('status') == 'complete' and state.get('requested_stage') != 'scan':
-            return set()
-        ids = [value for checkpoint in state.get('scan_checkpoints', {}).values()
-               for value in checkpoint.get('result', {}).get('new_ids', [])]
-        completed = {int(key.split(':',1)[0]) for key in state.get('completed_metadata', [])}
-        ids = [value for value in ids if value not in completed]
-    if not isinstance(ids,list) or any(type(value) is not int or value<=0 for value in ids):
-        raise ValueError('新入库处理范围无效，请重新扫描媒体库')
+        return _legacy(path.with_name('library-processing.json'))
+    except ValueError:
+        ids = None
+    if not _valid(ids):
+        _set_aside(path)
+        return set()
     return set(ids)
 
 

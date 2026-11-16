@@ -196,7 +196,7 @@ class SmbMediaTests(unittest.TestCase):
             self.assertEqual(smb_media.resolve(str(resource), loaded).connection.password, 'private-password')
             with self.assertRaises(OSError):
                 with smb_media.credential_transaction(loaded, [{**sources[0], 'smb_password': 'replacement'}]):
-                    raise OSError('模拟配置文件替换失败')
+                    raise OSError('simulated settings file replace failure')
             self.assertEqual(smb_media.resolve(str(resource), loaded).connection.password, 'private-password')
             smb_media.save_credentials(loaded, [{**sources[0], 'smb_clear': True}])
             self.assertEqual(smb_media.resolve(str(resource), loaded).connection.password, '')

@@ -4,11 +4,16 @@ import { resolve } from 'node:path';
 
 import { expect, it } from 'vitest';
 
+import { createTranslator } from '../src/i18n';
+
+/* 按钮文字写成 `{t('命名空间:键')}`，按中文资源还原成界面上的字。 */
+const zh = createTranslator('zh-CN');
+const shown = (label: string) => label.replace(/^\{t\('([^']+)'\)\}$/, (_all, key: string) => zh.t(key));
 const dir = resolve(process.cwd(), 'src/react/settings');
 const buttons = readdirSync(dir)
   .filter((name) => name.endsWith('.tsx'))
   .flatMap((name) => [...readFileSync(resolve(dir, name), 'utf8').matchAll(/<Button\b([\s\S]*?)<\/Button>/g)]
-    .map(([, tag = '']) => ({ name, tag, label: tag.slice(tag.lastIndexOf('>') + 1).trim() })));
+    .map(([, tag = '']) => ({ name, tag, label: shown(tag.slice(tag.lastIndexOf('>') + 1).trim()) })));
 
 it('保存键一律叫「保存配置」', () => {
   const saves = buttons.filter((button) => button.label.startsWith('保存'));

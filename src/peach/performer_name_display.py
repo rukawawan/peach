@@ -1,29 +1,28 @@
-"""当前所选艺名的中日显示写法；只读投影，不更改规范名或作品署名。"""
+"""当前所选艺名的中日显示写法；只读投影，不更改规范名或作品署名。
+
+按语言筛写法只针对采集来的名字：读音、括号注记、说明文字和对不上语言的写法都是来源
+噪声。用户自己添的别名（`user:alias`）是本人认定的名字，菜单和别名行在两种语言下都列，
+找不到对应语言的写法时照原样显示。
+"""
 from __future__ import annotations
 
 import json
 import re
 
 from . import entity_classification
-from .entities import normalize_entity_name
+from .entities import USER_ALIAS_SOURCE, normalize_entity_name
 from .kanji import fold_glyphs, simplify_kanji
 from .metadata_alias_resolve import is_descriptive, is_planning_alias
-from .performer_header import HIDDEN_SOURCES, SHOWN, page_names
+from .performer_header import HIDDEN_SOURCES, OTHER, SHOWN, name_group, page_names
 from .performer_profiles import read_profile
+from .source_page_words import PROFILE_SENTENCE, REVIEWED_WRITINGS
 from .sources.seesaa import split_names
 
 _KANA = re.compile(r"[\u3040-\u30ff]")
 _LATIN = re.compile(r"[A-Za-z]")
 _BRACKET = re.compile(r"[()（）【】\[\]]")
-_SENTENCE = re.compile(r"中に.+ながらも|を実現して|を我慢でき|現在は|正式女優名")
-# 已核对的同一艺名译写。仅当资料原文含对应日文写法时使用，
-# 不把同一人物的新旧艺名当作语言对应。
-_REVIEWED_WRITINGS = (
-    ("枫花恋", "楓カレン"),
-    ("田中柠檬", "田中レモン"),
-    ("松永纱奈", "松永さな"),
-    ("森泽佳奈", "森沢かな"),
-)
+_SENTENCE = re.compile(PROFILE_SENTENCE)
+_REVIEWED_WRITINGS = REVIEWED_WRITINGS
 
 
 def _key(name: str) -> str:
@@ -58,17 +57,18 @@ def _stage_key(name: str, page: dict) -> str:
 class _NameEvidence:
     """资料原文、读音和别名来源构成的艺名判别证据。"""
 
-    def __init__(self, canonical: str, aliases: list[dict], page: dict):
+    def __init__(self, canonical: str, aliases: list[dict], page: dict, manual: list[str]):
         self.canonical = canonical
         self.originals = {page["name"], *(entry["name"] for entry in page["aliases"])} - {""}
         self.readings = {page["reading"], *(entry.get("reading", "") for entry in page["aliases"])} - {""}
         self.romanizations = {_key(entry.get("romaji", "")) for entry in page["aliases"]} - {""}
         self.hidden = {_key(row["alias"]) for row in aliases if row["source"] in HIDDEN_SOURCES}
-        self.registered = {canonical, *(row["alias"] for row in aliases)}
+        self.manual = set(manual) - {""}
+        self.registered = {canonical, *(row["alias"] for row in aliases), *self.manual}
         self.known = {_key(name) for name in self.registered | self.originals}
 
     def keep(self, name: str) -> bool:
-        if name == self.canonical:
+        if name == self.canonical or name in self.manual:
             return True
         if not name or _BRACKET.search(name):
             return False
@@ -84,21 +84,31 @@ class _NameEvidence:
         return not is_planning_alias(name)
 
 
-def _registered_stages(canonical: str, aliases: list[dict], page: dict, source_url: str) -> dict:
-    """按同一艺名归并写法，同时保留实际登记值。"""
-    evidence = _NameEvidence(canonical, aliases, page)
+def _registered_stages(canonical: str, aliases: list[dict], page: dict, source_url: str,
+                       manual: list[str]) -> dict:
+    """按同一艺名归并写法，同时保留实际登记值。
+
+    用户添的别名所在的那一组缺某种语言的写法时，用别名原文补上，两种语言都不落下它。
+    """
+    evidence = _NameEvidence(canonical, aliases, page, manual)
+    current_key = _stage_key(canonical, page)
     stages: dict[str, dict] = {}
     ordered = [canonical, page["name"], *(entry["name"] for entry in page["aliases"]),
-               *(row["alias"] for row in aliases)]
+               *(row["alias"] for row in aliases), *manual]
     for name in ordered:
         if not evidence.keep(name):
             continue
         key = _stage_key(name, page)
-        row = stages.setdefault(key, {"value": None, "registered": [], **writing(name, page, source_url)})
+        row = stages.setdefault(key, {"value": None, "registered": [], "manual": False,
+                                      **writing(name, page, source_url)})
         if name in evidence.registered and name not in row["registered"]:
             row["registered"].append(name)
         if row["value"] is None and name in evidence.registered:
             row["value"] = name
+        if name in evidence.manual and key != current_key:
+            row["manual"] = True
+            row["zh_cn"] = row["zh_cn"] or name
+            row["ja"] = row["ja"] or name
     return stages
 
 
@@ -116,8 +126,7 @@ def _language_groups(stages: dict, canonical: str, page: dict, grouped: dict | N
                 shown.append({"name": row[field]})
                 taken.add(key)
         if shown:
-            sections.append({"label": section.get("label", ""), "names": shown})
-    everyone = [entry["name"] for section in sections for entry in section["names"]]
+            sections.append(name_group(section.get("label", ""), shown))
     reading = ""
     if field == "ja":
         if _stage_key(page["name"], page) == current_key:
@@ -127,6 +136,18 @@ def _language_groups(stages: dict, canonical: str, page: dict, grouped: dict | N
                             if _stage_key(entry["name"], page) == current_key), "")
         if reading == stages[current_key][field]:
             reading = ""
+    # 页头分组按 ADR-0069 不列纯拉丁写法和读音同键的写法；用户添的别名在这里补回「其它」。
+    if reading:
+        taken.add(_stage_key(reading, page))
+    missing = [{"name": row[field]} for key, row in stages.items()
+               if row["manual"] and row[field] and key not in taken]
+    if missing:
+        other = next((section for section in sections if section["label"] in (OTHER, "")), None)
+        if other is None:
+            other = name_group(OTHER if sections else "", [])
+            sections.append(other)
+        other["names"].extend(missing)
+    everyone = [entry["name"] for section in sections for entry in section["names"]]
     return {"reading": reading, "shown": everyone[:SHOWN], "total": len(everyone), "groups": sections}
 
 
@@ -135,7 +156,13 @@ def display(connection, entity_id: int, canonical: str, aliases: list[dict], gro
     profile = read_profile(connection, entity_id)
     page = page_names(profile)
     source_url = (profile or {}).get("source_url", "")
-    stages = _registered_stages(canonical, aliases, page, source_url)
+    # 同一写法另有来源时 `aliases` 只带其中一行的来源，用户添的那几条直接按来源查。
+    manual = list(dict.fromkeys([
+        *(row["alias"] for row in aliases if row["source"] == USER_ALIAS_SOURCE),
+        *(str(row[0]) for row in connection.execute(
+            "SELECT alias FROM entity_alias WHERE entity_id=? AND source=? ORDER BY alias",
+            (int(entity_id), USER_ALIAS_SOURCE)))]))
+    stages = _registered_stages(canonical, aliases, page, source_url, manual)
     current_key = _stage_key(canonical, page)
     choices, groups = {}, {}
     for language, field in (("zh-CN", "zh_cn"), ("ja", "ja")):

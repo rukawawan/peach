@@ -23,6 +23,7 @@ from peach.config import DATABASE_PATH, FFMPEG_DIR, GENERATED_DIR, STATE_DIR
 from peach.scripting import open_readonly
 from peach.classification import is_probable_mainstream_release, is_structural_creator
 from peach.ffmpeg import FFmpegResolver
+from peach.interface_text import dev as t
 from peach.jobs import (
     ACTIVE_ASSET_SQL,
     DiskGuard,
@@ -37,7 +38,7 @@ from peach.media import normalized_path
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="生成创作者跨作品视觉风格板")
+    parser = argparse.ArgumentParser(description=t("creator_boards.description"))
     parser.add_argument("--top", type=int, default=40)
     parser.add_argument("--per", type=int, default=9)
     parser.add_argument("--workers", type=int, default=16)
@@ -49,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--disk-check-secs",
         type=float,
         default=20.0,
-        help="运行期复查磁盘余量的间隔；0 表示每条都查",
+        help=t("creator_boards.helpDiskCheckSecs"),
     )
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--output-dir", type=Path, default=GENERATED_DIR / "boards")
@@ -174,7 +175,7 @@ def build_from_videos(args: argparse.Namespace, ffmpeg: str, ffprobe: str) -> in
     ranked = sorted(by_creator.items(), key=lambda item: -len(item[1]))[:args.top]
     existing = _existing_video_boards(args.output_dir)
     ranked = [(creator, items) for creator, items in ranked if safe_name(creator) not in existing]
-    print(f"待出板 {len(ranked)} 位；并发 {args.workers}")
+    print(t("creator_boards.pending", count=len(ranked), workers=args.workers))
 
     jobs: list[tuple[str, float]] = []
     for creator, items in ranked:
@@ -199,7 +200,8 @@ def build_from_videos(args: argparse.Namespace, ffmpeg: str, ffprobe: str) -> in
                 captured[job] = output
             if index % 25 == 0:
                 rate = index / max(time.time() - started, 1) * 60
-                print(f"  {index}/{len(jobs)} 帧 成功 {len(captured)} {rate:.1f} 帧/分", flush=True)
+                print(t("creator_boards.progress", index=index, total=len(jobs), captured=len(captured),
+                        rate=f"{rate:.1f}"), flush=True)
             if not stop.is_set():
                 try:
                     guard.check()
@@ -210,21 +212,22 @@ def build_from_videos(args: argparse.Namespace, ffmpeg: str, ffprobe: str) -> in
 
     if stopped_reason:
         # 已抽到的帧留在缓存里，续跑时不会重复下载；但板子不出，避免用残缺样本代表创作者。
-        print(f"磁盘闸门中止：{stopped_reason}")
-        print(f"已缓存 {len(captured)} 帧，未出板；恢复磁盘后重跑即可续上。")
+        print(t("creator_boards.diskStopped", reason=stopped_reason))
+        print(t("creator_boards.cachedNoBoards", count=len(captured)))
         return DiskSpaceDenied.exit_code
 
     made = 0
     for rank, (creator, items) in enumerate(ranked, 1):
         frames = [captured[job] for job in items[:args.per] if job in captured]
         if len(frames) < 4:
-            print(f"  {rank:>2}. {creator[:26]:<26} 可用帧仅 {len(frames)}，跳过")
+            print(t("creator_boards.tooFewFrames", rank=f"{rank:>2}", creator=f"{creator[:26]:<26}", frames=len(frames)))
             continue
         destination = args.output_dir / f"v{rank:02d}_{safe_name(creator)}_{len(items)}.jpg"
         if build_board(ffmpeg, ffprobe, frames, destination):
             made += 1
-            print(f"  {rank:>2}. {creator[:26]:<26} 视频{len(items):>4} 帧{len(frames)} → {destination.name}")
-    print(f"生成 {made} 张 → {args.output_dir}")
+            print(t("creator_boards.videoBoard", rank=f"{rank:>2}", creator=f"{creator[:26]:<26}",
+                    videos=f"{len(items):>4}", frames=len(frames), name=destination.name))
+    print(t("creator_boards.made", count=made, path=args.output_dir))
     return 0
 
 
@@ -255,7 +258,7 @@ def build_from_snapshots(args: argparse.Namespace, ffmpeg: str, ffprobe: str) ->
         if path.is_file():
             by_creator[creator].append(path)
     ranked = [(creator, count) for creator, count in counts.most_common() if len(by_creator.get(creator, [])) >= 4][:args.top]
-    print(f"可出板创作者 {len(ranked)} 位，覆盖无标签视频 {sum(count for _, count in ranked)} 条")
+    print(t("creator_boards.ranked", count=len(ranked), videos=sum(count for _, count in ranked)))
     made = 0
     for rank, (creator, count) in enumerate(ranked, 1):
         candidates = by_creator[creator]
@@ -263,14 +266,15 @@ def build_from_snapshots(args: argparse.Namespace, ffmpeg: str, ffprobe: str) ->
         destination = args.output_dir / f"{rank:02d}_{safe_name(creator)}_{count}.jpg"
         if build_board(ffmpeg, ffprobe, candidates[:args.per], destination):
             made += 1
-            print(f"  {rank:>2}. {creator[:26]:<26} 视频{count:>4} 取样{min(len(candidates), args.per)} → {destination.name}")
-    print(f"生成 {made} 张 → {args.output_dir}")
+            print(t("creator_boards.snapshotBoard", rank=f"{rank:>2}", creator=f"{creator[:26]:<26}",
+                    videos=f"{count:>4}", sampled=min(len(candidates), args.per), name=destination.name))
+    print(t("creator_boards.made", count=made, path=args.output_dir))
     return 0
 
 
 def run(args: argparse.Namespace) -> int:
     if args.top < 1 or args.per < 4 or args.workers < 1:
-        raise SystemExit("top/workers 必须大于 0，per 至少为 4")
+        raise SystemExit(t("creator_boards.badArguments"))
     resolver = FFmpegResolver(FFMPEG_DIR)
     ffmpeg = resolver.ffmpeg()
     ffprobe = resolver.ffprobe()

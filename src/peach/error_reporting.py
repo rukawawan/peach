@@ -292,14 +292,22 @@ def console_ready() -> None:
 
 
 def failure_details(stage: str, error: BaseException) -> str:
+    """托盘弹窗与通知里的一段：异常本身加诊断报告或错误日志的位置，跟本机语言（`tray.failure.*`）。"""
+    from . import interface_text
+    from .user_messages import UserFacingError
+    language = interface_text.local_language()
+    shown = (interface_text.text(f"server:{error.code}", error.params, language)
+             if isinstance(error, UserFacingError) else str(error))
     path = event(stage, error)
     try:
         from .support_bundle import save_bundle
         report = save_bundle()
-        return f"{error}\n\n诊断报告：{report}"
+        return interface_text.text("server:tray.failure.report", {"error": shown, "path": report}, language)
     except Exception as report_error:
         event("report-failed", report_error)
-        return f"{error}\n\n错误日志：{path}" if path else f"{error}\n\n错误日志未能写入，请保留此弹窗。"
+        if path:
+            return interface_text.text("server:tray.failure.log", {"error": shown, "path": path}, language)
+        return interface_text.text("server:tray.failure.noLog", {"error": shown}, language)
 
 
 def tray_main() -> int:
@@ -311,13 +319,17 @@ def tray_main() -> int:
         message = failure_details("tray-import", error)
         if os.name == "nt":
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, message, "Peach 启动失败", 0x10)
+            from . import interface_text
+            title = interface_text.text("server:tray.title.startFailed", None, interface_text.local_language())
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
         elif sys.stderr is not None:
             print(message, file=sys.stderr)
         return 1
 
 
 def cli_main() -> int:
+    from .docker_entrypoint import drop_root_for_cli
+    drop_root_for_cli()
     install()
     try:
         from .cli import main

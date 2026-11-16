@@ -438,6 +438,14 @@ class TestPlanningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ci_plan.validate_results(passed, [])
 
+    def test_result_gate_names_the_failed_upstream_when_no_plan_was_produced(self):
+        results = {'workflow-lint': {'result': 'failure'}, 'plan': {'result': 'skipped'}}
+        with patch.object(sys, 'argv', ['ci_plan.py', '--verify-results']), \
+                patch.dict(ci_plan.os.environ, {'RESULTS': json.dumps(results), 'REQUIRED_JOBS': ''}), \
+                self.assertRaises(SystemExit) as stopped:
+            ci_plan.main()
+        self.assertIn("'workflow-lint': 'failure'", str(stopped.exception.code))
+
     def test_frontend_gate_requires_only_the_selected_frontend_jobs(self):
         required = ci_plan.plan('push', ['frontend/package-lock.json'])['required_jobs']
         passed = {name: {'result': 'success'} for name in ('plan', 'web-bundle', 'web-vendor')}
@@ -886,25 +894,25 @@ class GateAndFlakyRerunTests(unittest.TestCase):
     """全量先过秒级门槛；全量里失败的少数文件单独重跑，过了记为偶发，并排整机锁。"""
 
     @staticmethod
-    def fail(test_id):
+    def failed_row(test_id):
         return {'id': test_id, 'outcome': 'fail', 'seconds': 1.0, 'message': 'x'}
 
     def test_failed_rows_name_the_files_to_rerun_and_refuse_what_cannot_be_isolated(self):
-        rows = [self.fail('e2e:e2e/folder-layout.test.ts > 目录 > 滚到底'),
-                self.fail('test_web_e2e.WebE2ESmokeTests.test_every_route_holds_the_layout_and_runtime_invariants'),
-                self.fail('vitest:test/react/follow-feed.test.tsx > 页面 > 加载更多'),
-                self.fail(runner.VITEST_CONTAINER),
-                self.fail('test_feeds_web.FeedsWebTests.test_second_round'),
+        rows = [self.failed_row('e2e:e2e/folder-layout.test.ts > 目录 > 滚到底'),
+                self.failed_row('test_web_e2e.WebE2ESmokeTests.test_every_route_holds_the_layout_and_runtime_invariants'),
+                self.failed_row('vitest:test/react/follow-feed.test.tsx > 页面 > 加载更多'),
+                self.failed_row(runner.VITEST_CONTAINER),
+                self.failed_row('test_feeds_web.FeedsWebTests.test_second_round'),
                 {'id': 'test_ok.Case.test_pass', 'outcome': 'pass', 'seconds': 0.1}]
         self.assertEqual(runner.rerun_selectors(rows), [
             'test_feeds_web.FeedsWebTests.test_second_round', 'frontend/e2e/folder-layout.test.ts',
             'frontend/test/react/follow-feed.test.tsx'])
-        self.assertEqual(runner.rerun_selectors([self.fail('setUpClass (test_web_e2e.WebE2ESmokeTests)')]),
+        self.assertEqual(runner.rerun_selectors([self.failed_row('setUpClass (test_web_e2e.WebE2ESmokeTests)')]),
                          ['test_web_e2e'], '类级准备失败选择所属模块')
-        self.assertIsNone(runner.rerun_selectors([self.fail(
+        self.assertIsNone(runner.rerun_selectors([self.failed_row(
             'test_web_e2e.WebE2ESmokeTests.test_every_route_holds_the_layout_and_runtime_invariants')]),
             '浏览器容器失败却没有逐条结果：说不清是哪个文件')
-        many = [self.fail(f'e2e:e2e/page-{index}.test.ts > 用例') for index in range(runner.RERUN_LIMIT + 1)]
+        many = [self.failed_row(f'e2e:e2e/page-{index}.test.ts > 用例') for index in range(runner.RERUN_LIMIT + 1)]
         self.assertIsNone(runner.rerun_selectors(many), '失败面大多半是真回归，不再重跑一轮')
         self.assertIsNone(runner.rerun_selectors([]))
 
@@ -913,17 +921,60 @@ class GateAndFlakyRerunTests(unittest.TestCase):
             def __init__(self, code):
                 self.returncode = code
 
-        rows = [self.fail('e2e:e2e/folder-layout.test.ts > 目录 > 滚到底')]
+        rows = [self.failed_row('e2e:e2e/folder-layout.test.ts > 目录 > 滚到底')]
         commands = []
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(runner.rerun_failures(rows, spawn=lambda command, **_: commands.append(command) or Done(0)))
         self.assertEqual(runner.FLAKY, ['frontend/e2e/folder-layout.test.ts'])
-        self.assertIn('--machine-lock-held', commands[0], '父进程已持有整机锁，重跑不能再去等它')
         self.assertEqual(commands[0][-2:], ['--focus', 'frontend/e2e/folder-layout.test.ts'])
         runner.FLAKY.clear()
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(runner.rerun_failures(rows, spawn=lambda command, **_: Done(1)))
         self.assertEqual(runner.FLAKY, [])
+
+    def test_a_flaky_pass_is_recorded_and_shown_on_the_github_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            summary = Path(folder) / 'summary.md'
+            with patch.object(runner.test_history, 'nested', return_value=False), \
+                    patch.object(runner.test_history, 'append_flaky') as recorded, \
+                    patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_STEP_SUMMARY': str(summary)}), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                runner.report_flaky(['frontend/e2e/search.test.ts'])
+            recorded.assert_called_once_with(runner.ROOT, ['frontend/e2e/search.test.ts'])
+            self.assertIn('::warning title=偶发失败::', output.getvalue())
+            self.assertIn('`frontend/e2e/search.test.ts`', summary.read_text(encoding='utf-8'))
+
+    @staticmethod
+    def red_suite():
+        case = type('Red', (unittest.TestCase,), {'__module__': 'test_sample',
+                                                  'test_red': lambda self: self.assertEqual(1, 2)})
+        return unittest.defaultTestLoader.loadTestsFromTestCase(case)
+
+    def test_ci_shards_and_focused_browser_runs_rerun_their_failed_files_once(self):
+        """CI 的独立分片和浏览器分片也先单独重跑失败文件，不让一个偶发把整片判红。"""
+        from types import SimpleNamespace
+        from scripts import test_focus
+        for flag, expected in ((True, 0), (False, 1)):
+            with self.subTest(rerun_failures=flag), \
+                    patch.object(test_focus, 'selection', return_value=(self.red_suite(), (), ())), \
+                    patch.object(runner.test_history, 'append'), \
+                    patch.object(runner, 'rerun_failures', return_value=True) as rerun, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(test_focus.run(runner, SimpleNamespace(focus=['test_sample'], rerun_failures=flag)),
+                                 expected)
+            self.assertEqual(rerun.call_count, int(flag))
+        shard = SimpleNamespace(shard_plan=None, resume_plan=None, timings=None, shard_index=0, shard_count=2)
+        for passes, expected in ((True, 0), (False, 1)):
+            with self.subTest(rerun_passes=passes), \
+                    patch.object(runner, 'build_suite', return_value=self.red_suite()), \
+                    patch.object(runner, 'assigned_files', return_value=[]), \
+                    patch.object(runner.test_history, 'append'), \
+                    patch.object(runner, 'rerun_failures', return_value=passes) as rerun, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(runner.run_shard_child(shard, ('auto',), ('core',), set()), expected)
+            self.assertEqual(rerun.call_args.args[0][0]['outcome'], 'fail')
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            runner.main(['--rerun-failures'])
 
     def test_the_gate_runs_first_and_a_red_gate_skips_the_other_shards(self):
         files = [runner.TESTS / name for name in ('test_script_policy.py', 'test_media.py', 'test_scan.py')]

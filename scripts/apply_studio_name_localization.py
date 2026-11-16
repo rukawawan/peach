@@ -30,17 +30,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+sys.path.append(str(Path(__file__).resolve().parent))
 
 from peach.config import GENERATED_DIR   # noqa: E402
 from peach.entities import normalize_entity_name, rewrite_flat_projection   # noqa: E402
+from peach.interface_text import dev as t   # noqa: E402
 from peach.previews import relink_logo_files   # noqa: E402
 from peach.review_csv import read_rows, write_rows   # noqa: E402
 from peach.scripting import (   # noqa: E402
     add_ledger_write_args, counts_of, open_for_write, verify_after_write,
 )
+from legacy_values import STUDIO_LOCALIZATION_VERDICTS   # noqa: E402
 
-#: 复核件的判词，与 `localize_studio_names.RENAME` 同一个字面值。
-RENAME_VERDICT = "改名"
+#: 复核件的判词，与 `localize_studio_names.RENAME` 同一个字面值；旧版复核件写中文，读入时先归一。
+RENAME_VERDICT = "rename"
 ALIAS_SOURCE = "javbus:studio-localization"
 FIELDS = ("entity_id", "current_name", "target_name", "action", "reason")
 
@@ -51,7 +54,8 @@ def plan(connection: sqlite3.Connection, review_rows: list[dict]) -> list[dict]:
     """逐行核对复核件与账本现状，给每条判「改」或「跳过」并写明原因。"""
     rows = []
     for review in review_rows:
-        if str(review.get("verdict") or "").strip() != RENAME_VERDICT:
+        verdict = str(review.get("verdict") or "").strip()
+        if STUDIO_LOCALIZATION_VERDICTS.get(verdict, verdict) != RENAME_VERDICT:
             continue
         entity_id = int(review["entity_id"])
         listed = str(review.get("studio") or "").strip()
@@ -62,16 +66,16 @@ def plan(connection: sqlite3.Connection, review_rows: list[dict]) -> list[dict]:
         found = connection.execute(
             "SELECT kind,canonical_name FROM entity WHERE id=?", (entity_id,)).fetchone()
         if not target:
-            row["reason"] = "复核件没有建议名"
+            row["reason"] = t("apply_studio_name_localization.noProposal")
         elif found is None or found[0] != "studio":
-            row["reason"] = "实体已不在（多半已被合并）"
+            row["reason"] = t("apply_studio_name_localization.entityGone")
         elif found[1] != listed:
-            row["reason"] = f"现名已变为 {found[1]}"
+            row["reason"] = t("apply_studio_name_localization.renamedSince", name=found[1])
         else:
             row["reason"] = _clash(connection, entity_id, target)
             if not row["reason"]:
                 row["action"] = RENAME
-                row["reason"] = str(review.get("evidence") or "").strip() or "javbus 製作商为日文原名"
+                row["reason"] = str(review.get("evidence") or "").strip() or t("apply_studio_name_localization.defaultEvidence")
     return rows
 
 
@@ -81,13 +85,13 @@ def _clash(connection: sqlite3.Connection, entity_id: int, target: str) -> str:
         "SELECT id FROM entity WHERE kind='studio' AND normalized_name=? AND id<>?",
         (key, entity_id)).fetchone()
     if taken:
-        return f"日文名已是厂牌 #{taken[0]} 的规范名，需人工判断是否合并"
+        return t("apply_studio_name_localization.clashCanonical", id=taken[0])
     alias = connection.execute(
         "SELECT a.entity_id FROM entity_alias a JOIN entity e ON e.id=a.entity_id"
         " WHERE e.kind='studio' AND a.normalized_alias=? AND a.entity_id<>?",
         (key, entity_id)).fetchone()
     if alias:
-        return f"日文名已是厂牌 #{alias[0]} 的别名，需人工判断是否合并"
+        return t("apply_studio_name_localization.clashAlias", id=alias[0])
     return ""
 
 
@@ -123,17 +127,17 @@ EXTRA_COUNTS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="把复核件判「改名」的厂牌换回日文原名")
+    parser = argparse.ArgumentParser(description=t("apply_studio_name_localization.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--plan", type=Path, required=True,
-                        help="localize_studio_names.py 产出的复核 CSV")
+                        help=t("apply_studio_name_localization.planHelp"))
     parser.add_argument("--audit-csv", type=Path,
                         default=GENERATED_DIR / "studio-name-localization-apply.csv")
     parser.add_argument("--logo-root", type=Path,
-                        help="随 --apply 一起把旧名下的标识文件挪到新名下")
+                        help=t("apply_studio_name_localization.logoRootHelp"))
     # 复核件不是 javbus 那一轮出的时候（官方名录、人工复核），旧名降为别名要记真实来源。
     parser.add_argument("--alias-source", default=ALIAS_SOURCE,
-                        help="旧名降为别名时记的来源")
+                        help=t("apply_studio_name_localization.aliasSourceHelp"))
     return parser
 
 
@@ -142,25 +146,25 @@ def run(args: argparse.Namespace) -> int:
     try:
         rows = plan(connection, read_rows(args.plan))
         write_rows(args.audit_csv, FIELDS, rows)
-        print(f"复核件判改名 {len(rows)} 行，审计 CSV：{args.audit_csv}")
-        print("  动作分布：", dict(Counter(row["action"] for row in rows)))
+        print(t("apply_studio_name_localization.planned", count=len(rows), path=args.audit_csv))
+        print(t("apply_studio_name_localization.actions", counts=dict(Counter(row["action"] for row in rows))))
         for row in rows:
             print(f"    [{row['action']}] {row['current_name']} -> {row['target_name']}"
                   f"  {row['reason']}")
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("apply_studio_name_localization.dryRun"))
             return 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("apply_studio_name_localization.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             changed = apply_rows(connection, rows, alias_source=args.alias_source)
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, violations = verify_after_write(connection)
-        print("  写入结果：", dict(changed))
+        print(t("apply_studio_name_localization.written", counts=dict(changed)))
         for key in before:
             print(f"    {key}: {before[key]} -> {after[key]}")
-        print(f"  integrity_check={integrity}；foreign_key_check={violations}")
+        print(t("apply_studio_name_localization.selfCheck", integrity=integrity, foreignKeys=violations))
         if args.logo_root:
             moved, left = [], []
             for row in rows:
@@ -169,8 +173,8 @@ def run(args: argparse.Namespace) -> int:
                         row["current_name"], row["target_name"], args.logo_root)
                     moved += done
                     left += stayed
-            print(f"  标识改挂 {len(moved)} 个文件（新名下已有、留在原地的 {len(left)} 个）")
-            for line in [*moved, *(f"留在原地：{name}" for name in left)]:
+            print(t("apply_studio_name_localization.logosMoved", moved=len(moved), left=len(left)))
+            for line in [*moved, *(t("apply_studio_name_localization.logoLeft", name=name) for name in left)]:
                 print(f"    {line}")
         return 1 if integrity != "ok" or violations else 0
     finally:

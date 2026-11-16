@@ -9,7 +9,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { queryClient } from '../../src/react/query';
 import {
-  commonReviewSources, filterReviewRows, groupReviewRows, prefetchReview, REVIEW_DECISION_URL,
+  commonReviewSources, fieldName, filterReviewRows, groupReviewRows, prefetchReview, REVIEW_DECISION_URL,
   REVIEW_KEY, REVIEW_PAGE_SIZE, REVIEW_URL, reviewGroupingOptions, settleReviewRows,
   reviewWindow, type ReviewCandidate, type ReviewData, type ReviewRow,
   type DecisionResult,
@@ -507,4 +507,10 @@ it('元数据字段下逐条列出自动写入：作品、写了什么、原来�
 it('没有自动写入时不出现那一块', async () => {
   const { host } = await open();
   expect(host.querySelector('[aria-labelledby="auto-landings-title"]')).toBeNull();
+});
+
+it('候选表的字段名按字段 id 取当前语言，登记之外的字段照原样显示脚本写的名字', () => {
+  expect(fieldName({ ...row(1), field: 'performers', field_label: '出演' })).toBe('演员');
+  expect(fieldName({ ...row(1), field: 'director', field_label: '导演' })).toBe('导演');
+  expect(fieldName({ ...row(1), field: 'runtime', field_label: '' })).toBe('runtime');
 });

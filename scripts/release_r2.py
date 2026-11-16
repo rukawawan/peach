@@ -15,6 +15,7 @@ from urllib.parse import quote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach import release_signing
+from peach.interface_text import dev as t
 from peach.user_agent import USER_AGENT
 from peach.peach_proxy import http_client
 
@@ -26,17 +27,17 @@ KEEP = 3
 
 def inventory(root: Path, version: str) -> list[dict]:
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        raise ValueError("发布版本必须是三段数字")
+        raise ValueError(t("release_r2.versionFormat"))
     paths = sorted(path for path in root.iterdir() if path.is_file()
                    and path.suffix in {".zip", ".exe", ".dmg"})
     required = {f"Peach-{version}-windows-x64{suffix}" for suffix in (".zip", "-setup.exe", "-lite-setup.exe", "-update.zip")}
     required.update(f"Peach-{version}-macos-{arch}.dmg" for arch in ("arm64", "x86_64"))
     if not required.issubset(path.name for path in paths):
-        raise ValueError("发布制品缺少 Windows 完整包、轻量包或 macOS 双架构 DMG")
+        raise ValueError(t("release_r2.artifactsIncomplete"))
     items = []
     for path in paths:
         if path.is_symlink() or not re.fullmatch(r"[A-Za-z0-9_.-]+", path.name) or not path.stat().st_size:
-            raise ValueError(f"无效的发布制品：{path.name}")
+            raise ValueError(t("release_r2.invalidArtifact", name=path.name))
         with path.open("rb") as source:
             checksum = hashlib.file_digest(source, "sha256").hexdigest()
         items.append({"name": path.name, "size": path.stat().st_size, "sha256": checksum})
@@ -58,7 +59,7 @@ def release_sums(root: Path, items: list[dict], scratch: Path) -> list[Path]:
         generated.write_text("".join(f"{item['sha256']}  {item['name']}\n" for item in items), encoding="utf-8")
         return [generated]
     if release_signing.parse(sums.read_bytes()) != {item["name"]: item["sha256"] for item in items}:
-        raise ValueError("发布摘要与制品不一致")
+        raise ValueError(t("release_r2.sumsMismatch"))
     signature = root / release_signing.SIGNATURE
     return [sums, signature] if signature.is_file() else [sums]
 
@@ -68,27 +69,27 @@ def verify_download(url: str, item: dict) -> None:
     size = 0
     with http_client(follow_redirects=True, timeout=120) as client, client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as response:
         if response.status_code != 200:
-            raise ValueError(f"公开下载未返回完整文件：{item['name']}")
+            raise ValueError(t("release_r2.downloadIncomplete", name=item['name']))
         for chunk in response.iter_bytes(1024 * 1024):
             size += len(chunk)
             checksum.update(chunk)
     if size != item["size"] or checksum.hexdigest() != item["sha256"]:
-        raise ValueError(f"公开下载的大小或 SHA-256 不符：{item['name']}")
+        raise ValueError(t("release_r2.downloadMismatch", name=item['name']))
 
 
 def rclone_environment() -> dict:
     environment = os.environ.copy()
     for key in ("PEACH_R2_ACCESS_KEY_ID", "PEACH_R2_SECRET_ACCESS_KEY", "PEACH_R2_ENDPOINT", "PEACH_R2_BUCKET", "PEACH_R2_PUBLIC_BASE"):
         if not environment.get(key):
-            raise ValueError(f"缺少发布变量：{key}")
+            raise ValueError(t("release_r2.missingVariable", name=key))
     endpoint = urlsplit(environment["PEACH_R2_ENDPOINT"])
     public = urlsplit(environment["PEACH_R2_PUBLIC_BASE"])
     if endpoint.scheme != "https" or not endpoint.hostname or not endpoint.hostname.endswith(".r2.cloudflarestorage.com"):
-        raise ValueError("上传端点必须是 Cloudflare R2 HTTPS 地址")
+        raise ValueError(t("release_r2.endpointNotR2"))
     if public.scheme != "https" or not public.hostname or public.username or public.password:
-        raise ValueError("公开下载入口必须是无凭据的 HTTPS 地址")
+        raise ValueError(t("release_r2.publicUrlUnsafe"))
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", environment["PEACH_R2_BUCKET"]):
-        raise ValueError("无效的 R2 桶名")
+        raise ValueError(t("release_r2.invalidBucket"))
     environment.update({"RCLONE_CONFIG_PEACH_TYPE": "s3", "RCLONE_CONFIG_PEACH_PROVIDER": "Cloudflare",
                         "RCLONE_CONFIG_PEACH_ACCESS_KEY_ID": environment["PEACH_R2_ACCESS_KEY_ID"],
                         "RCLONE_CONFIG_PEACH_SECRET_ACCESS_KEY": environment["PEACH_R2_SECRET_ACCESS_KEY"],
@@ -107,10 +108,10 @@ def retention(existing: list[dict], releases: object, tag: str) -> tuple[list[st
     """本次发布后保留的版本（连同本次按版本号取最新 `KEEP` 个，新版在前）与要删除的版本目录。"""
     if not isinstance(releases, list) or not all(isinstance(item, dict) and _version(item.get("tag_name"))
                                                   for item in releases):
-        raise ValueError("公开版本索引格式无效")
+        raise ValueError(t("release_r2.invalidIndex"))
     kept = sorted({*(item["tag_name"] for item in releases), tag}, key=_version, reverse=True)[:KEEP]
     if tag not in kept:
-        raise ValueError(f"{tag} 比镜像保留的 {KEEP} 个版本都旧，不上传")
+        raise ValueError(t("release_r2.tooOld", tag=tag, keep=KEEP))
     folders = {item["Path"].split("/", 1)[0] for item in existing if "/" in item["Path"]}
     return kept, sorted({name for name in folders if _version(name)} - set(kept), key=_version)
 
@@ -121,7 +122,7 @@ def require_capacity(existing: list[dict], items: list[dict], tag: str, limit: i
     projected = sum(current.values()) + sum(item["size"] for item in items
                                           if f"{tag}/{item['name']}" not in current) + 1_000_000
     if limit <= 0 or projected > limit:
-        raise ValueError(f"发布桶预计占用 {projected} 字节，超过上限 {limit}；保留已有制品并停止上传")
+        raise ValueError(t("release_r2.overCapacity", projected=projected, limit=limit))
     return projected
 
 
@@ -133,13 +134,13 @@ def publish(root: Path, version: str, *, apply: bool = False) -> dict:
     environment = rclone_environment()
     published_at = environment.get("CI_COMMIT_TIMESTAMP")
     if not published_at:
-        raise ValueError("发布需要 CI_COMMIT_TIMESTAMP，以便相同提交可重复校验")
+        raise ValueError(t("release_r2.timestampRequired"))
     sha = environment.get("CI_COMMIT_SHA", "")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError("发布需要 CI_COMMIT_SHA")
+        raise ValueError(t("release_r2.commitShaRequired"))
     executable = environment.get("PEACH_RCLONE") or shutil.which("rclone")
     if not executable:
-        raise ValueError("发布需要官方 rclone")
+        raise ValueError(t("release_r2.rcloneRequired"))
     tag = "v" + version
     prefix = f"peach:{environment['PEACH_R2_BUCKET']}/{tag}"
     base = environment["PEACH_R2_PUBLIC_BASE"].rstrip("/")
@@ -199,7 +200,7 @@ def publish(root: Path, version: str, *, apply: bool = False) -> dict:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("release_r2.description"))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--apply", action="store_true")
@@ -207,7 +208,7 @@ def main(argv=None) -> int:
     try:
         print(json.dumps(publish(args.root.resolve(), args.version, apply=args.apply), ensure_ascii=False, indent=2))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        print(f"R2 发布未完成：{error}")
+        print(t("release_r2.failed", error=error))
         return 1
     return 0
 

@@ -107,7 +107,7 @@ describe('目录取数', () => {
 
   it('竖屏带跟着主列表的筛选走，一条取一批竖屏', () => {
     const params = new URLSearchParams(shortsParams({ sort: 'seed', tag: '' }, 36));
-    expect(Object.fromEntries(params)).toEqual({ sort: 'seed', orient: '竖屏', limit: String(SHORTS_BATCH), offset: '36' });
+    expect(Object.fromEntries(params)).toEqual({ sort: 'seed', orient: 'portrait', limit: String(SHORTS_BATCH), offset: '36' });
   });
 });
 
@@ -245,7 +245,7 @@ describe('续页', () => {
       if (init?.method === 'POST') posts.push(JSON.parse(String(init.body)));
       const url = new URL(String(input), 'http://peach.test');
       const body = url.pathname === '/api/library-processing' ? { status: 'idle' }
-        : url.searchParams.get('orient') === '竖屏' ? { items: strip, total: strip.length, has_more: false }
+        : url.searchParams.get('orient') === 'portrait' ? { items: strip, total: strip.length, has_more: false }
           : { items: [1, 2, 3].map((n) => item(n)), total: 3, has_more: false };
       return Promise.resolve(reply(body));
     }));
@@ -266,7 +266,7 @@ describe('续页', () => {
     const strip = [item(41, { part_group: group, duration: 600 }), item(43), item(42, { part_group: group, duration: 600 })];
     vi.stubGlobal('fetch', vi.fn((input: string) => {
       const url = new URL(String(input), 'http://peach.test');
-      const body = url.searchParams.get('orient') === '竖屏'
+      const body = url.searchParams.get('orient') === 'portrait'
         ? { items: strip, total: strip.length, has_more: false }
         : { items: [1, 2, 3].map((n) => item(n)), total: 3, has_more: false };
       return Promise.resolve(reply(body));
@@ -309,7 +309,7 @@ describe('续页', () => {
     vi.stubGlobal('IntersectionObserver', FakeObserver);
     vi.stubGlobal('fetch', vi.fn((input: string) => {
       const url = new URL(String(input), 'http://peach.test');
-      const body = url.searchParams.get('orient') === '竖屏'
+      const body = url.searchParams.get('orient') === 'portrait'
         ? { items: portraitParts, total: portraitParts.length, has_more: false }
         : { items: [1, 2, 3].map((n) => item(n)), total: 3, has_more: false };
       return Promise.resolve(reply(body));
@@ -579,7 +579,7 @@ describe('作品卡', () => {
   });
 
   it('有图却取失败时不留坏图：问服务端卡在哪一步，缺印相的本地影片给「补全预览」', async () => {
-    vi.stubGlobal('fetch', fetchMock(404, { error: 'unavailable', reason: 'snapshot unavailable' }));
+    vi.stubGlobal('fetch', fetchMock(404, { error: 'unavailable', reason: 'snapshot unavailable', reason_code: 'errors.previews.snapshotUnavailable' }));
     const { host } = await render(item(31, { location: 'local', has_thumb: true }));
     const img = host.querySelector('[data-media-art] img')!;
     await act(async () => { img.dispatchEvent(new Event('error')) });
@@ -591,7 +591,7 @@ describe('作品卡', () => {
   });
 
   it('取失败后「重试」换一个地址重新取图', async () => {
-    vi.stubGlobal('fetch', fetchMock(404, { error: 'unavailable', reason: 'ffmpeg generation failed' }));
+    vi.stubGlobal('fetch', fetchMock(404, { error: 'unavailable', reason: 'ffmpeg generation failed', reason_code: 'errors.previews.ffmpegFailed' }));
     const { host } = await render(item(32, { location: '115', has_thumb: true }));
     await act(async () => { host.querySelector('[data-media-art] img')!.dispatchEvent(new Event('error')) });
     await settle();

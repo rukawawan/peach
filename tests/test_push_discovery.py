@@ -298,7 +298,7 @@ class QueueTests(unittest.TestCase):
 
     def test_one_failing_path_does_not_take_the_queue_down(self):
         def boom(_location, _path):
-            raise OSError("数据库忙")
+            raise OSError("database is locked")
 
         queue = push.DiscoveryQueue(boom, lambda _location, _path: 1,
                                     debounce=0.0, settle=0.0)
@@ -306,9 +306,9 @@ class QueueTests(unittest.TestCase):
         queue.tick(0.0)
         with self.assertLogs("peach.push_discovery", level="ERROR") as captured:
             queue.tick(0.0)
-        self.assertIn("数据库忙", "\n".join(captured.output))
+        self.assertIn("database is locked", "\n".join(captured.output))
         self.assertEqual(queue.snapshot()["failed"], 1)
-        self.assertIn("数据库忙", queue.snapshot()["last_error"])
+        self.assertIn("database is locked", queue.snapshot()["last_error"])
 
 
 class JournalTests(unittest.TestCase):

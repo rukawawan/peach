@@ -16,6 +16,7 @@ import urllib.parse
 from ..catalog_rules import same_release_code
 from ..jav_cover_fetch import NotFound
 from ..javdb import clean
+from ..source_page_words import JAVBUS_FIELDS
 from .base import FailureReason, Page, Session, SiteConfig, SiteRecord, SiteSource, SourceFailure
 
 #: 主机间隔用默认的 2 秒：JavBus 不按出口 IP 计配额，年龄门靠 Cookie 过。
@@ -39,25 +40,25 @@ class JavBusSource(SiteSource):
         try:
             return session.get(self.work_url(code), config=self.config)
         except NotFound:
-            raise SourceFailure(FailureReason.NOT_FOUND, "JavBus 没有这个番号", status_code=404) from None
+            raise SourceFailure(FailureReason.NOT_FOUND, "errors.javbus.notFound", status_code=404) from None
 
     def parse(self, page: Page, code: str) -> SiteRecord:
         text = page.text
         fields = {clean(label): clean(value) for label, value in _FIELD.findall(text)}
-        shown = fields.get("識別碼", "").replace(" ", "")
+        shown = fields.get(JAVBUS_FIELDS["code"], "").replace(" ", "")
         if not shown:
             raise SourceFailure(FailureReason.AUTH_REQUIRED,
-                                "JavBus 回的不是作品页，多半是年龄确认页：到采集设置给 JavBus 贴上浏览器里的 Cookie")
+                                "errors.javbus.ageGate")
         if not same_release_code(code, shown):
-            raise SourceFailure(FailureReason.NOT_FOUND, "JavBus 没有这个番号")
+            raise SourceFailure(FailureReason.NOT_FOUND, "errors.javbus.notFound")
         heading = _TITLE.search(text)
         cover = _COVER.search(text)
-        runtime = re.search(r"\d+", fields.get("長度", ""))
+        runtime = re.search(r"\d+", fields.get(JAVBUS_FIELDS["runtime"], ""))
         return SiteRecord(
             source=self.config.name, provenance=self.config.provider, code=shown, source_url=page.url,
             title=clean(heading.group(1)).removeprefix(shown).strip() if heading else "",
             performers=tuple({"japanese_name": clean(name)} for name in _ACTRESS.findall(text)),
-            studio=fields.get("製作商", ""), label=fields.get("發行商", ""),
-            series=fields.get("系列", ""), director=fields.get("導演", ""),
-            release_date=fields.get("發行日期", ""), runtime=int(runtime.group()) if runtime else None,
+            studio=fields.get(JAVBUS_FIELDS["studio"], ""), label=fields.get(JAVBUS_FIELDS["label"], ""),
+            series=fields.get(JAVBUS_FIELDS["series"], ""), director=fields.get(JAVBUS_FIELDS["director"], ""),
+            release_date=fields.get(JAVBUS_FIELDS["release_date"], ""), runtime=int(runtime.group()) if runtime else None,
             cover_urls=(urllib.parse.urljoin(self.config.base_url, cover.group(1)),) if cover else ())

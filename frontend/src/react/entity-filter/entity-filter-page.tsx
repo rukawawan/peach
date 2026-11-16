@@ -26,6 +26,7 @@ import {
   videoOnly, type EntityComboItem, type EntityFilterActions, type EntityFilterHelpers, type EntityFilterProps, type EntityOnlineHead,
   type EntityPhotoHead, type EntitySortKey, type EntityVideoHead, type EntityView, type EntityViewKeys, type SegmentOption,
 } from './entity-filter';
+import { t } from '../../i18n';
 
 const Sep = () => <span data-entity-sep="" aria-hidden="true" />;
 const ShuffleIcon = spriteGlyph('shuffle');
@@ -66,7 +67,7 @@ export function EntityFilterPage(props: EntityFilterProps) {
   return (
     <>
       <Combo items={combo} hidden={!onVideos} actions={actions} />
-      <FilterGlassRows label="筛选与排序" topLabel="媒体与标签"
+      <FilterGlassRows label={t('catalog:catalogFilter.filterAndSort')} topLabel={t('catalog:entityFilter.mediaAndTags')}
         attrs={{ 'data-filter-frame': '', 'data-entity-filter-glass': '' }}
         topClassName="gap-1.5 overflow-visible"
         bottomClassName="min-h-12" bottomRef={bottomRow} busy={props.busy}
@@ -89,7 +90,7 @@ export function EntityFilterPage(props: EntityFilterProps) {
             </>
           ) : null}
           <div ref={scroll} data-entity-scroll="">
-            <div ref={stateRow} role="group" aria-label={online ? '状态' : '观看状态'} data-entity-states=""
+            <div ref={stateRow} role="group" aria-label={online ? t('catalog:shared.status') : t('catalog:entityFilter.watchStatus')} data-entity-states=""
               hidden={!filtered} onPointerLeave={stateGlide.leave}>
               {stateOptions.map((option) => (
                 <button key={option.k} type="button" data-entity-state={option.k} data-entity-press=""
@@ -120,7 +121,7 @@ export function EntityFilterPage(props: EntityFilterProps) {
   );
 }
 
-const ONLINE_MEDIA = [['videos', '视频', 'play', 'video'], ['images', '图片', 'pics', 'image']] as const;
+const ONLINE_MEDIA = [['videos', t('catalog:shared.videos'), 'play', 'video'], ['images', t('catalog:entityFilter.images'), 'pics', 'image']] as const;
 
 /** 在线视图左端那两枚圆键，同关注页：这一屏摆视频还是图片。 */
 function OnlineMediaKeys({ head, row, glide, onMedia }: {
@@ -130,7 +131,7 @@ function OnlineMediaKeys({ head, row, glide, onMedia }: {
   onMedia(media: 'videos' | 'images'): void;
 }) {
   return (
-    <div ref={row} role="group" aria-label="在线媒体类型" data-entity-media="" data-online-media=""
+    <div ref={row} role="group" aria-label={t('catalog:entityFilter.onlineMediaType')} data-entity-media="" data-online-media=""
       onPointerLeave={glide.leave}>
       {ONLINE_MEDIA.map(([value, text, symbol, kind]) => {
         const title = `${text} ${Math.max(0, head.mediaCounts?.[value] || 0).toLocaleString()}`;
@@ -150,7 +151,7 @@ function OnlineFilters({ head, actions }: { head: EntityOnlineHead; actions: Ent
     <>
       {head.providers.map(([key, label]) => (
         <button key={key} type="button" data-follow-provider={key} data-entity-press=""
-          aria-pressed={head.provider === key} title={label} aria-label={`来源：${label}`}
+          aria-pressed={head.provider === key} title={label} aria-label={t('catalog:entityFilter.sourceName', { source: label })}
           onClick={() => actions.onlineProvider(key)} dangerouslySetInnerHTML={{ __html: sourceIcon(key) }} />
       ))}
       {head.providers.length && head.tags.length ? <Sep /> : null}
@@ -175,9 +176,9 @@ function ViewKeys({ keys, view, row, glide, onView }: {
 }) {
   const buttons: { value: EntityView; text: string; count: number; symbol: string; kind: string }[] = [];
   if (keys.people) buttons.push({ value: 'people', text: keys.people.label, count: keys.people.count, symbol: keys.people.icon, kind: 'people' });
-  if (keys.videos) buttons.push({ value: 'videos', text: '视频', count: keys.videos.count, symbol: 'play', kind: 'video' });
-  if (keys.photos) buttons.push({ value: 'photos', text: '照片', count: keys.photos.count, symbol: 'pics', kind: 'image' });
-  if (keys.online) buttons.push({ value: 'online', text: '在线', count: keys.online.count, symbol: 'rss', kind: 'online' });
+  if (keys.videos) buttons.push({ value: 'videos', text: t('catalog:shared.videos'), count: keys.videos.count, symbol: 'play', kind: 'video' });
+  if (keys.photos) buttons.push({ value: 'photos', text: t('catalog:entityFilter.photos'), count: keys.photos.count, symbol: 'pics', kind: 'image' });
+  if (keys.online) buttons.push({ value: 'online', text: t('catalog:shared.online'), count: keys.online.count, symbol: 'rss', kind: 'online' });
   return (
     <div ref={row} role="group" aria-label={keys.label} data-entity-media="" onPointerLeave={glide.leave}>
       {buttons.map(({ value, text, count, symbol, kind }) => {
@@ -204,13 +205,13 @@ export function Combo({ items, hidden, actions }: {
           {items.map((item) => (
             <span key={`${item.kind}:${item.key}`} data-combo-chip="">
               {item.label}
-              <button type="button" aria-label={`撤掉 ${item.label}`}
+              <button type="button" aria-label={t('catalog:entityFilter.removeChip', { label: item.label })}
                 onClick={() => (item.kind === 'untag' ? actions.toggleTag(item.key) : actions.clearFilter(item.key))}>
                 ✕
               </button>
             </span>
           ))}
-          <button type="button" data-combo-clear="" onClick={actions.clearAll}>全部清除</button>
+          <button type="button" data-combo-clear="" onClick={actions.clearAll}>{t('catalog:entityFilter.clearAll')}</button>
         </>
       ) : null}
     </div>
@@ -224,7 +225,7 @@ function Head(props: EntityFilterProps) {
     <>
       {view === 'photos' && photo?.back ? (
         <button type="button" data-photo-back="" onClick={actions.photoBack}>
-          <span className="contents" dangerouslySetInnerHTML={{ __html: icon('chevron-left') }} /><span>全部照片</span>
+          <span className="contents" dangerouslySetInnerHTML={{ __html: icon('chevron-left') }} /><span>{t('catalog:entityFilter.allPhotos')}</span>
         </button>
       ) : null}
       <Readout text={readout} busy={busy} />
@@ -268,7 +269,7 @@ export function Segments({ name, label, value, options, onChange }: {
 
 export function Shuffle({ onPress, busy = false }: { onPress(): void; busy?: boolean }) {
   return (
-    <FilterIconButton data-entity-batch="" label="换一批" busy={busy} busyStyle="strand" icon={ShuffleIcon} onPress={onPress} />
+    <FilterIconButton data-entity-batch="" label={t('catalog:entityFilter.shuffle')} busy={busy} busyStyle="strand" icon={ShuffleIcon} onPress={onPress} />
   );
 }
 
@@ -279,7 +280,7 @@ function VideoControls({ head, actions }: { head: EntityVideoHead; actions: Enti
     <span data-entity-sorts="">
       <Shuffle onPress={() => void actions.reshuffle()} />
       {head.jav && view === 'cards' ? (
-        <Segments label="JAV 卡片版式" value={head.jav.layout} options={head.jav.options} onChange={actions.setJavLayout} />
+        <Segments label={t('catalog:entityFilter.javCardLayout')} value={head.jav.layout} options={head.jav.options} onChange={actions.setJavLayout} />
       ) : null}
       <CatalogViewToggle />
       <FolderBrowseToggle />
@@ -312,9 +313,9 @@ function OnlineControls({ head, actions }: { head: EntityOnlineHead; actions: En
       <Shuffle onPress={actions.onlineShuffle} />
       {head.media === 'images' ? (
         <>
-          <Segments label="图片布局" value={head.photoLayout} options={head.photoLayouts} onChange={actions.setPhotoLayout} />
-          <button type="button" data-follow-images-only="" aria-pressed={head.imagesOnly} title="仅显示图片"
-            aria-label="仅显示图片" onClick={() => actions.onlineImagesOnly(!head.imagesOnly)}>
+          <Segments label={t('catalog:entityFilter.imageLayout')} value={head.photoLayout} options={head.photoLayouts} onChange={actions.setPhotoLayout} />
+          <button type="button" data-follow-images-only="" aria-pressed={head.imagesOnly} title={t('catalog:entityFilter.imagesOnly')}
+            aria-label={t('catalog:entityFilter.imagesOnly')} onClick={() => actions.onlineImagesOnly(!head.imagesOnly)}>
             {head.imagesOnly ? <span data-view-glide="" aria-hidden="true" /> : null}
             <span className="contents" dangerouslySetInnerHTML={{ __html: icon('captions-off') }} />
           </button>
@@ -341,7 +342,7 @@ function PhotoControls({ head, actions, helpers }: {
   return (
     <span data-entity-sorts="">
       {head.shuffle ? <Shuffle onPress={shuffle} busy={shuffling} /> : null}
-      <Segments label="图片布局" value={head.layout} options={head.layouts} onChange={actions.setPhotoLayout} />
+      <Segments label={t('catalog:entityFilter.imageLayout')} value={head.layout} options={head.layouts} onChange={actions.setPhotoLayout} />
       {toolsHtml ? <span ref={tools} data-entity-srctools="" dangerouslySetInnerHTML={{ __html: toolsHtml }} /> : null}
     </span>
   );

@@ -196,8 +196,8 @@ class KmibHarvestTests(unittest.TestCase):
         finally:
             con.close()
         results = {row["code"]: row["result"] for row in rows}
-        self.assertEqual(results["AR-101"], "未取得")
-        self.assertEqual(results["JS-012"], "取得")
+        self.assertEqual(results["AR-101"], "missed")
+        self.assertEqual(results["JS-012"], "found")
 
     def test_auto_apply_fills_empty_fields_and_links_the_performer(self):
         candidates = self.root / "generated"
@@ -216,7 +216,7 @@ class KmibHarvestTests(unittest.TestCase):
             asset = con.execute("SELECT catalog_title,release_date,studio FROM asset "
                                 "WHERE id=1").fetchone()
             tags = [r[0] for r in con.execute(
-                "SELECT tag FROM asset_tag WHERE asset_id=1 AND tag NOT LIKE '演员:%' "
+                "SELECT tag FROM asset_tag WHERE asset_id=1 AND tag NOT LIKE 'performer:%' "
                 "ORDER BY tag")]
             ref = con.execute(
                 "SELECT e.canonical_name FROM entity_external_ref x JOIN entity e "

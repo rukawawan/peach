@@ -35,8 +35,8 @@ class NamingTests(unittest.TestCase):
 
     def test_restored_copy_carries_its_own_badge(self):
         from peach.catalog_rules import jav_edition_badges
-        self.assertEqual(jav_edition_badges('ipx-458-C-去码.mkv', 'IPX-458'), ['中字', 'AI去码'])
-        self.assertEqual(jav_edition_badges('ipx-458-C.mp4', 'IPX-458'), ['中字'])
+        self.assertEqual(jav_edition_badges('ipx-458-C-去码.mkv', 'IPX-458'), ['chinese-subtitles', 'ai-restored'])
+        self.assertEqual(jav_edition_badges('ipx-458-C.mp4', 'IPX-458'), ['chinese-subtitles'])
 
 
 class ConfigTests(unittest.TestCase):

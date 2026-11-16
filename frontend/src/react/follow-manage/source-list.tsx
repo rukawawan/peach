@@ -46,6 +46,7 @@ import { EmptyState } from '../components/empty-state';
 import { clickedBlank } from '../components/row-click';
 import { Note } from '../components/note';
 import { TaskProgress } from '../components/task-progress';
+import { activityKind } from '../../activity-kinds';
 import { SelectionDock } from '../components/selection-dock';
 import { busyProps } from '../settings/use-action';
 import {
@@ -58,6 +59,9 @@ import {
   type TableRow as SourceTableRow,
 } from './follow-manage';
 import { AuthorAvatar, ErrorLine, SourceIcon, SourceLink, StatusBadge } from './source-view';
+import { codedText, jobText } from '../../core/server-text';
+import { FOLLOW_CHECK_TASK } from '../../running-tasks';
+import { joinList, t } from '../../i18n';
 
 const sourceTableFeatures = tableFeatures({
   rowPaginationFeature,
@@ -66,8 +70,6 @@ const sourceTableFeatures = tableFeatures({
   columnVisibilityFeature,
   paginatedRowModel: createPaginatedRowModel(),
 });
-
-const count = (value: unknown) => (Number(value) || 0).toLocaleString();
 
 /** 列头点的就是工具栏里的那一档排序，所以两边共用同一张对照表，方向也共用一个值。 */
 const SORT_COLUMN = Object.fromEntries(
@@ -98,8 +100,8 @@ function useCompactToolbar(): [(node: HTMLDivElement | null) => void, boolean] {
 }
 
 const COLUMN_LABELS: Record<string, string> = {
-  select: '选择', author: '创作者', source: '来源', provider: '站点',
-  status: '状态', checked: '上次检查', actions: '操作',
+  select: t('follow:shared.select'), author: t('follow:shared.creator'), source: t('follow:followFeed.filterKindSource'), provider: t('follow:shared.site'),
+  status: t('follow:shared.status'), checked: t('follow:sourceList.colLastChecked'), actions: t('follow:shared.actions'),
 };
 const preferenceColumns = Object.entries(COLUMN_LABELS).map(([id, label]) => ({ id, label,
   width: id === 'select' ? 48 : id === 'source' ? 320 : id === 'author' ? 240 : id === 'actions' ? 208 : 184,
@@ -149,7 +151,7 @@ function SourceRow(
     <div data-selected={selected || undefined} data-follow-source-row=""
       className="flex min-h-16 flex-wrap items-center gap-3 px-2 py-3 last:rounded-b-lg max-sm:gap-x-2"
       onClick={(event) => { if (clickedBlank(event, event.currentTarget)) onToggle(!selected) }}>
-      <Checkbox isSelected={selected} onChange={onToggle} aria-label={`选择 ${source.label}`} />
+      <Checkbox isSelected={selected} onChange={onToggle} aria-label={t('follow:shared.selectNamed', { name: source.label })} />
       {/* 名字从零宽起长：长名字在列内折行，不把状态和操作键挤到下一行。站标贴在名字前。 */}
       <span className="flex min-w-0 grow basis-0 items-center gap-1.5">
         <span data-follow-source-site="" className="flex shrink-0 items-center text-body-medium">
@@ -165,7 +167,7 @@ function SourceRow(
           <span aria-hidden className="w-4 shrink-0" />
           <span className="flex min-w-0 grow gap-1.5">
             <span aria-hidden className="w-(--icon-inline) shrink-0 text-body-medium" />
-            <span className="min-w-0 grow"><ErrorLine text={source.last_error} /></span>
+            <span className="min-w-0 grow"><ErrorLine text={codedText(source, 'last_error')} /></span>
           </span>
         </span>
       ) : null}
@@ -173,15 +175,15 @@ function SourceRow(
         <span className="shrink-0 text-body-2-regular whitespace-nowrap text-text-secondary max-sm:mr-auto max-sm:text-caption-1-regular">
           {checkedText(source)}
         </span>
-        <Switch aria-label={`启用 ${source.label}`} isSelected={source.enabled}
+        <Switch aria-label={t('follow:shared.enableNamed', { name: source.label })} isSelected={source.enabled}
           isDisabled={handlers.readOnly} onChange={(on) => handlers.toggle(source, on)} />
         <span className="flex shrink-0 items-center gap-1">
           <Button variant="secondary" size="small" iconOnly leadingIcon={RiRefreshLine}
-            aria-label={`检查 ${source.label} 的更新`}
+            aria-label={t('follow:sourceList.checkNamed', { name: source.label })}
             disabled={!source.enabled || handlers.readOnly} {...busyProps(handlers.busy)}
             onClick={() => handlers.check([source.id])} />
           <Button variant="secondary" size="small" iconOnly leadingIcon={RiDeleteBinLine}
-            aria-label={`移除 ${source.label}`} disabled={handlers.readOnly}
+            aria-label={t('follow:shared.removeNamed', { name: source.label })} disabled={handlers.readOnly}
             onClick={() => handlers.remove(source)} />
         </span>
       </span>
@@ -203,11 +205,11 @@ function AuthorCard(
   const ids = group.map((source) => source.id);
   const enabled = group.filter((source) => source.enabled).map((source) => source.id);
   const bad = group.filter(isBroken).length;
-  const providers = [...new Set(group.map((source) => source.provider_label || source.provider))].join('、');
+  const providers = joinList([...new Set(group.map((source) => source.provider_label || source.provider))]);
   const panel = `follow-author-${group[0]!.id}`;
   const state = selectionState(selected, ids);
   return (
-    <section aria-label={`${name} 的关注来源`}
+    <section aria-label={t('follow:sourceList.groupLabel', { name })}
       className={cardClass({
         variant: 'raised', padding: 'none', className: 'flex flex-col overflow-hidden p-2',
       })}>
@@ -221,25 +223,25 @@ function AuthorCard(
             {group.map((source) => <SourceIcon key={source.id} provider={source.provider} />)}
             {/* 只读屏用的文字走 `VisuallyHidden`：它把样式写在元素上，不会生成一个和旧
                 样式表同名的工具类（`web/css/01-base.css` 里那条 `.sr-only` 带 !important）。 */}
-            <VisuallyHidden>{`来源：${providers}`}</VisuallyHidden>
+            <VisuallyHidden>{t('follow:sourceList.providers', { providers })}</VisuallyHidden>
             {bad
-              ? <span className="ml-1 shrink-0 text-text-error-primary">{`${bad} 个失败`}</span>
+              ? <span className="ml-1 shrink-0 text-text-error-primary">{t('follow:shared.failedCount', { count: bad })}</span>
               : null}
           </span>
         </span>
         <span data-follow-author-controls="" className="flex flex-none items-center gap-2 max-sm:w-full max-sm:justify-end">
           <Button variant="secondary" size="small" iconOnly leadingIcon={RiRefreshLine}
-            aria-label={`检查 ${name} 的全部来源`} disabled={!enabled.length || handlers.readOnly}
+            aria-label={t('follow:sourceList.checkGroup', { name })} disabled={!enabled.length || handlers.readOnly}
             {...busyProps(handlers.busy)} onClick={() => handlers.check(enabled)} />
           <span className="flex flex-none items-center gap-2">
           <Button variant="secondary" size="small" leadingIcon={RiCheckDoubleLine}
             aria-pressed={state.all ? 'true' : state.some ? 'mixed' : 'false'}
-            aria-label={`${state.all ? '取消全选' : '全选'} ${name} 的来源`}
-            onClick={() => onToggleGroup(!state.all)}>{state.all ? '取消全选' : '全选'}</Button>
+            aria-label={t(state.all ? 'follow:sourceList.deselectGroup' : 'follow:sourceList.selectGroup', { name })}
+            onClick={() => onToggleGroup(!state.all)}>{state.all ? t('follow:shared.deselectAll') : t('follow:shared.selectAll')}</Button>
           <Button variant="secondary" size="small" aria-expanded={open} aria-controls={panel}
             leadingIcon={CollapseChevron}
-            aria-label={`${open ? '收起' : '展开'} ${name} 的来源`}
-            onClick={() => onOpen(!open)}>{open ? '收起' : '展开'}</Button>
+            aria-label={t(open ? 'follow:sourceList.collapseGroup' : 'follow:sourceList.expandGroup', { name })}
+            onClick={() => onOpen(!open)}>{open ? t('follow:shared.collapse') : t('follow:shared.expand')}</Button>
           </span>
         </span>
       </div>
@@ -270,12 +272,13 @@ export function SourceList(props: SourceListProps) {
 
   const { job, running, outcome, start: check } = useBackgroundJob<CheckJob, number[]>({
     queryKey: FOLLOW_CHECK_KEY,
+    taskKey: FOLLOW_CHECK_TASK,
     queryFn: ({ signal }) => fetchCheckJob(signal),
     start: (ids) => startCheck(ids),
     onError: (cause) => setProblem(errorMessage(cause)),
     onFinish: (state) => {
       void reloadFollowManage();
-      toast(state.status === 'failed' ? (state.error || '检查失败') : checkReceipt(state));
+      toast(state.status === 'failed' ? (jobText(state, 'error') || t('follow:followCheck.checkFailed')) : checkReceipt(state));
     },
   });
 
@@ -295,7 +298,7 @@ export function SourceList(props: SourceListProps) {
     onSuccess: (_result, id) => {
       dropSources([id]);
       onSelected(toggleGroup(selected, [id], false));
-      toast('已取消关注来源');
+      toast(t('follow:sourceList.unfollowed'));
     },
     onError: (cause) => setProblem(errorMessage(cause)),
   });
@@ -312,8 +315,8 @@ export function SourceList(props: SourceListProps) {
   });
 
   const removeSourceRow = (source: FollowSource) => void confirmModal({
-    title: '取消关注来源', body: '将移除这个来源及已抓取的条目，媒体文件保留。',
-    confirmLabel: '取消关注来源', danger: true,
+    title: t('follow:sourceList.unfollow'), body: t('follow:sourceList.unfollowBody'),
+    confirmLabel: t('follow:sourceList.unfollow'), danger: true,
     onConfirm: () => remove.mutateAsync(source.id),
   });
 
@@ -332,12 +335,12 @@ export function SourceList(props: SourceListProps) {
       onSelected(toggleGroup(selected, result.done, false));
       const failed = result.results.filter((row) => !row.ok);
       if (failed.length) {
-        setProblem(`${failed.length}/${result.ids.length} 个来源未更新：${errorMessage(failed[0]?.error)}`);
+        setProblem(t('follow:sourceList.bulkPartialFail', { failed: failed.length, total: result.ids.length, error: errorMessage(failed[0]?.error) }));
         return;
       }
       setProblem('');
-      const word = result.action === 'remove' ? '删除' : result.action === 'enabled' ? '启用' : '暂停';
-      toast(`已${word} ${result.done.length} 个关注来源`);
+      const done = result.action === 'remove' ? 'follow:sourceList.bulkDeleted' : result.action === 'enabled' ? 'follow:sourceList.bulkEnabled' : 'follow:sourceList.bulkPaused';
+      toast(t(done, { count: result.done.length }));
     },
     onError: (cause) => setProblem(errorMessage(cause)),
   });
@@ -348,11 +351,11 @@ export function SourceList(props: SourceListProps) {
     onSuccess: (result) => {
       void reloadFollowManage();
       if (result.failed) {
-        setProblem(`批量更新 ${result.failed}/${result.total} 项未完成：${errorMessage(result.error)}`);
+        setProblem(t('follow:sourceList.bulkMarkFailed', { failed: result.failed, total: result.total, error: errorMessage(result.error) }));
         return;
       }
       setProblem('');
-      toast(`已批量标记 ${result.total} 项`);
+      toast(t('follow:sourceList.bulkMarked', { count: result.total }));
     },
     onError: (cause) => setProblem(errorMessage(cause)),
   });
@@ -379,13 +382,13 @@ export function SourceList(props: SourceListProps) {
     return column.columns([
       column.display({
         id: 'select',
-        header: context => <TableSelectionHeader table={context.table} label="全选本页来源" page />,
+        header: context => <TableSelectionHeader table={context.table} label={t('follow:sourceList.selectPage')} page />,
         /* `slot={null}`：表格自带一个叫 selection 的插槽，摆进去的勾不声明归属就会被它
            拦下报错。这一列的勾归 TanStack Table 那份行选择管，不走 Table 自己的选择。 */
         cell: (context) => (
           <Checkbox slot={null} isSelected={context.row.getIsSelected()}
             onChange={(on) => context.row.toggleSelected(on)}
-            aria-label={`选择 ${context.row.original.source.label}`} />
+            aria-label={t('follow:shared.selectNamed', { name: context.row.original.source.label })} />
         ),
       }),
       column.accessor((row) => row.author, {
@@ -404,7 +407,7 @@ export function SourceList(props: SourceListProps) {
         cell: (context) => (
           <span className="flex min-w-0 flex-col gap-0.5">
             <SourceLink source={context.row.original.source} />
-            {context.row.original.source.last_error ? <ErrorLine text={context.row.original.source.last_error} /> : null}
+            {context.row.original.source.last_error ? <ErrorLine text={codedText(context.row.original.source, 'last_error')} /> : null}
           </span>
         ),
       }),
@@ -433,16 +436,16 @@ export function SourceList(props: SourceListProps) {
         header: label('actions'),
         cell: (context) => (
           <span className="flex items-center gap-1">
-            <Switch aria-label={`启用 ${context.row.original.source.label}`}
+            <Switch aria-label={t('follow:shared.enableNamed', { name: context.row.original.source.label })}
               isSelected={context.row.original.source.enabled} isDisabled={rowHandlers.readOnly}
               onChange={(on) => handlers.current.toggle(context.row.original.source, on)} />
             <Button variant="secondary" size="small" iconOnly leadingIcon={RiRefreshLine}
-              aria-label={`检查 ${context.row.original.source.label} 的更新`}
+              aria-label={t('follow:sourceList.checkNamed', { name: context.row.original.source.label })}
               disabled={!context.row.original.source.enabled || rowHandlers.readOnly}
               {...busyProps(rowHandlers.busy)}
               onClick={() => handlers.current.check([context.row.original.source.id])} />
             <Button variant="secondary" size="small" iconOnly leadingIcon={RiDeleteBinLine}
-              aria-label={`移除 ${context.row.original.source.label}`} disabled={rowHandlers.readOnly}
+              aria-label={t('follow:shared.removeNamed', { name: context.row.original.source.label })} disabled={rowHandlers.readOnly}
               onClick={() => handlers.current.remove(context.row.original.source)} />
           </span>
         ),
@@ -508,9 +511,9 @@ export function SourceList(props: SourceListProps) {
 
   if (!sources.length) {
     return (
-      <EmptyState icon={RiRssLine} title="还没有关注来源" actions={
-        <Button variant="primary" size="small" onClick={onAdd}>添加关注</Button>
-      }>关注来源及其检查状态会显示在这里。</EmptyState>
+      <EmptyState icon={RiRssLine} title={t('follow:sourceList.empty')} actions={
+        <Button variant="primary" size="small" onClick={onAdd}>{t('follow:followFeed.addFollow')}</Button>
+      }>{t('follow:sourceList.emptyHint')}</EmptyState>
     );
   }
 
@@ -524,19 +527,19 @@ export function SourceList(props: SourceListProps) {
       {/* 操作区作为一组换行；独占一行仍放不下时，组内控件继续按顺序换行。 */}
       <div ref={toolbar} data-follow-toolbar="" data-responsive-toolbar="">
         <span data-follow-toolbar-heading="" data-toolbar-heading="">
-          <h3 className="text-title-2-medium text-text-primary">关注列表</h3>
+          <h3 className="text-title-2-medium text-text-primary">{t('follow:followManageNav.list')}</h3>
           <span className="text-body-2-regular text-text-secondary">
-            {`${sources.length.toLocaleString()} 个来源${counts.new ? ` · ${count(counts.new)} 条未看` : ''}`}
+            {counts.new ? t('follow:sourceList.sourceCountUnseen', { count: sources.length, unseen: Number(counts.new) || 0 }) : t('follow:sourceList.sourceCount', { count: sources.length })}
           </span>
         </span>
         <div data-follow-toolbar-actions="" data-toolbar-actions="">
         {failedSourceIds.length ? <Button variant="secondary" disabled={readOnly}
-          {...busyProps(rowHandlers.busy)} onClick={() => startChecking(failedSourceIds)}>检查失败项</Button> : null}
+          {...busyProps(rowHandlers.busy)} onClick={() => startChecking(failedSourceIds)}>{t('follow:sourceList.checkFailed')}</Button> : null}
         <Button variant="primary" leadingIcon={RiRefreshLine} disabled={readOnly}
-          aria-label="检查全部" iconOnly={compact}
-          {...busyProps(rowHandlers.busy)} onClick={() => startChecking([])}>检查全部</Button>
+          aria-label={t('follow:sourceList.checkAll')} iconOnly={compact}
+          {...busyProps(rowHandlers.busy)} onClick={() => startChecking([])}>{t('follow:sourceList.checkAll')}</Button>
         <span data-follow-toolbar-controls="" className="contents">
-          <span data-button-group role="group" aria-label="关注列表版式">
+          <span data-button-group role="group" aria-label={t('follow:sourceList.layout')}>
             <Button variant="ghost" iconOnly
               leadingIcon={RiLayoutGridLine} aria-label={LAYOUTS[0][1]} aria-pressed={!asTable}
               onClick={() => onLayout('default')} />
@@ -544,9 +547,9 @@ export function SourceList(props: SourceListProps) {
               leadingIcon={RiTableLine} aria-label={LAYOUTS[1][1]} aria-pressed={asTable}
               onClick={() => onLayout('table')} />
           </span>
-          {asTable ? <TableColumnControls preferences={preferences} label="关注来源" /> : null}
+          {asTable ? <TableColumnControls preferences={preferences} label={t('follow:sourceList.tableLabel')} /> : null}
           <span className="flex flex-none items-center gap-2">
-          <Select aria-label="关注列表排序" prefix="排序" selectedKey={sort}
+          <Select aria-label={t('follow:sourceList.sortLabel')} prefix={t('follow:shared.sort')} selectedKey={sort}
             onSelectionChange={(key) => {
               if (key === null) return;
               const next = String(key) as SortKey;
@@ -563,11 +566,11 @@ export function SourceList(props: SourceListProps) {
           {asTable ? null : (
             <Button variant="secondary" iconOnly={compact}
               leadingIcon={CollapseChevron} aria-expanded={!allCollapsed}
-              aria-label={allCollapsed ? '全部展开' : '全部收起'}
+              aria-label={allCollapsed ? t('follow:shared.expandAll') : t('follow:shared.collapseAll')}
               onClick={() => setCollapsed(allCollapsed
                 ? new Set<string>()
                 : new Set(groups.map((group) => String(group[0]!.author_key || group[0]!.id))))}>
-              {allCollapsed ? '全部展开' : '全部收起'}
+              {allCollapsed ? t('follow:shared.expandAll') : t('follow:shared.collapseAll')}
             </Button>
           )}
         </span>
@@ -576,48 +579,48 @@ export function SourceList(props: SourceListProps) {
 
       {/* 这一趟在后台跑，关掉页面还在继续，所以状态留在页面上而不是只让按钮转一下。 */}
       <div aria-live="polite" className="flex flex-col gap-3 empty:hidden">
-        {running ? <TaskProgress embedded label={job?.message || (job?.total
-          ? `${job.older ? '抓取历史' : '检查更新'}：已完成 ${job.checked || 0}/${job.total} 个来源`
-          : '正在准备检查任务')} value={job?.checked} total={job?.total} /> : null}
-        {problem ? <Note tone="error" title="操作未完成">{problem}</Note> : null}
+        {running ? <TaskProgress embedded kind={job?.older ? activityKind('feed-scrape') : activityKind('follow-check')} label={jobText(job) || (job?.total
+          ? t(job.older ? 'follow:sourceList.backfillProgress' : 'follow:sourceList.checkProgress', { checked: job.checked || 0, count: job.total })
+          : t('follow:sourceList.preparingCheck'))} value={job?.checked} total={job?.total} /> : null}
+        {problem ? <Note tone="error" title={t('follow:shared.actionFailed')}>{problem}</Note> : null}
         {!running && outcome?.results?.length ? (
-          <Note tone="neutral" title="检查结果">{checkSummary(outcome)}</Note>
+          <Note tone="neutral" title={t('follow:followFeed.checkResults')}>{checkSummary(outcome)}</Note>
         ) : null}
         {failures.length ? (
-          <Note tone="error" title={`${failures.length} 个来源检查失败`}
+          <Note tone="error" title={t('follow:sourceList.failedTitle', { count: failures.length })}
             extra={<ul className="flex flex-col gap-0.5 text-body-2-regular">
               {failures.map((row, at) => (
                 <li key={`${row.provider || ''}-${row.ref || at}`}>
-                  {`${row.provider_label || row.provider || ''} ${row.author || row.label || row.ref || ''}：${errorHeadline(row.error || '') || '未说明原因'}`}
+                  {t('follow:shared.labeled', { label: `${row.provider_label || row.provider || ''} ${row.author || row.label || row.ref || ''}`.trim(), value: errorHeadline(row.error || '') || t('follow:shared.noReason') })}
                 </li>
               ))}
             </ul>}>
-            这些来源这一轮没有取到更新。
+            {t('follow:sourceList.failedBody')}
           </Note>
         ) : null}
-        {evidence ? <Note tone="warning">{`条目已保存，但这次未保存来源的原始响应：${evidence}`}</Note> : null}
+        {evidence ? <Note tone="warning">{t('follow:sourceList.evidenceGap', { error: evidence })}</Note> : null}
       </div>
 
-        <SelectionDock label="关注来源批量操作" visible={chosen.length > 0} count={`已选 ${chosen.length} 个来源`}>
+        <SelectionDock label={t('follow:sourceList.bulkActions')} visible={chosen.length > 0} count={t('follow:sourceList.selectedCount', { count: chosen.length })}>
           <Button variant="secondary" size="small" disabled={readOnly}
-            {...busyProps(rowHandlers.busy)} onClick={() => startChecking(chosen)}>检查所选</Button>
+            {...busyProps(rowHandlers.busy)} onClick={() => startChecking(chosen)}>{t('follow:sourceList.checkSelected')}</Button>
           <Button variant="secondary" size="small" disabled={readOnly} {...busyProps(bulk.isPending)}
-            onClick={() => bulk.mutate({ ids: chosen, action: 'enabled' })}>启用</Button>
+            onClick={() => bulk.mutate({ ids: chosen, action: 'enabled' })}>{t('follow:shared.enable')}</Button>
           <Button variant="secondary" size="small" disabled={readOnly} {...busyProps(bulk.isPending)}
-            onClick={() => bulk.mutate({ ids: chosen, action: 'paused' })}>暂停</Button>
+            onClick={() => bulk.mutate({ ids: chosen, action: 'paused' })}>{t('follow:shared.pause')}</Button>
           <Button variant="danger" size="small" disabled={readOnly} {...busyProps(bulk.isPending)}
             onClick={() => void confirmModal({
-              title: `删除 ${chosen.length} 个关注来源`,
-              body: '将移除所选关注来源及其已抓取条目，媒体文件保留。',
-              confirmLabel: '删除所选来源', danger: true,
+              title: t('follow:sourceList.deleteManyTitle', { count: chosen.length }),
+              body: t('follow:sourceList.deleteManyBody'),
+              confirmLabel: t('follow:sourceList.deleteSelected'), danger: true,
               onConfirm: () => bulk.mutateAsync({ ids: chosen, action: 'remove' }),
-            })}>删除</Button>
-          <Button variant="ghost" size="small" onClick={() => onSelected(new Set())}>取消选择</Button>
+            })}>{t('follow:shared.delete')}</Button>
+          <Button variant="ghost" size="small" onClick={() => onSelected(new Set())}>{t('follow:shared.clearSelection')}</Button>
         </SelectionDock>
 
       {asTable ? (
         <DataTableFrame follow preferences={preferences} onRowClick={(key) => toggleOne(Number(key), !selected.has(Number(key)))}>
-          <Table aria-label="关注来源" size="sm"
+          <Table aria-label={t('follow:sourceList.tableLabel')} size="sm"
             sortDescriptor={sorting[0]
               ? { column: sorting[0].id, direction: sorting[0].desc ? 'descending' : 'ascending' }
               : undefined}
@@ -642,9 +645,9 @@ export function SourceList(props: SourceListProps) {
                   </TableColumn>
                 );
               })}
-              <TableColumn id="remaining-space" aria-label="行空白区域" data-table-space="" width={preferences.spaceWidth} minWidth={0} />
+              <TableColumn id="remaining-space" aria-label={t('follow:shared.rowSpacer')} data-table-space="" width={preferences.spaceWidth} minWidth={0} />
             </TableHeader>
-            <TableBody renderEmptyState={() => '这一页没有来源'}>
+            <TableBody renderEmptyState={() => t('follow:sourceList.pageEmpty')}>
               {pageRows.map((row) => (
                 <TableRow key={row.id} id={row.id}
                   data-follow-selected={row.getIsSelected() || undefined}>
@@ -662,7 +665,7 @@ export function SourceList(props: SourceListProps) {
       ) : (
         <>
           <Checkbox isSelected={pageState.all} isIndeterminate={pageState.some}
-            onChange={(on) => toggleMany(pageIds, on)} aria-label="全选本页来源">全选本页</Checkbox>
+            onChange={(on) => toggleMany(pageIds, on)} aria-label={t('follow:sourceList.selectPage')}>{t('follow:sourceList.selectPageShort')}</Checkbox>
           <div className="flex flex-col gap-3">
             {groups.slice(win.start, win.end).map((group) => {
               const key = String(group[0]!.author_key || group[0]!.id);
@@ -682,27 +685,27 @@ export function SourceList(props: SourceListProps) {
         </>
       )}
 
-      <DataTableFooter label="关注列表" total={win.total} pagination={{ pageIndex: win.page - 1, pageSize }}
-        unit={asTable ? '个来源' : '位创作者'} pageUnit={asTable ? '条' : '位'}
+      <DataTableFooter label={t('follow:followManageNav.list')} total={win.total} pagination={{ pageIndex: win.page - 1, pageSize }}
+        unit={asTable ? t('follow:followOverview.sourceUnit') : t('follow:sourceList.creatorUnit')} pageUnit={asTable ? t('follow:followOverview.itemUnit') : t('follow:followOverview.creatorUnit')}
         onChange={(next) => { if (next.pageSize !== pageSize) table.setPageSize(next.pageSize); else table.setPageIndex(next.pageIndex); }} />
 
       {counts.new ? (
         /* 旧 `.fsecfoot`：汇总与它的动作是卡底那一条带，比卡面暗一点点，通到卡片左右两沿。 */
         <div className="-mx-6 -mb-5 flex flex-wrap items-center gap-2 border-t border-separator-border rounded-b-2xl bg-card-footer px-6 py-4 max-sm:-mx-4 max-sm:px-4">
           <span className="mr-auto text-body-2-regular text-text-secondary">
-            {`未看 ${count(counts.new)} · 已看 ${count(counts.seen)} · 已保存 ${count(counts.saved)} · 已忽略 ${count(counts.ignored)}`}
+            {t('follow:sourceList.markSummary', { unwatched: Number(counts.new) || 0, watched: Number(counts.seen) || 0, saved: Number(counts.saved) || 0, ignored: Number(counts.ignored) || 0 })}
           </span>
-          <Button variant="secondary" size="small" onClick={openFollow}>去看更新</Button>
+          <Button variant="secondary" size="small" onClick={openFollow}>{t('follow:sourceList.seeUpdates')}</Button>
           <Button variant="secondary" size="small" disabled={readOnly} {...busyProps(markAll.isPending)}
             onClick={() => void confirmModal({
-              title: '标记已看', body: '将把当前未看作品标记为已看。', confirmLabel: '标记已看',
+              title: t('follow:followDetail.markSeen'), body: t('follow:sourceList.markWatchedBody'), confirmLabel: t('follow:followDetail.markSeen'),
               onConfirm: () => markAll.mutateAsync('seen'),
-            })}>全部标记已看</Button>
+            })}>{t('follow:sourceList.markAllWatched')}</Button>
           <Button variant="secondary" size="small" disabled={readOnly} {...busyProps(markAll.isPending)}
             onClick={() => void confirmModal({
-              title: '标记已忽略', body: '将把当前未看作品标记为已忽略。', confirmLabel: '标记已忽略',
+              title: t('follow:sourceList.markIgnored'), body: t('follow:sourceList.markIgnoredBody'), confirmLabel: t('follow:sourceList.markIgnored'),
               onConfirm: () => markAll.mutateAsync('ignored'),
-            })}>全部忽略</Button>
+            })}>{t('follow:sourceList.ignoreAll')}</Button>
         </div>
       ) : null}
     </div>

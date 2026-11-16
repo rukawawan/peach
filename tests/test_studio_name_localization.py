@@ -61,15 +61,15 @@ class FakeSite:
 class ShapeTests(unittest.TestCase):
     def test_kanji_or_hiragana_counts_as_japanese(self):
         for name in ("セレブの友", "痴女ヘブン", "アロマ企画", "本中", "桃太郎映像出版"):
-            self.assertEqual(MODULE.shape(name), "汉字假名", name)
+            self.assertEqual(MODULE.shape(name), "kana-kanji", name)
 
     def test_pure_katakana_is_its_own_class(self):
         for name in ("ムーディーズ", "プレステージ", "アタッカーズ", "グローリークエスト"):
-            self.assertEqual(MODULE.shape(name), "片假名", name)
+            self.assertEqual(MODULE.shape(name), "katakana", name)
 
     def test_latin_names_include_marks_and_digits(self):
         for name in ("MOODYZ", "kira☆kira", "S1 NO.1 STYLE", "Celeb no Tomo", "E-BODY"):
-            self.assertEqual(MODULE.shape(name), "拉丁", name)
+            self.assertEqual(MODULE.shape(name), "latin", name)
 
 
 class DecideTests(unittest.TestCase):

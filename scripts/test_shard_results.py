@@ -4,6 +4,11 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import sys
+
+if str(Path(__file__).resolve().parents[1] / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 
 
 EXIT_GRACE_SECONDS = 15.0
@@ -18,19 +23,19 @@ def read_report(path: Path) -> dict:
                 or not isinstance(report.get('timings', []), list)
                 or not isinstance(report.get('files', {}), dict)
                 or not isinstance(report.get('results', []), list)):
-            raise ValueError('分片报告字段无效')
+            raise ValueError(t("test_shard_results.badFields"))
         if not all(isinstance(row, dict) and isinstance(row.get('id'), str)
                    and row.get('outcome') in {'pass', 'skip', 'fail', 'error'}
                    for row in report.get('results', ())):
-            raise ValueError('分片结果无效')
+            raise ValueError(t("test_shard_results.badResults"))
         if report['success'] and any(row['outcome'] in {'fail', 'error'} for row in report.get('results', ())):
-            raise ValueError('分片整体结果与用例结果不符')
+            raise ValueError(t("test_shard_results.successMismatch"))
         if not all(isinstance(row, list) and len(row) == 2 and duration(row[0])
                    and isinstance(row[1], str) for row in report.get('timings', ())):
-            raise ValueError('分片耗时无效')
+            raise ValueError(t("test_shard_results.badTimings"))
         if not all(isinstance(name, str) and duration(seconds)
                    for name, seconds in report.get('files', {}).items()):
-            raise ValueError('文件耗时无效')
+            raise ValueError(t("test_shard_results.badFileTimings"))
         return report
     except (OSError, ValueError, UnicodeError, RecursionError) as error:
         return {'success': False, 'count': 0, 'timings': [], 'files': {}, 'results': [],
@@ -79,7 +84,7 @@ def completed_processes(running, folder: Path, completed_at: dict, *, now: float
             if now - completed_at[index] >= EXIT_GRACE_SECONDS:
                 if forced is not None:
                     forced.add(index)
-                print(f'分片 {index + 1} 已写出完成报告，正在回收其未退出的进程。', flush=True)
+                print(t("test_shard_results.reclaiming", index=index + 1), flush=True)
                 stop_process_tree(process)
                 finished.append(index)
     return finished

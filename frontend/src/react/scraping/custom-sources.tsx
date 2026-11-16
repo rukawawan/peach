@@ -15,11 +15,12 @@ import { composingKey } from '../components/ime';
 import { SelectField } from '../settings-panel/legacy-controls';
 import { CUSTOM_SOURCES_URL as URL, CUSTOM_SOURCES_KEY as KEY, fetchCustomSources,
   type CustomSource as Source } from './custom-source-data';
+import { t } from '../../i18n';
 
-const FIELDS = [['code', '番号'], ['title', '标题'], ['studio', '厂牌'], ['series', '系列'],
-  ['release_date', '发行日期'], ['performers', '演员（文本数组）'], ['tags', '标签（文本数组）']] as const;
-const TYPES = [['censored', '有码'], ['amateur', '素人'], ['uncensored', '无码'], ['fc2', 'FC2'],
-  ['kmib', '韩国 MIB'], ['other', '其他'], ['unsure', '待核番号'], ['unknown', '未知']] as const;
+const FIELDS = [['code', t('manage:shared.code')], ['title', t('manage:shared.title')], ['studio', t('manage:customSources.fieldStudio')], ['series', t('manage:shared.series')],
+  ['release_date', t('manage:shared.releaseDate')], ['performers', t('manage:customSources.fieldPerformers')], ['tags', t('manage:customSources.fieldTags')]] as const;
+const TYPES = [['censored', t('manage:customSources.typeCensored')], ['amateur', t('manage:customSources.typeAmateur')], ['uncensored', t('manage:shared.uncensored')], ['fc2', 'FC2'],
+  ['kmib', t('manage:customSources.typeKoreanMib')], ['other', t('manage:shared.other')], ['unsure', t('manage:customSources.typeUnverifiedCode')], ['unknown', t('manage:shared.unknown')]] as const;
 const blank = (): Source => ({ name: '', endpoint: '', enabled: false, fields: { code: 'id', title: 'title' }, content_types: ['censored'] });
 
 export function CustomSources({ receipt }: { receipt(message: string): void }) {
@@ -28,29 +29,29 @@ export function CustomSources({ receipt }: { receipt(message: string): void }) {
   const action = useAction();
   const changed = (result: { items: Source[] }) => queryClient.setQueryData(KEY, result);
   const hasContent = Boolean(query.isPending || query.error || query.data?.items.length || action.error);
-  const add = <Button variant="secondary" onClick={() => setEditing(blank())}>添加来源</Button>;
-  return <Section title="自定义元数据来源">
+  const add = <Button variant="secondary" onClick={() => setEditing(blank())}>{t('manage:customSources.addSource')}</Button>;
+  return <Section title={t('manage:customSources.title')}>
     {hasContent ? <Stack>
-      {query.isPending ? <div aria-busy="true" data-skeleton="" aria-label="读取自定义来源" /> : null}
+      {query.isPending ? <div aria-busy="true" data-skeleton="" aria-label={t('manage:customSources.loading')} /> : null}
       {query.error ? <ErrorText>{errorMessage(query.error)}</ErrorText> : null}
       {query.data?.items.map((source) => <div key={source.id} className="flex flex-wrap items-center gap-3">
         <span className="min-w-0 flex-1">{source.name}</span>
-        <StatusLabel tone={source.enabled ? 'success' : 'neutral'}>{source.enabled ? '已启用' : '已停用'}</StatusLabel>
-        <Button variant="secondary" onClick={() => setEditing(source)}>编辑</Button>
+        <StatusLabel tone={source.enabled ? 'success' : 'neutral'}>{source.enabled ? t('manage:customSources.enabled') : t('manage:customSources.disabled')}</StatusLabel>
+        <Button variant="secondary" onClick={() => setEditing(source)}>{t('manage:shared.edit')}</Button>
         <Button variant="secondary" {...busyProps(action.busy === source.id)} onClick={() => void action.run(source.id!,
           (signal) => apiSend<{ items: Source[] }>(URL, { ...source, enabled: !source.enabled }, 'POST', signal),
-          (result) => { changed(result); receipt(source.enabled ? '已停用来源' : '已启用来源') })}>
-          {source.enabled ? '停用' : '启用'}</Button>
-        <Button variant="danger" onClick={() => confirmModal({ title: '删除自定义来源',
-          body: `删除「${esc(source.name)}」后，采集将不再查询这个来源。`, confirmLabel: '删除来源', danger: true,
+          (result) => { changed(result); receipt(source.enabled ? t('manage:customSources.sourceDisabled') : t('manage:customSources.sourceEnabled')) })}>
+          {source.enabled ? t('manage:customSources.disable') : t('manage:customSources.enable')}</Button>
+        <Button variant="danger" onClick={() => confirmModal({ title: t('manage:customSources.deleteTitle'),
+          body: t('manage:customSources.deleteBody', { name: esc(source.name) }), confirmLabel: t('manage:customSources.deleteConfirm'), danger: true,
           onConfirm: async () => { changed(await apiSend<{ items: Source[] }>(URL, { action: 'delete', id: source.id }));
-            setEditing(null); receipt('已删除来源') } })}>删除</Button>
+            setEditing(null); receipt(t('manage:customSources.deleted')) } })}>{t('manage:shared.delete')}</Button>
       </div>)}
       {action.error ? <ErrorText>{action.error}</ErrorText> : null}
     </Stack> : null}
     {!editing ? hasContent ? <Footer>{add}</Footer> : <Stack><div className="flex justify-end">{add}</div></Stack> : null}
     {editing ? <SourceForm key={editing.id || 'new'} initial={editing} cancel={() => setEditing(null)}
-      saved={(result) => { changed(result); setEditing(null); receipt('已保存来源') }} /> : null}
+      saved={(result) => { changed(result); setEditing(null); receipt(t('manage:customSources.saved')) }} /> : null}
   </Section>;
 }
 
@@ -63,34 +64,34 @@ function SourceForm({ initial, cancel, saved }: {
   const revision = useRef(0);
   const action = useAction();
   const change = (patch: Partial<Source>) => { revision.current++; setSource((current) => ({ ...current, ...patch })); setPreview('') };
-  return <form aria-label="元数据来源配置" aria-busy={action.busy === 'preview'} onSubmit={(event) => {
+  return <form aria-label={t('manage:customSources.formLabel')} aria-busy={action.busy === 'preview'} onSubmit={(event) => {
     event.preventDefault();
     void action.run('save', (signal) => apiSend<{ items: Source[] }>(URL, source, 'POST', signal), saved);
   }}>
     <Stack>
-      <Input label="来源名称" value={source.name} maxLength={80} onChange={(name) => change({ name })} />
-      <Input label="JSON 接口地址" value={source.endpoint} maxLength={2048}
+      <Input label={t('manage:customSources.name')} value={source.name} maxLength={80} onChange={(name) => change({ name })} />
+      <Input label={t('manage:customSources.endpoint')} value={source.endpoint} maxLength={2048}
         placeholder="https://example.com/api/movies/{code}" onChange={(endpoint) => change({ endpoint })} />
       <div className="flex flex-col gap-2">
-        <FieldLabel>来源连接方式</FieldLabel>
-        <SelectField id="custom-source-network" label="来源连接方式" epoch={0} value={source.network || 'direct'}
-          options={[["direct", "直连"], ["peach_proxy", "Peach 代理"]]} onPick={(network) => change({ network })} />
+        <FieldLabel>{t('manage:customSources.network')}</FieldLabel>
+        <SelectField id="custom-source-network" label={t('manage:customSources.network')} epoch={0} value={source.network || 'direct'}
+          options={[["direct", t('manage:processingTraffic.connectionDirect')], ["peach_proxy", t('manage:customSources.peachProxy')]]} onPick={(network) => change({ network })} />
       </div>
       <div className="flex flex-col gap-2">
-        <FieldLabel>接口番号格式</FieldLabel>
-        <SelectField id="custom-source-code-format" label="接口番号格式" epoch={0} value={source.code_format || 'original'}
-          options={[["original", "原样"], ["lowercase", "小写"], ["compact", "去掉连字符"], ["underscore", "连字符转下划线"]]}
+        <FieldLabel>{t('manage:customSources.codeFormat')}</FieldLabel>
+        <SelectField id="custom-source-code-format" label={t('manage:customSources.codeFormat')} epoch={0} value={source.code_format || 'original'}
+          options={[["original", t('manage:customSources.codeAsIs')], ["lowercase", t('manage:customSources.codeLowercase')], ["compact", t('manage:customSources.codeNoHyphens')], ["underscore", t('manage:customSources.codeUnderscores')]]}
           onPick={(code_format) => change({ code_format })} />
       </div>
-      <Help>填写公开 JSON 接口和响应字段路径，例如 data.title。番号字段用于核对作品身份。</Help>
-      {FIELDS.map(([field, label]) => <Input key={field} label={`${label}字段路径`} value={source.fields[field] || ''}
+      <Help>{t('manage:customSources.help')}</Help>
+      {FIELDS.map(([field, label]) => <Input key={field} label={t('manage:customSources.fieldPath', { field: label })} value={source.fields[field] || ''}
         onChange={(path) => { const fields = { ...source.fields }; if (path) fields[field] = path; else delete fields[field]; change({ fields }) }} />)}
-      <div className="flex flex-wrap gap-3" role="group" aria-label="适用内容类型">
+      <div className="flex flex-wrap gap-3" role="group" aria-label={t('manage:customSources.contentTypes')}>
         {TYPES.map(([type, label]) => <Checkbox key={type} isSelected={source.content_types.includes(type)}
           onChange={(checked) => change({ content_types: checked ? [...source.content_types, type] : source.content_types.filter((kind) => kind !== type) })}>{label}</Checkbox>)}
       </div>
-      <Checkbox isSelected={source.enabled} onChange={(enabled) => change({ enabled })}>启用来源</Checkbox>
-      <Input label="试查番号（回车查询）" value={code} onChange={(value) => {
+      <Checkbox isSelected={source.enabled} onChange={(enabled) => change({ enabled })}>{t('manage:customSources.enableSource')}</Checkbox>
+      <Input label={t('manage:customSources.testCode')} value={code} onChange={(value) => {
         revision.current++; setCode(value); setPreview('');
       }} onKeyDown={(event) => {
         if (event.key !== 'Enter' || composingKey(event.nativeEvent)) return;
@@ -101,11 +102,11 @@ function SourceForm({ initial, cancel, saved }: {
             if (current === revision.current) setPreview(JSON.stringify(result.record, null, 2));
           }, (cause) => { if (current === revision.current) action.setError(errorMessage(cause)) });
       }} />
-      {action.busy === 'preview' ? <Help role="status"><span dangerouslySetInnerHTML={{ __html: spinnerHtml('正在试查来源') }} />正在试查来源</Help> : null}
-      {preview ? <CodeBlock code={preview} language="json" label="元数据接口返回" /> : null}
+      {action.busy === 'preview' ? <Help role="status"><span dangerouslySetInnerHTML={{ __html: spinnerHtml(t('manage:customSources.testing')) }} />{t('manage:customSources.testing')}</Help> : null}
+      {preview ? <CodeBlock code={preview} language="json" label={t('manage:customSources.response')} /> : null}
       {action.error ? <ErrorText>{action.error}</ErrorText> : null}
     </Stack>
-    <Footer><Button variant="secondary" type="button" onClick={cancel}>取消</Button>
-      <Button type="submit" {...busyProps(action.busy === 'save')}>保存来源</Button></Footer>
+    <Footer><Button variant="secondary" type="button" onClick={cancel}>{t('manage:shared.cancel')}</Button>
+      <Button type="submit" {...busyProps(action.busy === 'save')}>{t('manage:customSources.saveSource')}</Button></Footer>
   </form>;
 }

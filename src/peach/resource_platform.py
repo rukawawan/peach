@@ -39,7 +39,7 @@ def thread_times(process, identities):
             code = ctypes.get_errno()
             if code == errno.ESRCH:
                 continue  # 采样前线程已退出。
-            raise OSError(code, 'macOS 原生线程 CPU 时间未取得')
+            raise OSError(code, 'macOS native thread CPU time not available')
         result[identity] = (info.user + info.system) / 1_000_000_000
     return result
 
@@ -69,7 +69,7 @@ def cgroup_capacity(proc_root, pid):
         mount = Path(_unescape(fields[4]))
         current = mount.joinpath(*group.relative_to(root).parts)
         if '..' in group.parts:
-            raise ValueError('CPU 控制组路径不可访问')
+            raise ValueError("CPU cgroup path isn't accessible")
         while True:
             try:
                 if unified:
@@ -78,10 +78,10 @@ def cgroup_capacity(proc_root, pid):
                     quota = (current / 'cpu.cfs_quota_us').read_text().strip()
                     period = (current / 'cpu.cfs_period_us').read_text().strip()
                 if int(period) <= 0:
-                    raise ValueError('CPU 控制组周期无效')
+                    raise ValueError("invalid CPU cgroup period")
                 if quota not in ('max', '-1'):
                     if int(quota) <= 0:
-                        raise ValueError('CPU 控制组配额无效')
+                        raise ValueError("invalid CPU cgroup quota")
                     capacities.append(int(quota) / int(period))
             except FileNotFoundError:
                 pass  # 根组或未启用 CPU 控制器的组没有配额文件。
@@ -94,11 +94,11 @@ def cgroup_capacity(proc_root, pid):
 def cpu_capacity(process):
     capacity = psutil.cpu_count()
     if not capacity:
-        raise ValueError('CPU 总容量未取得')
+        raise ValueError("total CPU capacity not available")
     if sys.platform.startswith('linux'):
         allowed = process.cpu_affinity()
         if not allowed:
-            raise ValueError('执行进程的 CPU 可用范围未取得')
+            raise ValueError("CPU affinity of the process not available")
         capacity = min(capacity, len(allowed))
         quota = cgroup_capacity(Path('/proc'), process.pid)
         if quota is not None:

@@ -361,8 +361,9 @@ def best_mark(url: str, fetch, render, fallback=None, accept=None) -> bytes | No
     """
     tried = 0
     first: tuple[bytes, str] | None = None
-    for candidate in discover(url, fetch):
-        if tried >= MAX_FETCH:
+    # `tried` 只数取到了的；页面声明一长串取不到的图标时，按尝试次数再封一道顶。
+    for attempt, candidate in enumerate(discover(url, fetch)):
+        if tried >= MAX_FETCH or attempt >= MAX_FETCH * 3:
             break
         got = fetch(candidate.url)
         if got is None:

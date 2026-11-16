@@ -7,6 +7,7 @@ import { memo, useEffect, useLayoutEffect, useRef, type MouseEvent } from 'react
 import {
   expandMiniplayer, closeMiniplayer, playMiniplayer, registerMiniplayer, seekMiniplayer,
 } from './stage-player';
+import { t } from '../../i18n';
 
 const Glyph = ({ name }: { name: string }) => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><use href={`#i-${name}`} /></svg>
@@ -41,24 +42,24 @@ export const Miniplayer = memo(function Miniplayer() {
   useEffect(() => publishBottomSpace(root.current!), []);
 
   return (
-    <aside ref={root} data-miniplayer="" id="miniplayer" data-corner="br" aria-label="小窗播放" hidden>
+    <aside ref={root} data-miniplayer="" id="miniplayer" data-corner="br" aria-label={t('catalog:miniplayer.label')} hidden>
       <div ref={card} data-miniplayer-card="" id="miniplayerCard">
         <div ref={frame} data-miniplayer-frame="" id="miniplayerFrame">
           <div data-miniplayer-scrim="">
-            <button type="button" data-miniplayer-button="expand" id="miniplayerExpand" aria-label="展开到详情"
+            <button type="button" data-miniplayer-button="expand" id="miniplayerExpand" aria-label={t('catalog:miniplayer.expand')}
               aria-keyshortcuts="i" onClick={pressed(expandMiniplayer)}><Glyph name="maximize-2" /></button>
-            <button type="button" data-miniplayer-button="close" id="miniplayerClose" aria-label="关闭小窗"
+            <button type="button" data-miniplayer-button="close" id="miniplayerClose" aria-label={t('catalog:miniplayer.close')}
               onClick={pressed(closeMiniplayer)}><Glyph name="x" /></button>
             <button ref={back} type="button" data-miniplayer-seek="" id="miniplayerBack"
               onClick={pressed(() => seekMiniplayer(-1))}><Glyph name="rotate-ccw" /></button>
-            <button ref={play} type="button" data-miniplayer-play="" id="miniplayerPlay" aria-label="暂停" aria-keyshortcuts="k"
+            <button ref={play} type="button" data-miniplayer-play="" id="miniplayerPlay" aria-label={t('catalog:shared.pause')} aria-keyshortcuts="k"
               onClick={pressed(playMiniplayer)} dangerouslySetInnerHTML={PLAY_GLYPH} />
             <button ref={ahead} type="button" data-miniplayer-seek="" id="miniplayerAhead"
               onClick={pressed(() => seekMiniplayer(1))}><Glyph name="rotate-cw" /></button>
             <span ref={time} className="mono" data-miniplayer-time="" id="miniplayerTime">0:00 / 0:00</span>
           </div>
         </div>
-        <button ref={info} type="button" data-miniplayer-info="" id="miniplayerInfo" aria-label="展开到详情"
+        <button ref={info} type="button" data-miniplayer-info="" id="miniplayerInfo" aria-label={t('catalog:miniplayer.expand')}
           onClick={() => expandMiniplayer()}>
           <span ref={title} data-miniplayer-title="" id="miniplayerTitle" />
           <span ref={sub} data-miniplayer-sub="" id="miniplayerSub" />

@@ -2,6 +2,7 @@
 import { randomId } from '../core/random-id';
 import { rememberVolume } from './volume-memory';
 import type { PlayerEvents, PlayerSource, QualityLevelList, VideojsFactory, VjsPlayer } from './types';
+import { interfaceLanguage, t } from '../i18n';
 
 interface HlsEngine {
   bandwidthEstimate: number;
@@ -24,7 +25,7 @@ export const createV10Player: VideojsFactory = (video, options) => {
   const provider = document.createElement('video-player');
   root.className = 'video-js vjs-paused vjs-user-active';
   root.id = video.id || `peach-player-${randomId()}`;
-  root.setAttribute('lang', 'zh-CN');
+  root.setAttribute('lang', interfaceLanguage);
   const container = document.createElement('media-container');
   let media = document.createElement('hlsjs-video') as MediaElement;
   const parent = video.parentNode;
@@ -34,25 +35,25 @@ export const createV10Player: VideojsFactory = (video, options) => {
   if (options.poster) video.poster = String(options.poster);
   media.append(video); container.append(media); provider.append(container); root.append(provider);
   if (options.controls !== false) {
-    container.insertAdjacentHTML('beforeend', `<div class="vjs-loading-spinner" aria-label="正在缓冲"></div>
+    container.insertAdjacentHTML('beforeend', `<div class="vjs-loading-spinner" aria-label="${t('catalog:playerShell.buffering')}"></div>
       <div class="vjs-error-display"><div class="vjs-modal-dialog-content" role="alert"></div></div>
       <div class="vjs-control-bar">
-        <media-play-button class="vjs-play-control vjs-control vjs-button" label="播放"></media-play-button>
+        <media-play-button class="vjs-play-control vjs-control vjs-button" label="${t('catalog:shared.play')}"></media-play-button>
         <div class="vjs-volume-panel vjs-control vjs-volume-panel-horizontal">
-          <media-mute-button class="vjs-mute-control vjs-control vjs-button" label="静音"></media-mute-button>
-          <div class="vjs-volume-control vjs-volume-horizontal"><media-volume-slider class="vjs-volume-bar vjs-slider vjs-slider-horizontal" label="音量">
+          <media-mute-button class="vjs-mute-control vjs-control vjs-button" label="${t('catalog:playerControls.mute')}"></media-mute-button>
+          <div class="vjs-volume-control vjs-volume-horizontal"><media-volume-slider class="vjs-volume-bar vjs-slider vjs-slider-horizontal" label="${t('catalog:playerShell.volume')}">
             <media-slider-track><media-slider-fill class="vjs-volume-level"></media-slider-fill></media-slider-track>
             <media-slider-thumb class="vjs-volume-thumb"></media-slider-thumb>
             <media-slider-value class="vjs-volume-tooltip"></media-slider-value>
           </media-volume-slider></div>
         </div>
-        <div class="vjs-progress-control vjs-control"><media-time-slider class="vjs-progress-holder vjs-slider vjs-slider-horizontal" label="播放进度">
+        <div class="vjs-progress-control vjs-control"><media-time-slider class="vjs-progress-holder vjs-slider vjs-slider-horizontal" label="${t('catalog:playerShell.seek')}">
           <media-slider-track><media-slider-buffer class="vjs-load-progress"></media-slider-buffer><media-slider-fill class="vjs-play-progress"></media-slider-fill></media-slider-track>
           <media-slider-thumb class="vjs-progress-thumb"></media-slider-thumb>
         </media-time-slider></div>
-        <div class="vjs-subtitles-control vjs-control"><button type="button" class="vjs-button" aria-label="开启字幕" aria-pressed="false">CC</button></div>
-        <media-pip-button class="vjs-picture-in-picture-control vjs-control vjs-button" label="画中画"></media-pip-button>
-        <media-fullscreen-button class="vjs-fullscreen-control vjs-control vjs-button" label="全屏"></media-fullscreen-button>
+        <div class="vjs-subtitles-control vjs-control"><button type="button" class="vjs-button" aria-label="${t('catalog:subtitles.turnOn')}" aria-pressed="false">CC</button></div>
+        <media-pip-button class="vjs-picture-in-picture-control vjs-control vjs-button" label="${t('catalog:playerControls.pictureInPicture')}"></media-pip-button>
+        <media-fullscreen-button class="vjs-fullscreen-control vjs-control vjs-button" label="${t('catalog:playerControls.fullScreen')}"></media-fullscreen-button>
       </div>`);
   }
   const events = new EventTarget();
@@ -79,18 +80,25 @@ export const createV10Player: VideojsFactory = (video, options) => {
     active();
   };
   const emit = (name: string) => events.dispatchEvent(new Event(name));
+  // 进入等待时的播放位置：之后时间往前走了，就说明已经在播。
+  let waitingAt = -1;
   for (const name of ['play', 'pause', 'ended', 'loadedmetadata', 'durationchange', 'timeupdate', 'progress', 'loadstart', 'waiting', 'stalled', 'canplay', 'playing', 'seeking', 'seeked', 'ratechange', 'volumechange', 'resize', 'enterpictureinpicture', 'leavepictureinpicture']) {
     video.addEventListener(name, () => {
       if (['play', 'pause', 'ended', 'loadedmetadata'].includes(name)) update();
-      if (['waiting', 'stalled', 'seeking'].includes(name)) root.classList.add('vjs-waiting');
+      // stalled 只说明暂时没收到数据；缓冲还够（HAVE_FUTURE_DATA 及以上）时照常在播，不算等待。
+      if (['waiting', 'seeking'].includes(name) || (name === 'stalled' && video.readyState < 3)) {
+        root.classList.add('vjs-waiting'); waitingAt = video.currentTime;
+      }
       if (['canplay', 'playing', 'seeked', 'pause'].includes(name)) root.classList.remove('vjs-waiting');
+      // iOS Safari 渐进下载时会发 stalled、waiting，缓冲够了接着播却不再发 canplay、playing：时间在走就清掉。
+      if (name === 'timeupdate' && !video.seeking && video.currentTime !== waitingAt) root.classList.remove('vjs-waiting');
       emit(name);
     }, { signal });
   }
   const showError = (value: unknown, notify = true) => {
     failure = value; root.classList.add('vjs-error');
     const message = root.querySelector('.vjs-modal-dialog-content');
-    if (message) message.textContent = (value as { message?: string })?.message || '视频暂时无法播放';
+    if (message) message.textContent = (value as { message?: string })?.message || t('catalog:playerShell.cannotPlay');
     if (notify) emit('error');
   };
   media.addEventListener('error', () => showError(media.error || video.error), { signal });
@@ -154,7 +162,7 @@ export const createV10Player: VideojsFactory = (video, options) => {
       const generation = ++playGeneration;
       // 官方 HLS adapter 在微任务里挂载片源；原生 play 必须使用已经挂载的片源。
       await Promise.resolve();
-      if (disposed || generation !== playGeneration) throw new DOMException('播放请求已取消', 'AbortError');
+      if (disposed || generation !== playGeneration) throw new DOMException(t('catalog:playerShell.requestCanceled'), 'AbortError');
       return video.play();
     },
     pause: () => { playGeneration++; video.pause() },

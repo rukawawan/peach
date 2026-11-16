@@ -16,10 +16,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from peach.interface_text import dev as t
 from peach.user_agent import USER_AGENT
 
-REQUIRED_ARTIFACTS = {"desktop-candidate", "macos-candidate-arm64", "macos-candidate-x86_64", "docker-candidate"}
-REQUIRED_JOBS = {"Windows x64 独立测试包", "仅下载制品验收", "Linux amd64 镜像构建与验收",
+#: Docker 镜像按架构各在原生 runner 上构建验收，发布时合成同一个多架构 index（ADR-0121）。
+DOCKER_ARCHITECTURES = ("amd64", "arm64")
+REQUIRED_ARTIFACTS = {"desktop-candidate", "macos-candidate-arm64", "macos-candidate-x86_64",
+    *(f"docker-candidate-{arch}" for arch in DOCKER_ARCHITECTURES)}
+REQUIRED_JOBS = {"Windows x64 独立测试包", "仅下载制品验收",
+    *(f"Linux {arch} 镜像构建与验收" for arch in DOCKER_ARCHITECTURES),
     "macOS arm64 独立测试包", "macOS x86_64 独立测试包",
     "macOS arm64 仅下载制品验收", "macOS x86_64 仅下载制品验收"}
 
@@ -27,7 +32,7 @@ REQUIRED_JOBS = {"Windows x64 独立测试包", "仅下载制品验收", "Linux 
 class ArtifactRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, file, code, message, headers, url):
         if urlsplit(url).scheme != "https":
-            raise ValueError("GitHub 产物重定向必须使用 HTTPS")
+            raise ValueError(t("github_release_candidate.redirectHttps"))
         redirected = super().redirect_request(request, file, code, message, headers, url)
         if redirected is not None and urlsplit(url).hostname != "api.github.com":
             redirected.remove_header("Authorization")
@@ -49,25 +54,25 @@ def api(repo: str, endpoint: str):
 
 def select(repo: str, sha: str) -> dict:
     if not re.fullmatch(r"[0-9a-f]{40}", sha) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-        raise ValueError("GitHub 晋级需要明确仓库与完整提交")
+        raise ValueError(t("github_release_candidate.repoAndCommitRequired"))
     # 版本提交推送时自动演练；其他主线提交的推送演练被跳过，只能手动触发。
     runs = api(repo, f"actions/workflows/release.yml/runs?head_sha={sha}&per_page=100")["workflow_runs"]
     matching = [row for row in runs if row["head_sha"] == sha and row["head_branch"] == "master"
                 and row["event"] in {"push", "workflow_dispatch"}]
     if not matching:
-        raise ValueError("未取得同一提交的主线发布演练")
+        raise ValueError(t("github_release_candidate.noRehearsal"))
     succeeded = [row for row in matching if row["status"] == "completed" and row["conclusion"] == "success"]
     if not succeeded:
-        raise ValueError("主线发布演练尚未成功")
+        raise ValueError(t("github_release_candidate.rehearsalNotSuccessful"))
     run = max(succeeded, key=lambda row: (row["id"], row.get("run_attempt", 1)))
     jobs = api(repo, f"actions/runs/{run['id']}/jobs?per_page=100")["jobs"]
     passed = {row["name"] for row in jobs if row["conclusion"] == "success"}
     if not REQUIRED_JOBS <= passed:
-        raise ValueError("演练缺少必需的构建或独立制品验收")
+        raise ValueError(t("github_release_candidate.rehearsalMissingJobs"))
     artifacts = api(repo, f"actions/runs/{run['id']}/artifacts?per_page=100")["artifacts"]
     selected = {row["name"]: row for row in artifacts if row["name"] in REQUIRED_ARTIFACTS and not row["expired"]}
     if set(selected) != REQUIRED_ARTIFACTS or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", str(row.get("digest", ""))) for row in selected.values()):
-        raise ValueError("候选产物已过期、缺失或缺少摘要；重新执行演练")
+        raise ValueError(t("github_release_candidate.candidateUnusable"))
     return {"run_id": run["id"], "commit": sha, "artifacts": selected}
 
 
@@ -77,10 +82,10 @@ def extract(package: Path, destination: Path) -> None:
             parts = PurePosixPath(info.filename).parts
             if (not parts or ".." in parts or "\\" in info.filename or ":" in info.filename
                     or PurePosixPath(info.filename).is_absolute() or (info.external_attr >> 16) & 0o170000 == 0o120000):
-                raise ValueError("候选 ZIP 包含无效路径")
+                raise ValueError(t("github_release_candidate.zipInvalidPath"))
             target = destination.joinpath(*parts)
             if not target.resolve().is_relative_to(destination.resolve()):
-                raise ValueError("候选 ZIP 路径越出目标")
+                raise ValueError(t("github_release_candidate.zipEscapes"))
             if info.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
@@ -88,7 +93,7 @@ def extract(package: Path, destination: Path) -> None:
             if target.exists():
                 with archive.open(info) as source, target.open("rb") as current:
                     if hashlib.file_digest(source, "sha256").digest() != hashlib.file_digest(current, "sha256").digest():
-                        raise ValueError("候选文件同名但内容不同")
+                        raise ValueError(t("github_release_candidate.sameNameDiffers"))
                 continue
             with archive.open(info) as source, target.open("xb") as stream:
                 shutil.copyfileobj(source, stream)
@@ -97,7 +102,7 @@ def extract(package: Path, destination: Path) -> None:
 def download(repo: str, sha: str, group: str, destination: Path) -> dict:
     receipt = select(repo, sha)
     names = {"desktop": {"desktop-candidate"}, "macos": {"macos-candidate-arm64", "macos-candidate-x86_64"},
-             "docker": {"docker-candidate"}}[group]
+             "docker": {f"docker-candidate-{arch}" for arch in DOCKER_ARCHITECTURES}}[group]
     destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="peach-candidate-") as directory:
         for name in sorted(names):
@@ -108,37 +113,40 @@ def download(repo: str, sha: str, group: str, destination: Path) -> dict:
             with package.open("rb") as stream:
                 actual = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
             if actual != row["digest"]:
-                raise ValueError("下载产物与演练的 SHA-256 不一致")
+                raise ValueError(t("github_release_candidate.sha256Mismatch"))
             extract(package, destination)
     return {"promoted": True, "run_id": receipt["run_id"], "commit": sha, "group": group}
 
 
-def image_receipt(destination: Path, version: str, *, verify: bool) -> dict:
+def image_receipt(destination: Path, version: str, architecture: str, *, verify: bool) -> dict:
     actual = json.loads(subprocess.check_output(["docker", "image", "inspect", "--format", "{{json .}}",
-                                                "longmeidao/peach:candidate"], text=True, encoding="utf-8"))
+                                                f"longmeidao/peach:candidate-{architecture}"], text=True, encoding="utf-8"))
     labels = actual.get("Config", {}).get("Labels", {})
     sha = os.environ["GITHUB_SHA"]
     if labels.get("org.opencontainers.image.revision") != sha or labels.get("org.opencontainers.image.version") != version:
-        raise ValueError("镜像标签与发布提交或版本不一致")
-    expected = {"image_id": actual["Id"], "commit": sha, "version": version}
+        raise ValueError(t("github_release_candidate.imageTagMismatch"))
+    if actual.get("Architecture") != architecture:
+        raise ValueError(t("github_release_candidate.imageArchitectureMismatch"))
+    expected = {"image_id": actual["Id"], "commit": sha, "version": version, "architecture": architecture}
     if verify:
         if json.loads(destination.read_text(encoding="utf-8")) != expected:
-            raise ValueError("镜像与演练验收的摘要不一致")
+            raise ValueError(t("github_release_candidate.imageDigestMismatch"))
     else:
         destination.write_text(json.dumps(expected, indent=2) + "\n", encoding="utf-8")
     return expected
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("github_release_candidate.description"))
     parser.add_argument("group", choices=("desktop", "macos", "docker", "image-record", "image-verify"))
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--version")
+    parser.add_argument("--arch", choices=DOCKER_ARCHITECTURES)
     args = parser.parse_args()
     if args.group.startswith("image-"):
-        if not args.version:
-            parser.error("镜像核验需要版本")
-        result = image_receipt(args.destination, args.version, verify=args.group == "image-verify")
+        if not args.version or not args.arch:
+            parser.error(t("github_release_candidate.imageVersionRequired"))
+        result = image_receipt(args.destination, args.version, args.arch, verify=args.group == "image-verify")
     else:
         result = download(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_SHA"], args.group, args.destination)
     print(json.dumps(result))

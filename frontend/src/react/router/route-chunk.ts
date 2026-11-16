@@ -5,6 +5,7 @@
  *
  * 打开页面时装载失败，可能是服务端已经换了一版产物、旧入口指着的 chunk 不在了：服务还活着就整页重载一次拿新入口，
  * 同一会话里短时间内只重载一次；服务端连不上时照常抛错，交给页面的错误边界。空闲预热失败不重载，留到打开时再试。 */
+import { t } from '../../i18n';
 
 export interface RouteChunk<M> {
   /** 打开页面时装载这一页的模块。失败的那一次不记住，下次打开重试。 */
@@ -41,7 +42,7 @@ export function routeChunk<M>(load: () => Promise<M>): RouteChunk<M> {
   return {
     preload: () => attempt().catch(async (error: unknown) => { await recoverStaleBuild(); throw error }),
     get: () => {
-      if (!loaded) throw new Error('页面代码还没装载');
+      if (!loaded) throw new Error(t('shell:router.chunkNotLoaded'));
       return loaded.module;
     },
   };

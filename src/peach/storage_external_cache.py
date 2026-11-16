@@ -10,6 +10,7 @@ from google.protobuf.empty_pb2 import Empty
 from .clouddrive_proxy import client_for
 from .downloads import DownloadSettings
 from .storage_budget import validate
+from .user_messages import UserValueError
 
 
 def read(config):
@@ -22,12 +23,12 @@ def read(config):
         except ValueError:
             local = host == 'localhost'
         if not local:
-            raise ValueError('远程 CloudDrive 请手动填写 Peach 可访问的缓存映射目录')
+            raise UserValueError('errors.storageExternalCache.remoteNeedsManualPath')
         if not client.token_info().permissions.allow_get_system_settings:
-            raise ValueError('自动读取需要 CloudDrive API 令牌的“查看系统设置”权限')
-        settings = client.call('GetSystemSettings', Empty(), '读取缓存目录')
+            raise UserValueError('errors.storageExternalCache.tokenNeedsPermission')
+        settings = client.call('GetSystemSettings', Empty(), 'readCacheDir')
         if not settings.HasField('fileBufferDiskCacheLocation') or not settings.fileBufferDiskCacheLocation:
-            raise ValueError('CloudDrive 未返回缓存目录，请手动填写')
+            raise UserValueError('errors.storageExternalCache.noCacheDirectory')
         path = validate({'external_cache_path': settings.fileBufferDiskCacheLocation}).external_cache_path
         with os.scandir(path):
             pass

@@ -4,9 +4,13 @@
  * route() 留在应用导航域，因为它还要同步标题与界面动作。 */
 import { entityLinkId, registerEntityLink, registerResponseEntities } from './entity-links';
 import { SOURCE_LABELS } from './media-sources';
-import { requestErrorMessage } from './request-error';
+import { markResolved, requestErrorMessage } from './request-error';
+import { serverText } from './server-text';
+import { noticeFailedResponse, noticeRequestFailure } from './service-status';
 import { iconGeometry } from './icon-geometry';
 import { libraryScopedPath } from './library-scope';
+import { t } from '../i18n';
+import { linkLabel } from './stored-values';
 export { registerEntityLink, registerResponseEntities } from './entity-links';
 export { requestErrorMessage } from './request-error';
 const $=(s:string)=>document.querySelector(s);
@@ -25,12 +29,13 @@ const api=async(p:string,o?:RequestInit):Promise<unknown>=>{
   const init:RequestInit={headers:{'Content-Type':'application/json'},...rest};
   if(signal)init.signal=signal;
   let response:Response;
-  try{response=await fetch(p,init)}catch(error:any){if(error?.name==='AbortError')throw error;throw new Error(requestErrorMessage(error),{cause:error})}
+  try{response=await fetch(p,init)}catch(error:any){noticeRequestFailure(error);if(error?.name==='AbortError')throw error;throw markResolved(new Error(requestErrorMessage(error),{cause:error}))}
   let payload:any=null;
   try{payload=await response.json()}catch{}
   if(!response.ok){
-    const detail=payload&&(payload.message||payload.detail||payload.error);
-    throw new Error(requestErrorMessage(detail,response.status));
+    noticeFailedResponse(response.status,payload);
+    const reason=serverText(payload);
+    throw markResolved(new Error(reason||requestErrorMessage('',response.status)));
   }
   registerResponseEntities(p,payload);
   return payload;
@@ -60,7 +65,7 @@ const mapLimit=async<T,R>(items:Iterable<T>,limit:number,run:(item:T,index:numbe
 };
 const STATE_ROUTES:Record<string,string>={fresh:'/unseen',later:'/watch-later',flagged:'/flagged',ads:'/junk-files'};
 const ROUTE_STATES:Record<string,string>=Object.fromEntries(Object.entries(STATE_ROUTES).map(([state,path])=>[path,state]));
-const STATE_LABELS:Record<string,string>={fresh:'没看过',later:'稍后看',flagged:'已标记',ads:'垃圾文件'};
+const STATE_LABELS:Record<string,string>={fresh:t('shell:catalogView.unwatched'),later:t('shell:catalogView.watchLater'),flagged:t('shell:catalogView.flagged'),ads:t('shell:catalogView.junkFiles')};
 const isCatalogPath=(path:string)=>path==='/'||path==='/wall'||Object.prototype.hasOwnProperty.call(ROUTE_STATES,path);
 const ENTITY_ROUTES:Record<string,string>={performer:'performers',studio:'studios',creator:'creators',series:'series',agency:'agencies',tag:'tags'};
 const ROUTE_ENTITIES:Record<string,string>={performers:'performer',studios:'studio',creators:'creator',series:'series',agencies:'agency',tags:'tag'};
@@ -81,7 +86,7 @@ const esc=(s:unknown)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 const SITE_NAMES:[string,string][]=[['nax-pro.com','NAX'],['t-powers.co.jp','T-POWERS'],['dmm.co.jp','DMM'],
   ['mgstage.com','MGStage'],['av-event.jp','AV-EVENT'],['k-mib.com','K-MIB'],
   ['minnano-av.com','みんなのAV'],
-  ['km-produce.com','KMP'],['mousouzoku-av.com','妄想族'],['mines-pro.jp','マインズ'],
+  ['km-produce.com','KMP'],['mousouzoku-av.com','妄想族'],['mines-pro.jp','マインズ'], // i18n-exempt: 站点短名是内容
   ['lightpro.jp','LIGHT'],['eltra.jp','ELTRA'],['linx.live','LINX'],['bambi.ne.jp','Bambi'],
   ['prestige-av.com','Prestige'],['cmore.jp','C-more'],['so-agent.jp','SO MODEL'],
   ['attractive-llc.net','Attractive'],['krone-web.jp','KRONE'],['actentertainment.jp','ACT'],
@@ -141,15 +146,15 @@ const foldName=(s:unknown)=>String(s??'').normalize('NFKC').trim().toLocaleLower
 const ARCHIVE_HOSTS=['web.archive.org'];
 const isArchiveLink=(url:unknown)=>ARCHIVE_HOSTS.includes(linkHost(url));
 const officialLinkText=(link:{url?:string;label?:string},kind:string,names:readonly string[]=[])=>{
-  const text=siteName(link.url)||link.label||'';
+  const text=siteName(link.url)||linkLabel(link.label);
   if((kind!=='studio'&&kind!=='agency')||isArchiveLink(link.url))return text;
   const said=[text,link.label].map(foldName).filter(Boolean);
-  const own=!said.length||said.includes('官方网站')||said.some(shown=>
+  const own=!said.length||said.includes('official-site')||said.some(shown=>
     bareHost(shown)===linkHost(link.url)||names.some(name=>{
       const folded=foldName(name);
       return Boolean(folded)&&(folded.includes(shown)||shown.includes(folded));
     }));
-  return own?'官方网站':text;
+  return own?t('shell:sourceLink.officialSite'):text;
 };
 /* 什么才算一个真时长——只有这一处说了算。
 
@@ -164,7 +169,7 @@ const realDuration=(value:unknown)=>{const n=Number(value);return Number.isFinit
 /** 秒数格式化成 `h:mm:ss`／`m:ss`，48 小时起写成 `N 天 N 小时`；`0`、负数与非有限值都是 `—`
  *  （probe 的硬失败哨兵）。 */
 const fmtDur:(seconds:number|null|undefined)=>string=(s:any)=>{s=realDuration(s);if(!s)return'—';s=Math.round(s);
-  if(s>=48*3600){const d=Math.floor(s/86400),hours=Math.floor((s%86400)/3600);return hours?`${d} 天 ${hours} 小时`:`${d} 天`}
+  if(s>=48*3600){const d=Math.floor(s/86400),hours=Math.floor((s%86400)/3600);return hours?t('shell:duration.daysHours', { days: d, count: hours }):t('shell:duration.days', { count: d })}
   const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;
   return h?`${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`:`${m}:${String(x).padStart(2,'0')}`};
 /** 秒数格式化成播放器时钟 `h:mm:ss`／`m:ss`；非数值当 0。 */
@@ -174,9 +179,9 @@ const fmtClock:(seconds:unknown)=>string=(s:any)=>{s=Math.max(0,Math.floor(Numbe
    非零的最少写 1 KB，免得 1 字节读成「0」。缺值、NaN 与负数是「大小未知」；0 是真的 0——
    可回收空间、已下载量这类读数会是 0，单个文件的 0 字节由调用方判成未知。 */
 const fmtSize:(bytes:number|null|undefined)=>string=(value:any)=>{
-  if(value===null||value===undefined||value==='')return '大小未知';
+  if(value===null||value===undefined||value==='')return t('shell:fileSize.unknown');
   const b=Number(value);
-  if(!Number.isFinite(b)||b<0)return '大小未知';
+  if(!Number.isFinite(b)||b<0)return t('shell:fileSize.unknown');
   if(b===0)return '0 B';
   if(b<1048576)return `${Math.max(1,Math.round(b/1024))} KB`;
   return b>=1125899906842624?(b/1125899906842624).toFixed(2)+' PB':b>=1099511627776?(b/1099511627776).toFixed(2)+' TB':b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.floor(b/1048576)+' MB'};
@@ -203,7 +208,7 @@ const clipGraphemes=(value:unknown,max:number)=>{
   return parts.length>max?`${parts.slice(0,Math.max(0,max-1)).join('')}…`:parts.join('');
 };
 /** 来源代号到界面名称：`local`→`本地`、`115`→`115`、`pikpak`→`PikPak`、`online`→`在线`。 */
-const LOC:Record<string,string>={...SOURCE_LABELS,local:'本地',online:'在线'};
+const LOC:Record<string,string>={...SOURCE_LABELS,local:t('shell:storageLabel.localLabel'),online:t('shell:storageLabel.online')};
 /* 种子随机：FNV-1a 把「种子 + 键」压成一个 32 位数当排序键。同一个种子下顺序稳定，
    换种子就是另一套顺序，客户端不必存 PRNG 状态，也不必让后端多带一个参数。首页的
    抽样和关注页岛的两排共用这一份，同一粒种子两边取到的是同一批。 */
@@ -215,6 +220,7 @@ const seededRank=(seed:number|string,value:string)=>{
 /* 掷一粒取样种子。异或结果是有符号 32 位，先转无符号再取模：种子要写进地址，后端只认非负整数。 */
 const newSeed=()=>String(((Date.now()^(Math.random()*1e9|0))>>>0)%99991);
 /* 时长四档是筛选条上的时长段，不是内容标签：目录的标签筛选里不收它们，地址上带来的也摘掉。 */
+// i18n-exempt: 时长段的标签值，与地址和标签数据比对
 const DURATION_TAGS:ReadonlySet<string>=new Set(['短片-2分内','中片-10分内','长片-30分内','超长片-30分上']);
 const cleanTagFilter=(value:unknown)=>String(value||'').split(',').filter(tag=>tag&&!DURATION_TAGS.has(tag)).join(',');
 

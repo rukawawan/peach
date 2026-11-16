@@ -14,6 +14,7 @@ import type { SettingsPanelHost } from './settings-panel-api';
 import { Button } from '@/components/base/buttons/button';
 import { resetSidebarOrder } from '../../sidebar';
 import { NavigationDropLine, restoreNavigationOrder } from '../components/navigation-order';
+import { t } from '../../i18n';
 
 /* 首页那一项的键是空串；空串写进属性和 dataTransfer 都等于没写，给它一个占位。 */
 const HOME = '__home__';
@@ -80,11 +81,11 @@ export function SidebarOrder({ host }: { host: SettingsPanelHost }) {
           <span data-sidebar-label=""><i data-sidebar-grip="" aria-hidden="true"><Icon name="grip-vertical" /></i>
             <Icon name={glyph ?? ''} /><b>{label}</b></span>
           <span data-sidebar-actions="">
-            <button type="button" data-sidebar-key={key} data-sidebar-move="-1" aria-label={`上移 ${label}`} title="上移"
+            <button type="button" data-sidebar-key={key} data-sidebar-move="-1" aria-label={t('settings:sidebarOrder.moveItemUp', { label })} title={t('settings:sidebarOrder.moveUp')}
               disabled={index === 0} onClick={() => step(key, -1)}><Icon name="chevron-up" /></button>
-            <button type="button" data-sidebar-key={key} data-sidebar-move="1" aria-label={`下移 ${label}`} title="下移"
+            <button type="button" data-sidebar-key={key} data-sidebar-move="1" aria-label={t('settings:sidebarOrder.moveItemDown', { label })} title={t('settings:sidebarOrder.moveDown')}
               disabled={index === visible.length - 1} onClick={() => step(key, 1)}><Icon name="chevron-down" /></button>
-            <button type="button" data-sidebar-key={key} data-sidebar-hide="" aria-label={`隐藏 ${label}`} title="隐藏"
+            <button type="button" data-sidebar-key={key} data-sidebar-hide="" aria-label={t('settings:sidebarOrder.hideItem', { label })} title={t('settings:sidebarOrder.hide')}
               disabled={visible.length === 1}
               onClick={() => { if (order.length > 1) commit(order.filter((item) => item !== key)) }}><Icon name="eye-off" /></button>
           </span>
@@ -100,10 +101,10 @@ export function SidebarOrder({ host }: { host: SettingsPanelHost }) {
             disabled={!chosen} ref={trigger} onClick={toggleMenu}>
             {chosen
               ? <><Icon name={chosen[2] ?? ''} /><span data-sidebar-add-label="">{chosen[1]}</span><Icon name="chevron-down" /></>
-              : <><Icon name="check" /><span>全部页面都已显示</span></>}
+              : <><Icon name="check" /><span>{t('settings:sidebarOrder.allShown')}</span></>}
           </button>
           {available.length
-            ? <div className="popmenu" data-sidebar-add-menu="" role="listbox" aria-label="选择要添加的页面" hidden ref={menu}>
+            ? <div className="popmenu" data-sidebar-add-menu="" role="listbox" aria-label={t('settings:sidebarOrder.pickPage')} hidden ref={menu}>
                 {available.map(([key, label, glyph]) => (
                   <button type="button" role="option" key={optionKey(key)} data-sidebar-add-option={optionKey(key)}
                     aria-selected={chosen?.[0] === key} tabIndex={chosen?.[0] === key ? 0 : -1} onKeyDown={optionKeys}
@@ -115,10 +116,10 @@ export function SidebarOrder({ host }: { host: SettingsPanelHost }) {
             : null}
         </div>
         <button type="button" className="geist-button primary" data-sidebar-add="" disabled={!chosen}
-          onClick={() => { if (chosen && !order.includes(chosen[0])) commit([...order, chosen[0]]) }}>添加</button>
+          onClick={() => { if (chosen && !order.includes(chosen[0])) commit([...order, chosen[0]]) }}>{t('settings:shared.add')}</button>
       </div>
       {order.join(',') !== defaults.join(',') ? <div className="peach-react"><Button variant="secondary" size="small"
-        onClick={() => restoreNavigationOrder({ label: '左侧导航', keys: order, defaults, commit })}>恢复侧栏默认顺序</Button></div> : null}
+        onClick={() => restoreNavigationOrder({ label: t('settings:sidebarOrder.groupLabel'), keys: order, defaults, commit })}>{t('settings:sidebarOrder.reset')}</Button></div> : null}
     </div>
   );
 }

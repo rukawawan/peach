@@ -15,10 +15,11 @@ import uuid
 
 from filelock import FileLock, Timeout
 
-from . import dev_copy
+from . import dev_copy, interface_text
 from .diagnostic_browser import BUNDLE_CHUNK_NAME
 from .fsutil import atomic_write_bytes, atomic_write_text
 from .jobs import process_alive
+from .user_messages import UserFacingError, UserValueError
 
 ACTIVE = {'building', 'waiting_restart', 'restarting'}
 BUNDLES = ('peach-app.js', 'peach-app.css', 'peach-pages.js', 'peach-pages.css')
@@ -47,14 +48,27 @@ def _read_status(path: Path) -> dict:
     return {}
 
 
+def _message(name: str) -> dict:
+    """生效状态的说明（ADR-0159）：`message` 是 zh-CN 原文，`message_code` 是 `labels.devCopyRuntime.<名字>`。"""
+    code = f"labels.devCopyRuntime.{name}"
+    return {"message": interface_text.text(f"server:{code}"), "message_code": code, "message_params": {}}
+
+
+def _failure(error: BaseException) -> dict:
+    """失败原因：带 code 的异常带上 code；别的异常只有原文，把上一句的 code 清掉。"""
+    if isinstance(error, UserFacingError):
+        return {"message": error.message, "message_code": error.code, "message_params": dict(error.params)}
+    return {"message": str(error), "message_code": None, "message_params": {}}
+
+
 def status(root: Path) -> dict:
     data = _read_status(_directory(root) / 'apply.json')
     if data.get('state') in ACTIVE:
         if data['state'] == 'waiting_restart':
             if time.time() - data['updated'] > 30:
-                return {**data, 'state': 'error', 'message': '未连接源码托盘，启动托盘后可重试生效'}
+                return {**data, 'state': 'error', **_message('trayMissing')}
         elif not process_alive(data['pid']):
-            return {**data, 'state': 'error', 'message': '生效任务已中断，可以重试'}
+            return {**data, 'state': 'error', **_message('interrupted')}
     return data
 
 
@@ -62,13 +76,13 @@ def _start(root: Path, saved: dict) -> dict:
     state = 'building' if saved['needs_build'] else 'waiting_restart' if saved['file'].endswith('.py') else 'ready'
     job = _write(root, {'id': uuid.uuid4().hex, 'state': state, 'file': saved['file'],
                         'needs_build': saved['needs_build'], 'pid': os.getpid(), 'updated': time.time(),
-                        'message': {'building': '已保存，正在构建…', 'waiting_restart': '已保存，等待重载服务…',
-                                    'ready': '已保存，正在刷新…'}[state]})
+                        **_message({'building': 'building', 'waiting_restart': 'waitingRestart',
+                                    'ready': 'refreshing'}[state])})
     if state == 'building':
         try:
             threading.Thread(target=_build, args=(root, job), daemon=True, name='PeachCopyBuild').start()
         except RuntimeError as exc:
-            job = _write(root, {**job, 'state': 'error', 'message': str(exc)})
+            job = _write(root, {**job, 'state': 'error', **_failure(exc)})
     return job
 
 
@@ -79,15 +93,15 @@ def submit(root: Path, body: dict, *, retry: bool = False) -> dict:
         with FileLock(directory / 'apply.lock', timeout=0):
             current = status(root)
             if current.get('state') in ACTIVE:
-                raise ValueError('文案正在生效，请稍后再编辑')
+                raise UserValueError("errors.devCopyRuntime.applying")
             if retry:
                 if not isinstance(body, dict) or current.get('id') != body.get('id') or current.get('state') != 'error':
-                    raise ValueError('没有可重试的生效任务')
+                    raise UserValueError("errors.devCopyRuntime.nothingToRetry")
                 return {'ok': True, 'apply': _start(root, current)}
             saved = dev_copy.save(root, body)
             return {**saved, 'apply': _start(root, saved)}
     except Timeout as exc:
-        raise ValueError('正在保存其他文案，请稍后重试') from exc
+        raise UserValueError("errors.devCopyRuntime.saving") from exc
 
 
 def _chunks(folder: Path) -> list[str]:
@@ -98,7 +112,7 @@ def _chunks(folder: Path) -> list[str]:
 def build_frontend(root: Path) -> None:
     npm = shutil.which('npm.cmd' if os.name == 'nt' else 'npm')
     if not npm:
-        raise ValueError('未找到 npm，请安装项目所需的 Node.js')
+        raise UserValueError("errors.devCopyRuntime.npmMissing")
     directory = _directory(root)
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='build-', dir=directory) as temporary:
@@ -109,9 +123,10 @@ def build_frontend(root: Path) -> None:
             **({'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
         atomic_write_text(directory / 'build.log', (result.stdout or '') + (result.stderr or ''))
         if result.returncode:
-            raise ValueError('构建失败：' + ((result.stderr or result.stdout or '').strip()[-600:] or str(result.returncode)))
+            raise UserValueError("errors.devCopyRuntime.buildFailed", {
+                "detail": (result.stderr or result.stdout or '').strip()[-600:] or str(result.returncode)})
         if any(not (stage / name).is_file() for name in BUNDLES):
-            raise ValueError('构建产物不完整，详情见 build/copy-editor/build.log')
+            raise UserValueError("errors.devCopyRuntime.buildIncomplete")
         destination = root / 'web/dist'
         fresh = _chunks(stage)
         stale = [name for name in _chunks(destination) if name not in fresh]
@@ -135,9 +150,9 @@ def build_frontend(root: Path) -> None:
 def _build(root: Path, job: dict) -> None:
     try:
         build_frontend(root)
-        _write(root, {**job, 'state': 'ready', 'message': '构建完成，正在刷新…'})
+        _write(root, {**job, 'state': 'ready', **_message('built')})
     except Exception as exc:
-        _write(root, {**job, 'state': 'error', 'message': str(exc)})
+        _write(root, {**job, 'state': 'error', **_failure(exc)})
 
 
 def poll(tray, root: Path) -> None:
@@ -153,8 +168,7 @@ def poll(tray, root: Path) -> None:
             if job.get('state') != 'waiting_restart' or not tray._action_lock.acquire(blocking=False):
                 return
             try:
-                job = _write(root, {**job, 'state': 'restarting', 'pid': os.getpid(),
-                                    'message': '已保存，正在重载服务…'})
+                job = _write(root, {**job, 'state': 'restarting', 'pid': os.getpid(), **_message('reloading')})
             except OSError:
                 tray._action_lock.release()
                 raise
@@ -163,20 +177,20 @@ def poll(tray, root: Path) -> None:
 
     def reload_services():
         # 先释放托盘动作锁再写终态，读到终态的一方据此可以立即发起下一次托盘动作。
-        outcome = {'state': 'ready', 'message': '服务已重载，正在刷新…'}
+        outcome = {'state': 'ready', **_message('reloaded')}
         try:
             from .config import DATABASE_PATH
             from .runtime_prepare import task_gate
             gate = task_gate(DATABASE_PATH, host=socket.gethostname(), alive=process_alive)
             if gate.refused:
                 raise ValueError(gate.refusal())
-            if not tray.manager.restart(reason="源码改字构建完成，重载服务"):
-                raise ValueError('服务尚未恢复，请查看托盘日志')
+            if not tray.manager.restart(reason="source copy edit built, reloading services"):
+                raise UserValueError("errors.devCopyRuntime.serviceNotRecovered")
             readiness = tray._readiness()
             if readiness.problem:
                 raise ValueError(readiness.message)
         except Exception as exc:
-            outcome = {'state': 'error', 'message': str(exc)}
+            outcome = {'state': 'error', **_failure(exc)}
         finally:
             tray._action_lock.release()
         _write(root, {**job, **outcome})

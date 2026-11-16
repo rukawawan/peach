@@ -33,6 +33,7 @@ from pathlib import Path
 from peach.catalog_rules import (
     CODE_BODY_STOPWORDS,
     REPOST_SITE_LABELS,
+    CodePatternError,
     code_query_variants,
     compact_label,
     compile_code_patterns,
@@ -417,20 +418,20 @@ class TokyoHotShapeTests(unittest.TestCase):
             name = f'MKBD{separator}S94-C 作品标题.mkv'
             self.assertEqual(jav_display_metadata(name, 'MKBD-S94'), {
                 'display_code': 'MKBD-S94', 'display_title': '作品标题',
-                'edition_badges': ['中字', '无码']})
+                'edition_badges': ['chinese-subtitles', 'uncensored']})
         self.assertEqual(jav_fallback_title('MKD-S118.mp4', 'MKD-S118'), '')
 
     def test_uncensored_only_labels_get_the_uncensored_badge(self):
         for name, code in (('SMBD-120.mp4', 'SMBD-120'), ('SKYHD-050-C.mp4', 'SKYHD-050')):
             with self.subTest(code=code):
-                self.assertIn('无码', jav_display_metadata(name, code)['edition_badges'])
+                self.assertIn('uncensored', jav_display_metadata(name, code)['edition_badges'])
         self.assertEqual(jav_display_metadata('MCDV-024.mp4', 'MCDV-024')['edition_badges'], [])
 
     def test_ltx_after_the_code_marks_a_cracked_edition(self):
         self.assertEqual(jav_display_metadata('ABP-123-LTX.mp4', 'ABP-123'), {
-            'display_code': 'ABP-123', 'display_title': '', 'edition_badges': ['无码破解']})
+            'display_code': 'ABP-123', 'display_title': '', 'edition_badges': ['uncensored-crack']})
         self.assertEqual(jav_display_metadata('ABP-123-C-LTX.mp4', 'ABP-123')['edition_badges'],
-                         ['中字', '无码破解'])
+                         ['chinese-subtitles', 'uncensored-crack'])
         # 字母段本身是 LTX 的番号不是破解标记。
         self.assertEqual(jav_display_metadata('LTX-123.mp4', 'LTX-123')['edition_badges'], [])
 
@@ -552,8 +553,10 @@ class TitledFilenameTests(unittest.TestCase):
         self.assertEqual(release_code_from_filename("片名 CAWD-987.mp4", patterns=loose), "CAWD-987")
 
     def test_a_broken_user_rule_says_which_one(self):
-        with self.assertRaisesRegex(ValueError, "第 2 条"):
+        with self.assertRaises(CodePatternError) as caught:
             compile_code_patterns([r"(\w+-\d+)", "(unclosed"])
+        self.assertEqual((caught.exception.code, caught.exception.params["index"]),
+                         ("errors.catalogRules.codePatternInvalid", 2))
         self.assertEqual(compile_code_patterns(None), ())
         self.assertEqual(compile_code_patterns(["", "  "]), ())
 
@@ -772,9 +775,9 @@ class AuditScriptTests(unittest.TestCase):
         self._asset(12, folder + r"\最新成人AV.gif", "HJD2048")
         rows = self._rows()
         self.assertEqual((rows[10]["proposed_code"], rows[10]["proposal_from"]),
-                         ("MIDE-612", "文件名"))
+                         ("MIDE-612", "filename"))
         self.assertEqual((rows[12]["proposed_code"], rows[12]["proposal_from"]),
-                         ("MIDE-612", "同目录兄弟"))
+                         ("MIDE-612", "siblings"))
 
     def test_two_codes_in_one_directory_leave_the_rest_unproposed(self):
         # 目录里有两部片时，兄弟证据指不出这条属于哪一部，宁可报「无番号」。
@@ -792,7 +795,7 @@ class AuditScriptTests(unittest.TestCase):
         self._asset(6, r"B:\番号\_未知厂牌\NEWSITE77\newsite77.com@SSIS-070\SSIS-070.mp4",
                     "NEWSITE77")
         row = self._rows()[6]
-        self.assertEqual((row["tier"], row["confidence"]), ("E2", "高"))
+        self.assertEqual((row["tier"], row["confidence"]), ("E2", "high"))
         self.assertEqual(row["proposed_code"], "SSIS-070")
 
     def test_a_sibling_carries_the_evidence_for_a_renamed_file(self):
@@ -801,7 +804,7 @@ class AuditScriptTests(unittest.TestCase):
                     "NEWSITE77")
         self._asset(8, r"B:\番号\_未知厂牌\NEWSITE77\SSIS-071\SSIS-071.mp4", "NEWSITE77")
         row = self._rows()[8]
-        self.assertEqual((row["tier"], row["confidence"]), ("E3", "中"))
+        self.assertEqual((row["tier"], row["confidence"]), ("E3", "medium"))
         self.assertEqual(row["proposed_code"], "SSIS-071")
         self.assertEqual(row["evidence"], "newsite77.com")
 
@@ -870,13 +873,14 @@ class ApplyTests(unittest.TestCase):
         self.assertTrue((self.root / "b.db").exists())
 
     def test_a_pack_row_is_never_written(self):
-        # `存疑` 的 269 条论坛整合包要人工看过再定，不能跟着这一批一起改。
+        # `suspect` 的 269 条论坛整合包要人工看过再定，不能跟着这一批一起改；旧版表里写「存疑」。
         self._asset(3, r"B:\x\WX17\[mtfdz.club]WX17.3\a.rar", "WX17")
-        self._plan({"asset_id": "3", "current_code": "WX17",
-                    "proposed_code": "", "tier": "存疑"})
-        with self.assertRaises(SystemExit):
-            self._run("--apply", "--backup", str(self.root / "b.db"))
-        self.assertEqual(self._codes()[3][0], "WX17")
+        for tier in ("suspect", "存疑"):
+            self._plan({"asset_id": "3", "current_code": "WX17",
+                        "proposed_code": "", "tier": tier})
+            with self.assertRaises(SystemExit):
+                self._run("--apply", "--backup", str(self.root / "b.db"))
+            self.assertEqual(self._codes()[3][0], "WX17")
 
     def test_a_row_edited_since_the_review_is_skipped_not_overwritten(self):
         # 出表和写库之间隔着一次人工阅读，期间别的脚本可能已经改过同一行。

@@ -31,6 +31,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import GENERATED_DIR, SOURCES_DIR
+from peach.interface_text import dev as t
 from peach.review_csv import write_rows
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write
 
@@ -49,12 +50,12 @@ EXTRA_COUNTS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="修复 r18.dev 早期自动落库的英文回退值")
+    parser = argparse.ArgumentParser(description=t("repair_r18_machine_translations.description"))
     add_ledger_write_args(parser)
     parser.add_argument(
         "--snapshots", type=Path,
         default=SOURCES_DIR / "library-metadata",
-        help="scrape_codes.py 保存的 r18.dev 原始快照目录",
+        help=t("repair_r18_machine_translations.snapshotsHelp"),
     )
     parser.add_argument(
         "--audit-csv", type=Path,
@@ -63,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--javinizer-snapshots", type=Path,
         default=SOURCES_DIR / "metadata" / "javinizer-go",
-        help="Javinizer-Go 的快照目录，按 <番号>/r18dev.json 找",
+        help=t("repair_r18_machine_translations.javinizerSnapshotsHelp"),
     )
     parser.add_argument(
         "--entity-audit-csv", type=Path,
@@ -80,23 +81,23 @@ def run(args: argparse.Namespace) -> int:
         write_rows(args.audit_csv, FIELDS, rows, atomic=True, fill_missing=True)
         distribution = Counter(str(row["action"]) for row in rows)
         reasons = Counter(str(row["reason"]) for row in rows if row["action"] != "replace")
-        print(f"已审计 {len(rows)} 个 r18dev 字段；审计 CSV：{args.audit_csv}")
-        print("  动作分布：", dict(distribution))
+        print(t("repair_r18_machine_translations.fieldsAudited", count=len(rows), path=args.audit_csv))
+        print(t("repair_r18_machine_translations.actions", counts=dict(distribution)))
         if reasons:
-            print("  跳过原因：", dict(reasons))
+            print(t("repair_r18_machine_translations.skipReasons", counts=dict(reasons)))
         entity_rows = collect_entities(connection, args.snapshots, args.javinizer_snapshots)
         write_rows(args.entity_audit_csv, ENTITY_FIELDS, entity_rows, atomic=True, fill_missing=True)
-        print(f"已审计 {len(entity_rows)} 条英文名实体；审计 CSV：{args.entity_audit_csv}")
-        print("  动作分布：", dict(Counter(str(row["action"]) for row in entity_rows)))
+        print(t("repair_r18_machine_translations.entitiesAudited", count=len(entity_rows), path=args.entity_audit_csv))
+        print(t("repair_r18_machine_translations.actions", counts=dict(Counter(str(row["action"]) for row in entity_rows))))
         for row in entity_rows:
             if row["action"] != "skip":
                 print(f"    [{row['action']}] {row['kind']} #{row['entity_id']} "
                       f"{row['current']} -> {row['target']}")
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("repair_r18_machine_translations.dryRun"))
             return 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("repair_r18_machine_translations.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with connection:
@@ -104,10 +105,10 @@ def run(args: argparse.Namespace) -> int:
             entities = apply_entity_rows(connection, entity_rows, stamp)
         after = counts_of(connection, EXTRA_COUNTS)
         integrity, foreign_keys = verify_after_write(connection)
-        print("  写入结果：", changed, dict(entities))
+        print(t("repair_r18_machine_translations.written", fields=changed, entities=dict(entities)))
         for key in before:
             print(f"    {key}: {before[key]} -> {after[key]}")
-        print(f"  integrity_check={integrity}；foreign_key_check={foreign_keys}")
+        print(t("repair_r18_machine_translations.selfCheck", integrity=integrity, foreignKeys=foreign_keys))
         return 1 if integrity != "ok" or foreign_keys else 0
     finally:
         connection.close()

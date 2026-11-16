@@ -4,6 +4,8 @@
 
 「应用与维护」的存储状态使用 `GET /api/configuration/storage`；`POST /api/configuration/storage/measure` 启动统计，`POST /api/configuration/storage/clean` 按所选类别清理，`POST /api/configuration/storage/policy` 保存本机容量保护（`enabled` 总开关默认开启）并返回同一状态形状。`GET /api/configuration/storage/external-cache` 只读本机 CloudDrive 缓存目录，不自动保存；需要登录与本机管理，未配置、远程地址、权限不足或路径不可读取返回 400。容量数值为整数 `GiB`，`0` 表示自动磁盘保留值或不设对应总量上限；外部缓存目录不会由 Peach 删除。写请求需要登录、本机管理与同源检查，字段或目录无效返回 400，跨站请求返回 403；统计或清理已在运行时返回 409。规则与清理边界见[容量保护](OPERATIONS.md#容量保护与显示尺寸补测)。
 
+`GET /api/result-updates` 是每个页面常驻的那一处轻量检查：返回结果版本 `result_versions`、入库通知 `ingest_notices`、有没有任务在排或在跑 `busy`，以及在排在跑的任务 `running_tasks`。`running_tasks` 每个 `task_key` 一项 `{task_key, run_id, status}`，按 `task_key` 排序；有一轮在跑时 `status` 为 `running`、`run_id` 是在跑的最新一轮，只在排队时为 `pending` 与最新排进来的那一轮，没有任务时是空数组。页面有任务时每 5 秒、闲着每 10 秒读一次，读失败按 4、8、16、30 秒退避；其余页面只读这份缓存决定要不要开始读自己的任务进度，闲着时不各自轮询。
+
 馆藏处理的 `POST /api/library-processing` 支持按 `job_id` 暂停、继续、取消及归档结束提示；`stopping` 仍占用当前范围，`cancelled` 不自动恢复。`scope=new` 在启动时解析成固定资产集合，不与 `asset_ids` 或失败重试混用。状态只返回新入库数量，不下发内部处理路径。
 
 `GET /api/library-processing/issues` 返回任务号、内容摘要 `revision`、总数、偏移和记录。导出后续页传入首份摘要；同任务追加、恢复或记录替换时拒绝混合读取。旧完整问题数组可分页读取，原始记录缺失或损坏作为失败返回。
@@ -122,7 +124,7 @@
 
 `GET /api/review/auto-landings` 逐条列出 ADR-0139 两条规则仍在的自动写入：作品、封面地址、写入的字段与值、写入前的值或补上的标签、规则与时间；带 `items=<决定键>`（换行分隔）时只读返回这几条要改回的值、要删的标签、写入后被改过或已删除而不动的作品，以及计划摘要 `token`。`POST /api/review/auto-landings/revert` 接收 `items` 与 `token`，在写锁里重算计划，对不上返回 400 要求重新预览；对上后先备份账本再撤回，回执带备份文件名与未改动的作品。列表里没有的决定键一律拒绝，其余自动落库来源仍由 `scripts/revert_auto_landing.py` 撤回；只读端拒绝撤回（ADR-0141）。
 
-`GET /api/client-updates` 要求应用鉴权，返回运行版本与构建标记、发行版检查结果、安装状态、用户脚本版本和自动补修状态，不触发外部检查。`GET /api/jav-browser/updates` 使用用户脚本专用令牌，无需番号，返回运行与发行版、脚本版本快照，不暴露补修明细。`POST /api/configuration/upgrade-repairs/retry` 限本机同源请求，重试失败项；`GET /api/configuration/upgrade-repairs/review` 限本机管理权限，下载 JSON 复核记录，无记录时返回 404。
+`GET /api/client-updates` 要求应用鉴权，返回运行版本与构建标记、发行版检查结果、安装状态、用户脚本版本、自动补修状态和启动迁移状态（进行中带阶段 `stage`，备份阶段另带百分比 `progress`），不触发外部检查。服务启动时迁移数据库期间，它与 `/healthz` 照常回应且不读数据库，其余 `/api/` 与媒体路由回 503，`message_code` 为 `api.ledger.migrating`。`GET /api/jav-browser/updates` 使用用户脚本专用令牌，无需番号，返回运行与发行版、脚本版本快照，不暴露补修明细。`POST /api/configuration/upgrade-repairs/retry` 限本机同源请求，重试失败项；`GET /api/configuration/upgrade-repairs/review` 限本机管理权限，下载 JSON 复核记录，无记录时返回 404。
 
 Docker 镜像的一键更新（[ADR-0140](adr/0140-docker-one-click-update-via-watchtower.md)）：容器里的 `GET /api/configuration/updates` 在 Docker Hub 的版本号标签与 `edge` 指向同一镜像前返回 `state: pending`；有新镜像时多一个 `one_click`，`available` 表示镜像标签是 `edge`、令牌已生成且探测得到 Watchtower，不能时 `reason` 说明原因，没启用 Watchtower 时为空。`POST /api/configuration/docker-update` 请 Watchtower 异步拉取并重建容器，收到 202 后返回 `state: updating`；条件不满足、Watchtower 拒绝令牌或正忙返回 409。接口限本机同源请求，非 Docker 部署返回 404，从不回传令牌。
 

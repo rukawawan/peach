@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from peach import interface_text
 from peach import metadata_policy as rm_policy
 from peach import review_csv as rm_candidates
 from peach import web_contract as rm_web
@@ -898,7 +899,7 @@ class ReviewQueueTests(unittest.TestCase):
                 upsert_asset_entity(con, kind=kind, name=name, asset_id=97, role=role,
                                     source=source)
             con.execute("INSERT INTO asset_tag(asset_id,tag,confidence,source) "
-                        "VALUES(97,'演员:三浦沙綾',0.9,'r18:performer')")
+                        "VALUES(97,'performer:三浦沙綾',0.9,'r18:performer')")
             con.commit()
         finally:
             con.close()
@@ -916,12 +917,12 @@ class ReviewQueueTests(unittest.TestCase):
                 "SELECT ae.role, e.canonical_name FROM asset_entity ae "
                 "JOIN entity e ON e.id=ae.entity_id WHERE ae.asset_id=97")}
             flat = {row[0] for row in con.execute(
-                "SELECT tag FROM asset_tag WHERE asset_id=97 AND tag LIKE '演员:%'")}
+                "SELECT tag FROM asset_tag WHERE asset_id=97 AND tag LIKE 'performer:%'")}
         finally:
             con.close()
         self.assertEqual(linked, {("series", "美人CAのマゾ性癖"), ("performer", "永沢咲良"),
                                   ("performer", "手挂的人")})
-        self.assertEqual(flat, {"演员:永沢咲良"})
+        self.assertEqual(flat, {"performer:永沢咲良"})
 
     def test_a_stage_name_between_the_intro_and_the_age_lands(self):
         """MGS 的 `300NTK` 把介绍写在最前：`…/はな/20歳` 的艺名是年龄前那一段。"""
@@ -1728,7 +1729,7 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual(revert.main([
                 "--db", self.db_path, "--logo-root", str(self.logo_root),
                 "--source", "javinizer:r18dev:tag"]), 0)
-        self.assertIn("'标签': 0", printed.getvalue())
+        self.assertIn("'tags': 0", printed.getvalue())
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(revert.main([
                 "--db", self.db_path, "--logo-root", str(self.logo_root),
@@ -1790,7 +1791,7 @@ class ReviewQueueTests(unittest.TestCase):
                 "--source", "adr-0079-fc2-descriptive-performer"]
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(revert.main(base), 0)
-        self.assertIn("'否决': 1", printed.getvalue())
+        self.assertIn("'rejections': 1", printed.getvalue())
         self.assertEqual(self._decision("AUTO")[0], "rejected", "只列计划时不动数据库")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(revert.main(
@@ -2066,7 +2067,7 @@ class ReviewQueueTests(unittest.TestCase):
         row = next(item for item in rows if item["item_key"] == "III-9:studio")
         self.assertEqual(row["current_owner"], USER_MANUAL)
         self.assertEqual(row["asset_mutation_revision"], 1)
-        self.assertIn("（手动填写）", rm_review._review_evidence("metadata_fields", row))
+        self.assertIn("（手动填写）", rm_review._evidence_fields("metadata_fields", row)["reason"])
 
     def test_two_sources_saying_the_same_thing_land_without_review(self):
         """数取值，不数候选条数。
@@ -3060,7 +3061,7 @@ class ReviewQueueTests(unittest.TestCase):
         ).fetchall(), [("performer", "木村さん", "performer")])
         self.assertEqual(con.execute(
             "SELECT tag FROM asset_tag WHERE asset_id=1 AND source='javinizer:r18dev:performer'"
-        ).fetchall(), [("演员:木村さん",)])
+        ).fetchall(), [("performer:木村さん",)])
         self.assertEqual(con.execute(
             "SELECT provider,external_id FROM entity_external_ref"
         ).fetchall(), [("r18dev", "7")])
@@ -3140,7 +3141,7 @@ class ReviewQueueTests(unittest.TestCase):
             ])
 
     def test_a_stale_candidate_lands_on_the_current_vocabulary(self):
-        """候选文件停在抓取那一刻：那时给的撤掉的粗桶与退役名，落库时按现在的词表处理。"""
+        """候选文件停在抓取那一刻：那时给的撤掉的粗桶、退役名与来源的分辨率，落库时按现在的词表处理。"""
         con = sqlite3.connect(self.db_path)
         con.execute("UPDATE asset SET code='ABC-001' WHERE id=1")
         con.commit(); con.close()
@@ -3148,7 +3149,7 @@ class ReviewQueueTests(unittest.TestCase):
             "candidate_key": "ABC-001:tags:r18dev:specific", "source": "r18dev",
             "source_url": "https://r18.dev/example", "confidence": 0.9,
             "provider_id": "ABC-001",
-            "value": ["乳系", "处女", "颜射"], "display_value": "乳系、处女、颜射",
+            "value": ["乳系", "处女", "颜射", "4K"], "display_value": "乳系、处女、颜射、4K",
             "warnings": [],
         }
         self.write_metadata_candidates([{
@@ -3350,7 +3351,7 @@ class ReviewQueueTests(unittest.TestCase):
             connection.execute("UPDATE asset SET disposal='trash' WHERE id=3")
         connection.close()
         self._csv("babepedia-candidates.csv", ["entity_id", "creator", "videos", "verdict"],
-                  [{"entity_id": "1", "creator": "ukiru", "videos": "2", "verdict": "命中"}])
+                  [{"entity_id": "1", "creator": "ukiru", "videos": "2", "verdict": "matched"}])
         row = rm_review.q_review(self.contract)["sections"]["western_identity"][0]
         self.assertEqual([asset["id"] for asset in row["preview_assets"]], [1, 2])
         with sqlite3.connect(self.db_path) as connection:
@@ -3361,33 +3362,48 @@ class ReviewQueueTests(unittest.TestCase):
 
     def test_settled_western_identity_rows_stay_out_of_the_queue(self):
         # 168 条里 143 条是「确认无档案」，站上确实没有这个人，没有可判断的东西。
+        # 旧版候选表写的中文取值照样认。
         fields = ["entity_id", "creator", "videos", "verdict", "matched_variant",
                   "babepedia_name", "token_overlap", "portrait_url", "profile_url"]
-        self._csv("babepedia-candidates.csv", fields, [
-            {"entity_id": "1", "creator": "ruth_lee", "videos": "336", "verdict": "命中",
-             "matched_variant": "ruth_lee", "babepedia_name": "Ruth Lee",
-             "token_overlap": "1.0", "portrait_url": "https://x/p.jpg", "profile_url": ""},
-            {"entity_id": "2", "creator": "minhie", "videos": "17", "verdict": "需人工确认",
-             "matched_variant": "minhie", "babepedia_name": "Aryminh",
-             "token_overlap": "0.0", "portrait_url": "", "profile_url": ""},
-            {"entity_id": "3", "creator": "luckydog22", "videos": "496",
-             "verdict": "确认无档案", "matched_variant": "", "babepedia_name": "",
-             "token_overlap": "0.0", "portrait_url": "", "profile_url": ""},
-        ])
-        rows = rm_review.q_review(self.contract)["sections"]["western_identity"]
-        self.assertEqual({r["creator"] for r in rows}, {"ruth_lee", "minhie"})
+        for verdicts in (("matched", "needs-review", "no-profile"), ("命中", "需人工确认", "确认无档案")):
+            with self.subTest(verdicts=verdicts):
+                self._csv("babepedia-candidates.csv", fields, [
+                    {"entity_id": "1", "creator": "ruth_lee", "videos": "336", "verdict": verdicts[0],
+                     "matched_variant": "ruth_lee", "babepedia_name": "Ruth Lee",
+                     "token_overlap": "1.0", "portrait_url": "https://x/p.jpg", "profile_url": ""},
+                    {"entity_id": "2", "creator": "minhie", "videos": "17", "verdict": verdicts[1],
+                     "matched_variant": "minhie", "babepedia_name": "Aryminh",
+                     "token_overlap": "0.0", "portrait_url": "", "profile_url": ""},
+                    {"entity_id": "3", "creator": "luckydog22", "videos": "496",
+                     "verdict": verdicts[2], "matched_variant": "", "babepedia_name": "",
+                     "token_overlap": "0.0", "portrait_url": "", "profile_url": ""},
+                ])
+                self.contract.cache_bust()
+                rows = rm_review.q_review(self.contract)["sections"]["western_identity"]
+                self.assertEqual({r["creator"] for r in rows}, {"ruth_lee", "minhie"})
 
     def test_western_identity_rows_carry_a_readable_evidence_line(self):
         fields = ["entity_id", "creator", "videos", "verdict", "matched_variant",
                   "babepedia_name", "token_overlap", "portrait_url"]
         self._csv("babepedia-candidates.csv", fields, [
-            {"entity_id": "1", "creator": "SexySaffron", "videos": "357", "verdict": "命中",
+            {"entity_id": "1", "creator": "SexySaffron", "videos": "357", "verdict": "matched",
              "matched_variant": "Sexy Saffron", "babepedia_name": "Saffron Bacchus",
              "token_overlap": "0.33", "portrait_url": "https://x/s.jpg"}])
         row = rm_review.q_review(self.contract)["sections"]["western_identity"][0]
-        self.assertIn("Saffron Bacchus", row["reason"])
+        self.assertIn("命中 → Saffron Bacchus", row["reason"])
         self.assertIn("写法 Sexy Saffron", row["reason"], "别名跳转必须写明用了哪个写法")
         self.assertEqual(row["preview_url"], "https://x/s.jpg")
+        first = row["reason_parts"][0]
+        self.assertEqual(interface_text.text(f"server:{first['code']}", first["params"], language="en"),
+                         "Matched → Saffron Bacchus (spelled Sexy Saffron)")
+
+    def test_a_legacy_chinese_western_verdict_reads_in_english(self):
+        self._csv("babepedia-candidates.csv", ["entity_id", "creator", "videos", "verdict", "babepedia_name"],
+                  [{"entity_id": "1", "creator": "Aryminh", "videos": "3", "verdict": "需人工确认",
+                    "babepedia_name": "Aryminh"}])
+        first = rm_review.q_review(self.contract)["sections"]["western_identity"][0]["reason_parts"][0]
+        self.assertEqual(interface_text.text(f"server:{first['code']}", first["params"], language="en"),
+                         "Needs review → Aryminh")
 
     def test_review_rows_say_up_front_whether_the_face_can_be_fetched(self):
         """复核卡片那张脸和别处一样先问再出图，只是这里没有代表作可退。
@@ -3399,7 +3415,7 @@ class ReviewQueueTests(unittest.TestCase):
         self._csv("babepedia-candidates.csv",
                   ["entity_id", "creator", "videos", "verdict", "matched_variant",
                    "babepedia_name", "token_overlap", "portrait_url"],
-                  [{"entity_id": "1", "creator": "ukiru", "videos": "3", "verdict": "命中",
+                  [{"entity_id": "1", "creator": "ukiru", "videos": "3", "verdict": "matched",
                     "matched_variant": "ukiru", "babepedia_name": "Ukiru",
                     "token_overlap": "1.0", "portrait_url": ""}])
         self.write_candidates("creator-tags-candidate-20260818.csv", [
@@ -3522,6 +3538,18 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertIn("19 个分片", row["reason"])
         self.assertIn("封面不下发", row["reason"])
 
+    def test_evidence_lines_carry_codes_that_read_in_english(self):
+        self._csv("fc2-candidate-log.csv", self.FC2_FIELDS, [
+            self._fc2_row("FC2-PPV-2355314", performers="真夏",
+                          performer_votes="真夏:2", writer="陸王24")])
+        row = rm_review.q_review(self.contract)["sections"]["fc2_markings"][0]
+        parts = row["reason_parts"]
+        self.assertEqual([part["code"] for part in parts], [
+            "labels.webReview.commentVotes", "labels.webReview.separator", "labels.webReview.seller"])
+        english = "".join(interface_text.text(f"server:{part['code']}", part["params"], language="en")
+                          for part in parts)
+        self.assertEqual(english, "Comment marks 真夏:2; Seller 陸王24")
+
     def test_fc2_cross_number_similarity_is_a_record_only_review_candidate(self):
         con = sqlite3.connect(self.db_path)
         con.execute("UPDATE asset SET code='FC2-PPV-1083921' WHERE id=1")
@@ -3603,7 +3631,7 @@ class ReviewQueueTests(unittest.TestCase):
             (101, "18歳Eカップ彼氏持ち美女.mp4", r"A:\Pack From Shared\pen\banbi_555\18歳.mp4")])
         rows = rm_review.q_review(self.contract)["sections"]["code_creators"]
         self.assertEqual([row["item_key"] for row in rows], ["6869"])
-        self.assertEqual(rows[0]["verdict"], "存疑")
+        self.assertEqual(rows[0]["verdict"], "unclear")
         self.assertIn("没有同番号文件", rows[0]["reason"])
 
     def test_a_cleaned_up_creator_leaves_the_queue_on_its_own(self):

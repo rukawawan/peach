@@ -164,7 +164,7 @@ class MetadataCandidateTest(unittest.TestCase):
             connection.commit(); connection.close()
             source = root / "fc2-candidate-log.csv"
             rows = metadata_candidate_rows([{
-                "code": "FC2 3701252", "video_id": "3701252", "result": "取得",
+                "code": "FC2 3701252", "video_id": "3701252", "result": "found",
                 "title": "作品标题", "tags": "素人 フェラ 口内発射",
                 "duration": "46:44", "cover_url": "https://example.invalid/cover.jpg",
             }], database, raw_snapshot=source, fetched_at="2026-08-19T00:00:00Z")
@@ -179,6 +179,12 @@ class MetadataCandidateTest(unittest.TestCase):
             tag_row = next(row for row in rows if row["field"] == "tags")
             tags = json.loads(tag_row["candidates_json"])[0]
             self.assertEqual(tags["value"], ["素人", "口交", "口爆"])
+            # 旧版日志写的中文结果照样认；没取到的行不出候选。
+            for result, fields in (("取得", {"title", "tags"}), ("未取得", set()), ("missed", set())):
+                legacy = metadata_candidate_rows([{"code": "FC2 3701252", "video_id": "3701252",
+                                                   "result": result, "title": "作品标题", "tags": "素人"}],
+                                                 database, raw_snapshot=source, fetched_at="2026-08-19T00:00:00Z")
+                self.assertEqual({row["field"] for row in legacy}, fields, result)
 
 
 class HarvestTest(unittest.TestCase):

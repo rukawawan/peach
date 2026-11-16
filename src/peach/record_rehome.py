@@ -39,6 +39,7 @@ from pathlib import PureWindowsPath
 
 from .catalog_rules import normalise_code_key, release_code_from_filename
 from .personal_records import ASSET_RECORD_COLUMNS, ASSET_REFERENCE_TABLES, VANISHED
+from .user_messages import UserValueError
 
 #: 登记时自动接回记的来源。
 AUTO_SOURCE = "auto:vanished-reattach"
@@ -319,9 +320,9 @@ def move(connection, old_id: int, new_id: int, *, source: str, rule: str,
     old = connection.execute("SELECT disposal FROM asset WHERE id=?", (old_id,)).fetchone()
     target = connection.execute("SELECT disposal FROM asset WHERE id=?", (new_id,)).fetchone()
     if old is None or old[0] != VANISHED:
-        raise ValueError("只能接回已消失的行")
+        raise UserValueError("errors.recordRehome.oldNotVanished")
     if target is None or target[0] is not None or old_id == new_id:
-        raise ValueError("只能接到在库的另一行")
+        raise UserValueError("errors.recordRehome.targetNotPresent")
     snapshot = _snapshot(connection, old_id)
     moved: dict = {table: _move_rows(connection, table, keys, old_id, new_id)
                    for table, keys in MOVED_TABLES.items()}
@@ -399,13 +400,13 @@ def revert_one(connection, rehome_id: int, *, now: str | None = None) -> None:
     """按快照重建旧行，把搬到新行的记录改回旧行。旧行的 id 或路径已被占用时拒绝。"""
     row = _rows(connection, "SELECT * FROM record_rehome WHERE id=? AND reverted_at IS NULL", (rehome_id,))
     if not row:
-        raise ValueError(f"没有可撤回的批次 {rehome_id}")
+        raise UserValueError("errors.recordRehome.batchMissing", {"batch": rehome_id})
     snapshot, moved, new_id = (json.loads(row[0]["snapshot_json"]), json.loads(row[0]["moved_json"]),
                                int(row[0]["new_asset_id"]))
     old = snapshot["asset"]
     if connection.execute("SELECT 1 FROM asset WHERE id=? OR (location=? AND path=?)",
                           (old["id"], old["location"], old["path"])).fetchone():
-        raise ValueError(f"旧行 {old['id']} 的 id 或路径已被占用，不能撤回")
+        raise UserValueError("errors.recordRehome.oldRowTaken", {"row": old['id']})
     _insert(connection, "asset", old)
     for table, keys in (*MOVED_TABLES.items(), (GOAL_TABLE, GOAL_KEYS)):
         match = " AND ".join(f"{key}=?" for key in keys)

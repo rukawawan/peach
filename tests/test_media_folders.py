@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from peach import folder_rules, media_folders, scan, web_folders
+from peach import folder_rules, interface_text, media_folders, scan, web_folders
 from peach.entities import upsert_asset_entity
 from peach.field_owners import write_owned_fields
 from peach.migrations import upgrade
@@ -115,14 +115,20 @@ class MediaFolderTests(unittest.TestCase):
         preview = web_folders.w_folder_preview(self.contract, body)
         with self.contract.write_transaction() as connection:
             write_owned_fields(connection, [1], {'creator': '其他人'}, 'user:manual')
-        with self.assertRaisesRegex(ValueError, '重新预览'):
+        with self.assertRaisesRegex(ValueError, '重新预览') as caught:
             web_folders.w_folder_rule(self.contract, {**body, 'action': 'save', 'expected_revision': 0,
                                                      'plan_version': preview['plan_version']})
+        self.assertEqual(caught.exception.code, 'errors.folderRules.planChanged')
+        self.assertEqual(interface_text.text(f'server:{caught.exception.code}', language='en'),
+                         'The directory contents or credits have changed. Preview again.')
 
     def test_conflicts_keep_manual_and_external_relations(self):
         with self.contract.write_transaction() as connection:
             write_owned_fields(connection, [1], {'creator': '其他人'}, 'user:manual')
             upsert_asset_entity(connection, kind='creator', name='其他人', asset_id=1, role='creator', source='user:manual')
+        preview = web_folders.w_folder_preview(self.contract, self.rule())
+        self.assertEqual([(row['reason'], row['reason_code']) for row in preview['conflicts']],
+                         [('已有不同的归属', 'labels.folderRules.conflict.differentOwner')])
         result = self.save()
         self.assertEqual((result['applied'], result['conflicts']), (1, 1))
         with self.contract.read_connection() as connection:
@@ -183,7 +189,7 @@ class MediaFolderTests(unittest.TestCase):
     def test_performer_and_seller_use_existing_entity_contracts(self):
         self.save(purpose='performer', name='演示人物')
         with self.contract.read_connection() as connection:
-            self.assertEqual(connection.execute("SELECT count(*) FROM asset_tag WHERE tag='演员:演示人物'").fetchone()[0], 2)
+            self.assertEqual(connection.execute("SELECT count(*) FROM asset_tag WHERE tag='performer:演示人物'").fetchone()[0], 2)
         self.save(purpose='seller', name='演示卖家')
         with self.contract.read_connection() as connection:
             self.assertEqual(connection.execute("SELECT count(*) FROM entity_classification WHERE value='seller' AND status='approved'").fetchone()[0], 1)

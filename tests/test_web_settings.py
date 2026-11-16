@@ -138,7 +138,7 @@ class SettingsRoundTripTests(unittest.TestCase):
                           "feedHideGroupCompilations": True,
                           "feedHideSoloCompilations": False, "feedHideExcerpts": True,
                           "searchHistoryLimit": None, "performerNameLanguage": "zh-CN", "taskSpeedMode": "standard",
-                          "interfaceLanguage": "auto", "systemLanguage": None})
+                          "interfaceLanguage": "auto", "systemLanguage": None, "javBrowserWantOnNoMatch": True})
 
     def test_code_patterns_are_checked_when_saved(self):
         """写错的规则在保存那一刻报出来；存下的规则去掉空行，读回来是同一份。"""
@@ -192,11 +192,14 @@ class SettingsRoundTripTests(unittest.TestCase):
                 w_settings(self.contract, {'interfaceLanguage': value})
         self.assertEqual(self._stored_json(), {'interfaceLanguage': 'en'})
 
-    def test_interface_languages_match_the_shipped_locales(self):
-        """后端放行的语言必须有前端译文：多放一个，存进去以后整页回落成中文；少放一个，选了存不进去。"""
-        locales = Path(__file__).resolve().parents[1] / 'frontend' / 'src' / 'locales'
-        shipped = sorted(path.name for path in locales.iterdir() if path.is_dir() and path.name != 'glossary')
-        self.assertEqual(sorted(web_settings.INTERFACE_LANGUAGES), shipped)
+    def test_interface_languages_have_locale_resources(self):
+        """后端放行的语言必须有译文目录，否则存进去以后整页回落成中文。
+
+        Weblate 新开的语言先只有目录，翻到能用再登记，所以目录可以比放行的多。
+        """
+        locales = Path(__file__).resolve().parents[1] / 'resources' / 'locales'
+        present = {path.name for path in locales.iterdir() if path.is_dir() and path.name != 'glossary'}
+        self.assertLessEqual(set(web_settings.INTERFACE_LANGUAGES), present)
 
     def test_a_hand_broken_rule_reads_as_unset(self):
         con = sqlite3.connect(self.db)
@@ -226,6 +229,15 @@ class SettingsRoundTripTests(unittest.TestCase):
                                    "feedHideGroupCompilations": False, "feedHideExcerpts": False})
         self.assertEqual(web_settings.hidden_compilations(self.contract), frozenset({"solo"}))
 
+    def test_the_browser_want_switch_defaults_on_and_takes_only_booleans(self):
+        self.assertTrue(q_settings(self.contract)["javBrowserWantOnNoMatch"])
+        with self.assertRaises(ValueError):
+            w_settings(self.contract, {"javBrowserWantOnNoMatch": "off"})
+        self.assertEqual(self._stored_json(), {})
+        self.assertFalse(w_settings(self.contract, {"javBrowserWantOnNoMatch": False})["javBrowserWantOnNoMatch"])
+        self.assertFalse(q_settings(self.contract)["javBrowserWantOnNoMatch"])
+        self.assertEqual(self._stored_json(), {"javBrowserWantOnNoMatch": False})
+
     def test_avatar_and_favicon_periods_are_read_only(self):
         settings = q_settings(self.contract)
         self.assertEqual(settings["avatarRefreshDays"], 90)
@@ -245,7 +257,7 @@ class SettingsRoundTripTests(unittest.TestCase):
                           "feedHideGroupCompilations": True,
                           "feedHideSoloCompilations": False, "feedHideExcerpts": True,
                           "searchHistoryLimit": None, "performerNameLanguage": "zh-CN", "taskSpeedMode": "standard",
-                          "interfaceLanguage": "auto", "systemLanguage": None})
+                          "interfaceLanguage": "auto", "systemLanguage": None, "javBrowserWantOnNoMatch": True})
         self.assertEqual(q_settings(self.contract)["sidebarOrder"], order)
         self.assertEqual(self._stored_json()["sidebarOrder"], order)
 

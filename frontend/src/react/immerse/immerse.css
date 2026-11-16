@@ -45,8 +45,9 @@ body[data-immerse-open]{overflow:hidden}
   border-radius:var(--pill-radius);background:rgba(0,0,0,.58);color:#fff;backdrop-filter:blur(12px);pointer-events:none;
   font:var(--fs-xs)/1 "Cascadia Mono",monospace;white-space:nowrap}
 [data-immerse-loader][hidden]{display:none}
-/* 加载圈由遗留层的 `spinnerHtml` 拼；外面这层不占盒子，圈与文字照旧是提示条的两个弹性子项。 */
-[data-immerse-spinner]{display:contents}
+/* 加载圈与播放器缓冲同一份（`PLAYER_SPINNER_HTML`），尺寸跟提示条的字号走，描边按播放器那枚 64px 配 6px 的比例收细。 */
+[data-immerse-spinner]{position:relative;display:block;flex:none;width:1.5em;height:1.5em}
+[data-immerse-spinner] .vjs-peach-spinner-circle{border-width:2px}
 [data-immerse-ui]{position:absolute;left:20px;bottom:20px;width:min(520px,calc(50% - 28.125vh - 36px));
   padding:0;color:#f1f1f1;pointer-events:none}
 [data-immerse][data-wide] [data-immerse-ui]{width:min(500px,calc(36vw - 56px))}

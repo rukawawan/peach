@@ -13,6 +13,7 @@ from peach.organize_clouddrive import (ACCEPTED, DAV_ORIGIN, REJECTED, MoveNotEx
                                        UnconfirmedMove)
 from peach import organize_clouddrive
 from peach.task_retry import transient_delay
+from peach.os_errors import UserFileNotFoundError
 
 MAPPING = organize_clouddrive.PikPakPaths('A:\\', '/Pikpak')
 
@@ -169,7 +170,7 @@ class OfficialMoves(unittest.TestCase):
 
     def listing(self, path):
         if path != 'A:\\' and self.entries.get(path) is not True:
-            raise FileNotFoundError('官方父目录未列出所需目录')
+            raise UserFileNotFoundError('errors.organizeClouddrive.cloudParentMissing')
         return [dict(path=name, size=0 if value is True else value, directory=value is True)
                 for name, value in self.entries.items()
                 if name != path and str(PureWindowsPath(name).parent) == path]
@@ -306,7 +307,7 @@ class OfficialMoves(unittest.TestCase):
 
     def test_cache_failure_after_submission_preserves_intent(self):
         self.dav.move_remote = Mock(return_value=ACCEPTED)
-        self.dav.refresh = Mock(side_effect=OSError('未取得'))
+        self.dav.refresh = Mock(side_effect=OSError('connection refused'))
         with self.assertRaises(UnconfirmedMove):
             self.dav.move('A:\\old\\film.mp4', 'A:\\new\\film.mp4')
         self.dav.move_remote.assert_called_once()

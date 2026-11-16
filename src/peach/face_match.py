@@ -24,6 +24,8 @@ from .face_detect import FaceDetector, main_face
 #: opencv_zoo 的 SFace 定版模型，与 YuNet 同一个定版提交。LFS 指针里的 oid 就是下面这个哈希。
 MODEL_URL = face_detect.ZOO_MEDIA + "face_recognition_sface/face_recognition_sface_2021dec.onnx"
 MODEL_SHA256 = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
+#: 回报给 `observer` 的模型标识；任务中心按它认是哪一个模型。
+MODEL_LABEL = "face-match"
 MODEL_PATH = TOOLS_DIR / "sface" / "face_recognition_sface_2021dec.onnx"
 #: 记进头像边车的模型名，回溯时要答得出「这个分是哪一版模型给的」。
 MODEL_NAME = "sface_2021dec"
@@ -44,7 +46,7 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
         return bundled
     target = Path(path) if path is not None else MODEL_PATH
     return face_detect.fetch_model(target, MODEL_URL, MODEL_SHA256,
-                                   allow_download=allow_download, label="人脸比对模型")
+                                   allow_download=allow_download, label=MODEL_LABEL, kind="match")
 
 
 def cosine(one, other) -> float:
@@ -69,8 +71,7 @@ class FaceEmbedder:
         self.model_path = ensure_model(model, allow_download=allow_download)
         create = getattr(getattr(cv2, "FaceRecognizerSF", None), "create", None)
         if create is None:                       # pragma: no cover - 依赖版本兜底
-            raise face_detect.FaceModelUnavailable(
-                "当前 OpenCV 没有 FaceRecognizerSF；需要 4.5.4 以上")
+            raise face_detect.FaceModelUnavailable("errors.faceMatch.recognizerUnsupported")
         # 模型路径交给 Python 读取，OpenCV 只接收校验后的 ONNX 字节。
         model_bytes = numpy.frombuffer(self.model_path.read_bytes(), dtype=numpy.uint8)
         self._recognizer = create("ONNX", model_bytes, numpy.empty(0, dtype=numpy.uint8))

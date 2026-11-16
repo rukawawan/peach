@@ -21,6 +21,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import DATABASE_PATH, GENERATED_DIR
+from peach.interface_text import dev as t
 from peach.scripting import open_readonly
 from peach.fc2_similarity import POLICY_VERSION, build_candidates, fc2_video_id
 from peach.review_csv import read_rows, write_rows
@@ -46,7 +47,7 @@ HEALTH_FIELDS = (
 
 def build_parser() -> argparse.ArgumentParser:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_fc2_similarity.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument(
         "--harvest", type=Path, default=GENERATED_DIR / "fc2-comment-harvest.csv",
@@ -61,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--evidence", type=Path,
         default=GENERATED_DIR / f"fc2-similarity-evidence-{stamp}.csv",
-        help="所有跨号证据；库外 counterpart 留在这里，不占 /review",
+        help=t("audit_fc2_similarity.evidenceHelp"),
     )
     parser.add_argument(
         "--health", type=Path,
@@ -148,15 +149,15 @@ def run(args: argparse.Namespace) -> int:
         health["last_error_message"] = str(error)[:500]
         health["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
         atomic_csv(args.health, HEALTH_FIELDS, [health])
-        print(f"FC2 相似候选失败：{error}")
-        print(f"健康报告 → {args.health}")
+        print(t("audit_fc2_similarity.failed", error=error))
+        print(t("audit_fc2_similarity.healthReport", path=args.health))
         return 2
     health["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
     atomic_csv(args.health, HEALTH_FIELDS, [health])
-    print(f"FC2 跨号候选 {health['candidates']} 条 → {args.out}")
-    print(f"全部跨号证据 {health['evidence_pairs']} 条 → {args.evidence}")
-    print(f"来源健康 → {args.health}")
-    print("只生成候选：未修改 ledger、番号、资产关系或复核决定。")
+    print(t("audit_fc2_similarity.candidates", count=health['candidates'], path=args.out))
+    print(t("audit_fc2_similarity.evidence", count=health['evidence_pairs'], path=args.evidence))
+    print(t("audit_fc2_similarity.sourceHealth", path=args.health))
+    print(t("audit_fc2_similarity.candidatesOnly"))
     return 0
 
 

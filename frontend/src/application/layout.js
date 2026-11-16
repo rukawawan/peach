@@ -12,6 +12,7 @@ import { hideDiscoveryBars } from './loading.js';
 import { releaseManagedRoute } from './../history/managed';
 import { isFeedNewPath } from './feed.js';
 import { tagLabel } from '../core/tags';
+import { PORTRAIT } from '../core/stored-values';
 import { followFeedLive, followState, followView, followViewPath, routeFollowFeed } from './follow.js';
 import { applicationEffects } from './effects';
 import { entityJavLayout, notifyShell, pageOpens, runtimeConfigurable, selectMode, selectSurface, state, writeShell } from './../shell/index';
@@ -33,6 +34,7 @@ import { routeMetaOf } from './../history/route-meta';
 import { peachHistory, shellNavigate, isPreferencePath, preferenceSection, settingsPath, settingsBackgroundOf } from '../history';
 import { filterScrollState } from './filter-scroll.js';
 import { releaseHoverPreviews } from './../card-art/hover';
+import { t } from '../i18n';
 export const layoutState = { sidebarProps: undefined, sidebarSurface: undefined, sidebarCatalog: undefined, sidebarContentSeq: undefined, SIDEBAR_ITEMS: undefined, MANAGE_SECTIONS: undefined, MANAGE_MENU_SECTIONS: undefined, manageMenuSections: undefined, OPTIONAL_SIDEBAR_ITEMS: undefined, NAV_CATALOG: undefined, DIRECT_MANAGE_NAV: undefined, settingsHost: undefined, lastManagePageLabel: undefined, manageHeaderSkeleton: undefined, manageHeaderRoot: undefined, scrollT: undefined, stickyFrame: undefined, mobileFilterScroll: undefined, mobileFilterHost: undefined, mobileFilterPath: undefined };
 
 export function ledgerGateNote(runtime,message,actionLabel,actionHref){
@@ -92,7 +94,7 @@ export function openDrawer(v){const drawer=$('#drawer'),restore=!v&&drawer.conta
   drawer.inert=!v&&narrowShell();
   drawer.classList.toggle('open',v);$('#scrim').classList.toggle('on',v);
   document.body.classList.toggle('drawer-open',!!v);document.dispatchEvent(new Event('board:sidebar'));
-  $('#filterBtn').setAttribute('aria-expanded',String(!!v));$('#filterBtn').setAttribute('aria-controls','drawer');$('#filterBtn').setAttribute('aria-label',v?'收起侧栏':'展开侧栏');
+  $('#filterBtn').setAttribute('aria-expanded',String(!!v));$('#filterBtn').setAttribute('aria-controls','drawer');$('#filterBtn').setAttribute('aria-label',v?t('shell:sidebar.collapse'):t('shell:sidebar.expand'));
   if(restore)$('#filterBtn').focus();sessionStorage.setItem('board.sidebar',v?'open':'closed')}
 
 export function closeDrawerAfterNav(){if(narrowShell())openDrawer(false)}
@@ -236,11 +238,13 @@ export function paintListTitle(){
 export function paintCatalogPageTitle(heading,query){
   const title=heading?.querySelector('[data-page-title]');if(!title)return;
   const words=String(query||'').trim();
-  const next=words?`搜索结果：「${words}」`:'首页';
+  const next=words?t('shell:searchTitle.results', { query: words }):t('shell:shared.home');
   if(title.title===next||(!words&&title.textContent===next))return;
   if(!words){title.textContent=next;title.removeAttribute('title');return}
   const part=(text,full)=>{const span=document.createElement('span');span.textContent=text;if(full!==undefined)span.dataset.titleWords=full;return span};
-  title.replaceChildren(part('搜索结果：「'),part(words,words),part('」'));
+  // 搜索词那一段要单独截断：整句按语言取，在词的位置切开，前后两段照原样放。
+  const [before='',after='']=t('shell:searchTitle.results', { query: '\u0000' }).split('\u0000');
+  title.replaceChildren(part(before),part(words,words),part(after));
   title.title=next;
   fitTitleWords(title);
   // 框宽变了由观察者重截；字体晚到时框不变、字变宽，等字体就绪再截一次。
@@ -357,14 +361,14 @@ export function navOn(k){
   }
   // JAV 分区及馆藏 JAV 筛选共用导航状态；竖屏由内存里的筛选开关判定。
   if(k==='jav')return path==='/jav'||javActive();
-  if(k==='shorts')return state.orient==='竖屏';
+  if(k==='shorts')return state.orient===PORTRAIT;
   // 首页只在真的停在首页列表上时亮：管理区、索引页、实体页都不算，
   // 否则它会和当前所在的入口同时高亮。
-  if(k==='')return path==='/'&&!manageSection()&&!state.state&&!javActive()&&state.orient!=='竖屏';
+  if(k==='')return path==='/'&&!manageSection()&&!state.state&&!javActive()&&state.orient!==PORTRAIT;
   // 目录页的四个筛选态共用一屏，竖屏是压在它们之上的另一层筛选。
-  if(STATE_ROUTES[k])return nav===k&&state.orient!=='竖屏';
+  if(STATE_ROUTES[k])return nav===k&&state.orient!==PORTRAIT;
   if(nav)return nav===k;
-  return path==='/'&&state.state===k&&state.orient!=='竖屏';
+  return path==='/'&&state.state===k&&state.orient!==PORTRAIT;
 }
 
 export function navTo(k){
@@ -383,7 +387,7 @@ export function navTo(k){
   // 有自己路径的入口（追更、播放列表、沉浸模式、索引页）按路由元数据的 `nav` 找路径进。
   const path=STATE_ROUTES[k]?null:navigationState.routePathOf('nav',k);
   if(path){navigationState.openRoutePath(path);return}
-  if(k==='shorts'){state.orient='竖屏';state.state=''}else{state.orient='';state.state=k}
+  if(k==='shorts'){state.orient=PORTRAIT;state.state=''}else{state.orient='';state.state=k}
   notifyShell();
   navigationState.route(homePath());
   syncNavigation();buildBars();

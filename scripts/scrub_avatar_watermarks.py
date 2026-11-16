@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach import avatar_face, avatar_watermark, face_detect  # noqa: E402
 from peach.config import GENERATED_DIR  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 
 #: 处理记录写在 provenance 的这个键下。有这个键就是已经处理过，不再重复处理。
 STAMP = "watermark_scrubbed"
@@ -181,7 +182,7 @@ def plan_of(info: dict) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="头像去水印")
+    parser = argparse.ArgumentParser(description=t("scrub_avatar_watermarks.description"))
     parser.add_argument("--source", type=Path, default=GENERATED_DIR / "avatars")
     parser.add_argument("--archive", type=Path,
                         default=GENERATED_DIR / "avatars-superseded")
@@ -190,12 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidates", type=Path,
                         default=GENERATED_DIR / "watermark-candidates.csv")
     parser.add_argument("--marks", type=Path,
-                        help="人工确认或补写的框，CSV，列 file,x,y,w,h")
-    parser.add_argument("--model", type=Path, help="文字检测模型，默认按固定 URL 取")
+                        help=t("scrub_avatar_watermarks.marksHelp"))
+    parser.add_argument("--model", type=Path, help=t("scrub_avatar_watermarks.modelHelp"))
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--force", action="store_true",
-                        help="已经处理过的也重新处理")
-    parser.add_argument("--apply", action="store_true", help="真的写盘")
+                        help=t("scrub_avatar_watermarks.forceHelp"))
+    parser.add_argument("--apply", action="store_true", help=t("scrub_avatar_watermarks.applyHelp"))
     return parser
 
 

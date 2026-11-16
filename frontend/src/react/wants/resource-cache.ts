@@ -1,9 +1,10 @@
-/* 资源查询按作品发行日缓存；浏览器重启后也可读取，最多保留 128 部。 */
+/* 资源查询按作品发行日缓存；浏览器重启后也可读取，最多保留 128 部。
+ * 键带版本号：来源与属性改成英文 id 之后换了键，旧版存的中文取值不再读。 */
 import type { MagnetResult } from './want-magnets';
 import type { Want } from './wants';
 import { publicationFresh, publicationLifetime } from '../publication-cache';
 
-const KEY = 'peach.want-resources.v2';
+const KEY = 'peach.want-resources.v3';
 type Entry = { code: string; saved: number; result: MagnetResult };
 
 export const resourceLifetime = publicationLifetime;

@@ -32,6 +32,7 @@ from peach.config import COVER_DIR
 from peach.cover_artwork import FACE_ALGORITHM_VERSION, face_record
 from peach.face_detect import FaceDetector, FaceModelUnavailable
 from peach.fsutil import atomic_write_text
+from peach.interface_text import dev as t
 from peach.jav_poster_crop import read_sidecar
 
 
@@ -42,9 +43,9 @@ def detect(path: Path, detector: FaceDetector) -> dict | None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="给封面算人脸位置，供取景用")
+    parser = argparse.ArgumentParser(description=t("detect_cover_faces.description"))
     parser.add_argument("--covers", type=Path, default=COVER_DIR)
-    parser.add_argument("--redo", action="store_true", help="重算已有的 sidecar")
+    parser.add_argument("--redo", action="store_true", help=t("detect_cover_faces.redoHelp"))
     parser.add_argument("--limit", type=int, default=0)
     return parser
 
@@ -70,20 +71,21 @@ def run(args: argparse.Namespace) -> int:
             if args.redo or not current_face(p)]
     if args.limit:
         todo = todo[:args.limit]
-    print(f"封面 {len(covers)} 张，待处理 {len(todo)} 张")
+    print(t("detect_cover_faces.start", covers=len(covers), todo=len(todo)))
 
     stats = {"face": 0, "none": 0, "unreadable": 0}
     for index, path in enumerate(todo, 1):
         result = detect(path, detector)
         if result is None:
             stats["unreadable"] += 1
-            print(f"[{index}/{len(todo)}] 读图失败 {path.name}", flush=True)
+            print(t("detect_cover_faces.unreadable", index=index, total=len(todo), name=path.name), flush=True)
             continue
         stats["face" if result["face"] else "none"] += 1
         # 换名写入：服务的封面索引只认目录修改时间，原地覆写不会让它重读。
         atomic_write_text(path.with_suffix(".face.json"), json.dumps(result, ensure_ascii=False))
-    print(f"\n检出 {stats['face']}，未检出 {stats['none']}，读图失败 {stats['unreadable']}")
-    print("未检出的会退回固定取景，不影响显示。")
+    print("\n" + t("detect_cover_faces.summary", face=stats["face"], none=stats["none"],
+                    unreadable=stats["unreadable"]))
+    print(t("detect_cover_faces.noneNote"))
     return 0
 
 

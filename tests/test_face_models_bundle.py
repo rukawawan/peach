@@ -12,6 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 from peach import face_detect, face_match, face_models, update_packages
+from support.outcomes import told
 from scripts import fetch_face_models
 from scripts.package_windows_release import package as package_release
 
@@ -129,7 +130,7 @@ class FullPackageTests(FixtureCase):
                 patch.object(face_detect, "read_url", side_effect=AssertionError("程序目录有模型时不该联网")):
             self.assertEqual(face_detect.ensure_model(), bundle / face_detect.MODEL_PATH.name)
             self.assertEqual(face_match.ensure_model(), bundle / face_match.MODEL_PATH.name)
-            self.assertEqual(face_models.download_all(), {"ok": True, "outcome": "人脸模型已就绪"})
+            self.assertEqual(told(face_models.download_all()), {"ok": True, "outcome": "人脸模型已就绪"})
         self.assertFalse(data.exists(), "随包那份不往数据根复制")
 
 

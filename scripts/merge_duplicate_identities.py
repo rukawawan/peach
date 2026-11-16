@@ -76,6 +76,7 @@ from peach.entities import (
     merge_entity,
     normalize_entity_name,
 )
+from peach.interface_text import dev as t
 from peach.review_csv import write_rows
 from peach.scripting import add_ledger_write_args, counts_of, open_for_write, verify_after_write
 
@@ -122,14 +123,14 @@ def _fuzzy_evidence(
     performer = _fold(performer_name)
     aliases = {_fold(alias) for alias in performer_aliases if _fold(alias)}
     if creator in aliases:
-        return "performer 别名等于 creator 名"
+        return t("merge_duplicate_identities.aliasEqualsCreator")
     if creator != performer and performer in creator:
         account_aliases = {
             alias for alias in aliases
             if alias != performer and len(re.sub(r"\s+", "", alias)) >= 3
         }
         if any(alias in creator for alias in account_aliases):
-            return "creator 名由 performer 本名与账号别名组成"
+            return t("merge_duplicate_identities.nameAndAccountAlias")
     return None
 
 
@@ -147,13 +148,13 @@ def _asset_relation(
     if not creator_assets or not performer_assets:
         return None
     if creator_assets == performer_assets:
-        return f"作品集合完全相同（各 {len(creator_assets)} 部）"
+        return t("merge_duplicate_identities.sameVideos", count=len(creator_assets))
     if creator_assets < performer_assets:
-        return (f"creator 作品集合真包含于 performer"
-                f"（{len(creator_assets)}/{len(performer_assets)} 部）")
+        return t("merge_duplicate_identities.creatorSubset", part=len(creator_assets),
+                 whole=len(performer_assets))
     if performer_assets < creator_assets:
-        return (f"performer 作品集合真包含于 creator"
-                f"（{len(performer_assets)}/{len(creator_assets)} 部）")
+        return t("merge_duplicate_identities.performerSubset", part=len(performer_assets),
+                 whole=len(creator_assets))
     return None
 
 
@@ -196,7 +197,7 @@ def _variant_evidence(
     aliases = {_fold(alias) for alias in keep_aliases if _fold(alias)}
     if not extra or not extra <= aliases:
         return None
-    return "同 kind 目录名投影：多出的词是保留方别名"
+    return t("merge_duplicate_identities.sameKindProjection")
 
 
 def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
@@ -241,7 +242,7 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
         creator = by_normalized_creator[normalized]
         performer = by_normalized_performer[normalized]
         candidates[(int(creator["id"]), int(performer["id"]))] = (
-            creator, performer, "规范名完全相同")
+            creator, performer, t("merge_duplicate_identities.sameCanonical"))
 
     performer_ids_by_name: dict[str, set[int]] = {}
     performer_by_id = {int(row["id"]): row for row in performers}
@@ -263,7 +264,7 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
             continue
         performer = performer_by_id[next(iter(release_ids))]
         candidates[(int(creator["id"]), int(performer["id"]))] = (
-            creator, performer, "creator 规范名是完整重复串",
+            creator, performer, t("merge_duplicate_identities.repeatedCanonical"),
         )
 
     performers_by_asset: dict[int, set[int]] = {}
@@ -294,7 +295,7 @@ def collect(connection: sqlite3.Connection) -> list[dict[str, object]]:
                 aliases.get(performer_id, []),
             )
             if evidence:
-                fuzzy.append((creator, performer, f"{evidence}；{relation}"))
+                fuzzy.append((creator, performer, t("common.clauseSeparator").join((evidence, relation))))
 
     # 一方若同时命中多个候选，就留给人工复核，避免同作品集合内的连锁误并。
     fuzzy_counts = Counter(
@@ -396,14 +397,14 @@ def _directory_identity_plan(
                      if not str(row["canonical_name"]).isascii()]
         if len(localized) == 1:
             keep = localized[0]
-            why = "保留已本地化的规范名"
+            why = t("merge_duplicate_identities.keepLocalized")
         else:
             keep = max((first, second), key=lambda row: (int(row["links"]), -int(row["id"])))
-            why = "两侧规范名同为本地化或同为罗马字，保留作品多的一侧"
+            why = t("merge_duplicate_identities.keepMoreVideos")
         drop = second if keep is first else first
         plan.append({
             "normalized_name": drop["normalized_name"],
-            "match_evidence": f"两侧官网链接按同一个 minnano-av 名录页 actress{actress} 装上；{why}",
+            "match_evidence": t("merge_duplicate_identities.sameDirectoryPage", actress=actress, why=why),
             "keep_kind": keep["kind"],
             "keep_id": keep["id"],
             "keep_name": keep["canonical_name"],
@@ -482,7 +483,7 @@ def _stage_name_plan(
         alias, source = alias_note[(normalized, keep_id)]
         plan.append({
             "normalized_name": normalized,
-            "match_evidence": f"艺名已登记为保留方别名「{alias}」（{source}）",
+            "match_evidence": t("merge_duplicate_identities.stageNameAlias", alias=alias, source=source),
             "keep_kind": keep["kind"],
             "keep_id": keep["id"],
             "keep_name": keep["canonical_name"],
@@ -571,7 +572,7 @@ def _variant_plan(
 def apply_rows(
     connection: sqlite3.Connection, rows: list[dict[str, object]],
 ) -> dict[str, int]:
-    """逐对合并，并同步兼容投影 `asset.creator` / `演员:` 标签。
+    """逐对合并，并同步兼容投影 `asset.creator` / `performer:` 标签。
 
     扁平字段必须跟着规范关系走（ADR-0005），否则资料页和卡片会各说各话：
 
@@ -610,7 +611,7 @@ def apply_rows(
                 counts["flat_filled"] += connection.execute("SELECT changes()").fetchone()[0]
                 connection.execute(
                     "DELETE FROM asset_tag WHERE asset_id=? AND tag=?",
-                    (asset_id, f"演员:{row['drop_name']}"))
+                    (asset_id, f"performer:{row['drop_name']}"))
                 counts["actor_tags_removed"] += connection.execute(
                     "SELECT changes()").fetchone()[0]
         elif row["keep_kind"] == "series":
@@ -623,7 +624,7 @@ def apply_rows(
             connection.execute(
                 "UPDATE asset SET creator=NULL WHERE creator=?", (row["drop_name"],))
             counts["flat_cleared"] += connection.execute("SELECT changes()").fetchone()[0]
-            old_tag, new_tag = f"演员:{row['drop_name']}", f"演员:{row['keep_name']}"
+            old_tag, new_tag = f"performer:{row['drop_name']}", f"performer:{row['keep_name']}"
             connection.execute(
                 "INSERT OR IGNORE INTO asset_tag(asset_id,tag,confidence,source) "
                 "SELECT asset_id,?,confidence,source FROM asset_tag WHERE tag=?",
@@ -656,8 +657,8 @@ def collect_repeated_projections(
     names.update(str(row[0]) for row in connection.execute(
         "SELECT DISTINCT creator FROM asset WHERE creator IS NOT NULL AND creator<>''"
     ))
-    names.update(str(row[0])[3:] for row in connection.execute(
-        "SELECT DISTINCT tag FROM asset_tag WHERE tag LIKE '演员:%'"
+    names.update(str(row[0]).removeprefix("performer:") for row in connection.execute(
+        "SELECT DISTINCT tag FROM asset_tag WHERE tag LIKE 'performer:%'"
     ))
     names.update(str(row[0]) for row in connection.execute(
         "SELECT DISTINCT alias FROM entity_alias a JOIN entity e ON e.id=a.entity_id "
@@ -691,7 +692,7 @@ def collect_repeated_projections(
             int(row[0]) for row in connection.execute(
                 "SELECT id FROM asset WHERE creator=? UNION "
                 "SELECT asset_id FROM asset_tag WHERE tag=?",
-                (bad_name, f"演员:{bad_name}"),
+                (bad_name, f"performer:{bad_name}"),
             )
         }
         linked_target_ids = {
@@ -732,7 +733,7 @@ def collect_repeated_projections(
                 "SELECT count(*) FROM asset WHERE creator=?", (bad_name,)
             ).fetchone()[0],
             "actor_tags": connection.execute(
-                "SELECT count(*) FROM asset_tag WHERE tag=?", (f"演员:{bad_name}",)
+                "SELECT count(*) FROM asset_tag WHERE tag=?", (f"performer:{bad_name}",)
             ).fetchone()[0],
             "aliases": connection.execute(
                 "SELECT count(*) FROM entity_alias WHERE alias=?", (bad_name,)
@@ -763,9 +764,9 @@ def apply_repeated_projections(
         bad_name = str(row["bad_name"])
         connection.execute("UPDATE asset SET creator=NULL WHERE creator=?", (bad_name,))
         counts["flat_cleared"] += connection.execute("SELECT changes()").fetchone()[0]
-        old_tag = f"演员:{bad_name}"
+        old_tag = f"performer:{bad_name}"
         if row["action"] == "use-performer":
-            new_tag = f"演员:{row['target_name']}"
+            new_tag = f"performer:{row['target_name']}"
             connection.execute(
                 "INSERT OR IGNORE INTO asset_tag(asset_id,tag,confidence,source) "
                 "SELECT asset_id,?,confidence,source FROM asset_tag WHERE tag=?",
@@ -832,18 +833,16 @@ def named_pairs(connection: sqlite3.Connection, pairs: list[str],
     for pair in pairs:
         parts = pair.split(":", 2)
         if len(parts) != 3 or not parts[2].strip():
-            raise SystemExit(f"--pair 要写成 保留id:丢弃id:证据，收到 {pair!r}")
+            raise SystemExit(t("merge_duplicate_identities.pairFormat", pair=repr(pair)))
         keep_id, drop_id, why = int(parts[0]), int(parts[1]), parts[2].strip()
         if keep_id == drop_id:
-            raise SystemExit(f"--pair {pair}：两侧是同一条实体 {keep_id}，不合并")
+            raise SystemExit(t("merge_duplicate_identities.pairSameEntity", pair=pair, id=keep_id))
         if keep_id in dropped:
-            raise SystemExit(
-                f"--pair {pair}：保留侧 {keep_id} 在前面的 --pair 里已经被丢弃")
+            raise SystemExit(t("merge_duplicate_identities.pairKeepDropped", pair=pair, id=keep_id))
         if drop_id in dropped:
-            raise SystemExit(f"--pair {pair}：丢弃侧 {drop_id} 在前面的 --pair 里已经被丢弃")
+            raise SystemExit(t("merge_duplicate_identities.pairDropDropped", pair=pair, id=drop_id))
         if drop_id in kept:
-            raise SystemExit(
-                f"--pair {pair}：丢弃侧 {drop_id} 在前面的 --pair 里是保留侧")
+            raise SystemExit(t("merge_duplicate_identities.pairDropKept", pair=pair, id=drop_id))
         sides = {}
         for name, entity_id in (("keep", keep_id), ("drop", drop_id)):
             row = connection.execute(
@@ -853,12 +852,12 @@ def named_pairs(connection: sqlite3.Connection, pairs: list[str],
                 "   WHERE ae.entity_id=e.id) AS sources"
                 " FROM entity e WHERE e.id=?", (entity_id,)).fetchone()
             if row is None:
-                raise SystemExit(f"--pair {pair}：实体 {entity_id} 不存在")
+                raise SystemExit(t("merge_duplicate_identities.pairMissing", pair=pair, id=entity_id))
             if entity_id in engaged:
-                raise SystemExit(f"--pair {pair}：实体 {entity_id} 已经在自动判据的计划里")
+                raise SystemExit(t("merge_duplicate_identities.pairEngaged", pair=pair, id=entity_id))
             sides[name] = row
         if sides["keep"]["kind"] != sides["drop"]["kind"]:
-            raise SystemExit(f"--pair {pair}：两侧 kind 不同，不合并")
+            raise SystemExit(t("merge_duplicate_identities.pairKindsDiffer", pair=pair))
         kept.add(keep_id)
         dropped.add(drop_id)
         plan.append({
@@ -895,16 +894,16 @@ EXTRA_COUNTS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="合并 creator / performer 的重复身份（跨 kind 同名与同 kind 目录名投影）")
+    parser = argparse.ArgumentParser(description=t("merge_duplicate_identities.description"))
     add_ledger_write_args(parser)
     parser.add_argument("--review-csv", type=Path,
                         default=GENERATED_DIR / "duplicate-identity-merge.csv")
     parser.add_argument("--projection-review-csv", type=Path,
                         default=GENERATED_DIR / "repeated-identity-name-repair.csv")
-    parser.add_argument("--pair", action="append", default=[], metavar="保留id:丢弃id:证据",
-                        help="人工指定的一对，用于证据在站外、本地探测不出来的同一人")
+    parser.add_argument("--pair", action="append", default=[], metavar=t("merge_duplicate_identities.pairMetavar"),
+                        help=t("merge_duplicate_identities.pairHelp"))
     parser.add_argument("--pairs-only", action="store_true",
-                        help="只处理 --pair 点名的对子，跳过全部自动判据")
+                        help=t("merge_duplicate_identities.pairsOnlyHelp"))
     return parser
 
 
@@ -912,7 +911,7 @@ def run(args: argparse.Namespace) -> int:
     # 自动判据和人工点名各自成立，但一次只想执行一边：自动那几组的保留方常常另有争议，
     # 人工那批却已经定下来了，捆在一起就只能连着争议一起写，或者一起不写。
     if args.pairs_only and not args.pair:
-        raise SystemExit("--pairs-only 必须至少给一个 --pair")
+        raise SystemExit(t("merge_duplicate_identities.pairsOnlyNeedsPair"))
     connection = open_for_write(args)
     try:
         rows = [] if args.pairs_only else collect(connection)
@@ -921,17 +920,19 @@ def run(args: argparse.Namespace) -> int:
         projection_rows = [] if args.pairs_only else collect_repeated_projections(connection)
         write_csv(args.review_csv, rows)
         write_projection_csv(args.projection_review_csv, projection_rows)
-        print(f"高置信重复身份 {len(rows)} 组，复核 CSV：{args.review_csv}")
-        print("  保留方分布：", dict(Counter(str(row["keep_kind"]) for row in rows)))
-        print("  匹配判据：", dict(Counter(str(row["match_evidence"]) for row in rows)))
-        print(f"重复 person 名称/投影 {len(projection_rows)} 组，复核 CSV："
-              f"{args.projection_review_csv}")
-        print("  处理动作：", dict(Counter(str(row["action"]) for row in projection_rows)))
+        print(t("merge_duplicate_identities.found", count=len(rows), path=args.review_csv))
+        print(t("merge_duplicate_identities.keepKinds", counts=dict(Counter(str(row["keep_kind"]) for row in rows))))
+        print(t("merge_duplicate_identities.matchRules",
+                counts=dict(Counter(str(row["match_evidence"]) for row in rows))))
+        print(t("merge_duplicate_identities.projectionsFound", count=len(projection_rows),
+                path=args.projection_review_csv))
+        print(t("merge_duplicate_identities.projectionActions",
+                counts=dict(Counter(str(row["action"]) for row in projection_rows))))
         if not args.apply:
-            print("  未写 ledger（加 --apply --backup 才写）")
+            print(t("merge_duplicate_identities.dryRun"))
             return 0
 
-        print(f"  已备份到 {args.backup}")
+        print(t("merge_duplicate_identities.backedUp", path=args.backup))
         before = counts_of(connection, EXTRA_COUNTS)
         with connection:
             moved = apply_rows(connection, rows)
@@ -939,12 +940,12 @@ def run(args: argparse.Namespace) -> int:
         after = counts_of(connection, EXTRA_COUNTS)
         _integrity, violations = verify_after_write(connection)
 
-        print("  合并结果：", moved)
-        print("  重复名称投影：", projections)
+        print(t("merge_duplicate_identities.merged", counts=moved))
+        print(t("merge_duplicate_identities.projectionsApplied", counts=projections))
         for key in before:
-            mark = "" if before[key] == after[key] else "  <-- 变化"
+            mark = "" if before[key] == after[key] else t("merge_duplicate_identities.changedMark")
             print(f"    {key}: {before[key]} -> {after[key]}{mark}")
-        print(f"  foreign_key_check 违规 {violations} 条")
+        print(t("merge_duplicate_identities.foreignKeys", count=violations))
         return 1 if violations else 0
     finally:
         connection.close()

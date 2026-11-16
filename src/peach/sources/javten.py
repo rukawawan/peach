@@ -84,7 +84,7 @@ class JavtenSource(SiteSource):
         return self.config.base_url + SEARCH_PATH.format(video_id=found) if found else ""
 
     def _missing(self) -> SourceFailure:
-        return SourceFailure(FailureReason.NOT_FOUND, f"{self.config.label} 上没有这个商品")
+        return SourceFailure(FailureReason.NOT_FOUND, "errors.base.itemNotListed", {"label": self.config.label})
 
     def fetch(self, code: str, *, session: Session) -> Page:
         """搜索一跳，必要时再取作品页一跳。站方跳到的若是译文页，再取一次日文原页。"""
@@ -113,7 +113,7 @@ class JavtenSource(SiteSource):
             raise unrecognised()
         if challenge_page(page.body):
             raise SourceFailure(FailureReason.CLOUDFLARE_CHALLENGE,
-                                f"{self.config.label} 要求 Cloudflare 验证，请在采集设置里更新 Cookie",
+                                "errors.base.cloudflareUpdateCookie", {"label": self.config.label},
                                 status_code=403)
         soup = BeautifulSoup(page.text, "html.parser")
         heading = text_of(soup.select_one("h1.fc2-id"))
@@ -121,7 +121,7 @@ class JavtenSource(SiteSource):
             raise self._missing()
         address = landing(page.body)
         if address is not None and address.group("lang"):
-            raise SourceFailure(FailureReason.PARSE_ERROR, f"{self.config.label} 回的是译文页，只收日文原页")
+            raise SourceFailure(FailureReason.PARSE_ERROR, "errors.javten.translatedPage", {"label": self.config.label})
         description = _DESCRIPTION.search(_meta(soup, "description"))
         published = _meta(soup, "videos:published_time")
         covers = [storage_original(_absolute(_meta(soup, "og:image")))]

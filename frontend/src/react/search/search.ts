@@ -7,6 +7,8 @@
  *
  * 下拉栏的开合动效是全站菜单那一副（遗留层 `presentMenu`／`dismissMenu`，由 `helpers` 递进来）：
  * `hidden` 始终是「看不见了」，壳的全局 Escape 与外点收起照旧读它。 */
+import { t } from '../../i18n';
+import { codedText } from '../../core/server-text';
 
 /** 补全里的一张小封面：作品本身，或人名那一行右边的近作。 */
 export interface SuggestCard {
@@ -42,6 +44,8 @@ export interface SuggestItem {
 export interface SuggestGroup {
   kind: string;
   label: string;
+  /** 服务端补全分组显示名的 code；推荐栏自己拼的组没有。 */
+  label_code?: string;
   total?: number;
   items: SuggestItem[];
   href?: string;
@@ -216,24 +220,24 @@ export function menuModel({ query, history, picks, suggestFor, groups, tabs, kin
       // 搜索记录排在左栏最下面：它比推荐晚到，排在末尾到了也不把上面的往下推。键盘上下按画出来的
       // 次序走，左栏走完再到右栏，所以编号也按这个次序给。
       const left = recommendations.filter(group => !SUGGEST_RIGHT_KINDS.has(group.kind)).map(section);
-      if (matching.length) left.push({ label: '搜索记录', options: matching.map(value => add({ type: 'history', value })) });
+      if (matching.length) left.push({ label: t('catalog:searchSuggest.history'), options: matching.map(value => add({ type: 'history', value })) });
       const right = recommendations.filter(group => SUGGEST_RIGHT_KINDS.has(group.kind)).map(section);
       return { tabs: null, recent: null, left, right, empty: false, options };
     }
-    const recent = matching.length ? { label: '搜索记录', options: matching.map((value) => add({ type: 'history', value })) } : null;
-    const suggested = picks.length ? { label: '推荐', options: picks.map((value) => add({ type: 'pick', value })) } : null;
+    const recent = matching.length ? { label: t('catalog:searchSuggest.history'), options: matching.map((value) => add({ type: 'history', value })) } : null;
+    const suggested = picks.length ? { label: t('catalog:javScore.recommended'), options: picks.map((value) => add({ type: 'pick', value })) } : null;
     return { tabs: null, recent: null, left: recent ? [recent] : [], right: suggested ? [suggested] : [], empty: false, options };
   }
   const fresh = suggestFor === query;
   const recent = !kind && matching.length
-    ? { label: '搜索记录', options: matching.map((value) => add({ type: 'history', value })) } : null;
+    ? { label: t('catalog:searchSuggest.history'), options: matching.map((value) => add({ type: 'history', value })) } : null;
   // 选了一类就只画这一类；拉满那一类的请求还在路上时，先用「全部」里的那几条顶着。
   const shown = (fresh ? groups : []).filter((group) => !kind || group.kind === kind);
   const section = (group: SuggestGroup): MenuSection => {
     const rows = group.items.map((item) => add({ type: 'suggest', value: item.value, kind: group.kind, item }));
     const more = group.kind === 'asset' && (group.total ?? 0) > rows.length
       ? add({ type: 'more', value: query, total: group.total! }) : undefined;
-    return { kind: group.kind, label: group.label, options: rows, more };
+    return { kind: group.kind, label: codedText(group, 'label'), options: rows, more };
   };
   const left = shown.filter((group) => !SUGGEST_RIGHT_KINDS.has(group.kind)).map(section);
   const right = shown.filter((group) => SUGGEST_RIGHT_KINDS.has(group.kind)).map(section);

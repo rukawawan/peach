@@ -10,6 +10,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from peach.local_poster import read_jpeg
+from peach.user_messages import UserInterruptedError
 
 
 class LocalPosterTests(unittest.TestCase):
@@ -122,7 +123,7 @@ class LocalPosterTests(unittest.TestCase):
                  self.root / f'{index}.jpg') for index in range(5)]
         def update(**values):
             if values.get('checked') == 1:
-                raise InterruptedError('停止')
+                raise UserInterruptedError('errors.processingControl.stopped')
         with patch('peach.local_poster.read_jpeg', return_value=(data, size)) as read, \
                 self.assertRaises(InterruptedError):
             _read_local_posters(jobs, dict(speed_mode='standard', covers=0),

@@ -11,7 +11,15 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
 
 #: 版本号的唯一来源。GitHub Release 的 `v<版本>` tag 必须与它相等。
 VERSION_FILE = "src/peach/__init__.py"
@@ -75,7 +83,7 @@ def git(root: Path, *args: str) -> str:
     done = subprocess.run(["git", *args], cwd=str(root), capture_output=True,
                           text=True, encoding="utf-8", check=False)
     if done.returncode != 0:
-        raise VersionError(f"git {' '.join(args)} 失败：{done.stderr.strip()}")
+        raise VersionError(t("version_bump.gitFailed", command=" ".join(args), error=done.stderr.strip()))
     return done.stdout.strip()
 
 
@@ -98,9 +106,26 @@ def release_range(root: Path) -> str:
     return f"{tag}..HEAD" if tag else "HEAD"
 
 
+def recorded_only(root: Path, spec: str) -> set[str]:
+    """`git merge -s ours` 记入的那一侧：合并前后树不变，对方的提交只进历史、不进代码。
+
+    记入社区 PR 是为了署名（贡献约定），那些提交的改动没有一行留在主线上，算进版本级别
+    或变更日志就是在报告没发生的变化。只算对方那一侧独有的提交：对方分支合过的主线提交
+    从第一父提交也到得了，照常计入。
+    """
+    excluded: set[str] = set()
+    for line in lines(git(root, "log", "--merges", "--format=%T %P", spec)):
+        tree, first, *others = line.split()
+        if others and git(root, "rev-parse", f"{first}^{{tree}}") == tree:
+            excluded.update(git(root, "rev-list", *others, f"^{first}").split())
+    return excluded
+
+
 def subjects_in(root: Path, spec: str) -> list[str]:
-    """区间里的提交主题，合并提交不算——它们的主题只说明分支名。"""
-    return lines(git(root, "log", "--no-merges", "--format=%s", spec))
+    """区间里的提交主题，合并提交和只记入历史的提交不算——前者的主题只说明分支名。"""
+    skipped = recorded_only(root, spec)
+    rows = (line.split(" ", 1) for line in lines(git(root, "log", "--no-merges", "--format=%H %s", spec)))
+    return [row[1] if len(row) > 1 else "" for row in rows if row[0] not in skipped]
 
 
 def changed_in(root: Path, spec: str) -> list[str]:
@@ -200,10 +225,11 @@ def readme_link_problems(root: Path) -> list[str]:
         links = DOWNLOAD_LINK.findall((root / name).read_bytes().decode("utf-8"))
         versions = {version for tag, asset, _ in links for version in (tag, asset)}
         if not links:
-            problems.append(f"{name}: 没有 Release 下载直链")
+            problems.append(t("version_bump.readmeNoLinks", name=name))
         elif len(versions) != 1 or not versions <= set(allowed):
-            problems.append(f"{name}: 下载直链版本 {'、'.join(sorted(versions))} 不是 "
-                            f"{' 或 '.join(allowed)}；用 release_tag.py --point-readme --apply 换到当前版本")
+            problems.append(t("version_bump.readmeStaleLinks", name=name,
+                              versions=sorted(versions),
+                              allowed=t("version_bump.or").join(allowed)))
     return problems
 
 
@@ -232,9 +258,9 @@ def plan_bump(root: Path, part: str = "auto") -> dict[str, object]:
     spec = release_range(root)
     subjects = subjects_in(root, spec)
     if not subjects:
-        raise VersionError(f"{spec} 里没有提交，没有可发布的内容")
+        raise VersionError(t("version_bump.noCommits", range=spec))
     if not runtime_inputs_changed(changed_in(root, spec)):
-        raise VersionError(f"{spec} 只碰了开发过程的文件，发布物与上一个标签相同")
+        raise VersionError(t("version_bump.devOnly", range=spec))
     chosen = bump_part_for(subjects, added_in(root, spec)) if part == "auto" else part
     current = read_version(root)
     return {

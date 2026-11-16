@@ -1,6 +1,6 @@
 # 参与 Peach
 
-Issues and pull requests are welcome. Maintainer-authored changes follow the same PR workflow. Small fixes (bugs, copy, documentation, tests) can go straight to a PR; complex bugs and large changes — new features, default behavior, connectors, contract or data-layer changes, anything an ADR covers — should have an issue first. Read [`AGENTS.md`](AGENTS.md) before opening a PR: it is the single entry point for development rules, and reviews follow it. Issues follow the templates in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/); the terms and delivery format in `AGENTS.md` are for code changes only. Each platform has exactly one test entry point: `& .\scripts\test.ps1` on Windows and `./scripts/test.sh` on macOS/Linux. By submitting a contribution you agree to license it under AGPL-3.0-or-later. The rest of this document is in Chinese.
+Issues and pull requests are welcome. Maintainer-authored changes follow the same PR workflow. Small fixes (bugs, copy, documentation, tests) can go straight to a PR; complex bugs and large changes — new features, default behavior, connectors, contract or data-layer changes, anything an ADR covers — should have an issue first. Read [`AGENTS.md`](AGENTS.md) before opening a PR: it is the single entry point for development rules, and reviews follow it. When you follow it, "I / the user", the ledger and production mean your own environment, and you commit under your own Git identity; fork PRs with commits authored as the maintainer fail CI. Issues follow the templates in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/); the terms and delivery format in `AGENTS.md` are for code changes only. Each platform has exactly one test entry point: `& .\scripts\test.ps1` on Windows and `./scripts/test.sh` on macOS/Linux. By submitting a contribution you agree to license it under AGPL-3.0-or-later. The rest of this document is in Chinese.
 
 Peach 是单人自托管应用，由一个人维护。欢迎提 Issue 和 PR。维护者自己的改动也遵循同一套流程，通过 PR 保留审阅与验证记录。
 
@@ -85,9 +85,13 @@ GitHub 的字段与模板机制见 [Issue types](https://docs.github.com/en/issu
 
 ### AI 参与与提交责任
 
-允许 AI 辅助方案、代码、测试、文档和 PR 文字。使用时简短说明参与范围，以及提交者实际检查的内容；不要求提供提示词或模型名称，提交里也不需要加 AI 署名。
+允许 AI 辅助方案、代码、测试、文档和 PR 文字。使用时简短说明参与范围，以及提交者实际检查的内容；不要求提供提示词或模型名称。直接用 Git 提交时不需要加 AI 署名。
 
-维护者采纳社区补丁时保留原作者为提交作者，用 `Source-PR`、`Original-Commit` 记录来源，不替贡献者补加 AI 署名。提交里的智能体署名表示维护侧智能体的改写或补充，只在它确实改动了代码时出现，不代表贡献者使用了 AI。署名门槛只检查维护者本机提交者自己的提交，见工作树交付约定。
+提交一律用你自己的 Git 身份（`user.name`、`user.email`），不要照仓库历史配成维护者。来自 fork 的 PR 里出现以维护者为作者的提交，CI 会拒收并给出重写命令。`AGENTS.md` 里的「我 / 用户」、ledger、生产和主检出，对你来说都指你自己的环境；你的 `integrate` 只合进你自己的 master，进上游仍要开 PR。
+
+你也可以照维护者的工作树流程（`scripts/agent_worktree.py`）开发。这时署名门槛同样检查你自己的提交，要求写明智能体工具与模型，形如 `Co-Authored-By: 工具 (模型) <厂商 noreply 地址>`。所用工具未在 `scripts/co_author.py` 的 `VENDORS` 登记时，先单独提交一次登记（工具名加厂商公开的 noreply 地址，不用个人邮箱），并在 PR 里说明。
+
+维护者采纳社区补丁时保留原作者为提交作者，用 `Source-PR`、`Original-Commit` 记录来源，不替贡献者补加 AI 署名。提交里的智能体署名表示提交者一侧智能体的改写或补充，只在它确实改动了代码时出现。署名门槛只检查本机提交者自己的提交，采纳的他人提交不检查，见工作树交付约定。
 
 提交者对最终内容负责，能够解释设计与取舍，并核对代码、说明和验证结果。未运行的测试、跳过项、未取得的样本和待原环境验收的部分在「测试结果」中明确标注，不把推测写成已验证结论。维护者按影响和风险评审，授权与确认边界见 `AGENTS.md`。
 
@@ -113,6 +117,8 @@ GitHub 的字段与模板机制见 [Issue types](https://docs.github.com/en/issu
 
 `frontend/` 需要 Node 24 或更高版本。
 
+Node 脚本与测试写成 `.ts`（前端源码另有 `.tsx` 与少量 `.js`），由 Node 24 的类型擦除直接运行，不新建 `.mjs`、`.cjs`；本地模块按完整文件名导入，例如 `'../scripts/copy-check.ts'`。`tests/test_repo_hygiene.py` 会拦下 `.mjs`、`.cjs`。
+
 运行 Peach 时不需要 Node，Python 服务和安装包直接读取构建好的 `web/dist/`，所以它要提交进 Git。改了 `frontend/src` 后，在同一个 PR 里运行 `npm --prefix frontend run build` 并提交 `web/dist/`；CI 的 `web-bundle` 任务会检查构建结果和源码是否一致。目录结构与样式约定见 [`docs/FRONTEND.md`](docs/FRONTEND.md)。
 
 ## 提交说明与变更日志
@@ -125,5 +131,20 @@ GitHub 的字段与模板机制见 [Issue types](https://docs.github.com/en/issu
 
 - 文档职责、事实归属和界面提示遵循 [文档与界面文案](docs/WRITING.md)。正式测试入口执行 seiso 稳定规则；预览规则供人工复核。
 - 文档、注释、界面文字和测试名一律用中文；代码标识、命令、协议名和库名保留英文。
+- `scripts/` 下开发工具的新输出用 `t()`（`from peach.interface_text import dev as t`），文字写进 `scripts/locales/zh-CN/dev.json` 和 `scripts/locales/en/dev.json`，中英两份在同一个 PR 里写；写进日志文件的那一行用同一个键经 `dev_log` 渲染成英文。`tests/test_dev_text.py` 检查两份对得上。
 - 只写现在的状态，不写「改动前后」的对比，也不保留被否掉的做法。`tests/test_copy_final_state.py` 会检查这一条；确实需要记录的事故原文，逐行加 `copy-lint-disable-line` 放行。
 - 不要提交媒体、数据库、凭据、日志、构建缓存和个人信息（局域网地址、主机名、账号名、个人目录）。
+
+## 翻译
+
+界面翻译在 [Hosted Weblate](https://hosted.weblate.org/projects/peach/) 上进行，不用改代码，注册 Weblate 账号即可参与。
+
+- 源语言是简体中文。英文由改代码的人随功能写进仓库；现有英文是 AI 初稿，在 Weblate 上带「AI draft」标签。发现不准确的地方，可以提建议，也可以给别人的建议投票，由审核者采纳。
+- 其他语言直接在 Weblate 上翻译，没有的语言可以新建。翻到能用后，由维护者登记到设置的界面语言里。
+- 术语按项目术语表（Weblate 上的 Glossary 组件）翻译，不用标为禁用的写法。对术语有不同意见，在该条目下评论并说明理由。
+- `{{count}}` 这类插值占位原样保留，不翻译，也不增删。占位不对的译文，Weblate 不会保存。
+- 译文文件不要绕过 Weblate 直接改了提 PR，否则改动会和 Weblate 上的译文冲突。改代码时新增的界面文字按上一节，在同一个 PR 里写中文和英文。
+
+Weblate 以 PR 的形式把译文推回仓库，提交作者是各位译者。这类 PR 只改 `resources/locales/` 下的译文文件，CI 通过后由维护者合入；不要压缩合并，以保留每位译者的署名。
+
+Interface translation happens on [Hosted Weblate](https://hosted.weblate.org/projects/peach/); no code changes are needed. Simplified Chinese is the source language. English is written into the repository together with each feature; the current English is an AI draft and carries the "AI draft" label on Weblate, so suggest improvements or vote on other people's suggestions, and reviewers approve them. Other languages are translated directly on Weblate, and you can start a new one there; once it is usable, the maintainer adds it to the interface language setting. Follow the project glossary (the Glossary component on Weblate) and avoid terms marked forbidden; if you disagree with a term, comment on it and explain why. Keep placeholders such as `{{count}}` exactly as they are; Weblate rejects translations with broken placeholders. Do not edit translation files in a PR that bypasses Weblate. Weblate sends translations back as pull requests authored by the translators; they only touch files under `resources/locales/`, and the maintainer merges them once CI passes, without squashing, so every translator keeps the credit.

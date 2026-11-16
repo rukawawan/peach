@@ -23,6 +23,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+from peach.interface_text import dev as t  # noqa: E402
 from peach.update_packages import MANIFEST, SELF_PROVISIONED  # noqa: E402
 
 #: 支持自动更新到新版的最旧客户端。更早的版本要求工具集合与它认得的完全相等，0.48.0 加入人脸
@@ -76,7 +77,7 @@ def client_tags(root: Path, version: str, oldest: str = OLDEST_CLIENT) -> list[s
     tags = [tag for tag in listed.stdout.split() if re.fullmatch(r"v\d+\.\d+\.\d+", tag)
             and _version(oldest) <= _version(tag) < _version(version)]
     if not tags:
-        raise ValueError(f"没有可核对的旧版本标签（{oldest} 起）；检出须带发布标签")
+        raise ValueError(t("update_compat.noClientTags", oldest=oldest))
     return sorted(tags, key=_version)
 
 
@@ -106,7 +107,7 @@ def probe(root: Path, tag: str, payload: dict) -> dict:
         completed = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", PROBE, str(Path(folder) / "src")],
                                    input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8")
     if completed.returncode != 0:
-        return {"error": (completed.stderr or completed.stdout).strip().splitlines()[-1:] or ["无输出"]}
+        return {"error": (completed.stderr or completed.stdout).strip().splitlines()[-1:] or [t("update_compat.noOutput")]}
     return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
@@ -118,13 +119,15 @@ def check_clients(root: Path, rows: list[dict], manifest: dict, version: str,
     for tag in client_tags(root, version, oldest):
         result, reasons = probe(root, tag, payload), []
         if result.get("state") != "available" or result.get("latest") != version:
-            reasons.append(f"检查结果是 {result.get('state')}、{result.get('latest')}，选不中 {version}")
+            reasons.append(t("update_compat.notSelected", state=str(result.get("state")),
+                                 latest=str(result.get("latest")), version=version))
         if result.get("error"):
-            reasons.append(f"读不了这一版：{result['error']}")
+            reasons.append(t("update_compat.unreadable", error=str(result["error"])))
         if result.get("kind") == "update":
             orphaned = set(manifest.get("tools", {})) - set(result.get("tools", [])) - SELF_PROVISIONED
             if orphaned:
-                reasons.append("清单里有它不认得、运行时也补不齐的工具：" + "、".join(sorted(orphaned)))
+                reasons.append(t("update_compat.orphanedTools",
+                                     tools=sorted(orphaned)))
         if reasons:
             problems[tag] = reasons
     return problems
@@ -135,8 +138,8 @@ def verify(packages: Path, version: str, root: Path = ROOT) -> dict[str, list[st
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--packages", type=Path, required=True, help="package_windows_release.py 的输出目录")
+    parser = argparse.ArgumentParser(description=t("update_compat.description"))
+    parser.add_argument("--packages", type=Path, required=True, help=t("update_compat.packagesHelp"))
     parser.add_argument("--version", required=True)
     args = parser.parse_args(argv)
     problems = verify(args.packages, args.version)

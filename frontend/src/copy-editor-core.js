@@ -1,4 +1,5 @@
-/* Peach 原位改字核心。以 classic script 同步注册，保存由各端适配器提供。 */
+/* Peach 原位改字核心。以 classic script 同步注册，保存由各端适配器提供。
+ * i18n-exempt-file: classic script 不能导入翻译入口，且与官网、演示站共用一份，界面文字随兄弟项目接入多语言时再抽。 */
 (() => {
   const SKIP = '[data-copy-editor],script,style,textarea,input,select,svg,[contenteditable]';
   const INTERACT = '[role="tab"],[role="switch"],[role="radio"],[role="radiogroup"],[role="slider"],[role="checkbox"],[role="combobox"],[data-platform-option],[aria-expanded],[aria-pressed],[aria-haspopup],summary,input,select,label,[data-copy-interact]';

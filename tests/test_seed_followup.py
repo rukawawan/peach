@@ -11,6 +11,7 @@ from peach.repository import LedgerDatabase
 from peach.review_csv import read_rows
 from peach.task_runs import TaskRunStore
 from support.ledger import fresh_ledger
+from support.outcomes import told
 
 VERSION = "2026-09-25"
 STAMP = "2026-09-25T00:00:00Z"
@@ -133,13 +134,13 @@ class RunTests(Case):
         self.assertEqual(row[0], "天使萌")
         self.assertEqual(json.loads(row[1])["name_preference"]["previous_name"], "天使もえ")
         self.assertEqual(summary["names"], 1)
-        self.assertIn("中文名 1", summary["outcome"])
+        self.assertIn("中文名 1", told(summary)["outcome"])
 
     def test_failed_name_backup_leaves_the_ledger_unchanged(self):
         key = self.chinese_pack()
         person = self.add("performer", "天使もえ")
-        with mock.patch("peach.migrations.sqlite_backup", side_effect=OSError("备份目录不可写")):
-            with self.assertRaisesRegex(OSError, "备份目录不可写"):
+        with mock.patch("peach.migrations.sqlite_backup", side_effect=OSError("Permission denied")):
+            with self.assertRaisesRegex(OSError, "Permission denied"):
                 seed_followup.run(self.contract, key, None)
         with self.database.read_connection() as connection:
             self.assertEqual(connection.execute("SELECT canonical_name FROM entity WHERE id=?", (person,)).fetchone()[0], "天使もえ")
@@ -167,7 +168,7 @@ class RunTests(Case):
         summary = seed_followup.run(self.contract, KEY, None)
         self.assertEqual((summary["matched"], summary["aliases"], summary["links"], summary["memberships"],
                           summary["makers"], summary["conflicts"], summary["duplicates"]), (2, 1, 1, 1, 0, 1, 0))
-        self.assertEqual(summary["outcome"], "别名 1、链接 1、归属 1、不一致 1")
+        self.assertEqual(told(summary)["outcome"], "别名 1、链接 1、归属 1、不一致 1")
         self.assertEqual(self.busts, 1, "动了数据库就清一次聚合缓存")
         with self.database.read_connection() as connection:
             self.assertEqual(connection.execute("SELECT maker_id FROM label_maker WHERE label_id=?",
@@ -181,7 +182,7 @@ class RunTests(Case):
         self.assertEqual((again["aliases"], again["links"], again["memberships"], again["refreshed"]), (0, 0, 0, 0),
                          "同一包再跑一遍没有东西可补")
         self.assertEqual(self.busts, 1, "没动数据库就不清缓存")
-        self.assertTrue(again["outcome"].startswith("不一致 1"), again["outcome"])
+        self.assertTrue(told(again)["outcome"].startswith("不一致 1"), told(again)["outcome"])
 
     def test_two_local_entities_for_one_pack_item_become_a_duplicate_row(self):
         self.add("performer", "天川そら")

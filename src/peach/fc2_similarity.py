@@ -7,6 +7,7 @@ from itertools import combinations
 from typing import Iterable, Mapping
 
 from .catalog_rules import DUPLICATE_FLOOR_SECONDS, DUPLICATE_TOLERANCE, part_marker
+from .coded_text import Said
 
 
 POLICY_VERSION = "fc2-similarity-policy-v1"
@@ -141,13 +142,13 @@ def _candidate(
         kinds.append("media_similarity")
     warnings = []
     if comment is not None:
-        warnings.append("匿名评论等价标记只作候选")
+        warnings.append(Said("labels.fc2Similarity.commentOnly"))
     if left in collections or right in collections:
-        warnings.append("涉及合集，只能复核分片关系，不能整体合并")
+        warnings.append(Said("labels.fc2Similarity.collection"))
     if not assets.get(left) or not assets.get(right):
-        warnings.append("其中一个番号尚不在本地 ledger")
+        warnings.append(Said("labels.fc2Similarity.notInLedger"))
     if local_evidence.get("part_conflict"):
-        warnings.append("本地文件分片标记不同")
+        warnings.append(Said("labels.fc2Similarity.partConflict"))
     confidence = 1.0 if local_evidence.get("exact_hash") else (
         0.9 if comment is not None and "media_similarity" in kinds else
         0.72 if comment is not None else 0.65
@@ -170,9 +171,7 @@ def _candidate(
         **local_evidence,
         "confidence": confidence,
         "warnings": "；".join(warnings),
-        "reason": (
-            f"{left_code} ↔ {right_code}；证据：" + "、".join(kinds)
-        ),
+        "reason": str(Said("labels.fc2Similarity.reason", left=left_code, right=right_code, kinds=kinds)),
         "policy_version": POLICY_VERSION,
         "status": "candidate",
         "inferred": "1" if inferred else "",

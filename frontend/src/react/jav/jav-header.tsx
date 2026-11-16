@@ -3,6 +3,7 @@ import { Button } from '@/components/base/buttons/button';
 import { CloudDownloadDialog, type DownloadPrefill } from '../activity/cloud-download-dialog';
 import { JAV_TABS, javPath } from './jav';
 import { SortableBoardTabs } from '../components/navigation-order';
+import { t } from '../../i18n';
 
 /** 页头一行：标题、分区自己的筛选框（同名册页的 `IndexSearch`，靠右）、查找资源。馆藏用目录顶栏的搜索，不传。 */
 export function JavHeader({ tab, navigate, find, search }: {
@@ -12,10 +13,10 @@ export function JavHeader({ tab, navigate, find, search }: {
     <div className="flex min-w-0 flex-wrap items-center gap-3 max-board-narrow:gap-x-2">
       <h2 data-page-title="" className="text-display-4-medium text-text-primary max-board-narrow:text-title-1-medium">JAV</h2>
       {search}
-      <Button variant="primary" className={search ? 'flex-none' : 'ml-auto flex-none'} onClick={find}>查找资源</Button>
+      <Button variant="primary" className={search ? 'flex-none' : 'ml-auto flex-none'} onClick={find}>{t('catalog:shared.searchTorrents')}</Button>
     </div>
     <SortableBoardTabs group="jav" tabs={JAV_TABS.map(([value, label]) => ({ value, label }))} value={tab}
-      label="JAV 分区" className="" onChange={key => navigate(javPath(key))} />
+      label={t('catalog:javTabs.label')} className="" onChange={key => navigate(javPath(key))} />
   </div>;
 }
 

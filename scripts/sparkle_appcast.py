@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from peach.interface_text import dev as t  # noqa: E402
 from peach.sparkle_update import MIGRATION_HEAD, MIGRATION_NAMESPACE, migration_head
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
@@ -28,21 +29,21 @@ HEAD_TAG = f"{{{MIGRATION_NAMESPACE}}}{MIGRATION_HEAD.split(':', 1)[1]}"
 
 def _version(text: str | None) -> tuple[int, ...]:
     if not text or not re.fullmatch(r"\d+(\.\d+){0,3}", text.strip()):
-        raise ValueError(f"appcast 版本号无效：{text}")
+        raise ValueError(t("sparkle_appcast.badVersion", version=text))
     return tuple(int(part) for part in text.strip().split("."))
 
 
 def _items(tree: ET.ElementTree) -> list[ET.Element]:
     channel = tree.getroot().find("channel")
     if channel is None:
-        raise ValueError("appcast 缺少 channel")
+        raise ValueError(t("sparkle_appcast.noChannel"))
     return channel.findall("item")
 
 
 def _item(tree: ET.ElementTree, version: str) -> ET.Element:
     matches = [item for item in _items(tree) if item.findtext(f"{{{SPARKLE}}}version") == version]
     if len(matches) != 1:
-        raise ValueError(f"appcast 里版本 {version} 的条目有 {len(matches)} 个")
+        raise ValueError(t("sparkle_appcast.entryCount", version=version, count=len(matches)))
     return matches[0]
 
 
@@ -62,21 +63,21 @@ def verify(path: Path, *, version: str, dmg: Path, url_prefix: str, head: int) -
     item = _item(tree, version)
     for other in _items(tree):
         if other is not item and _version(other.findtext(f"{{{SPARKLE}}}version")) >= _version(version):
-            raise ValueError("appcast 里有不低于本版本的条目")
+            raise ValueError(t("sparkle_appcast.newerEntry"))
     enclosure = item.find("enclosure")
     if enclosure is None:
-        raise ValueError("本版本条目缺少 enclosure")
+        raise ValueError(t("sparkle_appcast.noEnclosure"))
     if enclosure.get("url") != url_prefix + dmg.name:
-        raise ValueError(f"下载地址不符：{enclosure.get('url')}")
+        raise ValueError(t("sparkle_appcast.urlMismatch", url=enclosure.get('url')))
     if enclosure.get("length") != str(dmg.stat().st_size):
-        raise ValueError("enclosure 大小与 DMG 不符")
+        raise ValueError(t("sparkle_appcast.sizeMismatch"))
     signature = enclosure.get(f"{{{SPARKLE}}}edSignature")
     if not signature:
-        raise ValueError("本版本条目缺少 EdDSA 签名")
+        raise ValueError(t("sparkle_appcast.noSignature"))
     if item.findtext(HEAD_TAG) != str(head):
-        raise ValueError("本版本条目的迁移号缺失或不符")
+        raise ValueError(t("sparkle_appcast.migrationMismatch"))
     if not item.findtext(f"{{{SPARKLE}}}minimumSystemVersion"):
-        raise ValueError("本版本条目缺少最低系统版本")
+        raise ValueError(t("sparkle_appcast.noMinimumSystem"))
     return {"version": version, "signature": signature}
 
 
@@ -86,7 +87,7 @@ def publish(feeds: list[Path]) -> list[dict]:
     environment = rclone_environment()
     executable = environment.get("PEACH_RCLONE") or shutil.which("rclone")
     if not executable:
-        raise ValueError("发布需要官方 rclone")
+        raise ValueError(t("sparkle_appcast.rcloneRequired"))
     base = environment["PEACH_R2_PUBLIC_BASE"].rstrip("/")
     published = []
     with tempfile.TemporaryDirectory(prefix="peach-sparkle-") as directory:
@@ -105,7 +106,7 @@ def publish(feeds: list[Path]) -> list[dict]:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("sparkle_appcast.description"))
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("annotate", "verify"):
         command = commands.add_parser(name)
@@ -126,7 +127,7 @@ def main(argv=None) -> int:
         else:
             result = publish(args.feeds)
     except (OSError, ValueError, ET.ParseError, subprocess.CalledProcessError) as error:
-        print(f"Sparkle appcast 未通过：{error}", file=sys.stderr)
+        print(t("sparkle_appcast.failed", error=error), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False))
     return 0

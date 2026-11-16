@@ -281,7 +281,7 @@ class DependencyPolicyTests(unittest.TestCase):
         换上游版本时新旧画法混在同一条按钮上。归属由生成脚本自己在写文件前拦，
         这里核的是那道拦阻还在、名单也还覆盖得住实际的雪碧图。
         """
-        generator = (ROOT / "scripts" / "vendor_web_dependencies.mjs").read_text(
+        generator = (ROOT / "scripts" / "vendor_web_dependencies.ts").read_text(
             encoding="utf-8")
         self.assertIn("const handDrawnIcons = new Set([", generator)
         self.assertIn("if (orphans.length) {", generator)
@@ -495,7 +495,7 @@ class DependencyPolicyTests(unittest.TestCase):
         只列不同步的路径时，看到这一段的人得先翻 `package.json` 才知道入口叫什么；
         Dependabot 的 PR 上尤其——那些改动不是人写的，没人知道漏了哪一步。
         """
-        source = (ROOT / "scripts/vendor_web_dependencies.mjs").read_text(encoding="utf-8")
+        source = (ROOT / "scripts/vendor_web_dependencies.ts").read_text(encoding="utf-8")
         failure = source[source.index("前端固定依赖未同步"):source.index("process.exit(1)")]
         self.assertIn("npm run vendor:web", failure)
         self.assertIn("adopt_dependency_bump.py", failure)

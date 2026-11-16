@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from . import interface_text
 from .avatar_picker import Choice, MAX_ASSET_CHOICES, MAX_IMAGE_BYTES, PickerError, prepare_image
 from .avatar_provider import AvatarCandidateCache
 from .follow_avatar import profile_identities
@@ -84,13 +85,16 @@ def choices(connection: sqlite3.Connection, entity_id: int, *, project: MediaPro
         profile = _profile(url)
         if profile:
             cached = cached_profile_avatar(providers_root, entity_id, profile) if providers_root else None
-            detail = ""
+            detail_code, detail_params = "", ()
             if cached is not None:
                 date = str(cached[1].get("cached_at") or "")[:10]
-                detail = "已缓存的社交头像" + (f" · {date}" if date else "")
+                detail_code = "labels.avatarOnline.cachedOn" if date else "labels.avatarOnline.cached"
+                detail_params = (("date", date),) if date else ()
             ref = f"sha256:{cached[1]['sha256']}" if cached else f"follow-link:{link_id}"
-            result.append(Choice(ref=ref, source="social",
-                                 label=label or urlsplit(url).hostname, detail=detail))
+            result.append(Choice(ref=ref, source="social", label=label or urlsplit(url).hostname,
+                                 detail=interface_text.text(f"server:{detail_code}", dict(detail_params))
+                                 if detail_code else "",
+                                 detail_code=detail_code, detail_params=detail_params))
     for source in store.sources():
         if source["entity_id"] != entity_id:
             continue
@@ -125,7 +129,7 @@ def resolve(ref: str, connection: sqlite3.Connection, entity_id: int, *, project
     listed = choices(connection, entity_id, project=project)
     allowed = {base for choice in listed for base in (choice.bases or (choice.ref,))}
     if ref not in allowed:
-        raise PickerError("这张备选图片不属于当前创作者")
+        raise PickerError("errors.avatarOnline.notThisCreator")
     if ref.startswith("follow-link:"):
         row = connection.execute("SELECT url FROM entity_link WHERE id=? AND entity_id=?",
                                  (int(ref.split(":")[1]), entity_id)).fetchone()
@@ -147,8 +151,8 @@ def resolve(ref: str, connection: sqlite3.Connection, entity_id: int, *, project
             body = media(item, index)
         provider = "follow-content"
     if not body:
-        raise PickerError("这张图未取得，请稍后重试")
+        raise PickerError("errors.avatarOnline.imageNotFound")
     if len(body) > MAX_IMAGE_BYTES:
-        raise PickerError("图片超过大小上限")
+        raise PickerError("errors.avatarOnline.imageOverLimit")
     body = prepare_image(body)
     return body, {"source": "avatar picker", "provider": provider, "external_id": ref}

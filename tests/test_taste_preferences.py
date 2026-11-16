@@ -73,7 +73,7 @@ class TastePreferenceTests(unittest.TestCase):
         self.assertEqual((first[0]["added"], second[0]["added"]), (1, 0))
         strengths, _, evidence = preference_profile(self.db, self.store)
         self.assertGreater(strengths["tag"][2], 0)
-        self.assertEqual(evidence["tag"][2], ["浏览器书签"])
+        self.assertEqual(evidence["tag"][2], ["bookmarks"])
         dashboard = build_taste_dashboard(self.store, self.db)
         self.assertEqual(dashboard["summary"]["history_visits"], 0)
         self.assertEqual(dashboard["summary"]["bookmarks"], 1)
@@ -178,7 +178,7 @@ class TastePreferenceTests(unittest.TestCase):
                       (3, "https://x.com/home", "演示女优")])
         strengths, names, evidence = preference_profile(self.db, self.store)
         self.assertEqual(set(strengths["performer"]), {1})
-        self.assertEqual(evidence["performer"][1], ["浏览记录", "关注"])
+        self.assertEqual(evidence["performer"][1], ["browsing", "follows"])
         self.assertEqual(names["performer"][1], "演示女优")
         self.db.execute("UPDATE follow_source SET enabled=0")
         self.assertLess(preference_profile(self.db, self.store)[0]["performer"][1], strengths["performer"][1])
@@ -193,7 +193,7 @@ class TastePreferenceTests(unittest.TestCase):
         self.assertEqual(reads.call_count, 1)
         self.assertGreater(strengths['performer'][1], 0)
         self.assertEqual(names['performer'][1], '演示女优')
-        self.assertEqual(evidence['performer'][1], ['浏览记录'])
+        self.assertEqual(evidence['performer'][1], ['browsing'])
 
     def test_browser_identity_cache_survives_watch_changes_and_tracks_aliases_and_history(self):
         from peach.taste_evidence import browser_entities
@@ -207,11 +207,11 @@ class TastePreferenceTests(unittest.TestCase):
             self.db.execute("UPDATE entity_alias SET alias='another_actor'")
             unmatched = preference_profile(self.db, self.store)
             self.assertEqual(reads.call_count, 2)
-            self.assertNotIn('浏览记录', unmatched[2]['performer'][1])
+            self.assertNotIn('browsing', unmatched[2]['performer'][1])
             self.history([(2, 'https://javdb.com/v/demo2', 'another_actor')])
             imported = preference_profile(self.db, self.store)
             self.assertGreater(reads.call_count, 2)
-            self.assertIn('浏览记录', imported[2]['performer'][1])
+            self.assertIn('browsing', imported[2]['performer'][1])
 
     def test_adult_product_titles_and_search_aliases_map_to_existing_entities(self):
         self.history([(1, "https://www.dmm.co.jp/digital/videoa/-/detail/=/cid=demo001/", "演示女优 的作品"),
@@ -219,7 +219,7 @@ class TastePreferenceTests(unittest.TestCase):
                       (3, "https://rule34.xxx/index.php?page=post&s=list&tags=footjob", "标签搜索")])
         strengths, _, evidence = preference_profile(self.db, self.store)
         self.assertIn(1, strengths["performer"])
-        self.assertEqual(evidence["performer"][1], ["浏览记录"])
+        self.assertEqual(evidence["performer"][1], ["browsing"])
 
     def test_titles_and_urls_share_content_and_identity_evidence(self):
         from peach.taste_history import build_taste_dashboard
@@ -232,7 +232,7 @@ class TastePreferenceTests(unittest.TestCase):
         strengths, _, evidence = preference_profile(self.db, self.store)
         for kind, eid in (("performer", 1), ("tag", 2), ("studio", 3), ("series", 4)):
             self.assertGreater(strengths[kind][eid], 0)
-            self.assertEqual(evidence[kind][eid], ["浏览记录", "浏览器书签"])
+            self.assertEqual(evidence[kind][eid], ["browsing", "bookmarks"])
         dashboard = build_taste_dashboard(self.store, self.db)
         self.assertEqual(dashboard["summary"]["history_visits"], 2)
         self.assertEqual(dashboard["summary"]["bookmarks"], 1)

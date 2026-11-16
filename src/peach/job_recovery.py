@@ -7,6 +7,7 @@ import os
 from contextvars import ContextVar
 from pathlib import Path
 
+from . import interface_text
 from .fsutil import atomic_write_text
 from .update_tasks import admission, state_for, UpdateBusy, _mutex
 
@@ -17,7 +18,7 @@ current_job_id = ContextVar('peach_resuming_job_id', default=None)
 
 def _path(db: Path, key: str) -> Path:
     if not key or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in key):
-        raise ValueError("任务恢复标识无效")
+        raise ValueError("invalid job recovery key")
     return state_for(db).parent / "job-recovery" / (key + ".json")
 
 
@@ -42,7 +43,14 @@ def read(db: Path, key: str) -> dict:
     except FileNotFoundError:
         return {}
     except (OSError, ValueError):
-        return {'status': 'blocked', 'error': '任务恢复记录无法读取，请重新发起任务。'}
+        return {'status': 'blocked', 'error': interface_text.text('server:errors.jobRecovery.unreadable'),
+                'error_code': 'errors.jobRecovery.unreadable'}
+
+
+def _stopped() -> dict:
+    """用户停止的那一轮写进任务行的原因（与 `processing_control` 的停止信号同一句）。"""
+    return {'error': interface_text.text('server:errors.processingControl.userStopped'),
+            'error_code': 'errors.processingControl.userStopped'}
 
 
 def save(db: Path, key: str, job_id: str, request: dict, *, run_id=None, waiting=False) -> None:
@@ -76,7 +84,7 @@ def cancel(db: Path, key: str) -> None:
         data = read(db, key)
         if data.get('run_id') is not None:
             from .task_runs import TaskRunStore
-            TaskRunStore(db).finish(data['run_id'], 'cancelled', error='用户停止任务')
+            TaskRunStore(db).finish(data['run_id'], 'cancelled', **_stopped())
         _path(db, key).unlink(missing_ok=True)
 
 
@@ -109,10 +117,24 @@ def reconcile_paused(db: Path) -> None:
                 waiting(db, path.stem, data['job_id'])
 
 
+def _maybe_active(db: Path, key: str) -> bool:
+    """无锁先看一眼：没有记录或记录已结束就不必取闸门锁。读不出来（替换瞬间的共享冲突）
+    不算结束，交给持锁的那次重读。"""
+    try:
+        data = json.loads(_path(db, key).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return not isinstance(data, dict) or data.get('status') == 'active'
+
+
 def resume(db: Path, handlers: dict) -> list[str]:
     """领取与起跑在同一把锁内；失败保留参数但不循环重试。"""
     resumed = []
     for key, handler in handlers.items():
+        if not _maybe_active(db, key):
+            continue
         try:
             with admission(db):
                 data = read(db, key)
@@ -130,7 +152,7 @@ def resume(db: Path, handlers: dict) -> list[str]:
                 if key == 'library-processing' and user_cancelled(db, data.get('job_id')):
                     if data.get('run_id') is not None:
                         from .task_runs import TaskRunStore
-                        TaskRunStore(db).finish(data['run_id'], 'cancelled', error='用户停止任务')
+                        TaskRunStore(db).finish(data['run_id'], 'cancelled', **_stopped())
                     finish(db, key, data['job_id'], 'cancelled')
                     continue
                 try:
@@ -152,7 +174,7 @@ def resume(db: Path, handlers: dict) -> list[str]:
                         TaskRunStore(db).finish(data['run_id'], 'failed', error=str(exc))
                     data.update(status="blocked", error=str(exc))
                     atomic_write_text(_path(db, key), json.dumps(data, ensure_ascii=False))
-                    LOGGER.warning("任务 %s 未能恢复：%s", key, exc)
+                    LOGGER.warning("Task %s could not be resumed: %s", key, exc)
                 else:
                     resumed.append(key)
         except UpdateBusy:

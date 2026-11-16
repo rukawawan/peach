@@ -8,7 +8,10 @@ from pathlib import Path
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "src"))
     __package__ = "scripts"
+from peach.interface_text import dev as t
+
 from . import check_readme_impact, co_author
 
 
@@ -20,16 +23,16 @@ def author_mail(repo: Path) -> str:
 
 def check(repo: Path, message: str, *, own: bool = True) -> list[str]:
     parsed = check_readme_impact.trailers(repo, message)
-    problems = co_author.problems("待提交", parsed.get("co-authored-by", []), own=own)
+    problems = co_author.problems(t("check_commit_message.pendingLabel"), parsed.get("co-authored-by", []), own=own)
     mentioned = sum(line.partition(":")[0].casefold() == "co-authored-by"
                     for line in message.splitlines())
     if mentioned != len(parsed.get("co-authored-by", [])):
-        problems.append("Co-Authored-By 须连续放在提交消息末尾的同一块，中间不要留空行。")
+        problems.append(t("check_commit_message.trailerBlock"))
     return problems
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("check_commit_message.description"))
     parser.add_argument("message_file", type=Path)
     args = parser.parse_args(argv)
     repo = Path.cwd()
@@ -41,7 +44,7 @@ def main(argv=None) -> int:
         own = co_author.is_own(author_mail(repo), co_author.committer_mail(repo))
         problems = check(repo, args.message_file.read_text(encoding="utf-8"), own=own)
     except (OSError, UnicodeError, subprocess.CalledProcessError) as error:
-        print(f"未取得提交校验结果：{error}", file=sys.stderr)
+        print(t("check_commit_message.checkFailed", error=error), file=sys.stderr)
         return 1
     for problem in problems:
         print(problem, file=sys.stderr)

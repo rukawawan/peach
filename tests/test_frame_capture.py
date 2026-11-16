@@ -216,7 +216,7 @@ class FFmpegCaptureIntegrationTests(unittest.TestCase):
                 capture_output=True, check=True, timeout=20)
             measured = media_probe.measure(str(ffprobe.path), 1, str(source))
             self.assertEqual(measured[1:3], (2276, 1280))
-            self.assertEqual(measured[7:9], ('横屏', '2K'))
+            self.assertEqual(measured[7:9], ('landscape', '2K'))
             for index in range(9):
                 self.assertTrue(frame_capture.capture_with_retry(str(ffmpeg.path), str(source), .1,
                     root / f's{index:02d}.jpg', width=480, decode_options=()))

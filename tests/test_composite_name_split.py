@@ -212,13 +212,13 @@ class ReviewedNameCleanupTests(unittest.TestCase):
             " VALUES(4,22,'performer','javdb',1.0)")
         self.con.execute(
             "INSERT INTO asset_tag(asset_id,tag,confidence,source)"
-            " VALUES(4,'演员:白石亚子',1.0,'javdb')")
+            " VALUES(4,'performer:白石亚子',1.0,'javdb')")
         done = apply_review(self.con, [
             self._row("strip", 22, "白石亚子", "白石 あこ", kind="performer")])
         self.assertEqual((done["strip"], done["flat"]), (1, 1))
         self.assertEqual(
             [tag for (tag,) in self.con.execute(
-                "SELECT tag FROM asset_tag WHERE asset_id=4")], ["演员:白石 あこ"])
+                "SELECT tag FROM asset_tag WHERE asset_id=4")], ["performer:白石 あこ"])
 
 
 class FormerNameTests(unittest.TestCase):
@@ -271,7 +271,7 @@ class FormerNameTests(unittest.TestCase):
         self.assertEqual(self.con.execute(
             "SELECT count(*) FROM entity WHERE kind='performer'").fetchone()[0], 2)
         self.assertEqual([row[0] for row in self.con.execute(
-            "SELECT tag FROM asset_tag WHERE asset_id=1")], ["演员:美谷朱音"])
+            "SELECT tag FROM asset_tag WHERE asset_id=1")], ["performer:美谷朱音"])
 
     def test_a_new_current_name_lands_on_whoever_holds_the_former_one(self):
         self.assertEqual(self.land("姫川ゆうな（月城らん）"), 21)

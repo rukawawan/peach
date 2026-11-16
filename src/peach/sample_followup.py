@@ -18,10 +18,12 @@ import time
 from pathlib import Path
 
 from . import sample_images
-from .followups import FollowupType, register
+from .followups import Followup, FollowupType, register
+from .task_outcomes import joined, part, said
+from .task_runs import item_progress, task_label
 
 TASK_KEY = "code-samples"
-TASK_LABEL = "番号样张采集"
+TASK_LABEL = task_label(TASK_KEY)
 
 #: 一轮只派一条，key 固定：同一件事同时只会有一条在排队或在跑。
 FOLLOWUP_KEY = f"{TASK_KEY}:stock"
@@ -53,7 +55,7 @@ def plan(database, config, cover_root) -> list[dict]:
                 connection, lambda key: (covers / f"{key}.jpg").is_file(), misses, snapshots, limit=1)
     except (OSError, sqlite3.Error):
         return []
-    return [{"key": FOLLOWUP_KEY, "task_key": TASK_KEY, "label": TASK_LABEL}] if found else []
+    return [Followup.item(FOLLOWUP_KEY, TASK_KEY).declared()] if found else []
 
 
 def _missing(error: Exception) -> bool:
@@ -96,7 +98,7 @@ def run(contract, key: str, handle, *, transport=None, clock=time.monotonic) -> 
     checkpoint = _SampleCheckpoint(contract, handle, misses, snapshots)
     codes = checkpoint.codes
     if not codes:
-        return {"outcome": "没有要补的番号", "codes": 0}
+        return {**said("noCodes"), "codes": 0}
     batch = sample_images.batch_for(getattr(handle, "run_id", None))
     owned = transport is None
     if owned:
@@ -116,7 +118,7 @@ def run(contract, key: str, handle, *, transport=None, clock=time.monotonic) -> 
             if code in checkpoint.completed:
                 continue
             if handle is not None:
-                handle.progress(current=max(index, len(checkpoint.completed)), total=len(codes), label=f"{TASK_LABEL}：{code}")
+                handle.progress(current=max(index, len(checkpoint.completed)), total=len(codes), **item_progress(TASK_KEY, code))
             site, urls = "", []
             snapshot = sample_images.snapshot_samples(snapshots.get(code, ()))
             if snapshot:
@@ -176,7 +178,7 @@ def run(contract, key: str, handle, *, transport=None, clock=time.monotonic) -> 
     if landed:
         contract.cache_bust()
     if handle is not None:
-        handle.progress(current=len(codes), total=len(codes), label=TASK_LABEL, throttle=0)
+        handle.progress(current=len(codes), total=len(codes), **item_progress(TASK_KEY), throttle=0)
     with contract.database.read_connection() as connection:
         remaining = len(sample_images.pending(connection, contract.has_cover, misses, snapshots, limit=10 ** 6))
     summary = {"codes": len(codes), "landed": landed, "images": images, "absent": absent, "failed": failed,
@@ -186,22 +188,19 @@ def run(contract, key: str, handle, *, transport=None, clock=time.monotonic) -> 
                "continue": remaining > 0 and landed + absent + probed > 0}
     if paused:
         summary["paused"] = sorted(paused)
-    return {"outcome": _outcome(summary), **summary}
+    return {**said(_outcome(summary)), **summary}
 
 
-def _outcome(summary: dict) -> str:
-    """活动页上那一行：补上几部、跳过几部各为什么、还剩几部、接不接着跑。"""
+def _outcome(summary: dict) -> list[dict]:
+    """活动页上那一行的段落：补上几部、跳过几部各为什么、还剩几部、接不接着跑。"""
     skipped, deferred, remaining = summary["skipped"], summary["deferred"], summary["remaining"]
-    text = f"补上 {summary['landed']} 部的样张（{summary['images']} 张）" if summary["landed"] else "这一轮没有补上样张"
-    reasons = [line for count, line in ((skipped["no_site"], f"{skipped['no_site']} 部没有可问的官方站"),
-                                        (skipped["recent_miss"], f"{skipped['recent_miss']} 部那一站近期说过没有"),
-                                        (skipped["paused"], f"{skipped['paused']} 部因来源冷却"),
-                                        (deferred, f"{deferred} 部联网名额用完留到下一轮")) if count]
-    if reasons:
-        text += "；跳过 " + "、".join(reasons)
-    if remaining:
-        text += f"；还有 {remaining} 部待补，" + ("接着排下一轮" if summary["continue"] else "等下一次处理")
-    return text
+    landed = (part("samplesLanded", landed=summary["landed"], images=summary["images"]) if summary["landed"]
+              else part("noSamples"))
+    reasons = [part(code, count=count) for code, count in (
+        ("skipNoSite", skipped["no_site"]), ("skipRecentMiss", skipped["recent_miss"]),
+        ("skipPaused", skipped["paused"]), ("skipDeferred", deferred)) if count]
+    rest = part("remainingNext" if summary["continue"] else "remainingLater", count=remaining) if remaining else []
+    return joined([landed, [part("skipped"), *joined(reasons, "listComma")] if reasons else [], rest])
 
 
 #: 写账本：样张地址写在 `code_sample_image`。联网在事务外做，每部写一次，很短；

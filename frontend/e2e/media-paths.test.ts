@@ -49,7 +49,7 @@ describe('非 Windows 媒体目录配置', () => {
         await page.route('**/api/library-processing', route => route.fulfill({ json: { status: 'running', trigger: 'cli' } }));
         await form.getByRole('button', { name: '保存配置', exact: true }).click();
         const restart = page.getByRole('dialog', { name: '扫描与采集正在进行', exact: true });
-        await restart.getByText(/由命令行或托盘发起，在独立进程里运行，不受重启影响/).waitFor();
+        await restart.getByText(/这个任务由命令行或托盘发起，不受重启影响/).waitFor();
         await restart.getByRole('button', { name: '取消', exact: true }).click();
         await restart.waitFor({ state: 'hidden' });
         assert.equal(writes.length, 0);

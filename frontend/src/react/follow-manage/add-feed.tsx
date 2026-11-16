@@ -21,9 +21,11 @@ import { ExternalLink, FieldLabel, Help } from '../settings/section';
 import { busyProps, useAction } from '../settings/use-action';
 import { composingKey } from '../components/ime';
 import { followFeedByName, followFeedEntity, lookupFeedActor, type FeedCandidate, type FeedLookup } from './follow-manage';
+import { serverLabel } from '../../core/server-text';
+import { joinList, t } from '../../i18n';
 
-const PLACEHOLDER = '输入女优名，到 JavDB 找她的演员页';
-const TITLE = '添加 JAV 订阅';
+const PLACEHOLDER = t('follow:addJavFeed.placeholder');
+const TITLE = t('follow:addJavFeed.title');
 
 export interface AddFeedProps {
   readOnly: boolean;
@@ -39,12 +41,12 @@ function destination(result: FeedLookup, picked: ReadonlySet<string>): { text: s
     if (picked.has(card.id) && card.held_by) holders.set(card.held_by.id, card.held_by.name);
   }
   if (holders.size > 1) {
-    return { text: `所勾的卡分属数据库里不同的人：${[...holders.values()].join('、')}，先去合并再订`, blocked: true };
+    return { text: t('follow:addJavFeed.cardsSplitAcrossPeople', { names: joinList([...holders.values()]) }), blocked: true };
   }
   const [holder] = holders.values();
-  if (holder) return { text: `会登记到「${holder}」名下`, blocked: false };
-  if (result.known) return { text: `会登记到数据库里的「${result.known.name}」名下`, blocked: false };
-  return { text: `数据库里还没有「${result.q}」，会新建一位`, blocked: false };
+  if (holder) return { text: t('follow:addJavFeed.willAddUnder', { name: holder }), blocked: false };
+  if (result.known) return { text: t('follow:addJavFeed.willAddUnderKnown', { name: result.known.name }), blocked: false };
+  return { text: t('follow:addJavFeed.willCreate', { name: result.q }), blocked: false };
 }
 
 function CandidateRow({ card, picked, onPick }: { card: FeedCandidate; picked: boolean; onPick(on: boolean): void }) {
@@ -52,10 +54,10 @@ function CandidateRow({ card, picked, onPick }: { card: FeedCandidate; picked: b
     <div className="flex flex-wrap items-center gap-2">
       <Checkbox isSelected={picked} onChange={onPick}>
         <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="min-w-0 break-words">{card.names.join('、')}</span>
+          <span className="min-w-0 break-words">{joinList(card.names)}</span>
           {card.record ? <Chip variant="caption" color="neutral">{card.record}</Chip> : null}
           {card.held_by ? (
-            <small className="text-caption-1-regular text-text-secondary">{`已在「${card.held_by.name}」名下`}</small>
+            <small className="text-caption-1-regular text-text-secondary">{t('follow:addJavFeed.alreadyUnder', { name: card.held_by.name })}</small>
           ) : null}
         </span>
       </Checkbox>
@@ -86,8 +88,8 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
     if (!result) return;
     void action.run('follow', (signal) => followFeedByName(result.q, [...picked], signal), (done) => {
       toast(done.created
-        ? `已新建「${done.entity_name}」并订阅她的新作`
-        : `已订阅「${done.entity_name}」的新作`);
+        ? t('follow:addJavFeed.createdAndSubscribed', { name: done.entity_name })
+        : t('follow:addJavFeed.subscribed', { name: done.entity_name }));
       setName('');
       close();
       onAdded();
@@ -98,7 +100,7 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
     const known = result?.known;
     if (!known) return;
     void action.run('known', (signal) => followFeedEntity(known.id, signal), () => {
-      toast(`已订阅「${known.name}」的新作`);
+      toast(t('follow:addJavFeed.subscribed', { name: known.name }));
       setName('');
       close();
       onAdded();
@@ -115,19 +117,19 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
       <h3 className="text-title-2-medium text-text-primary">{TITLE}</h3>
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-64 grow">
-          <Input aria-label="女优名" placeholder={PLACEHOLDER} value={name} leadingIcon={RiSearchLine}
+          <Input aria-label={t('follow:addJavFeed.actressName')} placeholder={PLACEHOLDER} value={name} leadingIcon={RiSearchLine}
             enterKeyHint="search" isDisabled={readOnly} onChange={setName} onKeyDown={onKeyDown} />
         </div>
         <Button variant="primary" disabled={readOnly || !name.trim()} {...busyProps(action.busy === 'lookup')}
-          onClick={search}>查找</Button>
+          onClick={search}>{t('follow:shared.search')}</Button>
       </div>
 
-      {action.error ? <Note tone="error" title="这一次没有完成">{action.error}</Note> : null}
+      {action.error ? <Note tone="error" title={t('follow:addJavFeed.notCompleted')}>{action.error}</Note> : null}
 
       {result ? (
         <div className="flex flex-col gap-3">
-          {result.unavailable ? <Note tone="warning" title="JavDB 这一次没有搜成">{result.unavailable}</Note> : null}
-          <FieldLabel>JavDB 上的演员卡</FieldLabel>
+          {result.unavailable ? <Note tone="warning" title={t('follow:addJavFeed.javdbSearchFailed')}>{serverLabel(result.unavailable_code ?? '', result.unavailable, result.unavailable_params)}</Note> : null}
+          <FieldLabel>{t('follow:addJavFeed.javdbCards')}</FieldLabel>
           {result.candidates.length ? result.candidates.map((card) => (
             <CandidateRow key={card.id} card={card} picked={picked.has(card.id)}
               onPick={(on) => setPicked((now) => {
@@ -135,24 +137,24 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
                 if (on) next.add(card.id); else next.delete(card.id);
                 return next;
               })} />
-          )) : <Help>{result.unavailable ? '这一次没有拿到演员卡。' : 'JavDB 上没有搜到这个名字。'}</Help>}
+          )) : <Help>{result.unavailable ? t('follow:addJavFeed.noCardsThisTime') : t('follow:addJavFeed.noJavdbMatch')}</Help>}
           {result.candidates.length ? (
-            <Help role="status">{picked.size ? where!.text : '勾选她的演员卡；有碼与無碼两条记录都是她的话，两张都勾。'}</Help>
+            <Help role="status">{picked.size ? where!.text : t('follow:addJavFeed.pickCardsHint')}</Help>
           ) : null}
           {direct ? (
             <Help role="status">{direct.following
-              ? `数据库里的「${direct.name}」已经在订阅新作。`
-              : `数据库里的「${direct.name}」已有 JavDB 或 DMM 编号，可以直接订阅。`}</Help>
+              ? t('follow:addJavFeed.alreadySubscribed', { name: direct.name })
+              : t('follow:addJavFeed.canSubscribeDirectly', { name: direct.name })}</Help>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="small" onClick={close}>关闭</Button>
+            <Button variant="secondary" size="small" onClick={close}>{t('follow:shared.close')}</Button>
             {result.candidates.length ? (
               <Button variant="primary" size="small" disabled={readOnly || !picked.size || where!.blocked}
-                {...busyProps(action.busy === 'follow')} onClick={add}>{`添加订阅（${picked.size}）`}</Button>
+                {...busyProps(action.busy === 'follow')} onClick={add}>{t('follow:addJavFeed.subscribePicked', { count: picked.size })}</Button>
             ) : null}
             {direct && !direct.following ? (
               <Button variant="primary" size="small" disabled={readOnly}
-                {...busyProps(action.busy === 'known')} onClick={followKnown}>{`订阅「${direct.name}」`}</Button>
+                {...busyProps(action.busy === 'known')} onClick={followKnown}>{t('follow:addJavFeed.subscribeTo', { name: direct.name })}</Button>
             ) : null}
           </div>
         </div>

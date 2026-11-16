@@ -4,8 +4,10 @@ from __future__ import annotations
 from contextlib import closing
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -18,12 +20,20 @@ import zipfile
 import httpx
 from filelock import FileLock, Timeout
 
-from . import __version__, desktop_installer, distribution, release_signing, release_updates, settings_file, update_packages
+from . import (__version__, desktop_installer, distribution, release_signing, release_updates,
+               settings_file, update_packages)
 from .fsutil import atomic_write_text
 from .windows_update import replace_with_retry
 from . import update_tasks
+from .user_messages import (UserFacingError, UserRuntimeError, UserTimeoutError, UserValueError, message_fields,
+                            nested_message)
 
 ACTIVE = {"downloading", "verifying", "extracting", "preparing", "restarting", "installing"}
+LOGGER = logging.getLogger(__name__)
+# 事务号是 `start` 里的 uuid4().hex；清理只认这个形态的目录名。
+TRANSACTION_ID = re.compile(r"[0-9a-f]{32}")
+# 数据库与配置备份留最近两次：最新一次之外再留一次，诊断报告也只收最近两份迁移日志。
+KEEP_BACKUPS = 2
 MAX_ARCHIVE = 512 * 1024 * 1024
 MAX_EXPANDED = 2 * 1024 * 1024 * 1024
 
@@ -60,6 +70,10 @@ def read() -> dict:
 
 
 def write(data: dict, **changes) -> dict:
+    """进度说明 `message` 配 `message_code`／`message_params`（`message_fields`）；只给原文时清掉上一句的 code。"""
+    if "message" in changes and "message_code" not in changes:
+        data.pop("message_code", None)
+        data.pop("message_params", None)
     data.update(changes, updated_at=time.time())
     atomic_write_text(state_path(), json.dumps(data, ensure_ascii=False))
     return data
@@ -68,9 +82,17 @@ def write(data: dict, **changes) -> dict:
 def public() -> dict:
     data = read()
     if data.get("state") in ACTIVE and time.time() - data.get("updated_at", 0) > 180:
-        data = dict(data, state="error", message="更新任务已中断，请重试。")
+        data = dict(data, state="error", **message_fields("jobMessage.standaloneUpdate.interrupted"))
     return {key: value for key, value in data.items() if key in {
-        "state", "progress", "message", "downloaded", "total", "version", "updated_at"}}
+        "state", "progress", "message", "message_code", "message_params", "downloaded", "total", "version",
+        "updated_at"}}
+
+
+def _failure(error: BaseException) -> dict:
+    """失败原因写成进度说明：带 code 的异常带上 code，别的异常照旧只给原文。"""
+    if isinstance(error, UserFacingError):
+        return message_fields(error.code, error.params)
+    return {"message": str(error)}
 
 
 def installation_pending() -> bool:
@@ -88,26 +110,26 @@ def extract(archive: Path, destination: Path, progress, *, tool_files: set[str] 
     with zipfile.ZipFile(archive) as package:
         entries = package.infolist()
         if sum(item.file_size for item in entries) > MAX_EXPANDED or len(entries) > 20000:
-            raise ValueError("更新包展开体积超限")
+            raise UserValueError("errors.standaloneUpdate.expandedTooLarge")
         seen = set()
         for index, item in enumerate(entries):
             name = item.filename
             parts = PurePosixPath(name).parts
             if (not parts or parts[0] != "Peach" or "\\" in name or ":" in name
                     or ".." in parts or name.startswith("/") or (item.external_attr >> 16) & 0o170000 == 0o120000):
-                raise ValueError("更新包含无效路径")
+                raise UserValueError("errors.standaloneUpdate.invalidPath")
             if tool_files is not None and (item.is_dir() or "/".join(parts[1:]) not in tool_files):
-                raise ValueError("工具包包含清单外的文件")
+                raise UserValueError("errors.standaloneUpdate.unlistedToolFile")
             target = destination.joinpath(*parts).resolve()
             key = str(target).casefold()
             if not target.is_relative_to(destination) or key in seen:
-                raise ValueError("更新包路径重复或越界")
+                raise UserValueError("errors.standaloneUpdate.pathConflict")
             seen.add(key)
             package.extract(item, destination)
             progress(index + 1, len(entries))
     root = destination / "Peach"
     if tool_files is None and (not (root / "Peach.exe").is_file() or not (root / "_internal" / "standalone.txt").is_file()):
-        raise ValueError("更新包不是独立 Windows 版本")
+        raise UserValueError("errors.standaloneUpdate.notStandalone")
     return root
 
 
@@ -133,12 +155,12 @@ def _download_once(url: str, archive: Path, size: int, digest: str, progress) ->
             for chunk in response.iter_bytes(256 * 1024):
                 received += len(chunk)
                 if received > size:
-                    raise ValueError("下载体积与发布记录不符")
+                    raise UserValueError("errors.standaloneUpdate.sizeMismatch")
                 output.write(chunk)
                 checksum.update(chunk)
                 progress(received)
     if received != size or checksum.hexdigest() != digest:
-        raise ValueError("更新包校验失败，请重新下载")
+        raise UserValueError("errors.standaloneUpdate.checksumFailed")
 
 
 def prepare_tools(stage: Path, target: Path, transaction: Path, release: dict, data: dict,
@@ -162,22 +184,22 @@ def prepare_tools(stage: Path, target: Path, transaction: Path, release: dict, d
         asset = bundle["asset"]
         archive = transaction / f"tools-{tool}.zip"
         received = data["downloaded"]
-        report(data, state="downloading", message=f"正在下载 {tool} 工具包")
+        report(data, state="downloading", **message_fields("jobMessage.standaloneUpdate.downloadingTool", {"tool": tool}))
         fetch(release["asset_url"].rsplit("/", 1)[0] + "/" + asset["name"], archive,
                  asset["size"], asset["sha256"],
                  lambda count, start=received, step=index, size=asset["size"]: report(
                      data, downloaded=start + count, progress=75 + round((step + count / size) / len(missing) * 13)))
-        report(data, state="verifying", message=f"正在校验 {tool} 工具包")
+        report(data, state="verifying", **message_fields("jobMessage.standaloneUpdate.verifyingTool", {"tool": tool}))
         extracted = extract(archive, transaction / f"tool-{tool}", lambda *_: None, tool_files=set(bundle["files"]))
         if not update_packages.matches(extracted, bundle["files"]):
-            raise ValueError(f"{tool} 工具包文件校验失败")
+            raise UserValueError("errors.standaloneUpdate.toolChecksumFailed", {"tool": tool})
         for name in bundle["files"]:
             destination = update_packages.checked_path(stage, name)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(update_packages.checked_path(extracted, name), destination)
     for tool, bundle in manifest["tools"].items():
         if not update_packages.matches(stage, bundle["files"]):
-            raise ValueError(f"{tool} 工具复用校验失败")
+            raise UserValueError("errors.standaloneUpdate.toolReuseFailed", {"tool": tool})
 
 
 def _fetch_small(client, url: str) -> bytes:
@@ -187,7 +209,7 @@ def _fetch_small(client, url: str) -> bytes:
         for chunk in response.iter_bytes(64 * 1024):
             body += chunk
             if len(body) > release_signing.MAX_BYTES:
-                raise ValueError("发布签名文件过大")
+                raise ValueError("release signature file is too large")
     return bytes(body)
 
 
@@ -211,17 +233,18 @@ def signed_release(release: dict) -> dict:
         except (httpx.HTTPError, ValueError):
             continue
     if name not in digests:
-        raise ValueError("发布签名校验未通过，已停止更新；请到发布页手动下载新版本")
+        raise UserValueError("errors.standaloneUpdate.signatureFailed")
     full = release.get("full_url")
     full = digests.get(full.rsplit("/", 1)[1]) if isinstance(full, str) else None
     return dict(release, asset_digest="sha256:" + digests[name], full_digest=full and "sha256:" + full)
 
 
-def checked_asset(digest: object, size: object, label: str) -> tuple[str, int]:
+def checked_asset(digest: object, size: object, label: str | dict) -> tuple[str, int]:
+    """`label` 是包的显示名，填进报错的 `{{label}}`：可以是嵌套参数 `{"code": ...}`。"""
     if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) != 71:
-        raise ValueError(f"{label}缺少 SHA-256 校验信息")
+        raise UserValueError("errors.standaloneUpdate.missingChecksum", {"label": label})
     if not isinstance(size, int) or not 0 < size <= MAX_ARCHIVE:
-        raise ValueError(f"{label}大小无效")
+        raise UserValueError("errors.standaloneUpdate.invalidSize", {"label": label})
     return digest[7:], size
 
 
@@ -230,14 +253,14 @@ def fetch_package(url: str, size: int, digest: str, transaction: Path, name: str
     archive, start = transaction / f"{name}.zip", data.get("downloaded", 0)
     download(url, archive, size, digest,
              lambda count: write(data, downloaded=start + count, progress=round((start + count) / data["total"] * 65, 1)))
-    write(data, state="verifying", progress=66, message="正在校验")
-    write(data, state="extracting", message="正在解压")
+    write(data, state="verifying", progress=66, **message_fields("jobMessage.standaloneUpdate.verifying"))
+    write(data, state="extracting", **message_fields("jobMessage.standaloneUpdate.extracting"))
     shutil.rmtree(transaction / "stage", ignore_errors=True)
     stage = extract(archive, transaction / "stage", lambda done, count: write(data, progress=67 + round(done / count * 8)))
     from .buildinfo import read_build_info
     info = read_build_info(stage / "_internal")
     if not info or info.version != version:
-        raise ValueError("包内版本与发布版本不符")
+        raise UserValueError("errors.standaloneUpdate.versionMismatch")
     return stage
 
 
@@ -245,47 +268,51 @@ def prepare(data: dict, lock: FileLock) -> None:
     try:
         release = release_updates.check()
         if release["state"] != "available":
+            if release.get("message_code"):
+                raise UserValueError(release["message_code"], release.get("message_params"))
             raise ValueError(release["message"])
         release = signed_release(release)
-        digest, total = checked_asset(release.get("asset_digest"), release.get("asset_size", 0), "更新包")
+        digest, total = checked_asset(release.get("asset_digest"), release.get("asset_size", 0),
+                                      {"code": "labels.standaloneUpdate.updatePackage"})
         target = Path(sys.executable).resolve().parent
         if state_path().resolve().is_relative_to(target):
-            raise ValueError("数据目录位于程序目录内，不能自动替换")
+            raise UserValueError("errors.standaloneUpdate.dataInsideProgram")
         transaction = target.parent / f".{target.name}-update-{data['id']}"
         transaction.mkdir()
         version = release["latest_version"]
         write(data, transaction=str(transaction), target=str(target), version=version,
-              total=total, downloaded=0, message="正在下载", state="downloading")
+              total=total, downloaded=0, state="downloading", **message_fields("jobMessage.standaloneUpdate.downloading"))
         stage = fetch_package(release["asset_url"], total, digest, transaction, "package", version, data)
         if release.get("package_kind") == "update":
-            write(data, state="preparing", message="正在复用和校验已安装工具")
+            write(data, state="preparing", **message_fields("jobMessage.standaloneUpdate.reusingTools"))
             try:
                 prepare_tools(stage, target, transaction, release, data)
             except (ValueError, KeyError, TypeError, FileNotFoundError) as exc:
                 # 清单格式、工具集合或工具包与本版更新器对不上：完整包自带全部工具，不经清单。
                 try:
-                    full_digest, full_size = checked_asset(release.get("full_digest"), release.get("full_size", 0), "完整包")
+                    full_digest, full_size = checked_asset(release.get("full_digest"), release.get("full_size", 0),
+                                                           {"code": "labels.standaloneUpdate.fullPackage"})
                 except ValueError:
                     raise exc from None
                 write(data, state="downloading", total=data["downloaded"] + full_size,
-                      message=f"应用更新包无法使用（{exc}），改为下载完整包")
+                      **message_fields("jobMessage.standaloneUpdate.packageUnusable", {"error": nested_message(exc)}))
                 stage = fetch_package(release["full_url"], full_size, full_digest, transaction, "full", version, data)
-        write(data, state="preparing", progress=90, message="正在准备安装")
+        write(data, state="preparing", progress=90, **message_fields("jobMessage.standaloneUpdate.preparingInstall"))
         desktop_installer.carry_uninstaller(target, stage)
         # 助手从自己的目录运行，正式目录与暂存目录都不会被它的 DLL 句柄占用。
         helper = transaction / "helper"
         shutil.copytree(target, helper, ignore=shutil.ignore_patterns("*.log"))
         write(data, stage=str(stage), helper=str(helper), state="ready", progress=100,
-              message="更新已准备好，重启后安装。")
+              **message_fields("jobMessage.standaloneUpdate.ready"))
     except Exception as exc:
-        write(data, state="error", message=str(exc), progress=0)
+        write(data, state="error", progress=0, **_failure(exc))
     finally:
         lock.release()
 
 
 def start() -> dict:
     if not distribution.in_app_update():
-        raise ValueError("此安装方式不支持应用内更新，请从发布页下载新版本")
+        raise UserValueError("errors.standaloneUpdate.inAppUnsupported")
     lock = FileLock(str(state_path()) + ".lock", thread_local=False)
     try:
         lock.acquire(timeout=0)
@@ -294,7 +321,8 @@ def start() -> dict:
     if public().get("state") in ACTIVE | {"ready"}:
         lock.release()
         return public()
-    data = write({"id": uuid.uuid4().hex}, state="downloading", progress=0, message="正在连接发布源")
+    data = write({"id": uuid.uuid4().hex}, state="downloading", progress=0,
+                 **message_fields("jobMessage.standaloneUpdate.connecting"))
     threading.Thread(target=prepare, args=(data, lock), daemon=True, name="PeachPackageUpdate").start()
     return public()
 
@@ -304,25 +332,26 @@ def _update_writer(stage: Path) -> bool:
     from .migrations import plan
     from .runtime_prepare import configured_ledger_writer
     config = settings_file.load_config()
-    writer, reason = configured_ledger_writer(config)
+    writer, reason = configured_ledger_writer(config, language=None)
     database = config.directory('database') / 'ledger.db'
     if not writer and database.is_file() and plan(database, stage / '_internal' / 'migrations')[1]:
-        raise ValueError(f'本机不能迁移账本：{reason}；请先在写入端迁移并同步')
+        raise UserValueError("errors.standaloneUpdate.secondaryNeedsPrimary", {"reason": reason})
     return writer
 
 
 def request_restart() -> dict:
     if not distribution.in_app_update():
-        raise ValueError("此安装方式不支持应用内更新，请从发布页下载新版本")
+        raise UserValueError("errors.standaloneUpdate.inAppUnsupported")
     with FileLock(str(state_path()) + ".lock", timeout=0):
         data = read()
         if data.get("state") != "ready":
-            raise ValueError("更新尚未准备完成")
+            raise UserValueError("errors.standaloneUpdate.notReady")
         writer = _update_writer(Path(data.get('stage', '')))
         db = settings_file.load_config().directory("database") / "ledger.db"
         token = update_tasks.reserve(db) if writer else None
         try:
-            write(data, state="restarting", task_token=token, progress=0, message="正在保存任务进度，随后重启安装")
+            write(data, state="restarting", task_token=token, progress=0,
+                  **message_fields("jobMessage.standaloneUpdate.savingTasks"))
         except Exception:
             if token:
                 update_tasks.release(db, token)
@@ -330,8 +359,95 @@ def request_restart() -> dict:
     return public()
 
 
+def _transaction_id(directory: Path, target: Path) -> str | None:
+    """本程序目录旁、按 `prepare` 的命名建出的事务目录才认，返回事务号。"""
+    prefix = f".{target.name}-update-"
+    ident = directory.name[len(prefix):] if directory.name.startswith(prefix) else ""
+    return ident if TRANSACTION_ID.fullmatch(ident) else None
+
+
+def _finished(transaction: Path) -> bool:
+    """装好的事务：旧程序已挪进 `backup`、暂存已换成正式目录，也没有回滚留下的 `failed`。"""
+    return ((transaction / "backup").is_dir() and not (transaction / "stage" / "Peach").exists()
+            and not (transaction / "failed").exists())
+
+
+def _running_from(directory: Path) -> bool:
+    """更新助手从事务里的 `helper` 运行，还有进程的可执行文件在目录里就不能删。"""
+    import psutil
+    root = os.path.normcase(str(directory.resolve())) + os.sep
+    for process in psutil.process_iter(["exe"]):
+        executable = process.info.get("exe")
+        if executable and os.path.normcase(executable).startswith(root):
+            return True
+    return False
+
+
+def sweep() -> bool:
+    """更新成功后清掉事务目录，`update-backups` 只留最近几次；返回 True 表示要稍后再试。
+
+    完成判定沿用助手写下的 `complete`：新版本已通过健康检查和就绪检查、托盘也在。
+    之后没有任何流程再用 `backup` 里的旧程序回滚，助手副本、更新包和工具包也只服务这一次，
+    所以整个事务目录都删。助手从 `helper` 运行，自己删不掉自己，由新版托盘在它退出后删。
+    以前版本留下的事务按目录内容判定已装好才删；失败、回滚过或还在进行的事务原样保留。
+    """
+    data = read()
+    if public().get("state") in ACTIVE | {"ready"}:
+        return True
+    target = Path(sys.executable).resolve().parent
+    current = data.get("id")
+    retry = False
+    for directory in target.parent.iterdir():
+        ident = _transaction_id(directory, target)
+        if not ident or directory.is_symlink() or not directory.is_dir() or not _finished(directory):
+            continue
+        if ident == current and not (data.get("state") == "complete" and data.get("version") == __version__):
+            continue
+        if _running_from(directory):
+            retry = True
+            continue
+        try:
+            shutil.rmtree(directory)
+            LOGGER.info("Removed update transaction directory: %s", directory)
+        except OSError:
+            LOGGER.warning("Could not remove update transaction directory: %s", directory, exc_info=True)
+            retry = True
+    backups = settings_file.load_config().directory("state") / "update-backups"
+    found = sorted((path for path in backups.iterdir() if path.is_dir() and not path.is_symlink()
+                    and TRANSACTION_ID.fullmatch(path.name)), key=lambda path: path.stat().st_mtime,
+                   reverse=True) if backups.is_dir() else []
+    for path in found[KEEP_BACKUPS:]:
+        if path.name == current:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            LOGGER.warning("Could not remove old update backup: %s", path, exc_info=True)
+    return retry
+
+
+def _sweep_in_background() -> None:
+    for _attempt in range(120):
+        try:
+            if not sweep():
+                return
+        except Exception:
+            LOGGER.warning("Update leftover cleanup failed", exc_info=True)
+            return
+        time.sleep(5)
+
+
+_sweep_started = threading.Event()
+
+
 def poll(tray) -> None:
-    if not distribution.standalone() or read().get("state") != "restarting":
+    if not distribution.standalone():
+        return
+    if read().get("state") != "restarting":
+        # 删一次事务要动上千个文件、一两 GB，放到后台，托盘的健康巡检不等它。
+        if not _sweep_started.is_set():
+            _sweep_started.set()
+            threading.Thread(target=_sweep_in_background, daemon=True, name="PeachUpdateCleanup").start()
         return
     if not tray._action_lock.acquire(blocking=False):
         return
@@ -356,7 +472,7 @@ def poll(tray) -> None:
     except Exception as exc:
         if locals().get('token'):
             update_tasks.release(db, token)
-        write(read(), state="error", message=f"未能重启：{exc}")
+        write(read(), state="error", **message_fields("jobMessage.standaloneUpdate.restartFailed", {"error": nested_message(exc)}))
     finally:
         tray._action_lock.release()
 
@@ -371,18 +487,19 @@ def migrate_database(stage: Path, data: dict) -> Path | None:
     if not pending:
         return None
     if not _update_writer(stage):
-        raise ValueError('读取端不能迁移账本')
+        raise UserValueError("errors.standaloneUpdate.secondaryCannotMigrate")
     backup = config.directory("state") / "update-backups" / data["id"] / "ledger.db"
     if not backup.is_file():
         sqlite_backup(database, backup)
-    write(data, database_backup=str(backup), state="installing", progress=10, message="正在更新本地数据库")
+    write(data, database_backup=str(backup), state="installing", progress=10,
+          **message_fields("jobMessage.standaloneUpdate.updatingDatabase"))
     environment = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1", PEACH_DATA_ROOT=str(config.data_root.resolve()))
     with (backup.parent / "migration.log").open("wb") as log:
         result = subprocess.run([str(stage / "Peach.exe"), "migrate", "upgrade", "--yes", "--db", str(database)],
                                 cwd=str(stage), env=environment, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
                                 timeout=180, check=False, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     if result.returncode:
-        raise RuntimeError("数据库更新失败")
+        raise UserRuntimeError("errors.standaloneUpdate.databaseUpgradeFailed")
     return backup
 
 
@@ -395,7 +512,7 @@ def restore_database(data: dict) -> None:
     with closing(sqlite3.connect(backup.as_uri() + "?mode=ro", uri=True)) as source, closing(sqlite3.connect(database)) as destination:
         source.backup(destination)
         if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise RuntimeError("数据库恢复检查失败")
+            raise UserRuntimeError("errors.standaloneUpdate.databaseRestoreCheckFailed")
 
 
 def preserve_local_state(data: dict, *, include_database: bool = True) -> None:
@@ -433,7 +550,7 @@ def restore_local_state(data: dict) -> None:
     for name, path in paths.items():
         resolved = path.resolve()
         if name != 'config' and not resolved.is_relative_to(config.directory('state').resolve()):
-            raise ValueError('任务恢复路径越界')
+            raise UserValueError("errors.standaloneUpdate.recoveryPathOutside")
         if path.is_dir():
             shutil.rmtree(path)
         else:
@@ -449,7 +566,7 @@ def restore_local_state(data: dict) -> None:
 def _transaction_paths(manifest: Path):
     """只接受本机状态文件与同卷暂存目录，安装目标须为完整独立包。"""
     if manifest.resolve() != state_path().resolve():
-        raise ValueError('更新状态文件不匹配')
+        raise UserValueError("errors.standaloneUpdate.stateFileMismatch")
     data = read()
     target = Path(data["target"]).resolve()
     transaction = Path(data["transaction"]).resolve()
@@ -457,7 +574,7 @@ def _transaction_paths(manifest: Path):
     if (transaction.parent != target.parent or transaction.name != f".{target.name}-update-{data['id']}"
             or stage != transaction / "stage" / "Peach" or state_path().resolve().is_relative_to(target)
             or not (target / "_internal" / "standalone.txt").is_file()):
-        raise ValueError('更新目录无效')
+        raise UserValueError("errors.standaloneUpdate.invalidUpdateDirectory")
     return data, target, transaction, stage
 
 
@@ -502,26 +619,27 @@ def apply(manifest: Path, wait_pid: int) -> int:
         else:
             token = None
     except Exception as exc:
-        write(data, state="error", progress=0, message=f"安装预检未通过，程序与数据库未更改：{exc}")
+        write(data, state="error", progress=0,
+              **message_fields("jobMessage.standaloneUpdate.preflightFailed", {"error": nested_message(exc)}))
         return 1
     try:
         deadline = time.monotonic() + 90
         while process_alive(wait_pid):
             if time.monotonic() > deadline:
-                raise TimeoutError("托盘尚未退出，安装已取消")
+                raise UserTimeoutError("errors.standaloneUpdate.trayStillRunning")
             time.sleep(.25)
         previous = job_recovery.legacy_library_request(db) if writer else None
         preserve_local_state(data, include_database=writer)
         if writer:
             job_recovery.import_legacy_library(db, previous)
         migrate_database(stage, data)
-        write(data, state="installing", progress=20, message="正在保留旧版本")
+        write(data, state="installing", progress=20, **message_fields("jobMessage.standaloneUpdate.keepingOld"))
         replace_with_retry(target, backup)
         moved = True
-        write(data, progress=50, message="正在安装新版本")
+        write(data, progress=50, **message_fields("jobMessage.standaloneUpdate.installing"))
         replace_with_retry(stage, target)
         installed = True
-        write(data, progress=80, message="正在启动新版本")
+        write(data, progress=80, **message_fields("jobMessage.standaloneUpdate.starting"))
         start_tray(target / "Peach.exe")
         deadline = time.monotonic() + 90
         specs = configured_service_specs(load_config())
@@ -537,28 +655,29 @@ def apply(manifest: Path, wait_pid: int) -> int:
                             desktop_installer.record_version(data["version"])
                         except OSError:
                             pass
-                    write(data, state="complete", progress=100, message=f"已更新至 {data['version']}")
+                    write(data, state="complete", progress=100,
+                          **message_fields("jobMessage.standaloneUpdate.complete", {"version": data["version"]}))
                     if token:
                         update_tasks.release(db, token)
                     return 0
             except (httpx.HTTPError, ValueError):
                 pass
             time.sleep(1)
-        raise TimeoutError("新版本未能就绪")
+        raise UserTimeoutError("errors.standaloneUpdate.newVersionNotReady")
     except Exception as exc:
         if moved:
             from .error_reporting import event
             event('standalone-update-install', exc)
             try:
                 _rollback_installation(data, target, transaction, installed=installed, writer=writer, token=token)
-                message = f"更新失败，已恢复旧版本：{exc}"
+                message = message_fields("jobMessage.standaloneUpdate.failedRestored", {"error": nested_message(exc)})
             except Exception as rollback:
                 event('standalone-update-rollback', rollback)
-                message = f"更新失败，回滚未完成：{rollback}"
+                message = message_fields("jobMessage.standaloneUpdate.rollbackIncomplete", {"error": nested_message(rollback)})
         else:
             from .error_reporting import event
             event('standalone-update-install', exc)
-            message = f"更新未安装：{exc}"
+            message = message_fields("jobMessage.standaloneUpdate.notInstalled", {"error": nested_message(exc)})
             try:
                 if writer:
                     restore_database(data)
@@ -569,8 +688,9 @@ def apply(manifest: Path, wait_pid: int) -> int:
                     start_tray(target / "Peach.exe")
             except Exception as rollback:
                 event('standalone-update-rollback', rollback)
-                message = f"更新失败，数据库恢复未完成：{rollback}"
-        write(data, state="error", progress=0, message=message)
+                message = message_fields("jobMessage.standaloneUpdate.databaseRestoreIncomplete",
+                                         {"error": nested_message(rollback)})
+        write(data, state="error", progress=0, **message)
         return 1
     finally:
         if token:

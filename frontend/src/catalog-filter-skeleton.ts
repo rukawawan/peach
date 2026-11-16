@@ -10,6 +10,7 @@
 import { rememberedTiers, type CatalogFilterProps, type CatalogView } from './react/catalog-filter/catalog-filter';
 import { islandShortcutsEntry } from './island-skeleton';
 import { filterControlsSkeletonHtml } from './filter-controls-skeleton';
+import { t } from './i18n';
 
 /** 每排摆多少格，同岛里空馆藏占位的 `EMPTY_SLOTS`，由容器裁到可用宽度。 */
 const EMPTY_SLOTS = 64;
@@ -33,11 +34,11 @@ export function catalogFilterSkeletonHtml(views: readonly CatalogView[], state: 
     + (shape.performers ? `<div data-catalog-tier="performers" data-skeleton="tiers">${tierPlaceholdersHtml('performer')}</div>` : '')
     + (shape.studios ? `<div data-catalog-tier="studios">${tierPlaceholdersHtml('studio')}</div>` : '')
     + `</div>`
-    + `<div role="group" aria-label="筛选与排序" data-filter-glass="" data-glass-pane="" data-filter-frame=""`
+    + `<div role="group" aria-label="${t('catalog:catalogFilter.filterAndSort')}" data-filter-glass="" data-glass-pane="" data-filter-frame=""`
     + ` data-catalog-frame="" class="sticky top-topbar z-10 mb-5.5 flex flex-col mx-4">`
-    + `<div role="group" aria-label="视图与标签" data-filter-row="top"`
+    + `<div role="group" aria-label="${t('catalog:catalogFilter.viewsAndTags')}" data-filter-row="top"`
     + ` class="flex h-12 min-w-0 items-center overscroll-x-contain px-3 py-2 gap-1.5 overflow-visible">`
-    + `<div data-catalog-scroll=""><div role="group" aria-label="视图" data-catalog-views="">${viewHtml}`
+    + `<div data-catalog-scroll=""><div role="group" aria-label="${t('catalog:catalogFilter.views')}" data-catalog-views="">${viewHtml}`
     + `<span data-entity-sep="" aria-hidden="true"></span></div>`
     + `<div data-catalog-tags=""><span data-catalog-placeholder="tag" aria-hidden="true">`
     + '<span></span>'.repeat(EMPTY_SLOTS) + `</span></div></div></div>`

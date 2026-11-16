@@ -11,6 +11,12 @@ import shutil
 import subprocess
 import sys
 
+SRC_DIR = Path(__file__).resolve().parent.parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from peach.interface_text import dev as t  # noqa: E402
+
 INPUTS = ("scripts/ffmpeg-sources.json", "scripts/untrunc-sources.json", "scripts/build_ffmpeg_windows.sh",
     "scripts/build_untrunc_windows.sh", "scripts/dav1d-mingw64.ini", "scripts/build_macos_media.py",
     "scripts/fetch_ffmpeg_sources.py", "scripts/fetch_untrunc_sources.py", "scripts/setup_macos_media_tools.py",
@@ -47,12 +53,12 @@ def github_cache_key(identity: dict) -> str:
 def remove_owned(root: Path, path: Path) -> None:
     base = (root / "build").resolve()
     if not base.is_relative_to(root.resolve()) or path.is_symlink() or not path.resolve().is_relative_to(base) or path.resolve() == base:
-        raise ValueError("媒体缓存清理路径越出构建目录")
+        raise ValueError(t("media_build_cache.cleanupOutsideBuild"))
     for parent in path.parents:
         if parent == root:
             break
         if parent.is_symlink():
-            raise ValueError("媒体缓存路径包含软链接")
+            raise ValueError(t("media_build_cache.pathHasSymlink"))
     if path.exists():
         shutil.rmtree(path)
 
@@ -78,7 +84,7 @@ def valid(cache: Path, identity: dict, tool: str, archive: str) -> bool:
                 return False
             path = cache / name
             if path.is_symlink() or any(parent.is_symlink() for parent in path.parents if parent != cache and parent.is_relative_to(cache)):
-                raise ValueError("媒体缓存包含软链接")
+                raise ValueError(t("media_build_cache.cacheHasSymlink"))
             if digest(path) != checksum:
                 return False
         return True
@@ -96,7 +102,7 @@ def build(root: Path, target: str, arch: str = "x86_64", tool: str | None = None
         archive = f"{item}-corresponding-source.zip" if target == "windows" else f"{item}-macos-{arch}-corresponding-source.zip"
         cache = root / f"build/media-cache/{target}-{arch}/{item}"
         if cache.is_symlink() or not cache.resolve().is_relative_to((root / "build").resolve()):
-            raise ValueError("媒体缓存位置越出构建目录")
+            raise ValueError(t("media_build_cache.cacheOutsideBuild"))
         if valid(cache, identity, item, archive):
             remove_owned(root, output)
             output.mkdir(parents=True)
@@ -112,7 +118,7 @@ def build(root: Path, target: str, arch: str = "x86_64", tool: str | None = None
                        "--arch", arch, "--output", str(output)]
         subprocess.run(command, cwd=root, check=True)
         if not (output / item / "manifest.json").is_file() or not (output / archive).is_file():
-            raise ValueError("媒体构建缺少已核验工具或对应源码包")
+            raise ValueError(t("media_build_cache.missingTools"))
         remove_owned(root, cache)
         cache.mkdir(parents=True)
         shutil.copytree(output / item, cache / item)
@@ -123,14 +129,14 @@ def build(root: Path, target: str, arch: str = "x86_64", tool: str | None = None
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("media_build_cache.description"))
     parser.add_argument("target", choices=("windows", "macos"))
     parser.add_argument("--arch", choices=("arm64", "x86_64"), default="x86_64")
     parser.add_argument("--tool", choices=("ffmpeg", "untrunc"))
-    parser.add_argument("--github-key", action="store_true", help="只输出包含工具链身份的 Actions 缓存键")
+    parser.add_argument("--github-key", action="store_true", help=t("media_build_cache.githubKeyHelp"))
     args = parser.parse_args()
     if args.target == "windows" and args.arch != "x86_64":
-        parser.error("Windows 媒体工具只构建 x86_64")
+        parser.error(t("media_build_cache.windowsArch"))
     if args.github_key:
         print(github_cache_key(input_identity(Path.cwd(), args.target, args.arch)))
     else:

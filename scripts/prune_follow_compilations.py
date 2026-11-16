@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peach.config import DATABASE_PATH, GENERATED_DIR  # noqa: E402
 from peach.follow_store import FollowStore  # noqa: E402
+from peach.interface_text import dev as t  # noqa: E402
 from peach.migrations import sqlite_backup  # noqa: E402
 from peach.review_csv import write_rows  # noqa: E402
 
@@ -25,11 +26,11 @@ FIELDS = ("item_id", "external_id", "source_ref", "status", "credited", "visual"
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--db", type=Path, default=DATABASE_PATH, help="当前账本路径")
-    parser.add_argument("--review", type=Path, help="复核 CSV 的落盘位置")
-    parser.add_argument("--apply", action="store_true", help="真的删除；缺省只列清单")
-    parser.add_argument("--json", action="store_true", help="机器可读输出")
+    parser = argparse.ArgumentParser(description=t("prune_follow_compilations.description"))
+    parser.add_argument("--db", type=Path, default=DATABASE_PATH, help=t("prune_follow_compilations.dbHelp"))
+    parser.add_argument("--review", type=Path, help=t("prune_follow_compilations.reviewHelp"))
+    parser.add_argument("--apply", action="store_true", help=t("prune_follow_compilations.applyHelp"))
+    parser.add_argument("--json", action="store_true", help=t("prune_follow_compilations.jsonHelp"))
     args = parser.parse_args(argv)
 
     db = args.db.resolve()
@@ -61,12 +62,12 @@ def main(argv: list[str] | None = None) -> int:
         }, ensure_ascii=False, indent=2))
     else:
         for row in rows:
-            print(f"{row.visual:>2} 位画面作者（名单 {row.credited:>2} 位）"
-                  f"  {row.source_ref}  {row.title[:52]}")
-        verb = "已删除" if args.apply else "将删除"
-        print(f"{verb} {len(rows)} 条，复核清单 {review}")
+            print(t("prune_follow_compilations.row", visual=f"{row.visual:>2}", credited=f"{row.credited:>2}",
+                    source=row.source_ref, title=row.title[:52]))
+        print(t("prune_follow_compilations.removed" if args.apply else "prune_follow_compilations.willRemove",
+                count=len(rows), review=review))
         if backup:
-            print(f"账本备份 {backup}")
+            print(t("prune_follow_compilations.backup", backup=backup))
     return 0
 
 

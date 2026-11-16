@@ -7,6 +7,7 @@ import { queryClient } from '../query';
 import { busyProps, useAction } from '../settings/use-action';
 import { EmptyState } from './empty-state';
 import type { JavDetail } from '../jav-detail/jav-detail';
+import { t } from '../../i18n';
 
 /** 来源图片（样张、来源封面、来源头像）的地址。服务端取过一次就落盘，回的是图片本身，
  *  浏览器按 ETag 与私有时效缓存；`attempt` 让重试换一个地址，不复用刚失败的那一次。 */
@@ -19,7 +20,7 @@ interface CoverRetry { has_cover: boolean; cover_version: string; message: strin
 function PictureMissing({ title, detail, busy, onRetry }: { title: string; detail?: string; busy?: boolean; onRetry(): void }) {
   return <div data-jav-picture-wait="">
     <EmptyState size="compact" icon={RiImageLine} title={title}
-      actions={<Button size="small" {...busyProps(!!busy)} onClick={onRetry}>立即重试</Button>}>{detail || null}</EmptyState>
+      actions={<Button size="small" {...busyProps(!!busy)} onClick={onRetry}>{t('shell:shared.retryNow')}</Button>}>{detail || null}</EmptyState>
   </div>;
 }
 
@@ -32,7 +33,7 @@ function CoverMissing({ code }: { code: string }) {
     queryClient.setQueriesData<JavDetail>({ queryKey: ['jav-detail'] }, current => current?.code === code
       ? { ...current, has_cover: true, cover_version: result.cover_version } : current);
   }) };
-  return <PictureMissing title="封面未取得" detail={action.error || reason} busy={!!action.busy} onRetry={retry} />;
+  return <PictureMissing title={t('shell:artworkGap.coverNotFound')} detail={action.error || reason} busy={!!action.busy} onRetry={retry} />;
 }
 
 /** 来源图片：本地有封面用本地那张，否则经 `/jav-image` 取。 */
@@ -46,7 +47,7 @@ export function SourcePicture({ item, image, thumbnail = false }: {
   const picture = useRef<HTMLImageElement>(null);
   const local = image === 'cover' && item.has_cover;
   const remote = !local && (image !== 'cover' || item.source_image);
-  const alt = thumbnail ? '' : image === 'cover' ? `${item.code} 封面` : `${item.code} 预览 ${Number(image) + 1}`;
+  const alt = thumbnail ? '' : image === 'cover' ? t('shell:sourcePicture.coverAlt', { code: item.code }) : t('shell:sourcePicture.previewAlt', { code: item.code, index: Number(image) + 1 });
   const src = remote ? javImageUrl(item.code, image, attempt) : local ? coverUrl(item, true) : item.cover_url || '';
   useLayoutEffect(() => {
     const node = picture.current;
@@ -55,11 +56,11 @@ export function SourcePicture({ item, image, thumbnail = false }: {
   if (!remote) {
     if (src) return <img ref={picture} data-jav-picture={thumbnail ? undefined : ''} src={src} alt={alt} referrerPolicy="no-referrer"
       onLoad={() => setLoaded({ src, alt })} />;
-    return thumbnail ? <span>封面未取得</span> : <CoverMissing code={item.code} />;
+    return thumbnail ? <span>{t('shell:artworkGap.coverNotFound')}</span> : <CoverMissing code={item.code} />;
   }
   if (failed === src) {
-    if (thumbnail) return <span>预览未取得</span>;
-    return <PictureMissing title="图片未取得" onRetry={() => setAttempt((value) => value + 1)} />;
+    if (thumbnail) return <span>{t('shell:artworkGap.previewNotFound')}</span>;
+    return <PictureMissing title={t('shell:sourcePicture.imageNotFound')} onRetry={() => setAttempt((value) => value + 1)} />;
   }
   const ready = loaded?.src === src;
   const reveal = async (node: HTMLImageElement) => {
@@ -68,8 +69,8 @@ export function SourcePicture({ item, image, thumbnail = false }: {
   };
   return <>
     {ready || loaded ? null : thumbnail
-      ? <span className="relative block h-full w-full skeleton-sheen" aria-label="正在读取预览" />
-      : <div data-jav-picture-wait="" data-skeleton="image" role="status" aria-label="正在读取图片"><span className="relative skeleton-sheen" /></div>}
+      ? <span className="relative block h-full w-full skeleton-sheen" aria-label={t('shell:sourcePicture.loadingPreview')} />
+      : <div data-jav-picture-wait="" data-skeleton="image" role="status" aria-label={t('shell:sourcePicture.loadingImage')}><span className="relative skeleton-sheen" /></div>}
     {!ready && loaded ? <img data-jav-picture={thumbnail ? undefined : ''} data-source-picture="" src={loaded.src}
       alt={loaded.alt} referrerPolicy="no-referrer" /> : null}
     <img ref={picture} data-jav-picture={thumbnail ? undefined : ''} data-source-picture="" src={src} alt={alt} referrerPolicy="no-referrer"

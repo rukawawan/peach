@@ -34,11 +34,18 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from peach.interface_text import dev as t
 from peach.review_csv import write_rows
 from peach.scripting import open_readonly
 from peach.config import DATABASE_PATH, GENERATED_DIR
 
 DEFAULT_OUTPUT = GENERATED_DIR / "ad-candidates.csv"
+#: 清单 `confidence` 列：有实证、只有裸域名要人看一眼。
+CONFIRMED, SUSPECT = "confirmed", "suspect"
+#: 清单 `hits` 列里的判据，几项用 `+` 连起来：目录名自曝、推广词、同目录等长重复（后接 `-x<条数>`）、
+#: 域名加推广文案、裸域名、推广站目录。
+HIT_AD_DIR, HIT_PROMO_WORD, HIT_SAME_LENGTH = "ad-dir", "promo-word", "same-length"
+HIT_DOMAIN_COPY, HIT_BARE_DOMAIN, HIT_PROMO_DIR = "domain-with-copy", "bare-domain", "promo-dir"
 
 # A：目录名自曝。整段路径分量匹配，不做子串 ——
 # "1024" 当子串会吃掉 FC2-PPV-1381024 这种正片番号（实测误伤 970 MB 一条）。
@@ -122,31 +129,31 @@ def find_candidates(db_path: Path | str, min_group: int = 3) -> tuple[list[dict]
         parts = PureWindowsPath(path).parent.parts
         hits = []
         if RE_ADDIR.search(directory) or any(RE_ADDIR_EXACT.match(p) for p in parts):
-            hits.append("目录名")
+            hits.append(HIT_AD_DIR)
         if RE_ADNAME.search(name) or RE_ADNAME.search(directory):
-            hits.append("推广词")
+            hits.append(HIT_PROMO_WORD)
         if aid in grouped:
-            hits.append(f"等长重复x{grouped[aid]}")
+            hits.append(f"{HIT_SAME_LENGTH}-x{grouped[aid]}")
         small = (size or 0) <= DOMAIN_AD_MB * 1048576
         short = duration is not None and 0 < duration <= DOMAIN_AD_SEC
         if RE_ANYDOMAIN.search(name) and small and short:
-            hits.append("域名+文案" if RE_ADCOPY.search(name) else "裸域名")
+            hits.append(HIT_DOMAIN_COPY if RE_ADCOPY.search(name) else HIT_BARE_DOMAIN)
         elif RE_DIRPACK.search(directory) and small and short:
-            hits.append("推广目录")
+            hits.append(HIT_PROMO_DIR)
         if not hits:
             continue
         # 只有裸域名、没有任何其它佐证的，交人工看一眼再定
-        solid = [h for h in hits if h != "裸域名"]
+        solid = [h for h in hits if h != HIT_BARE_DOMAIN]
         plan.append({
             "id": aid, "location": loc, "dir": directory, "name": name,
             "size_mb": round((size or 0) / 1048576, 1),
             "duration": round(duration, 1) if duration else "",
-            "confidence": "确认" if solid else "存疑",
+            "confidence": CONFIRMED if solid else SUSPECT,
             "score": len(hits), "hits": "+".join(hits),
             "group_n": grouped.get(aid, ""),
         })
 
-    plan.sort(key=lambda r: (r["confidence"] != "确认", -r["score"], r["dir"]))
+    plan.sort(key=lambda r: (r["confidence"] != CONFIRMED, -r["score"], r["dir"]))
     return plan, len(rows)
 
 
@@ -156,7 +163,7 @@ def write_candidates(output: Path | str, plan: list[dict]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="生成广告文件人工复核清单")
+    parser = argparse.ArgumentParser(description=t("find_ads.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--min-group", type=int, default=3)
@@ -166,17 +173,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.min_group < 2:
-        raise SystemExit("--min-group 必须至少为 2")
+        raise SystemExit(t("find_ads.minGroupTooSmall"))
     plan, scanned = find_candidates(args.db, args.min_group)
-    print(f"扫描 {scanned} 条视频")
+    print(t("find_ads.scanned", scanned=scanned))
     write_candidates(args.output, plan)
 
-    print(f"命中 {len(plan)} 条，合计 {sum(r['size_mb'] for r in plan)/1024:.1f} GB")
-    for level in ("确认", "存疑"):
+    print(t("find_ads.matched", count=len(plan), size=f"{sum(r['size_mb'] for r in plan) / 1024:.1f}"))
+    for level, shown in ((CONFIRMED, t("find_ads.confirmed")), (SUSPECT, t("find_ads.suspect"))):
         sub = [r for r in plan if r["confidence"] == level]
-        print(f"  {level}: {len(sub):>4} 条  {sum(r['size_mb'] for r in sub)/1024:>6.2f} GB")
-    print(f"\n判据分布: {collections.Counter(r['hits'] for r in plan).most_common(6)}")
-    print(f"→ {args.output}（仅清单，未删任何文件）")
+        print(t("find_ads.level", level=shown, count=f"{len(sub):>4}", size=f"{sum(r['size_mb'] for r in sub) / 1024:>6.2f}"))
+    print(t("find_ads.hits", hits=str(collections.Counter(r['hits'] for r in plan).most_common(6))))
+    print(t("find_ads.output", output=args.output))
     return 0
 
 

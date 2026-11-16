@@ -24,6 +24,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from peach.config import DATABASE_PATH, FFMPEG_DIR, GENERATED_DIR, STATE_DIR
+from peach.interface_text import dev as t
 from peach.scripting import open_readonly
 from peach.endcard import POLICY_VERSION, detect_endcard
 from peach.ffmpeg import FFmpegResolver
@@ -54,7 +55,7 @@ HEALTH_FIELDS = (
 
 def build_parser() -> argparse.ArgumentParser:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=t("audit_video_endcards.description"))
     parser.add_argument("--db", type=Path, default=DATABASE_PATH)
     parser.add_argument("--asset", type=int, action="append")
     parser.add_argument("--location")
@@ -86,9 +87,9 @@ def parse_offsets(raw: str) -> tuple[float, ...]:
     try:
         values = tuple(dict.fromkeys(float(value.strip()) for value in raw.split(",")))
     except ValueError as error:
-        raise ValueError("抽帧偏移必须是逗号分隔的秒数") from error
+        raise ValueError(t("audit_video_endcards.offsetsNotSeconds")) from error
     if not values or any(value <= 0 for value in values):
-        raise ValueError("抽帧偏移必须全部大于 0")
+        raise ValueError(t("audit_video_endcards.offsetsNotPositive"))
     return values
 
 
@@ -110,7 +111,7 @@ def sample_points(
 
 def load_assets(args: argparse.Namespace) -> list[dict]:
     if not args.asset and args.limit <= 0:
-        raise ValueError("必须点名 --asset，或给正数 --limit 才会启动")
+        raise ValueError(t("audit_video_endcards.needsTarget"))
     source_sql, source_parameters = SourceAccessPolicy().sql_filter(
         args.location, args.allow_metered,
     )
@@ -334,14 +335,14 @@ def run(
         health["last_error_message"] = str(error)[:500]
         health["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
         atomic_csv(args.health, HEALTH_FIELDS, [health])
-        print(f"首尾帧审计失败：{error}")
-        print(f"健康报告 → {args.health}")
+        print(t("audit_video_endcards.failed", error=error))
+        print(t("audit_video_endcards.healthReport", path=args.health))
         return getattr(error, "exit_code", 2)
     health["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
     atomic_csv(args.health, HEALTH_FIELDS, [health])
-    print(f"首尾帧候选 {health['candidates']} 条 → {args.out}")
-    print(f"来源健康 → {args.health}")
-    print("只生成候选：未修改 ledger、quality goal、媒体文件或复核决定。")
+    print(t("audit_video_endcards.candidates", count=health['candidates'], path=args.out))
+    print(t("audit_video_endcards.sourceHealth", path=args.health))
+    print(t("audit_video_endcards.candidatesOnly"))
     return 0
 
 

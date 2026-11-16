@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import PureWindowsPath, PurePosixPath
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from .user_messages import UserValueError
+
 #: 媒体库处理方式（ADR-0116）。`auto` 是默认值，配置里不写；`custom` 另存所选步骤。
 POLICIES = ("auto", "local", "custom")
 #: 处理步骤：读取视频信息、联网补资料、联网补封面、联网补人物图片、生成九宫格预览。
@@ -100,18 +102,18 @@ def _validate_library(value):
     from .media_libraries import LIBRARY_ICONS
     name = value.get("name", "")
     if not isinstance(name, str) or not name.strip() or len(name) > 80 or any(ord(c) < 32 for c in name):
-        raise ValueError("媒体库名称请使用 1 到 80 个可见字符")
+        raise UserValueError("errors.mediaIdentity.libraryNameInvalid")
     if value.get("icon", "") not in ("", *LIBRARY_ICONS):
-        raise ValueError("请选择列表中的媒体库图标")
+        raise UserValueError("errors.mediaIdentity.libraryIconInvalid")
     color = value.get("color", "")
     if color and not _COLOR.fullmatch(color):
-        raise ValueError("请选择列表中的来源色")
+        raise UserValueError("errors.mediaIdentity.libraryColorInvalid")
     policy = value.get("policy", "")
     if policy not in ("", *POLICIES):
-        raise ValueError("请选择列表中的处理方式")
+        raise UserValueError("errors.mediaIdentity.libraryPolicyInvalid")
     stages = [stage for stage in value.get("stages", "").split(",") if stage]
     if any(stage not in STAGES for stage in stages) or (stages and policy != "custom"):
-        raise ValueError("处理步骤无效")
+        raise UserValueError("errors.mediaIdentity.stagesInvalid")
 
 
 def validate_catalog(libraries, roots):
@@ -124,33 +126,33 @@ def validate_catalog(libraries, roots):
     for key, value in roots.items():
         UUID(key)
         if value.get("library_id") not in libraries:
-            raise ValueError("存储根目录的媒体库不存在")
+            raise UserValueError("errors.mediaIdentity.rootLibraryMissing")
         path = PureWindowsPath(value.get("root", ""))
         if not is_windows_path(str(path)) or not path.is_absolute() or ".." in path.parts:
-            raise ValueError("存储根目录必须使用完整 Windows 路径")
+            raise UserValueError("errors.mediaIdentity.rootPathNotWindows")
         if not value.get("location") or value.get("cost", "") not in ("", "free", "metered"):
-            raise ValueError("存储根目录的来源或读取策略无效")
+            raise UserValueError("errors.mediaIdentity.rootSourceInvalid")
         if any(overlaps(path, other) for other in seen):
-            raise ValueError("媒体路径与另一文件夹重复或互相包含")
+            raise UserValueError("errors.mediaIdentity.rootOverlap")
         seen.append(path)
         mount = value.get("mount", "")
         actual = (PureWindowsPath(mount) if len(mount) > 1 and mount[1] == ":" else PurePosixPath(mount)) if mount else path
         from .smb_media import canonical
         smb = value.get('transport') == 'smb'
         if value.get('transport', 'filesystem') not in {'filesystem', 'smb'}:
-            raise ValueError('媒体连接方式无效')
+            raise UserValueError('errors.mediaIdentity.transportInvalid')
         if smb:
             canonical(mount)
         if not smb and (not actual.is_absolute() or ".." in actual.parts):
-            raise ValueError("挂载目录必须使用完整路径")
+            raise UserValueError("errors.mediaIdentity.mountNotAbsolute")
         if any(overlaps(actual, other) for other in mounted):
-            raise ValueError("媒体目录与另一行重复或互相包含")
+            raise UserValueError("errors.mediaIdentity.mountOverlap")
         mounted.append(actual)
     for index, actual in enumerate(mounted):
         if isinstance(actual, PureWindowsPath) and any(
                 (index != other_index or actual != other) and overlaps(actual, other)
                 for other_index, other in enumerate(seen)):
-            raise ValueError("挂载目录与账本路径重叠，请使用独立目录")
+            raise UserValueError("errors.mediaIdentity.mountOverlapsRoot")
 
 
 def _match_root(row, root, previous, by_path, *, windows):
@@ -158,7 +160,7 @@ def _match_root(row, root, previous, by_path, *, windows):
     path = row["path"]
     supplied = str(row.get("root_id") or "")
     if supplied and supplied not in previous:
-        raise ValueError("存储根目录已变更，请刷新配置")
+        raise UserValueError("errors.mediaIdentity.rootChanged")
     matched = by_path.get(path_key(root))
     # 只按路径认回同一来源的根；换了来源的同一前缀是另一个目录声明，取新身份。
     if matched and previous[matched]["location"] != row["location"]:
@@ -166,12 +168,12 @@ def _match_root(row, root, previous, by_path, *, windows):
     old = previous.get(supplied or matched or "")
     if old:
         if row["location"] != old["location"] or path_key(root) != path_key(old["root"]):
-            raise ValueError("已有根目录的来源和账本路径不可更换；请添加另一目录")
+            raise UserValueError("errors.mediaIdentity.rootIdentityFixed")
         old_path = old.get("mount") or (root if windows else "")
         equal = path_key(path) == path_key(old_path) if windows else path == old_path
         # 原来没有实际目录的根第一次填上目录，不算重定位。
         if old_path and not equal and row.get("change_mode") != "relocate":
-            raise ValueError("请选择重定位此目录，或添加另一目录")
+            raise UserValueError("errors.mediaIdentity.relocateOrAdd")
     return supplied or matched or str(uuid4()), old
 
 
@@ -187,7 +189,7 @@ def _library_value(row, known, name):
     if policy == "custom":
         chosen = str(row.get("library_stages", known.get("stages", ""))).split(",")
         if any(stage and stage not in STAGES for stage in chosen):
-            raise ValueError("处理步骤无效")
+            raise UserValueError("errors.mediaIdentity.stagesInvalid")
         value["stages"] = ",".join(stage for stage in STAGES if stage in chosen)
     return value
 
@@ -204,13 +206,13 @@ def configure_sources(config, sources, *, windows):
         root = str(PureWindowsPath(row.get("root") or path))
         root_id, old = _match_root(row, root, previous, by_path, windows=windows)
         if root_id in roots:
-            raise ValueError("同一存储根目录不能登记多次")
+            raise UserValueError("errors.mediaIdentity.rootDuplicate")
         library_id = str(row.get("library_id") or (old or {}).get("library_id") or uuid4())
         UUID(library_id)
         name = str(row.get("library") or libraries.get(library_id, {}).get("name") or PureWindowsPath(root).name or root).strip()
         value = _library_value(row, libraries.get(library_id, {}), name)
         if library_id in declared_libraries and declared_libraries[library_id] != value:
-            raise ValueError("同一媒体库的名称、图标、来源色和处理方式必须一致")
+            raise UserValueError("errors.mediaIdentity.libraryMismatch")
         declared_libraries[library_id] = value
         libraries[library_id] = value
         roots[root_id] = dict(root=root, location=row["location"], library_id=library_id,

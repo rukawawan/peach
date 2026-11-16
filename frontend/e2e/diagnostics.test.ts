@@ -17,7 +17,7 @@ describe('配置中的系统诊断', () => {
             action: '检查媒体目录', target: '/settings/library', details: {} };
           report.library.groups.cover = { label: '缺封面', status: 'ok', count: 31, truncated: false,
             items: Array.from({ length: 31 }, (_, index) => ({ id: index + 1, code: null,
-              title: `演示条目 ${index + 1}`, name: `演示文件 ${index + 1}.mp4`,
+              title: index === 1 ? `演示条目 2 ${'很长的片名'.repeat(40)}` : `演示条目 ${index + 1}`, name: `演示文件 ${index + 1}.mp4`,
               path: `R:\\Media\\演示文件 ${index + 1}.mp4`, location: 'local', duration: 123, size: 1048576 })) };
           await route.fulfill({ json: report });
         });
@@ -37,6 +37,17 @@ describe('配置中的系统诊断', () => {
         assert.ok((await table.innerText()).includes('演示文件 1.mp4'));
         assert.ok((await table.innerText()).includes('R:\\Media\\演示文件 1.mp4'));
         await verifyColumnContentWidth(table, 'path', '[data-middle-truncate]');
+        // 长标题折到第二行截尾，全名在悬停提示里；媒体库格带图标。
+        const longTitle = table.locator('[data-health-title]').nth(1);
+        assert.ok((await longTitle.getAttribute('title'))?.endsWith('很长的片名'));
+        const clamp = await longTitle.evaluate(node => {
+          const text = node.querySelector('span > span')!;
+          return { height: text.getBoundingClientRect().height, line: parseFloat(getComputedStyle(text).lineHeight),
+            clipped: text.scrollHeight > text.clientHeight };
+        });
+        assert.ok(clamp.clipped, '长标题没有被截断');
+        assert.ok(clamp.height <= clamp.line * 2 + 1, `标题高 ${clamp.height}px，超过两行`);
+        assert.equal(await table.getByRole('row').nth(1).locator('[data-source-mark]').count(), 1);
         const pagination = page.getByRole('navigation', { name: '缺封面分页' });
         await pagination.getByRole('button', { name: '下一页', exact: true }).click();
         assert.equal(await table.getByRole('row').count(), 12);
