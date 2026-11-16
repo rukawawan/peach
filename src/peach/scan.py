@@ -46,7 +46,7 @@ from itertools import chain
 from pathlib import Path, PureWindowsPath
 from filelock import FileLock
 
-from . import folder_rules, junk, record_rehome, subtitles, wants
+from . import filename_performers, folder_rules, junk, record_rehome, subtitles, wants
 from .platform import is_windows_path, is_unmapped, resolve_location, resolve_root
 from .processing_control import checkpoint
 from .fsutil import atomic_write_text
@@ -426,6 +426,7 @@ def ingest_path(
         reattached = len(record_rehome.reattach(connection, [asset_id] if new else [], now=now))
         acquired = len(wants.reconcile(connection, [asset_id] if new else []))
         folder_rules.apply_new(connection, [asset_id] if new else [])
+        filename_performers.link_new(connection, [asset_id] if new else [])
         if identities is not None:
             identities.observe(connection, location, stored_path, directory / name, stat)
         connection.commit()
@@ -860,6 +861,7 @@ def _scan_location(
         reattached = len(record_rehome.reattach(connection, new_ids, now=now))
         acquired = len(wants.reconcile(connection, new_ids))
         folder_rules.apply_new(connection, new_ids)
+        filename_performers.link_new(connection, new_ids)
         connection.commit()
         gone = 0 if new_only else connection.execute(
             "SELECT COUNT(*) FROM asset a WHERE " + scope + " AND a.last_seen<?",

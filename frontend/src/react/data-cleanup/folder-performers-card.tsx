@@ -18,7 +18,60 @@ interface FolderPreview {
   applied?: { videos: number; performers: number; skipped: string[] }; undone?: { removed: number };
 }
 
+interface FilenamePreview { count: number; sample: { name: string; performers: string[] }[]; linked?: number; removed?: number }
+
+/* 按文件名认艺人（`src/peach/filename_performers.py`）：`艺人名 - 片名` 开头写着库里已有艺人的视频。
+ * 新入库的扫描时自动认，这里给全库补一遍、看样例、撤回。 */
+function FilenamePerformers({ toast }: { toast(message: string): void }) {
+  const [data, setData] = useState<FilenamePreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const send = async (action: string) => {
+    setBusy(true); setError('');
+    try {
+      const next = await apiSend<FilenamePreview>('/api/folder-performers', { action });
+      setData(next);
+      if (next.linked !== undefined) toast(`已按文件名认上 ${next.linked} 部`);
+      if (next.removed !== undefined) toast(`已撤回 ${next.removed} 条按文件名认的艺人`);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally { setBusy(false) }
+  };
+  return (
+    <Fieldset layout="stack" labelledBy="filename-performers-title">
+      <FieldsetTitle id="filename-performers-title">按文件名认艺人</FieldsetTitle>
+      <p className="text-body-regular text-text-secondary">
+        文件名开头写着「艺人名 - 片名」的（如 Tru Kait - ….mp4、Riley Reid, Lana Rhoades - ….mp4），
+        只要这位艺人库里已经有，就把还没归属的视频记到她名下。新入库的扫描时自动认；已有的在这里补一遍。
+        同名的有好几位、或库里还没有这位的不认。
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button size="small" variant="secondary" disabled={busy} onClick={() => void send('filename-preview')}>看看能认出多少</Button>
+        <Button size="small" variant="primary" disabled={busy || !data?.count} onClick={() => void send('filename-apply')}>
+          {data ? `全部认上（${data.count} 部）` : '全部认上'}
+        </Button>
+        <Button size="small" variant="ghost" disabled={busy} onClick={() => void send('filename-undo')}>撤回按文件名认的</Button>
+      </div>
+      {error ? <Note tone="error" title="操作失败">{error}</Note> : null}
+      {data?.sample.length ? (
+        <ul className="flex flex-col gap-1 text-caption-1-regular text-text-secondary">
+          {data.sample.map((item) => <li key={item.name} className="wrap-anywhere">{`${item.performers.join('、')} ← ${item.name}`}</li>)}
+        </ul>
+      ) : data ? <p className="text-caption-1-regular text-text-secondary">现在没有能按文件名认出的视频。</p> : null}
+    </Fieldset>
+  );
+}
+
 export function FolderPerformersCard({ toast }: { toast(message: string): void }) {
+  return (
+    <div className="flex flex-col gap-6">
+      <FolderPerformers toast={toast} />
+      <FilenamePerformers toast={toast} />
+    </div>
+  );
+}
+
+function FolderPerformers({ toast }: { toast(message: string): void }) {
   const [parent, setParent] = useState('');
   const [preview, setPreview] = useState<FolderPreview | null>(null);
   const [rows, setRows] = useState<FolderRow[]>([]);

@@ -377,8 +377,14 @@ def _post_western_scrape(contract, body):
 
 def _post_folder_performers(contract, body):
     """按文件夹归艺人（`folder_performers`）：preview 看子文件夹，apply 设目录规则，undo 移除。"""
-    from . import folder_performers
+    from . import filename_performers, folder_performers
     action = body.get("action")
+    if action == "filename-preview":
+        return filename_performers.preview(contract)
+    if action == "filename-apply":
+        return {**filename_performers.link_all(contract), **filename_performers.preview(contract)}
+    if action == "filename-undo":
+        return {**filename_performers.undo(contract), **filename_performers.preview(contract)}
     parent = body.get("parent") or ""
     if action == "apply":
         result = folder_performers.apply(contract, parent, body.get("folders") or [])
