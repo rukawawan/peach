@@ -5,6 +5,8 @@ import type { VjsPlayer } from './types';
 
 export interface PlayerMemoryValue {
   selected: string | null;
+  /** 用户在这部片上选过字幕（关闭也算）；没选过时默认打开中文字幕。旧记录按 `selected` 有无推断。 */
+  chosen?: boolean;
   tracks: { key: string; name: string; src: string }[];
   rotation?: number;
   rate?: number;

@@ -49,7 +49,7 @@ def _memory(request: Request, video: str) -> subtitle_memory.SubtitleMemory:
 
 def _memory_payload(video: str, value: dict) -> dict:
     return {**{key: value[key] for key in subtitle_memory.PREFERENCES if key in value},
-            "selected": value["selected"], "tracks": [
+            "selected": value["selected"], "chosen": value.get("chosen", value["selected"] is not None), "tracks": [
         {"key": row["key"], "name": row["name"],
          "src": f"/api/subtitles/memory/track/{row['file']}?video={video}"}
         for row in value["tracks"]]}

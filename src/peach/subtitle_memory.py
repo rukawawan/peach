@@ -56,9 +56,11 @@ class SubtitleMemory:
 
     def read(self) -> dict:
         if not self.manifest.exists():
-            return {"selected": None, "tracks": []}
+            return {"selected": None, "chosen": False, "tracks": []}
         value = json.loads(self.manifest.read_text(encoding="utf-8"))
-        return {"selected": value["selected"], "tracks": value["tracks"],
+        # `chosen`：用户在这部片上选过字幕（关闭也算）。没选过时播放器默认打开中文字幕。
+        return {"selected": value["selected"], "chosen": bool(value.get("chosen", value["selected"] is not None)),
+                "tracks": value["tracks"],
                 **{key: value[key] for key in PREFERENCES if key in value}}
 
     def update(self, selected: str | None, track: dict | None = None) -> dict:
@@ -90,6 +92,7 @@ class SubtitleMemory:
                 value["tracks"].append({"key": key, "name": name, "file": filename})
             if "selected" in patch:
                 value["selected"] = selected
+                value["chosen"] = True
             for field in PREFERENCES & patch.keys():
                 if field == "caption_style":
                     value[field] = {**value.get(field, {}), **patch[field]}

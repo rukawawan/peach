@@ -129,6 +129,19 @@ describe('每部视频的字幕选择', () => {
     view.dispose();
   });
 
+  it('这部片没选过字幕时默认打开中文字幕，选过关闭就不再打开', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ selected: null, chosen: false, tracks: [] }))));
+    const fresh = mounted(), session = new SubtitleSession(fresh.player, fresh.video);
+    await session.ready;
+    expect(fresh.add('sidecar:local:zh').mode).toBe('showing');
+    fresh.dispose();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ selected: null, chosen: true, tracks: [] }))));
+    const closed = mounted(), again = new SubtitleSession(closed.player, closed.video);
+    await again.ready;
+    expect(closed.add('sidecar:local:zh').mode).toBe('disabled');
+    closed.dispose();
+  });
+
   it('读取记忆期间选择关闭，迟到的响应和轨道都不能重新开启字幕', async () => {
     let loaded!: (response: Response) => void;
     const response = new Promise<Response>(resolve => { loaded = resolve });

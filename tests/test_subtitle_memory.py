@@ -108,7 +108,7 @@ class SubtitleMemoryApiTests(unittest.TestCase):
     def test_authenticated_memory_roundtrip_and_video_isolation(self):
         with self.client as client:
             url = "/api/subtitles/memory?video=item:1"
-            self.assertEqual(client.get(url).json(), {"selected": None, "tracks": []})
+            self.assertEqual(client.get(url).json(), {"selected": None, "chosen": False, "tracks": []})
             saved = client.put(url, json={"selected": "file:local", "track": {
                 "key": "file:local", "name": "字幕.srt", "text": VTT}})
             self.assertEqual(saved.status_code, 200)
