@@ -19,7 +19,8 @@ import zipfile
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent / "src"))
-from peach.user_agent import USER_AGENT
+
+SOURCE_USER_AGENT = "peach-source-fetch/1.0"
 try:
     import httpx
     from peach.peach_proxy import http_client
@@ -41,7 +42,9 @@ def digest(path: Path) -> str:
 def download_source(source: dict, archive: Path) -> None:
     """限次重试源码传输，完整校验后才登记缓存。"""
     temporary = archive.with_suffix(archive.suffix + ".part")
-    request = urllib.request.Request(source["url"], headers={"User-Agent": USER_AGENT})
+    # 源码站（VideoLAN 的 GitLab 等）对带 Mozilla 的浏览器 UA 先返回人机校验页，校验和必然对不上；
+    # 下载固定源码用不冒充浏览器的工具 UA。
+    request = urllib.request.Request(source["url"], headers={"User-Agent": SOURCE_USER_AGENT})
     for attempt in range(3):
         try:
             print(f"下载固定源码：{source['name']}，第 {attempt + 1}/3 次", flush=True)
