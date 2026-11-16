@@ -1,0 +1,26 @@
+name: x264 source probe
+
+# 一次性核对：VideoLAN 重新生成 x264 源码包后指纹变了。下载现在的包，打印 SHA256，
+# 并与 x264 官方 git 仓库同一提交的文件逐个比对，内容一致才能改登记的指纹。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 下载并比对
+        run: |
+          set -euo pipefail
+          rev=b35605ace3ddf7c1a5d67a2eb553f034aef41d55
+          curl -fsSL -o x264.tar.gz "https://code.videolan.org/videolan/x264/-/archive/$rev/x264-$rev.tar.gz"
+          echo "SHA256=$(sha256sum x264.tar.gz | cut -d' ' -f1)"
+          mkdir tarball && tar -xzf x264.tar.gz -C tarball --strip-components=1
+          git clone -q https://code.videolan.org/videolan/x264.git repo
+          git -C repo checkout -q "$rev"
+          rm -rf repo/.git
+          diff -r tarball repo && echo "CONTENT=identical"
