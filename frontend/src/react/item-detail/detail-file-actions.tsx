@@ -19,7 +19,7 @@ export interface JasnaJob {
 
 export interface JasnaState {
   configured: boolean;
-  config: { exe: string; model: string; extra: string };
+  config: { exe: string; model: string; extra: string; trash_original?: boolean };
   models: string[];
   jobs: JasnaJob[];
   queue: number[];

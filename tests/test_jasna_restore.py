@@ -104,5 +104,32 @@ class LabelTests(unittest.TestCase):
             self.assertEqual(titles, {1: '原标题', 2: '原标题（去码）'})
 
 
+class TrashOriginalTests(unittest.TestCase):
+    def test_the_original_goes_to_trash_only_when_the_output_looks_complete(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            database = LedgerDatabase(fresh_ledger(root))
+            with database.write_transaction() as connection:
+                connection.execute("INSERT INTO asset(id,location,path,name,medium) VALUES"
+                                   "(1,'local','E:\\a\\ABP-327.mp4','ABP-327.mp4','video'),"
+                                   "(3,'local','E:\\a\\ABP-328.mp4','ABP-328.mp4','video')")
+            contract = type('Contract', (), {'database': database, 'cache_bust': lambda self: None,
+                                              'write_transaction': lambda self: database.write_transaction()})()
+            source, good, short = root / 'a.mp4', root / 'a-去码.mkv', root / 'b-去码.mkv'
+            source.write_bytes(b'x' * 1000); good.write_bytes(b'x' * 900); short.write_bytes(b'x' * 50)
+            self.assertFalse(jasna.trash_original(contract, 3, source, short))
+            self.assertTrue(jasna.trash_original(contract, 1, source, good))
+            self.assertFalse(jasna.trash_original(contract, 1, source, good))
+            with database.read_connection() as connection:
+                states = dict(connection.execute("SELECT id,disposal FROM asset").fetchall())
+            self.assertEqual(states, {1: 'trash', 3: None})
+
+    def test_the_setting_is_saved_and_off_by_default(self):
+        with tempfile.TemporaryDirectory() as folder:
+            exe = fake_jasna(Path(folder), 'pass')
+            self.assertFalse(jasna.read_config(Path(folder))['trash_original'])
+            jasna.save_config({'exe': str(exe), 'trash_original': True}, Path(folder))
+            self.assertTrue(jasna.read_config(Path(folder))['trash_original'])
+
 if __name__ == '__main__':
     unittest.main()

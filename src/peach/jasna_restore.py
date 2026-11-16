@@ -45,7 +45,8 @@ def read_config(state_root: Path = STATE_DIR) -> dict:
         value = {}
     return {'exe': str(value.get('exe') or ''),
             'model': value.get('model') if value.get('model') in MODELS else 'basicvsrpp',
-            'extra': str(value.get('extra') or '')}
+            'extra': str(value.get('extra') or ''),
+            'trash_original': bool(value.get('trash_original'))}
 
 
 def check_exe(exe: str) -> Path:
@@ -72,7 +73,8 @@ def save_config(values: dict, state_root: Path = STATE_DIR) -> dict:
         raise ValueError('不支持的 Jasna 修复模型')
     extra = str(values.get('extra') or '').strip()
     extra_args(extra)
-    config = {'exe': str(exe), 'model': model, 'extra': extra}
+    config = {'exe': str(exe), 'model': model, 'extra': extra,
+              'trash_original': bool(values.get('trash_original'))}
     root = Path(state_root)
     root.mkdir(parents=True, exist_ok=True)
     atomic_write_text(root / CONFIG_FILE, json.dumps(config, ensure_ascii=False, indent=2))
@@ -273,7 +275,32 @@ def _restore(contract, row, config: dict, state_root: Path, control, handle, rep
         pass
     handle.progress(current=100, total=100, label=f'{TASK_LABEL} · 登记入库')
     new_id = _ingest(contract, row, final)
-    return {'output': final.name, 'restored_id': new_id}
+    trashed = bool(new_id and config.get('trash_original')
+                   and trash_original(contract, int(row['id']), source, final))
+    return {'output': final.name, 'restored_id': new_id, 'trashed_original': trashed}
+
+
+#: 去码成品比原片小这么多就不自动回收原片：多半是没跑完或出错的半截文件。
+MIN_OUTPUT_RATIO = 0.2
+
+
+def trash_original(contract, original_id: int, source: Path, final: Path) -> bool:
+    """设置里开了「去码后把原片移入回收站」时，成品登记成功后把原片移入回收站（可还原）。
+
+    只动这一行的回收站状态，不删磁盘文件；永久删除仍由用户在回收站里清空。成品明显
+    比原片小（不到 `MIN_OUTPUT_RATIO`）时保留原片，让用户先看看成品。
+    """
+    try:
+        if final.stat().st_size < source.stat().st_size * MIN_OUTPUT_RATIO:
+            return False
+    except OSError:
+        return False
+    with contract.write_transaction() as connection:
+        changed = connection.execute(
+            "UPDATE asset SET disposal='trash',disposal_reason='duplicate',feedback_at=? "
+            "WHERE id=? AND disposal IS NULL", (time.time(), original_id)).rowcount
+    contract.cache_bust()
+    return bool(changed)
 
 
 def _execute(command, *, cwd, log: Path, control, handle, report, name: str, label: str = TASK_LABEL,

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/base/buttons/button';
+import { Checkbox } from '@/components/base/checkbox/checkbox';
 import { Input } from '@/components/base/input/input';
 import { Label } from '@/components/base/input/label';
 import { Select, SelectItem } from '@/components/base/select/select';
@@ -37,6 +38,7 @@ export function JasnaCard({ toast }: { toast(message: string): void }) {
   const [exe, setExe] = useState('');
   const [model, setModel] = useState('basicvsrpp');
   const [extra, setExtra] = useState('');
+  const [trashOriginal, setTrashOriginal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [found, setFound] = useState('');
@@ -44,7 +46,8 @@ export function JasnaCard({ toast }: { toast(message: string): void }) {
   useEffect(() => {
     if (!data) return;
     setExe(data.config.exe); setModel(data.config.model); setExtra(data.config.extra);
-  }, [data?.config.exe, data?.config.model, data?.config.extra]);
+    setTrashOriginal(!!data.config.trash_original);
+  }, [data?.config.exe, data?.config.model, data?.config.extra, data?.config.trash_original]);
 
   const send = async (body: Record<string, unknown>, done: string) => {
     setBusy(true); setError('');
@@ -79,9 +82,12 @@ export function JasnaCard({ toast }: { toast(message: string): void }) {
           </Select>
         </div>
         <Input label="附加参数（可不填）" placeholder="例如 --max-clip-size 60" value={extra} onChange={setExtra} />
+        <Checkbox isSelected={trashOriginal} onChange={setTrashOriginal}>
+          去码成功后把原片移入回收站（可在回收站还原；成品明显比原片小时保留原片）
+        </Checkbox>
         <div className="flex flex-wrap gap-2">
           <Button size="small" variant="primary" disabled={busy || !exe.trim()}
-            onClick={() => void send({ action: 'config', exe, model, extra }, '已保存 Jasna 设置')}>保存</Button>
+            onClick={() => void send({ action: 'config', exe, model, extra, trash_original: trashOriginal }, '已保存 Jasna 设置')}>保存</Button>
           <Button size="small" variant="secondary" disabled={busy || !data?.configured}
             onClick={() => void send({ action: 'check' }, 'Jasna 可以启动')}>试启动</Button>
         </div>
