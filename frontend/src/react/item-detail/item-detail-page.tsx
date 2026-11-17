@@ -39,6 +39,7 @@ import { fetchJavDetail, javDetailKey } from '../jav-detail/jav-detail';
 import { busyProps } from '../settings/use-action';
 import { ExternalPlayback } from './external-playback';
 import { DetailFileActions } from './detail-file-actions';
+import { AssignPerformer } from './assign-performer';
 import { isPlayerGuidePreview } from '../../player/guide-preview';
 import { CoverCrop } from '../cover-crop/cover-crop-page';
 import { queryClient } from '../query';
@@ -568,6 +569,7 @@ function Identity({ item, actions }: { item: DetailItem; helpers: ItemDetailHelp
     <div data-item-identity="">
       {primary.length ? <div data-identity-primary="">{primary}</div> : null}
       <IdentitySeries people={groups.series} onOpen={actions.openEntity} />
+      <AssignPerformer key={item.id} id={item.id} itemKey={itemKey(item.id)} toast={actions.toast} />
     </div>
   );
 }

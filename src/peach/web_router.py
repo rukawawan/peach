@@ -420,6 +420,13 @@ def _post_junk_rules(contract, body):
     return _junk_rules(contract)
 
 
+def _post_item_performer(contract, body):
+    """详情页手动指定或移除这部作品的艺人（`item_performers.assign`）。"""
+    from . import item_performers
+    return item_performers.assign(contract, int(body["id"]), str(body.get("operation") or ""),
+                                  str(body.get("name") or ""))
+
+
 def _get_jasna(contract, _args):
     from . import jasna_restore
     return jasna_restore.summary(contract)
@@ -608,6 +615,7 @@ POST_HANDLERS = {
     "/api/quality-goal": w_quality_goal,
     "/api/wants": w_wants,
     "/api/item-tag": w_item_tag,
+    "/api/item-performer": _post_item_performer,
     "/api/batch": w_batch,
     "/api/ads/bulk": w_junk_bulk,
     "/api/western-scrape": _post_western_scrape,
