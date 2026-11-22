@@ -261,7 +261,8 @@ function DownloadForm({ state, settle, receipt, pikpakAccount }: CardProps & { p
   );
 }
 
-const DEFAULT_EDITION_ORDER = Object.keys(EDITION_TONE);
+/* `ai-restored` 是本机用 Jasna 去码出来的成品，不是能下载到的版本，不进下载优先顺序。 */
+const DEFAULT_EDITION_ORDER = Object.keys(EDITION_TONE).filter((key) => key !== 'ai-restored');
 
 function EditionPreferences({ values, disabled, onChange }: {
   values: string[];
