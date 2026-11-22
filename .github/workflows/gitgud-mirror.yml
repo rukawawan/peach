@@ -24,6 +24,8 @@ env:
 jobs:
   code:
     name: 推送代码
+    # 自定义 fork 不备份到 GitGud。
+    if: github.repository_owner != 'rukawawan'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # 同一个 ref 排队推送：较早的运行后完成会被 GitGud 当成回退拒收。
@@ -57,7 +59,7 @@ jobs:
 
   release:
     name: 备份发布制品
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.repository_owner != 'rukawawan'
     needs: code
     runs-on: ubuntu-latest
     # 一个版本约 1.4 GB：GitGud 的 runner 从 GitHub 下载，再逐个上传并核对摘要。
