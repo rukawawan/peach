@@ -505,7 +505,9 @@ class TokyoHotShapeTests(unittest.TestCase):
             'display_code': 'ABP-123', 'display_title': '', 'edition_badges': ['uncensored-crack']})
         self.assertEqual(jav_display_metadata('ABP-123-C-LTX.mp4', 'ABP-123')['edition_badges'],
                          ['chinese-subtitles', 'uncensored-crack'])
-        # 字母段本身是 LTX 的番号不是破解标记。
+        # JavBus 上的破解版也写作 `-J`；字母段本身是 LTX 或 J 开头的番号不是破解标记。
+        self.assertEqual(jav_display_metadata('IPZZ-965-J.mp4', 'IPZZ-965')['edition_badges'], ['uncensored-crack'])
+        self.assertEqual(jav_display_metadata('JUL-123.mp4', 'JUL-123')['edition_badges'], [])
         self.assertEqual(jav_display_metadata('LTX-123.mp4', 'LTX-123')['edition_badges'], [])
 
     def test_a_bare_number_is_read_only_at_the_head_of_the_name(self):

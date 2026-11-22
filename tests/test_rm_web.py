@@ -3789,7 +3789,8 @@ class JavModeAndCoverTests(unittest.TestCase):
         """无码片商的片是无码，明写流出的是流出，有码番号上其余的无码标记都是破解。"""
         badges = catalog_rules.jav_edition_badges
         for name, code, tags, expected in (
-            ("SSIS-698-UC.mp4", "SSIS-698", (), ["uncensored-crack"]),
+            # `-UC` 是无码加中文字幕，两枚都给。
+            ("SSIS-698-UC.mp4", "SSIS-698", (), ["chinese-subtitles", "uncensored-crack"]),
             ("www.98T.la@ABW-358-U.mp4", "ABW-358", (), ["uncensored-crack"]),
             ("300MIUM-123-U.mp4", "300MIUM-123", (), ["uncensored-crack"]),
             ("ABP-123.mp4", "ABP-123", ("无码",), ["uncensored-crack"]),

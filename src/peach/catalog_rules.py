@@ -1298,7 +1298,7 @@ def _edition_evidence(name: str | None, code: str | None,
 
     无码档取 `UNCENSORED_EDITIONS` 之一或空串：
     - 无码片商的片是「无码」，文件名再写什么都不改；
-    - 明写破解（`破解`、`AI去码`、`-LTX`、`-UMR`、`-C-U`）是「无码破解」；
+    - 明写破解（`破解`、`AI去码`、`-LTX`、`-UMR`、`-J`、`-C-U`）是「无码破解」；
     - 明写流出（`流出`、`leak`、`leaked`）是「无码流出」；
     - 只有 `-U`／`-UC`／`uncensored` 或标签「无码」：有码片商的番号是「无码破解」——真流出的片很少，
       网上流传的去码版绝大多数是破解（mdcz issue #80 的用户原话把 `番号-U` 叫作 AI 破解版）；
@@ -1320,9 +1320,9 @@ def _edition_evidence(name: str | None, code: str | None,
     cracked = (
         bool(re.search(r"无码\s*破解|無碼\s*破解|AI\s*去码|"
                        r"(?:^|[-_.\s\[])破解(?:$|[-_.\s\]])", text, re.I))
-        # `-LTX`、`-UMR` 是破解版的发布标记（amane #613、mdcz `bc4e8828`、`b3b1ef79` 同认）。
-        # 只看番号之后那段：`LTX` 自己也能是番号的字母段。
-        or bool(re.search(r"(?:^|[-_.\s\[])(?:ltx|umr)(?:$|[-_.\s\]])", suffix, re.I))
+        # `-LTX`、`-UMR` 是破解版的发布标记（amane #613、mdcz `bc4e8828`、`b3b1ef79` 同认）；
+        # JavBus 上的破解版也写作 `-J`。只看番号之后那段：`LTX` 自己也能是番号的字母段。
+        or bool(re.search(r"(?:^|[-_.\s\[])(?:ltx|umr|j)(?:$|[-_.\s\]])", suffix, re.I))
         or bool(cracked_cu.search(suffix))
         or "ai去码" in tag_set or "无码破解" in tag_set
     )
@@ -1339,7 +1339,8 @@ def _edition_evidence(name: str | None, code: str | None,
         suffix, re.I))
     subtitled = (
         bool({"中文字幕", "内嵌字幕", "外挂字幕", "中字"}.intersection(tag_set))
-        or bool(re.search(r"(?:^|[-_.\s\[])(?:c|ch|sub|中字|中文字幕)"
+        # `-UC` 是无码加中文字幕：两样都算。
+        or bool(re.search(r"(?:^|[-_.\s\[])(?:c|ch|uc|sub|中字|中文字幕)"
                           r"(?:$|[-_.\s\]])", suffix, re.I))
     )
     # 无码片商的片本身就是无码，不需要文件名里另有 `-U`／`Uncen` 标记。
