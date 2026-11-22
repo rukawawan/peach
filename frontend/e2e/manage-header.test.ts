@@ -181,6 +181,53 @@ async function stubJunk(page: Page) {
   } }));
 }
 
+it('垃圾文件和高清版目标在卡片与列表之间保留体积筛选', { timeout: 60_000 }, async () => {
+  const browser = await launch();
+  try {
+    const opened = await visit(browser, '/stats', WIDE);
+    try {
+      const page = opened.page;
+      const candidates = [9301, 9302].map((id, index) => ({ ...junkItem(id), size: 100 * 1024 ** 2 * (index + 1) }));
+      const choose = (name: string) => page.getByRole('radiogroup', { name: '馆藏显示方式' })
+        .locator('label').filter({ has: page.getByRole('radio', { name, exact: true }) }).click();
+      for (const [path, endpoint, cards, idAttribute] of [
+        ['/junk-files', 'ads', '[data-junk-card]', 'data-id'],
+        ['/quality-goals', 'quality-goals', '[data-goal-id]', 'data-goal-id'],
+      ] as const) {
+        await page.route(`**/api/${endpoint}?**`, route => {
+          const filters = JSON.parse(new URL(route.request().url()).searchParams.get('column_filters') || '{}');
+          const items = candidates.filter(item => !filters.size || item.size <= filters.size.range.max);
+          return route.fulfill({ json: { items, total: items.length, all_total: items.length, counts: { archive: items.length } } });
+        });
+        await page.goto(new URL(path, page.url()).href);
+        const visibleCards = page.locator(cards);
+        await visibleCards.nth(1).waitFor();
+        await choose('列表');
+        await page.getByRole('button', { name: '筛选体积', exact: true }).click();
+        const menu = page.getByRole('dialog', { name: '筛选体积' });
+        await menu.getByRole('textbox', { name: /^最大值/ }).fill('100');
+        await menu.getByRole('button', { name: '应用范围', exact: true }).click();
+        const rows = page.locator('[data-queue-table] [data-catalog-row]');
+        await rows.nth(1).waitFor({ state: 'detached' });
+        await rows.first().waitFor();
+        assert.equal(await rows.first().getAttribute('data-id'), '9301', path);
+        await choose('卡片');
+        await visibleCards.first().waitFor();
+        assert.deepEqual(await visibleCards.evaluateAll((nodes, attr) => nodes.map(node => node.getAttribute(attr)), idAttribute), ['9301'], path);
+        await choose('列表');
+        await page.locator('[data-table-column-filter="size"][data-filter-active]').waitFor();
+        await choose('卡片');
+        await page.getByRole('button', { name: /清除.*体积/ }).click();
+        await visibleCards.nth(1).waitFor();
+      }
+    } finally {
+      await opened.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 describe('批量条', () => {
   let browser: Browser;
   before(async () => { browser = await launch(); });
@@ -205,9 +252,9 @@ describe('批量条', () => {
         await page.goto(new URL('/trash', page.url()).href, { waitUntil: 'load' });
         await cards.first().waitFor({ timeout: 15_000 });
         await settle(page);
-        // 说明行右端的「清空回收站」：桌面是 Geist 32px 小键，手机回到本项目 44px 命中区。
-        const empty = await page.locator('[data-manage-lede] [data-empty-trash]').boundingBox();
-        assert.equal(Math.round(empty!.height), viewport.mobile ? 44 : 32, '清空回收站的键高');
+        // 筛选浮层下排读数后面的「清空回收站」：同垃圾文件的「全部移入回收站」，BoardUI 小号危险键 32px。
+        const empty = await page.locator('#trashFilter [data-catalog-frame] [data-empty-trash]').boundingBox();
+        assert.equal(Math.round(empty!.height), 32, '清空回收站的键高');
         await pickTwo(cards);
         assert.deepEqual(await readDock(page), { count: '已选 2 项', buttons: ['还原', '彻底删除', '取消'] });
 

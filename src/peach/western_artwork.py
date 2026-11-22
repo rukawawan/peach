@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
+from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
@@ -17,15 +19,27 @@ from .user_messages import UserValueError
 
 SITES = frozenset(('tushy', 'tushyraw', 'vixen', 'blacked', 'blackedraw',
                    'deeper', 'slayed', 'milfy', 'wifey'))
+PUBLISHERS = dict(tushy='Tushy', tushyraw='Tushy Raw', vixen='Vixen', blacked='Blacked',
+                  blackedraw='Blacked Raw', deeper='Deeper', slayed='Slayed', milfy='Milfy', wifey='Wifey')
+SCENE_SOURCE = 'vixen-network'
+_SCENE_FILENAME = re.compile(
+    r'^(?P<site>[a-z0-9]+(?:[._ -][a-z0-9]+){0,4}?)[._ -]'
+    r'(?P<year>(?:19|20)\d{2}|\d{2})[._ -](?P<month>\d{2})[._ -](?P<day>\d{2})[._ -]+(?P<scene>.+)$',
+    re.I,
+)
+_MOVIE_FILENAME = re.compile(r'^(?P<site>.+?)\s+-\s+(?P<title>.+?)\s+\((?P<year>(?:19|20)\d{2})\)$')
+_RELEASE_SUFFIX = re.compile(
+    r'\b(?:[248]k|[1-8]\d{2,3}p|uhd|web(?:[ -]?(?:dl|rip))?|[hx][ .]?26[45]|hevc|avc|aac|hdr|sdr)\b', re.I)
 SOURCE = 'auto:western-artwork'
 PAGE_LIMIT = 4 * 1024 * 1024
 TIMEOUT = 20
+SEARCH_LIMIT = 30
 SEARCH_QUERY = '''query PeachSearch($query:String!,$site:Site!,$first:Int){
 searchVideos(input:{query:$query,site:$site,first:$first}){edges{node{
 title slug releaseDate models{name} }}}}'''
 SCENE_QUERY = '''query PeachScene($videoSlug:String,$site:Site){
 findOneVideo(input:{slug:$videoSlug,site:$site}){
-title releaseDate models{name} images{poster{src width}}}}'''
+slug title releaseDate models{name} categories{name} images{poster{src width}}}}'''
 
 
 def artwork_key(asset_id: int, code: str | None) -> str:
@@ -39,7 +53,8 @@ def artwork_cast_size(cover: Path, ledger_count: int) -> int:
         evidence = json.loads(cover.with_suffix('.scraping.json').read_text(encoding='utf8'))
     except (OSError, ValueError):
         return ledger_count
-    names = evidence.get('performers') if isinstance(evidence, dict) and evidence.get('provider') == 'western-official' else None
+    names = (evidence.get('performers') if isinstance(evidence, dict)
+             and evidence.get('provider') in ('western-official', 'western-catalog') else None)
     if not isinstance(names, list):
         return ledger_count
     return max(ledger_count, len({_name(n) for n in names if isinstance(n, str) and _name(n)}))
@@ -159,6 +174,75 @@ def filename_date(name: str, site: str) -> str:
         return ''
 
 
+def _words(value):
+    return tuple(re.findall(r'[^\W_]+', str(value or '').casefold()))
+
+
+@dataclass(frozen=True)
+class WesternScene:
+    site: str
+    release_date: str
+    text: tuple[str, ...]
+    title: tuple[str, ...]
+
+    @property
+    def cache_key(self):
+        query = json.dumps((self.site, self.release_date, self.text, self.title), ensure_ascii=False)
+        return 'western-' + hashlib.sha256(query.encode()).hexdigest()[:24]
+
+
+def scene_identity(row) -> WesternScene | None:
+    """用结构化文件名或已有厂牌、发行日期和片名识别场景。"""
+    name = PureWindowsPath(str(row.get('name') or row.get('path') or '')).stem
+    matched = _SCENE_FILENAME.fullmatch(name)
+    if matched is None:
+        return _movie_identity(name) or _registered_identity(row)
+    site = _name(matched['site'])
+    if not 2 <= len(site) <= 48 or not any(char.isalpha() for char in site):
+        return None
+    year = int(matched['year'])
+    if year < 100:
+        year += 2000 if year < 70 else 1900
+    try:
+        released = date(year, int(matched['month']), int(matched['day'])).isoformat()
+    except ValueError:
+        return None
+    text = _words(_RELEASE_SUFFIX.split(matched['scene'], maxsplit=1)[0])
+    if len(text) < 2 or len(text) > 40:
+        return None
+    title = _words(row.get('original_title') or row.get('catalog_title'))
+    # 文件名可能曾作为展示标题。只利用可与文件名中的连续词序互证的已有标题。
+    if len(title) < 2 or not any(text[start:start + len(title)] == title for start in range(len(text))):
+        title = ()
+    return WesternScene(site, released, text, title)
+
+
+def _registered_identity(row):
+    site = _name(row.get('studio') or '')
+    title = _words(row.get('original_title') or row.get('catalog_title'))
+    released = str(row.get('release_date') or '')
+    if (not re.fullmatch(r'[a-z0-9]{2,48}', site) or not any(char.isalpha() for char in site)
+            or not 2 <= len(title) <= 40 or not all(word.isascii() for word in title)):
+        return None
+    try:
+        if date.fromisoformat(released).isoformat() != released:
+            return None
+    except ValueError:
+        return None
+    return WesternScene(site, released, title, title)
+
+
+def _movie_identity(name):
+    match = _MOVIE_FILENAME.fullmatch(_RELEASE_SUFFIX.split(name, maxsplit=1)[0].strip(' ._-'))
+    if match is None:
+        return None
+    site = _name(match['site'])
+    title = _words(match['title'])
+    if not re.fullmatch(r'[a-z0-9]{2,48}', site) or not 2 <= len(title) <= 40:
+        return None
+    return WesternScene(site, match['year'], title, title)
+
+
 def _graphql(http: HttpTransport, site: str, query: str, variables: dict) -> dict:
     if site not in SITES:
         raise ValueError('unsupported publisher')
@@ -171,7 +255,7 @@ def _graphql(http: HttpTransport, site: str, query: str, variables: dict) -> dic
     if response.status != 200:
         raise UserValueError('errors.westernArtwork.officialCoverHttp', {'status': response.status})
     data = json.loads(response.body)
-    if data.get('errors') or not isinstance(data.get('data'), dict):
+    if not isinstance(data, dict) or data.get('errors') or not isinstance(data.get('data'), dict):
         raise UserValueError('errors.westernArtwork.officialCoverInvalid')
     return data['data']
 
@@ -179,26 +263,111 @@ def _graphql(http: HttpTransport, site: str, query: str, variables: dict) -> dic
 def official_scene(http: HttpTransport, site: str, performer: str, released: str) -> dict | None:
     """搜索不是身份判定：名字与发行日期同时精确匹配，唯一结果才取详情。"""
     date.fromisoformat(released)
-    search = _graphql(http, site, SEARCH_QUERY, {'query': performer, 'first': 30})
-    edges = (search.get('searchVideos') or {}).get('edges') or []
     def matches(node):
         return (str(node.get('releaseDate') or '').split('T')[0] == released
                 and _name(performer) in {_name(m.get('name', '')) for m in node.get('models') or []})
-    hits = {(edge.get('node') or {}).get('slug'): edge['node'] for edge in edges
-            if isinstance(edge.get('node'), dict) and edge['node'].get('slug') and matches(edge['node'])}
-    if len(hits) != 1:
+    scene = _verified_scene(http, site, released, (performer,), matches)
+    return scene if scene and scene.get('image_url') else None
+
+
+def collect_scene(http: HttpTransport, identity: WesternScene) -> dict | None:
+    """用准确场景标题，或片名中的完整艺名加准确场景标题核对同日作品。"""
+    def matches(node):
+        return (str(node.get('releaseDate') or '').split('T')[0] == identity.release_date
+                and matches_scene_text(identity, node.get('title'),
+                                       (model.get('name') for model in node.get('models') or [])))
+
+    query = ' '.join(identity.title or identity.text)
+    artist_query = ' '.join(identity.text[:2])
+    return _verified_scene(http, identity.site, identity.release_date,
+                           tuple(dict.fromkeys((query, artist_query))), matches)
+
+
+def matches_scene_text(identity: WesternScene, title, performers) -> bool:
+    title_words = _words(title)
+    names = {_words(name) for name in performers}
+    if identity.text in names:
+        return True
+    if len(title_words) < 2:
+        return False
+    if title_words in (identity.title, identity.text):
+        return True
+    length = len(title_words)
+    prefix = identity.text[:-length]
+    return len(prefix) >= 2 and identity.text[-length:] == title_words and prefix in names
+
+
+def matches_publisher(identity: WesternScene, name: str) -> bool:
+    return _name(name) == identity.site
+
+
+def matches_exact_title(identity: WesternScene, title) -> bool:
+    return _words(title) == (identity.title or identity.text)
+
+
+def _validate_scene_node(node):
+    """身份字段不完整是接口失败，不能作为没有作品的证据。"""
+    if (not isinstance(node, dict)
+            or any(not isinstance(node.get(key), str) or not node[key].strip()
+                   for key in ('title', 'slug', 'releaseDate'))
+            or not isinstance(node.get('models'), list)
+            or any(not isinstance(model, dict) or not isinstance(model.get('name'), str)
+                   or not model['name'].strip() for model in node['models'])):
+        raise UserValueError('errors.westernArtwork.officialCoverInvalid')
+    try:
+        date.fromisoformat(node['releaseDate'].split('T')[0])
+    except ValueError as error:
+        raise UserValueError('errors.westernArtwork.officialCoverInvalid') from error
+
+
+def _search_nodes(search):
+    """只有显式的 edges 空列表才说明这一问没有结果。"""
+    connection = search.get('searchVideos')
+    if not isinstance(connection, dict) or not isinstance(connection.get('edges'), list):
+        raise UserValueError('errors.westernArtwork.officialCoverInvalid')
+    nodes = []
+    for edge in connection['edges']:
+        node = edge.get('node') if isinstance(edge, dict) else None
+        _validate_scene_node(node)
+        nodes.append(node)
+    return nodes
+
+
+def _verified_scene(http, site, released, queries, matches):
+    hits = set()
+    complete_hits = set()
+    for query in queries:
+        search = _graphql(http, site, SEARCH_QUERY, {'query': query, 'first': SEARCH_LIMIT})
+        nodes = _search_nodes(search)
+        found = set()
+        for node in nodes:
+            if not matches(node):
+                continue
+            slug = node.get('slug')
+            if isinstance(slug, str) and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]*', slug):
+                found.add(slug)
+        hits.update(found)
+        # 接口未提供 pageInfo；顶到查询上限的结果不能单独证明唯一性。
+        if len(nodes) < SEARCH_LIMIT:
+            complete_hits.update(found)
+    if len(hits) != 1 or hits != complete_hits:
         return None
     slug = next(iter(hits))
     scene = _graphql(http, site, SCENE_QUERY, {'videoSlug': slug}).get('findOneVideo')
-    if not isinstance(scene, dict) or not matches(scene):
+    _validate_scene_node(scene)
+    if scene.get('slug') != slug or not matches(scene):
         return None
+    return _public_scene(scene, site, slug, released)
+
+
+def _public_scene(scene, site, slug, released):
+    """提取已核对的官方字段，并限定海报地址在发行方域名下。"""
     images = [image for image in (scene.get('images') or {}).get('poster') or []
               if public_https_url(str(image.get('src') or ''))
               and (urlsplit(image['src']).hostname or '').endswith('.' + site + '.com')
               and isinstance(image.get('width'), (int, float))]
-    if not images:
-        return None
-    return {'title': scene.get('title'), 'date': released, 'site': site,
+    return {'title': scene.get('title'), 'date': released, 'site': site, 'scene_id': f'{site}:{slug}',
             'performers': [m['name'] for m in scene.get('models') or [] if m.get('name')],
+            'genres': [category['name'] for category in scene.get('categories') or [] if category.get('name')],
             'source_url': f'https://www.{site}.com/videos/{quote(slug)}',
-            'image_url': max(images, key=lambda image: image['width'])['src']}
+            'image_url': max(images, key=lambda image: image['width'])['src'] if images else ''}

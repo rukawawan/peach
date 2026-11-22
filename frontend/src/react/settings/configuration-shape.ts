@@ -48,6 +48,7 @@ export function maintenanceShape(data: ConfigurationData): MaintenanceShape {
     autoUpdateHelp: Boolean(automatic && (!automatic.available || automatic.download_available)),
     startupNote: Boolean(data.startup?.message),
     desktopNote: Boolean(data.startup?.desktop_message),
+    storage: Boolean(storage),
     storageRows: storage?.usage?.categories.length ?? 0,
     storageNotes: storage && !storage.relocation.available ? 1 : 0,
     reporting: Boolean(data.remote_reporting),

@@ -136,13 +136,27 @@ export const fetchProcessingEstimate = (command: LibraryProcessingCommand, signa
 export type ProcessingSpeed = 'low' | 'standard' | 'high';
 export interface LibraryProcessingCommand {
   library_id?: string;
+  directory?: string;
   incremental?: boolean;
   scope?: 'new';
-  stage?: 'scan' | 'collect' | 'previews' | 'metadata';
+  stage?: 'scan' | 'collect' | 'previews' | 'metadata' | 'covers';
   asset_ids?: number[];
   job_id?: string;
   retry?: number[];
   speed_mode?: ProcessingSpeed;
+}
+
+export interface ScanDirectoryChoices {
+  current?: string;
+  parent?: string | null;
+  directories: { path: string; name: string; library?: string }[];
+}
+
+export function fetchScanDirectories(libraryId: string | undefined, directory: string | undefined, signal: AbortSignal) {
+  const params = new URLSearchParams({ directories: '1' });
+  if (libraryId) params.set('library_id', libraryId);
+  if (directory) params.set('directory', directory);
+  return apiGet<ScanDirectoryChoices>(`${LIBRARY_PROCESSING_URL}?${params}`, signal);
 }
 export type ProcessingControlCommand =
   | { action: 'pause' | 'resume' | 'cancel' | 'archive' | 'unarchive'; job_id: string }
@@ -340,6 +354,10 @@ export function announceCompletion(
   } catch { /* 存储不可用时照常提示，最多重复一次 */ }
   if (state.requested_stage === 'previews') {
     toast(t('manage:scanFetch.previewsToast', { count: state.previews || 0 }));
+    return;
+  }
+  if (state.requested_stage === 'covers') {
+    toast(t('manage:scanFetch.coversToast', { count: state.covers || 0 }));
     return;
   }
   toast(t('manage:scanFetch.doneToast', { count: state.identified || 0, candidates: state.candidates || 0, autoApplied: state.auto_applied || 0 })

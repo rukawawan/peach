@@ -30,7 +30,7 @@ describe('馆藏表格列宽与占位图', () => {
         const a = picture.getBoundingClientRect(), b = placeholder.getBoundingClientRect();
         const title = node.querySelector<HTMLElement>('[data-list-name]')!;
         return { picture: getComputedStyle(picture).backgroundColor,
-          expected: getComputedStyle(picture).getPropertyValue('--sunk').trim(),
+          expected: getComputedStyle(picture).getPropertyValue('--media-placeholder').trim(),
           centerDelta: Math.abs(a.top + a.height / 2 - b.top - b.height / 2),
           titleWidth: title.clientWidth, titleHeight: title.clientHeight, fullHeight: title.scrollHeight,
           lineHeight: parseFloat(getComputedStyle(title).lineHeight), clamp: getComputedStyle(title).webkitLineClamp };
@@ -41,13 +41,20 @@ describe('馆藏表格列宽与占位图', () => {
       assert.ok(geometry.titleWidth < 320 && geometry.clamp === '2' && geometry.fullHeight > geometry.titleHeight
         && geometry.titleHeight <= geometry.lineHeight * 2 + 1, JSON.stringify(geometry));
       assert.equal(await row.locator('[data-list-name]').getAttribute('title'), name);
-      const defaultLabels = ['作品', '艺人', '媒体库', '标签', '时长', '评分', '观看次数', '入库时间'];
+      const defaultLabels = ['作品', '作品操作', '艺人', '媒体库', '标签', '时长', '评分', '观看次数', '入库时间'];
       const visibleLabels = () => page.locator('[data-catalog-table] th:not([data-table-space]) > span').allTextContents();
       assert.deepEqual(await visibleLabels(), defaultLabels);
+      const countHeader = await page.locator('[data-catalog-table] th[data-key="plays"]').evaluate(header => {
+        const label = header.querySelector<HTMLElement>('button .truncate')!;
+        const filter = header.querySelector('button svg')!.getBoundingClientRect();
+        const sort = header.querySelector('[data-sort-indicator]')!.getBoundingClientRect();
+        return { cropped: label.scrollWidth > label.clientWidth, gap: sort.left - filter.right };
+      });
+      assert.ok(!countHeader.cropped && countHeader.gap >= 4, JSON.stringify(countHeader));
       await page.getByRole('button', { name: '显示列', exact: true }).click();
       await page.getByRole('button', { name: '显示全部列', exact: true }).click();
       await page.keyboard.press('Escape');
-      assert.deepEqual(await visibleLabels(), ['作品', '艺人', '媒体库', '标签', '时长', '评分', '观看次数', '入库时间', '发行时间', '观看时间', '高潮计数', '分辨率', '体积', '番号']);
+      assert.deepEqual(await visibleLabels(), [...defaultLabels, '发行时间', '观看时间', '高潮计数', '分辨率', '体积', '番号']);
       for (const label of ['分辨率', '评分', '高潮计数', '观看次数', '时长', '体积', '入库时间', '观看时间', '发行时间', '番号']) {
         await page.getByRole('columnheader', { name: label, exact: false }).waitFor();
       }
@@ -56,7 +63,7 @@ describe('馆藏表格列宽与占位图', () => {
       assert.equal(await row.locator('[data-rating-stars] [data-rate]').count(), 5);
       assert.equal(await row.locator('[data-rating-stars] [data-rate][data-on="true"]').count(), 4);
       assert.ok((await row.textContent())?.includes('2026-01-03'));
-      const header = page.getByRole('columnheader', { name: /^作品/ });
+      const header = page.locator('[data-catalog-table] th[data-key="name"]');
       const initialWidth = (await header.boundingBox())!.width;
       if (!viewport.mobile) {
         const sort = await header.getAttribute('aria-sort');
@@ -82,11 +89,11 @@ describe('馆藏表格列宽与占位图', () => {
       const columnMenu = page.getByRole('dialog', { name: '表格显示列' });
       await columnMenu.locator('label').filter({ has: page.getByRole('checkbox', { name: '评分', exact: true }) }).click();
       await page.keyboard.press('Escape');
-      assert.equal(await page.getByRole('columnheader', { name: /^评分/ }).count(), 0);
+      assert.equal(await page.getByRole('columnheader', { name: /评分/ }).count(), 0);
       await page.reload({ waitUntil: 'load' });
       await page.locator('[data-catalog-row][data-id="99001"]').waitFor();
       assert.ok(Math.abs((await header.boundingBox())!.width - resizedWidth) <= 1);
-      assert.equal(await page.getByRole('columnheader', { name: /^评分/ }).count(), 0);
+      assert.equal(await page.getByRole('columnheader', { name: /评分/ }).count(), 0);
       await page.getByRole('button', { name: /作品列表排序/ }).click();
       const sortResponse = page.waitForResponse(response => {
         const url = new URL(response.url());
@@ -94,11 +101,11 @@ describe('馆藏表格列宽与占位图', () => {
       });
       await page.getByRole('option', { name: '评分', exact: true }).click();
       await sortResponse;
-      assert.equal(await page.getByRole('columnheader', { name: /^评分/ }).count(), 0);
+      assert.equal(await page.getByRole('columnheader', { name: /评分/ }).count(), 0);
       await page.getByRole('button', { name: '显示列', exact: true }).click();
       await page.getByRole('button', { name: '显示全部列', exact: true }).click();
       await page.keyboard.press('Escape');
-      await page.getByRole('columnheader', { name: /^评分/ }).waitFor();
+      await page.getByRole('columnheader', { name: /评分/ }).waitFor();
       const scroll = page.locator('[data-catalog-table] .overflow-x-auto');
       const scrolled = await scroll.evaluate(node => {
         node.scrollLeft = node.scrollWidth;

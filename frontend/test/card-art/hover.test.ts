@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureHoverPreview, releaseHover, releaseHoverPreviews, wireHover } from '../../src/card-art/hover';
 
-const settings = { hoverDelaySeconds: 0, selecting: false, censored: false };
+const settings = { hoverDelaySeconds: 0, selecting: false, censored: false, enabled: true };
 
 function card(): HTMLElement {
   const el = document.createElement('div');
@@ -17,10 +17,11 @@ const enter = (el: HTMLElement) => el.dispatchEvent(new MouseEvent('mouseenter')
 const leave = (el: HTMLElement) => el.dispatchEvent(new MouseEvent('mouseleave'));
 
 beforeEach(() => {
-  Object.assign(settings, { hoverDelaySeconds: 0, selecting: false, censored: false });
+  Object.assign(settings, { hoverDelaySeconds: 0, selecting: false, censored: false, enabled: true });
   configureHoverPreview({
     selecting: () => settings.selecting,
     censored: () => settings.censored,
+    enabled: () => settings.enabled,
     delaySeconds: () => settings.hoverDelaySeconds,
   });
   vi.useFakeTimers();
@@ -66,6 +67,17 @@ describe('悬停放大设置', () => {
 });
 
 describe('远端源只扫接触印相', () => {
+  it('计费的本地或 SMB 来源也只用缓存预览帧', () => {
+    for (const location of ['local', 'smb']) {
+      const el = card();
+      wireHover(el, { id: 7, location, cost: 'metered', has_thumb: true });
+      enter(el);
+      expect(el.querySelector('video')).toBeNull();
+      expect(el.querySelector('img.ui-hvframes')?.getAttribute('src')).toBe('/poster?id=7&c=4');
+      leave(el);
+    }
+  });
+
   it('叠一层扫视图，不碰封面那张图；移开就撤掉', () => {
     const el = card();
     el.querySelector('[data-media-pic]')!.innerHTML = '<img class="poster cover" src="/cover?code=A">';
@@ -213,6 +225,25 @@ describe('本地文件拉真视频', () => {
     vi.advanceTimersByTime(340);
     expect(el.querySelector('video.hv')).toBeNull();
     delete scrolling.__scrolling;
+  });
+
+  it('关掉「卡片悬停时播放视频预览」后只留静态图：本地不发 /stream，远端不扫接触印相，到点也不放', () => {
+    settings.enabled = false;
+    settings.hoverDelaySeconds = 3;
+    const local = card(), remote = card();
+    wireHover(local, { id: 1, location: 'local' });
+    wireHover(remote, { id: 2, location: 'pikpak', has_thumb: true });
+    enter(local); enter(remote);
+    vi.advanceTimersByTime(5000);
+    expect(local.querySelector('video')).toBeNull();
+    expect(remote.querySelector('img.ui-hvframes')).toBeNull();
+    expect(local.hasAttribute('data-previewing') || remote.hasAttribute('data-previewing')).toBe(false);
+    leave(local);
+    settings.enabled = true;
+    enter(local);
+    settings.enabled = false;
+    vi.advanceTimersByTime(340);
+    expect(local.querySelector('video')).toBeNull();
   });
 
   it('遮挡在防抖期间打开，到点也不放', () => {

@@ -21,10 +21,11 @@ import { apiGet } from '../../api';
 import { PLAYBACK_PROGRESS_EVENT, type PlaybackProgress } from '../../player/telemetry';
 import { LOAD_MORE_MARGIN, RetryNote } from '../components/grid-reveal';
 import { SkeletonContent } from '../components/skeleton-content';
+import { CatalogColumnFilterChips } from '../components/column-filter-chips';
 import { cardRatio, MediaCard, type MediaCardVariant } from '../components/media-card';
 import { MIX_FLIP_FACES, MixCard } from '../components/mix-card';
 import {
-  SHORTS_BATCH, arrangeTiles, catalogParams, catalogQuery, catalogSummary, collapseGroups, entityQuery, latestCatalogPages, mixHasPicture,
+  SHORTS_BATCH, arrangeTiles, catalogCardProps, catalogListScope, catalogParams, catalogQuery, catalogSummary, collapseGroups, entityQuery, latestCatalogPages, mixHasPicture,
   replaceCatalogItem, shortsBoundaries, shortsParams, splitSections, type GridPage, type ShortsCut, type Tile,
 } from './catalog-grid';
 import type { CatalogGridProps, MediaCardLayout, MediaCardHelpers, MediaItem, MediaPage } from './types';
@@ -35,17 +36,26 @@ import { LibraryCompletionPrompt, meteredPreviewIds, missingPreviewIds } from '.
 import { useCatalogView } from './catalog-view';
 import { queryClient } from '../query';
 import { CatalogListPage } from './catalog-list-page';
+import { useCatalogListPosition } from './catalog-list-position';
+import { catalogColumns } from './catalog-table-columns';
 import { t } from '../../i18n';
 
 export function CatalogGridPage(props: CatalogGridProps) {
   const view = useCatalogView();
+  const [position, setPosition] = useCatalogListPosition(catalogListScope(props));
   if (props.mode === 'items') return <ItemsGrid {...props} />;
   const key = props.mode === 'entity'
     ? `entity:${props.entityKey || ''}:${props.revision}`
     : `catalog:${catalogParams(props.filters || {}, !!props.excludeVertical)}:${props.batchSize || 60}:${props.revision}`;
-  if (view === 'list' && !props.wall) return <CatalogListPage key={key} {...props} />;
+  if (view === 'list' && !props.wall) return <CatalogListPage key={key} {...props} position={position} setPosition={setPosition} />;
   const scope = props.mode === 'entity' ? 'entity' : `catalog:${!!props.wall}`;
-  return <GridBody key={scope} {...props} />;
+  const encoded = position.filters.column_filters;
+  return <GridBody key={scope} {...catalogCardProps(props, encoded)}
+    filterBar={!props.wall && encoded ? <CatalogColumnFilterChips encoded={encoded} columns={catalogColumns} tagLabel={props.helpers.tagLabel}
+      onChange={next => {
+        const filters: Record<string, string> = next ? { column_filters: next } : {};
+        setPosition(current => ({ ...current, filters, pagination: { ...current.pagination, pageIndex: 0 } }));
+      }} /> : undefined} />;
 }
 
 function Icon({ name }: { name: string }) {
@@ -113,7 +123,7 @@ function usePlaybackProgress(): void {
 }
 
 /** 一次查询的整个生命周期：骨架、首屏、续页、竖屏带与读数。 */
-function GridBody(props: CatalogGridProps) {
+function GridBody(props: CatalogGridProps & { filterBar?: ReactNode }) {
   const { helpers, actions, layout } = props;
   const entity = props.mode === 'entity';
   const trash = !entity && props.filters?.state === 'trash';
@@ -257,6 +267,7 @@ function GridBody(props: CatalogGridProps) {
 
   return (
     <div ref={body} data-media-body="" aria-busy={result.isFetching && !result.isFetchingNextPage}>
+      {props.filterBar ? <div className="mb-3">{props.filterBar}</div> : null}
       <LibraryCompletionPrompt assetIds={missing} meteredIds={metered} />
       {props.wall ? content() : <SkeletonContent pending={result.isPending} skeletonHtml={props.skeletonHtml}>
         {content()}
@@ -333,8 +344,9 @@ function useShortsStrips(
   tiles: readonly Tile[], pageStarts: readonly number[], body: RefObject<HTMLElement | null>,
 ): ShortsCut[] {
   type Saved = { cuts: ShortsCut[]; offset: number; handled: number };
-  const cacheKey = ['catalog-short-layout', catalogParams(props.filters || {}, !!props.excludeVertical)];
-  const stamp = `${cacheKey[1]}:${props.revision}`;
+  const limit = props.shortsLimit || SHORTS_BATCH;
+  const cacheKey = ['catalog-short-layout', catalogParams(props.filters || {}, !!props.excludeVertical), limit];
+  const stamp = `${cacheKey[1]}:${limit}:${props.revision}`;
   const create = () => {
     const saved = props.restoreNavigation ? queryClient.getQueryData<Saved>(cacheKey) : undefined;
     const groups = { parts: new Set<string>(), editions: new Set<string>() };
@@ -361,7 +373,7 @@ function useShortsStrips(
     const controller = new AbortController();
     own.controllers.push(controller);
     const page = pages - 1;
-    apiGet<MediaPage>(`/api/items?${shortsParams(props.filters || {}, own.offset)}`, controller.signal)
+    apiGet<MediaPage>(`/api/items?${shortsParams(props.filters || {}, own.offset, limit)}`, controller.signal)
       .then((strip) => {
         if (run.current !== own || controller.signal.aborted) return;
         const items = strip.items || [];
@@ -383,7 +395,7 @@ function useShortsStrips(
     if (!boundaries.length) return;
     /* 落点定了才折叠：剪不出落点的这一批下次照原偏移量重取，不能先记成已出现。 */
     const items = collapseGroups(arrived.items, own.groups, props.groupCollapse !== false);
-    own.offset = arrived.more ? own.offset + SHORTS_BATCH : 0;
+    own.offset = arrived.more ? own.offset + limit : 0;
     if (!items.length) return;
     const at = start + (boundaries[Math.floor(Math.random() * boundaries.length)] ?? 0);
     const next = [...cuts, { at, total: arrived.total, items }];

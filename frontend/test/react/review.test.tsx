@@ -6,6 +6,7 @@
 import { act } from 'react';
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
+import * as legacyUi from '@peach/legacy/ui';
 
 import { queryClient } from '../../src/react/query';
 import {
@@ -14,7 +15,7 @@ import {
   reviewWindow, type ReviewCandidate, type ReviewData, type ReviewRow,
   type DecisionResult,
 } from '../../src/react/review/review';
-import { AUTO_LANDINGS_URL, type AutoLandingWrite } from '../../src/react/review/auto-landings';
+import { AUTO_LANDING_REVERT_URL, AUTO_LANDINGS_URL, type AutoLandingWrite } from '../../src/react/review/auto-landings';
 import { ReviewPage } from '../../src/react/review/review-page';
 
 import { actionOrder, choose, click, mountRoot, settle } from './render';
@@ -25,6 +26,18 @@ afterEach(() => queryClient.clear());
 /* Query 派发更新用的是它自己抓住的那个真 `setTimeout(0)`，假时钟推不动它：推完时钟
    断言到的还是上一帧的 DOM。用例里改成当场派发。 */
 notifyManager.setScheduler((notify) => notify());
+
+type Confirmation = Parameters<typeof legacyUi.confirmModal>[0];
+
+/** 批量判定先弹确认：这里替人点主按钮，记下弹窗写了什么。 */
+function acceptConfirm() {
+  const asked: Confirmation[] = [];
+  vi.spyOn(legacyUi, 'confirmModal').mockImplementation((async (options: Confirmation) => {
+    asked.push(options);
+    return { confirmed: true, result: await options.onConfirm?.() };
+  }) as typeof legacyUi.confirmModal);
+  return asked;
+}
 
 const candidate = (source: string, value: string): ReviewCandidate =>
   ({ candidate_key: `${source}:${value}`, source, display_value: value });
@@ -69,6 +82,9 @@ function serve(plan: Plan = {}) {
     const url = String(input);
     if (url === REVIEW_DECISION_URL) {
       return ok(decisions.length > 1 ? decisions.shift()! : decisions[0]!);
+    }
+    if (url.startsWith(AUTO_LANDINGS_URL + '?items=')) {
+      return ok({ items: [], token: 'preview-token', decisions: 1, restores: [], changed: [], tags: [] });
     }
     if (url.startsWith(AUTO_LANDINGS_URL)) return ok({ items: plan.autoLandings ?? [] });
     if (url.startsWith(REVIEW_URL)) return ok(plan.data ?? review());
@@ -266,6 +282,16 @@ it('Shift 选一段，翻页之后手里还是同一批', async () => {
   expect(statusText(host)).toContain('已选 5 项');
 });
 
+it('全选全部一次选中当前筛选下所有页的待处理项，选满后按钮收起', async () => {
+  const { host } = await open();
+  expect(cards(host)).toHaveLength(REVIEW_PAGE_SIZE);
+  await click(buttonIn(host, `全选全部 ${QUEUE.length} 项`));
+  expect(statusText(host)).toContain(`已选 ${QUEUE.length} 项`);
+  expect(buttonIn(host, `全选全部 ${QUEUE.length} 项`)).toBeNull();
+  await choose(host.querySelector('button[aria-label="筛选当前分类"]'), '单一来源 · 3');
+  expect(buttonIn(host, '全选全部 3 项')).toBeNull();
+});
+
 it('判过的行从缓存里摘掉并同步计数，不为一次判定重取整条队列', async () => {
   const { host, fetcher, props } = await open();
   const reads = () => fetcher.mock.calls.filter(([url]) => String(url) === REVIEW_URL).length;
@@ -288,7 +314,8 @@ it('服务端拒绝这次判定时说出原因，那一行留在屏幕上', asyn
   expect(queueOf().sections.metadata_fields).toHaveLength(QUEUE.length);
 });
 
-it('批量判定把成功的摘掉，没写成的留下来等重试', async () => {
+it('批量判定先确认，成功的摘掉，没写成的留下来等重试', async () => {
+  const asked = acceptConfirm();
   const { host, props } = await open({
     decisions: [{ ok: true }, { ok: false, error: '来源已失效' }, { ok: true }],
   });
@@ -299,6 +326,8 @@ it('批量判定把成功的摘掉，没写成的留下来等重试', async () =
     .toEqual(['忽略所选', '稍后处理所选', '通过所选', '取消选择']);
   await click(buttonIn(host, '通过所选'));
   await settle();
+  // 通过写进真相字段，撤不回：弹窗写明，回执不带撤销。
+  expect(asked[0]?.body).toBe('将通过选中的 3 项，按所选来源写入资料。不能撤销。');
   expect(props.toast).toHaveBeenCalledWith('已通过 2 项，1 项未完成');
   expect(queueOf().sections.metadata_fields).toHaveLength(QUEUE.length - 2);
   expect(keys(host)).toEqual(['row-101']);
@@ -329,6 +358,7 @@ it('逐项通过使用同资产最近一次批准的版本，已过期的候选�
 });
 
 it('批量通过逐条沿用服务端版本回执，并保留其他写入造成的冲突', async () => {
+  acceptConfirm();
   const { host, fetcher } = await open({
     data: review({ sections: { metadata_fields: sameAssetRows() } }),
     decisions: [receipt(1, 4), receipt(4, 5), { ok: false, error: '资产资料已更改' }],
@@ -439,14 +469,16 @@ it('批量状态移动只采用成功项，失败行和其他类别保持不变'
 });
 
 it('批量稍后处理失败的行留在待处理，成功行进入独立队列', async () => {
+  acceptConfirm();
   const rows = [row(0, ['nfo']), row(1, ['nfo']), row(2, ['nfo'])];
-  const { host } = await open({
+  const { host, props } = await open({
     data: review({ sections: { metadata_fields: rows }, counts: { metadata_fields: 3 } }),
     decisions: [{ ok: true }, { ok: false, error: '候选已变更' }, { ok: true }],
   });
   await click(buttonIn(host, '全选本页'));
   await click(buttonIn(host, '稍后处理所选'));
   await settle();
+  expect(props.toast).toHaveBeenCalledWith('已移至稍后处理 2 项，1 项未完成', { undo: expect.any(Function) });
   expect(keys(host)).toEqual(['row-1']);
   expect(cards(host)[0]?.textContent).toContain('候选已变更');
   expect(queueOf().counts.metadata_fields).toBe(1);
@@ -502,6 +534,29 @@ it('元数据字段下逐条列出自动写入：作品、写了什么、原来�
   const text = section.textContent ?? '';
   for (const expected of ['自动写入的资料', 'DASS-468', '某部作品的标题', '发行日期：2024-09-10', '原为 「2024-09-06」',
     'ROYD-083', '标签：痴女、姐弟', '原有标签保留']) expect(text).toContain(expected);
+});
+
+it('自动写入表右键撤回只预览点中的记录', async () => {
+  const confirm = vi.spyOn(legacyUi, 'confirmModal').mockResolvedValue({ confirmed: false });
+  const { host, fetcher } = await open({ autoLandings: WRITES });
+  const section = host.querySelector('[aria-labelledby="auto-landings-title"]')!;
+  const tableRows = () => [...section.querySelectorAll('[role="row"][data-work-context-row]')];
+  const openMenu = (index: number) => act(async () => {
+    tableRows()[index]!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 50 + index }));
+  });
+  const menuItem = (label: string) => [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent === label);
+  await openMenu(1);
+  await click(menuItem('选择'));
+  expect(tableRows()[1]?.hasAttribute('data-board-selected')).toBe(true);
+  await openMenu(0);
+  await click(menuItem('撤回'));
+  await settle();
+
+  expect(fetcher.mock.calls.map(([url]) => url)).toContain(
+    AUTO_LANDINGS_URL + '?items=' + encodeURIComponent(WRITES[0]!.item_key));
+  expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: '撤回自动写入', holdToConfirm: false }));
+  expect(fetcher.mock.calls.some(([url]) => url === AUTO_LANDING_REVERT_URL)).toBe(false);
+  expect(tableRows()[1]?.hasAttribute('data-board-selected')).toBe(true);
 });
 
 it('没有自动写入时不出现那一块', async () => {

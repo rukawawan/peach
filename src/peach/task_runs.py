@@ -76,6 +76,9 @@ FINISH_RETRY_DELAYS = (1.0, 5.0)
 #: 每个 task_key 默认保留多少条终态记录。活动页只看最近几轮，更早的属于日志。
 DEFAULT_KEEP = 20
 
+#: 失败与中断的后继行按结束时间保留这么多天，见 `prune` 的 `failed_days`。
+FAILED_FOLLOWUP_DAYS = 30
+
 #: 一轮任务最多能派出多少条后继（ADR-0040 第五条）。多出来的在入队时截断，截断了几条
 #: 写进父任务的摘要——静默丢弃和无上限一样，都是事后查不出来的那一类。
 #: 64 是「一部片的出演者加厂牌」那个量级的十几倍，正常扇出撞不到它。
@@ -91,10 +94,10 @@ TASK_KEYS = (
     "follow-check", "follow-resolve", "library-processing", "taste-refresh", "link-check", "link-prune",
     "resource-scan", "resource-apply", "scraping-cover", "media-repair", "mp4-header-repair",
     "jav-discovery-metadata", "diagnostic-export", "ledger-backup", "ledger-restore", "upgrade-repairs",
-    "upgrade-library", "follow-evidence-reclaim", "organize", "batch", "scrape-codes", "jav-covers",
+    "upgrade-library", "follow-evidence-reclaim", "follow-backfill", "organize", "batch", "scrape-codes", "jav-covers",
     "entity-avatar", "performer-profile", "performer-alias", "studio-mark", "creator-identity", "code-samples",
-    "feed-check", "feed-scrape", "feed-cover", "want-scrape", "timeline-thumbnails", "download-postprocess",
-    "seed-import", "jasna-restore", "ai-subtitles", "follow-creator", "amane-bridge", "source-check", "face-models",
+    "feed-check", "feed-scrape", "feed-cover", "want-scrape", "want-search", "timeline-thumbnails", "download-postprocess",
+    "seed-import", "jasna-restore", "ai-subtitles", "follow-creator", "amane-bridge", "source-check", "face-models", "cover-artwork-repair",
 )
 
 
@@ -187,6 +190,20 @@ def stamp(moment: datetime | None = None) -> str:
     """ISO-8601 UTC 文本，与 `entity`、`follow_schedule` 同一种写法。"""
     return (moment or datetime.now(timezone.utc)).astimezone(
         timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _delete_runs(connection, where: str, params) -> int:
+    """删掉满足 `where` 的运行行：下载任务指向它们的链接先清空，状态本身保留。"""
+    connection.execute("UPDATE download_task SET postprocess_run_id=NULL WHERE postprocess_run_id IN ("
+                       f"SELECT id FROM task_run WHERE {where})", params)
+    return connection.execute(f"DELETE FROM task_run WHERE {where}", params).rowcount
+
+
+def _settle_cancelled_followup(connection, run_id: int) -> None:
+    row = connection.execute("SELECT task_key,followup_key FROM task_run WHERE id=?", (run_id,)).fetchone()
+    if row["task_key"] == "download-postprocess" and row["followup_key"]:
+        from .downloads import DownloadStore
+        DownloadStore.settle_cancelled_postprocess(connection, run_id)
 
 
 def _parse(value: str | None) -> datetime | None:
@@ -518,7 +535,7 @@ class TaskRunStore:
         delays = list(self.finish_retry_delays)
         while True:
             try:
-                done = self._update_active(run_id, assignments, values)
+                done = self._update_active(run_id, assignments, values, cancelled=status == "cancelled")
                 break
             except sqlite3.OperationalError as failure:
                 if not delays:
@@ -534,8 +551,7 @@ class TaskRunStore:
 
     # -- 后继（ADR-0040）--------------------------------------------------
 
-    def enqueue_followups(self, parent_run_id: int | None,
-                          followups) -> dict:
+    def enqueue_followups(self, parent_run_id: int | None, followups, *, on_queued=None) -> dict:
         """把一轮任务声明的后继写成 `pending` 行，返回这次入队的结果。
 
         `followups` 的每一项是 `(key, task_key, label)`，可再带 `code, params`：`key` 是这件事的
@@ -545,6 +561,7 @@ class TaskRunStore:
         （同一次声明里重复的也算），`truncated` 是超出 `MAX_FOLLOWUPS` 被截掉的，
         `depth_exceeded` 是这条链已经到 `MAX_FOLLOWUP_DEPTH` 层。调用方把这三个数
         放进父任务的摘要，活动页因此看得见「派了几条、丢了几条」。
+        `on_queued(connection, run_id)` 在入队事务内登记后继所属的业务记录。
         """
         result = {"queued": [], "duplicates": 0, "truncated": 0, "depth_exceeded": 0}
         items = list(followups or [])
@@ -594,6 +611,8 @@ class TaskRunStore:
                     result["duplicates"] += 1
                     continue
                 run_id = int(cursor.lastrowid)
+                if on_queued is not None:
+                    on_queued(connection, run_id)
                 initialize_speed(self, run_id, parent)
                 result["queued"].append(run_id)
         return result
@@ -664,6 +683,7 @@ class TaskRunStore:
                 if action == 'cancel':
                     connection.execute("UPDATE task_run SET status='cancelled',finished_at=?,heartbeat_at=? "
                                        "WHERE id=? AND status='pending'", (moment, moment, candidate['id']))
+                    _settle_cancelled_followup(connection, candidate['id'])
                 elif action != 'pause':
                     row = candidate
                     break
@@ -725,13 +745,15 @@ class TaskRunStore:
         return True
 
     def _update_active(self, run_id: int, assignments: list[str],
-                       values: list[object], *, timeout: float | None = None) -> bool:
+                       values: list[object], *, timeout: float | None = None, cancelled: bool = False) -> bool:
         marks = ",".join(f"'{name}'" for name in ACTIVE_STATUSES)
         with self.database.write_transaction(notify=False, timeout=timeout) as connection:
             cursor = connection.execute(
                 f"UPDATE task_run SET {','.join(assignments)} "
                 f"WHERE id=? AND status IN ({marks})",
                 [*values, run_id])
+            if cancelled and cursor.rowcount:
+                _settle_cancelled_followup(connection, run_id)
         return cursor.rowcount > 0
 
     # -- 启动恢复与回收 ----------------------------------------------------
@@ -780,13 +802,17 @@ class TaskRunStore:
                 recovered.append(run.id)
         return recovered
 
-    def prune(self, task_key: str, keep: int = DEFAULT_KEEP, *, keep_errors: bool = False) -> int:
+    def prune(self, task_key: str, keep: int = DEFAULT_KEEP, *, keep_errors: bool = False,
+              failed_days: float | None = FAILED_FOLLOWUP_DAYS) -> int:
         """每个 task_key 只留最近 `keep` 条终态记录，返回删掉多少条。
 
         活跃任务保留，指向已清退历史的父任务和根任务关联由删除触发器置空。
         随后清退整个数据根里已结束运行的控制文件（`task_control.prune_controls`），不限本 task_key。
-        后继使用 `keep_errors` 保留仍可重试的失败项；下载状态保留并清空已清退运行的链接。
-        阈值用 `LIMIT 1 OFFSET keep` 取「第 keep+1 新的那条 id」。
+        后继使用 `keep_errors`：成功与取消的按 `keep` 条清退；失败与中断的不占条数，按结束时间
+        保留 `failed_days` 天，过了就清退。重试不读这一行——下载按自己的后处理状态重派，
+        升级补修按 `ledger_upgrade_item`——它只供任务中心里看最近出过什么错。`failed_days`
+        为 None 时失败行全留，交给类型自己按结论清退（`FollowupType.prunes_failures`）。
+        下载状态保留并清空已清退运行的链接。阈值用 `LIMIT 1 OFFSET keep` 取「第 keep+1 新的那条 id」。
         """
         if not self.enabled or keep < 0:
             return 0
@@ -798,14 +824,32 @@ class TaskRunStore:
                 f"SELECT id FROM task_run WHERE task_key=? AND status IN ({marks}) "
                 "ORDER BY id DESC LIMIT 1 OFFSET ?", (task_key, keep)).fetchone()
             if threshold is not None:
-                connection.execute(
-                    "UPDATE download_task SET postprocess_run_id=NULL WHERE postprocess_run_id IN ("
-                    f"SELECT id FROM task_run WHERE task_key=? AND status IN ({marks}) AND id<=?)",
-                    (task_key, threshold["id"]))
-                cursor = connection.execute(
-                    f"DELETE FROM task_run WHERE task_key=? AND status IN ({marks}) "
-                    "AND id<=?", (task_key, threshold["id"]))
-                removed = cursor.rowcount
+                removed = _delete_runs(connection, f"task_key=? AND status IN ({marks}) AND id<=?",
+                                       (task_key, threshold["id"]))
+            if keep_errors and failed_days is not None:
+                cutoff = stamp(datetime.now(timezone.utc) - timedelta(days=failed_days))
+                removed += _delete_runs(
+                    connection, "task_key=? AND status IN ('failed','interrupted') "
+                    "AND followup_key IS NOT NULL AND finished_at<?", (task_key, cutoff))
+        from .task_control import prune_controls
+        prune_controls(self)
+        return removed
+
+    def delete_finished(self, run_ids) -> int:
+        """删掉这几行已结束的运行（活跃的不碰），收走它们的控制文件，返回删掉的行数。
+
+        给按自己的结论清退失败后继的调用方（`upgrade_repairs.prune_settled_failures`）。
+        """
+        ids = sorted({int(run_id) for run_id in run_ids})
+        if not self.enabled or not ids:
+            return 0
+        removed = 0
+        terminal = ",".join(f"'{name}'" for name in TERMINAL_STATUSES)
+        with self.database.write_transaction(notify=False) as connection:
+            for offset in range(0, len(ids), 900):
+                batch = ids[offset:offset + 900]
+                removed += _delete_runs(
+                    connection, f"status IN ({terminal}) AND id IN ({','.join('?' * len(batch))})", batch)
         from .task_control import prune_controls
         prune_controls(self)
         return removed
@@ -836,19 +880,28 @@ class TaskRunStore:
             rows = connection.execute(sql, params).fetchall()
         return [_row(row) for row in rows]
 
-    def active_families(self) -> dict[int, list[tuple[int, str]]]:
+    def active_families(self, run_ids: list[int] | None = None) -> dict[int, list[tuple[int, str]]]:
         """每条自己或后代还在排在跑的任务 → 这一族里在排在跑的 `(id, status)`（含自己），按 id 排。
 
         键与 `live_ids` 相同。任务中心一页里每条在跑的任务都要问「族里谁还活着」：逐条递归查询、
         逐条开连接，几千条排队后继时一次轮询要好几秒；这里一条查询沿父链往上一次取齐。
         """
-        families: dict[int, list[tuple[int, str]]] = {}
-        with self.database.read_connection() as connection:
-            for ancestor, run_id, status in connection.execute(
-                    "WITH RECURSIVE up(ancestor, id, status) AS ("
+        if run_ids == []:
+            return {}
+        if run_ids is None:
+            query = ("WITH RECURSIVE up(ancestor, id, status) AS ("
                     "SELECT id, id, status FROM task_run WHERE status IN ('pending','running') "
                     "UNION SELECT t.parent_run_id, u.id, u.status FROM task_run t JOIN up u ON t.id=u.ancestor "
-                    "WHERE t.parent_run_id IS NOT NULL) SELECT ancestor, id, status FROM up ORDER BY ancestor, id"):
+                    "WHERE t.parent_run_id IS NOT NULL) SELECT ancestor, id, status FROM up ORDER BY ancestor, id")
+        else:
+            marks = ",".join("?" for _ in run_ids)
+            query = (f"WITH RECURSIVE family(ancestor, id, status) AS ("
+                     f"SELECT id, id, status FROM task_run WHERE id IN ({marks}) "
+                     "UNION SELECT f.ancestor, t.id, t.status FROM task_run t JOIN family f ON t.parent_run_id=f.id) "
+                     "SELECT ancestor, id, status FROM family WHERE status IN ('pending','running') ORDER BY ancestor, id")
+        families: dict[int, list[tuple[int, str]]] = {}
+        with self.database.read_connection() as connection:
+            for ancestor, run_id, status in connection.execute(query, run_ids or ()):
                 families.setdefault(int(ancestor), []).append((int(run_id), status))
         return families
 

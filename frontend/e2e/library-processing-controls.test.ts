@@ -12,6 +12,67 @@ describe('扫描与采集控制', () => {
   let browser: Browser;
   before(async () => { browser = await launch() });
   after(async () => { await browser?.close() });
+  it('目录扫描只把确认时选中的子文件夹提交给扫描任务', { timeout: 35_000 }, async () => {
+    const root = 'R:\\Media';
+    const child = root + '\\Nested';
+    const writes: Record<string, unknown>[] = [];
+    const opened = await visit(browser, '/data-cleanup', VIEWPORTS[0], async page => {
+      await page.route('**/api/library-processing{,?*}', async route => {
+        const request = route.request();
+        const params = new URL(request.url()).searchParams;
+        if (request.method() === 'POST') {
+          writes.push(request.postDataJSON());
+          await route.fulfill({ json: { status: 'running', job_id: 'folder-scan' } });
+        } else if (params.get('directories') === '1') {
+          const current = params.get('directory');
+          const result = current === root ? { current, parent: null, directories: [{ name: 'Nested', path: child }] }
+            : current === child ? { current, parent: root, directories: [] }
+            : { directories: [{ name: root, path: root, library: 'Library' }] };
+          await route.fulfill({ json: result });
+        } else {
+          await route.fulfill({ json: { status: 'idle' } });
+        }
+      });
+    });
+    const { page } = opened;
+    try {
+      await page.getByRole('button', { name: '更多同步方式', exact: true }).click();
+      await page.getByRole('dialog', { name: '同步方式' }).getByText('只扫描此目录', { exact: true }).click();
+      const picker = page.getByRole('dialog', { name: '只扫描此目录', exact: true });
+      const confirm = picker.getByRole('button', { name: '只扫描此目录', exact: true });
+      assert.equal(await confirm.isEnabled(), false);
+      await picker.getByRole('button', { name: /^R:\\Media/ }).click();
+      await picker.getByRole('button', { name: 'Nested', exact: true }).click();
+      await picker.getByText(child, { exact: true }).waitFor();
+      assert.deepEqual(writes, []);
+      await confirm.click();
+      await picker.waitFor({ state: 'hidden' });
+      assert.deepEqual(writes, [{ stage: 'scan', directory: child }]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('另一处任务在轮询间完成后，数据管理页更新问题清单', { timeout: 35_000 }, async () => {
+    let revision = '1';
+    const oldError = '样本影片上一轮尚未取得预览';
+    const opened = await visit(browser, '/data-cleanup#libraryProcessing', VIEWPORTS[0], async page => {
+      await page.route(url => url.pathname === '/api/library-processing', route => route.fulfill({ json: revision === '1'
+        ? { job_id: 'previous', status: 'failed', outcome: 'partial', error: oldError, issue_count: 1 }
+        : { job_id: 'current', status: 'complete', outcome: 'complete', issue_count: 0 },
+      }));
+      await page.route(url => url.pathname === '/api/result-updates', route => route.fulfill({ json: {
+        busy: false, running_tasks: [], result_versions: { library_processing: revision },
+      } }));
+    });
+    try {
+      const note = opened.page.getByText(oldError, { exact: false });
+      await note.first().waitFor();
+      revision = '2';
+      await note.first().waitFor({ state: 'hidden', timeout: 15_000 });
+    } finally { await opened.close() }
+  });
+
   for (const viewport of VIEWPORTS) it(`${viewport.name}：慢项可跳过，提示随空间同行，浮窗拖动保留`, async () => {
     let state = { status: 'running', job_id: 'skip-preview', checked: 0, total: 2,
       current_asset_id: 1, current_asset_name: '作品甲.mp4', current_action: 'querying_metadata',
@@ -178,10 +239,10 @@ describe('扫描与采集控制', () => {
         await card.getByRole('button', { name: '更多同步方式', exact: true }).click();
         const menu = page.getByRole('dialog', { name: '同步方式', exact: true });
         assert.equal(await menu.locator('svg').count(), 0);
-        assert.equal(await menu.getByRole('button').count(), 7);
-        assert.equal(await menu.getByRole('group', { name: '日常同步', exact: true }).getByRole('button').count(), 2);
-        assert.equal(await menu.getByRole('group', { name: '全库维护', exact: true }).getByRole('button').count(), 5);
-        for (const label of ['仅发现新增文件', '补全待处理影片', '同步所有媒体库', '仅扫描文件', '补全资料与预览', '仅补全影片资料', '仅补全预览图']) {
+        assert.equal(await menu.getByRole('button').count(), 9);
+        assert.equal(await menu.getByRole('group', { name: '日常同步', exact: true }).getByRole('button').count(), 3);
+        assert.equal(await menu.getByRole('group', { name: '全库维护', exact: true }).getByRole('button').count(), 6);
+        for (const label of ['仅发现新增文件', '只扫描此目录', '补全待处理影片', '同步所有媒体库', '仅扫描文件', '补全资料与预览', '仅补全影片资料', '仅补全封面', '仅补全预览图']) {
           await menu.getByText(label, { exact: true }).waitFor();
         }
         await menu.getByText('为已入库的视频生成九宫格，跳过流量保护目录', { exact: true }).waitFor();
@@ -249,7 +310,8 @@ describe('扫描与采集控制', () => {
         assert.equal(await sources.locator('svg, img').count(), 2);
         const modalBody = dialog.locator('.ui-geist-modal-body');
         assert.equal(await modalBody.getAttribute('data-overlay-scrollbar'), 'true');
-        assert.equal(await dialog.evaluate(el => getComputedStyle(el).overflowY), 'hidden');
+        // 外框自己不滚，只有正文滚；外框不裁边（框里的下拉要能伸出去），所以是 visible 而不是 hidden。
+        assert.ok(!['auto', 'scroll'].includes(await dialog.evaluate(el => getComputedStyle(el).overflowY)), '弹窗外框自己不该滚');
         assert.equal(await sources.first().evaluate(el => getComputedStyle(el.parentElement!).overflowY), 'visible',
           '确认弹窗明细不应嵌套纵向滚动');
         const frame = () => dialog.locator('.ui-geist-modal-header,.geist-modal-footer').evaluateAll(parts =>

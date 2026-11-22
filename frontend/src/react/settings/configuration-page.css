@@ -12,6 +12,7 @@ body #stats .ui-configpage>.ui-board-local-nav [role=tab]{text-align:left;justif
 .ui-configpage:has(>.ui-board-local-nav)>:not(.ui-board-local-nav):not(.ui-configgroup){grid-column:2;grid-row:1;min-width:0}
 @media(max-width:900px){
 .ui-configpage:has(>.ui-board-local-nav){display:flex;flex-direction:column;align-items:stretch;gap:20px}
+.ui-configpage{--settings-nav-offset:var(--settings-nav-height, 0px)}
 body #stats .ui-configpage>.ui-board-local-nav{align-self:stretch;flex-direction:row;flex-wrap:wrap;max-height:none;overflow:visible;background:var(--page)}
 body #stats .ui-configpage>.ui-board-local-nav>[data-navigation-frame]{width:100%}
 body #stats .ui-configpage>.ui-board-local-nav [data-board-tab-list]{flex-wrap:wrap;overflow:visible}

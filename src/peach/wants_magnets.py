@@ -19,6 +19,7 @@ from .fsutil import atomic_write_text
 from .jav_cache import cache_fresh, cache_lifetime as cache_lifetime
 
 MAX_CACHE_BYTES = 16 * 1024 * 1024
+CACHE_VERSION = 2
 
 
 def reusable_result(result) -> bool:
@@ -27,16 +28,22 @@ def reusable_result(result) -> bool:
             and all(isinstance(item, dict) and item.get('protocol') in {'magnet', 'ed2k', 'url'}
                     and isinstance(item.get('uri'), str) and isinstance(item.get('size'), str)
                     and isinstance(item.get('attributes'), list) for item in result['items'])
-            and bool(result['items'] or not result.get('warnings')))
+            and bool(result['items'] or result.get('complete') is True or not result.get('warnings')))
 
 
-def fetch(root: Path, code: str) -> dict:
-    from .magnet_chain import search
+def fetch(root: Path, code: str, *, quick: bool = False, edition_preferences: tuple[str, ...] = ()) -> dict:
+    """查一部的磁链与资源链接。无版次偏好时，定时查找可以跳过已有高清候选的 JavDB 查询。"""
+    from .magnet_chain import edition_rank, search
     from .sources.javdb import merge_resources
-    result = search(root, code, stop_on_preferred=False)
+    result = search(root, code, stop_on_preferred=False, skip_javdb_after_preferred=quick,
+                    edition_preferences=edition_preferences)
     linked = result.pop('linked_resources', [])
     ranked = [{**row, 'id': 'magnet:' + row['info_hash'], 'size': row['size_text']} for row in result['items']]
-    return {**result, 'items': merge_resources([*ranked, *linked])[:128]}
+    items = merge_resources([*ranked, *linked])
+    if edition_preferences:
+        items.sort(key=lambda item: edition_rank(item, code, edition_preferences)
+                   if item['protocol'] == 'magnet' else len(edition_preferences))
+    return {**result, 'items': items[:128]}
 
 
 class MagnetSearch:
@@ -59,7 +66,7 @@ class MagnetSearch:
             if self.path.stat().st_size > MAX_CACHE_BYTES:
                 return
             payload = json.loads(self.path.read_text(encoding='utf-8'))
-            rows = payload.get('entries', []) if payload.get('version') == 1 else []
+            rows = payload.get('entries', []) if payload.get('version') in {1, CACHE_VERSION} else []
             if not isinstance(rows, list):
                 return
             for row in reversed(rows[:128]):
@@ -71,6 +78,8 @@ class MagnetSearch:
                     continue
                 # 旧版写进缓存的中文来源与属性（「JavDB 评论」「中字」「高清」）读入时换成 id。
                 result = {**row['result'], 'items': [resource_item(item) for item in row['result']['items']]}
+                if payload.get('version') == 1 and result.get('warnings'):
+                    result['cache_stale'] = True
                 self.cache[normalise_code_key(row['code'])] = (
                     self.clock() - (self.wallclock() - saved), result)
                 self.saved_wall[normalise_code_key(row['code'])] = saved
@@ -80,28 +89,33 @@ class MagnetSearch:
     def _save(self):
         rows = [{'code': code, 'saved': self.saved_wall[code], 'result': result}
                 for code, (_, result) in reversed(self.cache.items()) if reusable_result(result)]
-        encoded = json.dumps({'version': 1, 'entries': rows}, ensure_ascii=False)
+        encoded = json.dumps({'version': CACHE_VERSION, 'entries': rows}, ensure_ascii=False)
         while len(encoded.encode('utf-8')) > MAX_CACHE_BYTES and rows:
             rows.pop()
-            encoded = json.dumps({'version': 1, 'entries': rows}, ensure_ascii=False)
+            encoded = json.dumps({'version': CACHE_VERSION, 'entries': rows}, ensure_ascii=False)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(self.path, encoded, mode=0o600)
         except OSError:
             return
 
-    def _cached(self, code, released):
+    def _cached(self, code, released, edition_preferences=None):
         with self.cache_lock:
             cached = self.cache.get(code)
             saved = self.saved_wall.get(code, 0)
             elapsed = max(0, self.clock() - cached[0]) if cached else 0
-            complete = cached and reusable_result(cached[1]) and not cached[1].get('warnings') and not cached[1].get('cache_stale')
-            if cached and (cache_fresh(saved, released, max(self.wallclock(), saved + elapsed)) if complete
-                           else elapsed < (86400 if reusable_result(cached[1]) else 60)):
+            complete = (cached and reusable_result(cached[1]) and not cached[1].get('cache_stale')
+                        and (cached[1].get('complete') is True or not cached[1].get('warnings')))
+            same_order = (edition_preferences is None or
+                          (cached and cached[1].get('edition_preferences', []) == list(edition_preferences)))
+            if cached and same_order and (cache_fresh(saved, released, max(self.wallclock(), saved + elapsed)) if complete
+                           else elapsed < (86400 if reusable_result(cached[1]) and not cached[1].get('cache_stale') else 60)):
                 self.cache.move_to_end(code)
                 return cached[1]
             failed = self.failures.get(code)
-            if failed and failed[0] + 60 > self.clock():
+            if (failed and failed[0] + 60 > self.clock()
+                    and (edition_preferences is None or
+                         failed[1].get('edition_preferences', []) == list(edition_preferences))):
                 return failed[1]
         return None
 
@@ -109,10 +123,22 @@ class MagnetSearch:
         result = self._cached(normalise_code_key(code), released)
         return any(item.get('protocol') == 'magnet' for item in result['items']) if result else None
 
+    def known_candidate(self, code, edition_preferences: tuple[str, ...] = ()):
+        """已取得的正片磁链证据，不请求来源，也不把最近一次来源失败当作资源消失。"""
+        from .jav_browser import _download_candidate
+        from .magnet_chain import edition_rank
+        with self.cache_lock:
+            cached = self.cache.get(normalise_code_key(code))
+            items = [item for item in cached[1]['items'] if item.get('protocol') == 'magnet'] if cached else []
+            if edition_preferences:
+                items.sort(key=lambda item: edition_rank(item, code, edition_preferences))
+            return _download_candidate(items, code)
+
     def _remember(self, code, result):
         with self.cache_lock:
             previous = self.cache.get(code)
-            if (result['state'] == 'error' or result.get('warnings')) and previous and reusable_result(previous[1]):
+            failed = result['state'] == 'error' or bool(result.get('warnings') and result.get('complete') is not True)
+            if failed and previous and reusable_result(previous[1]):
                 from .sources.javdb import merge_resources
                 result['items'] = merge_resources([*previous[1]['items'], *result['items']]) if result['items'] else previous[1]['items']
                 result['checked_at'] = previous[1].get('checked_at')
@@ -130,9 +156,10 @@ class MagnetSearch:
             if reusable_result(result):
                 self._save()
 
-    def query(self, code: str, *, refresh: bool = False, released: str | None = None) -> dict:
+    def query(self, code: str, *, refresh: bool = False, released: str | None = None, quick: bool = False,
+              edition_preferences: tuple[str, ...] | None = None) -> dict:
         code = normalise_code_key(code)
-        cached = self._cached(code, released)
+        cached = self._cached(code, released, edition_preferences)
         if cached and not refresh:
             return cached
         # 等锁的请求不积压为无限队列；前端把忙态留在卡片上，稍后再取。
@@ -140,7 +167,7 @@ class MagnetSearch:
             return {"ok": True, "state": "busy", "items": cached['items'] if cached else [], "error": "",
                     "checked_at": cached.get('checked_at') if cached else None}
         try:
-            cached = self._cached(code, released)
+            cached = self._cached(code, released, edition_preferences)
             if not refresh and cached:
                 return cached
             delay = self.next_request - self.clock()
@@ -149,7 +176,11 @@ class MagnetSearch:
             result = {"ok": True, "state": "ready", "items": [], "warnings": [], "error": "",
                       "checked_at": datetime.fromtimestamp(self.wallclock(), timezone.utc).isoformat()}
             try:
-                result.update(self.fetcher(self.root, code))
+                options = {"quick": True} if quick else {}
+                if edition_preferences:
+                    options["edition_preferences"] = edition_preferences
+                    result["edition_preferences"] = list(edition_preferences)
+                result.update(self.fetcher(self.root, code, **options))
                 if result['state'] == 'ready' and not reusable_result(result):
                     result.update(state='error', **coded('error', Said('labels.wantsMagnets.linksUnfetched')))
             except SourceFailure as error:

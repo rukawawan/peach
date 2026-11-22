@@ -8,11 +8,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from peach import download_postprocess as post
-from peach import ledger_backups
-from peach.downloads import DownloadStore, DownloadTask, INGESTED, POSTPROCESS_PENDING
+from peach import ledger_backups, task_control
+from peach.downloads import (DownloadStore, DownloadTask, INGESTED, POSTPROCESS_CANCELLED,
+                             POSTPROCESS_COMPLETE, POSTPROCESS_PENDING, POSTPROCESS_RUNNING)
+from peach.followups import FollowupRunner
 from peach.ingest_notices import IngestNotices
 from peach.jobs import JobDeferred
 from peach.repository import LedgerDatabase
+from peach.task_runs import TaskRunStore
 from support.ledger import fresh_ledger
 
 
@@ -66,6 +69,52 @@ class DownloadPostprocessTests(unittest.TestCase):
 
     def run_task(self):
         return post.run(self.contract, post.followup_key(self.task.id), self.handle)
+
+    def queued_run(self):
+        self.contract.task_runs = TaskRunStore(self.database)
+        self.contract.followups = FollowupRunner(self.contract)
+        with patch.object(self.contract.followups, "wake"):
+            return post.enqueue(self.contract, self.task)
+
+    def test_followup_cancelled_while_waiting_to_be_claimed_settles_the_download(self):
+        run_id = self.queued_run()
+        with patch.object(task_control, "requested", return_value="cancel"):
+            self.assertIsNone(self.contract.task_runs.claim_followup([post.TASK_KEY]))
+        self.assertEqual(self.contract.task_runs.get(run_id).status, "cancelled")
+        self.assertEqual(self.store.get(self.task.id).postprocess_state, POSTPROCESS_CANCELLED)
+
+    def test_running_postprocess_settles_when_it_reaches_the_cancellation_checkpoint(self):
+        run_id = self.queued_run()
+        run = self.contract.task_runs.claim_followup([post.TASK_KEY])
+        self.assertEqual(run.id, run_id)
+
+        def cancel_while_collecting(*_args):
+            task_control.request(self.contract.task_runs, run.id, "cancel")
+            self.assertEqual(self.store.get(self.task.id).postprocess_state, POSTPROCESS_RUNNING)
+            task_control.checkpoint()
+
+        with patch.object(post, "_collect", side_effect=cancel_while_collecting):
+            self.contract.followups._execute_one(run)
+        self.assertEqual(self.contract.task_runs.get(run_id).status, "cancelled")
+        task = self.store.get(self.task.id)
+        self.assertEqual((task.state, task.postprocess_state), (INGESTED, POSTPROCESS_CANCELLED))
+        self.assertIsNone(task.next_check_at)
+        self.assertTrue(self.source.is_file())
+
+    def test_late_cancellation_preserves_already_completed_postprocess(self):
+        run_id = self.queued_run()
+        run = self.contract.task_runs.claim_followup([post.TASK_KEY])
+
+        def cancel_after_finish(*_args):
+            task_control.request(self.contract.task_runs, run.id, "cancel")
+
+        with patch.object(post, "_discard_collect_state", side_effect=cancel_after_finish):
+            self.contract.followups._execute_one(run)
+        self.assertEqual(self.contract.task_runs.get(run_id).status, "cancelled")
+        task = self.store.get(self.task.id)
+        self.assertEqual(task.postprocess_state, POSTPROCESS_COMPLETE)
+        self.assertFalse(task.payload()["postprocess_retryable"])
+        self.assertTrue(self.target.is_file())
 
     def test_temporary_failure_is_scheduled_and_only_three_retries_are_allowed(self):
         from peach.downloads import parse_iso
@@ -143,6 +192,43 @@ class DownloadPostprocessTests(unittest.TestCase):
         self.assertEqual(backup.parent, folder)
         self.assertEqual(ledger_backups.list_backups(folder, ledger_backups.ORGANIZE_PATTERN),
                          [*old[3:], backup])
+
+    def test_stuck_cloud_rename_leaves_other_ledger_writes_running(self):
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        # 挂载上的存在判断与改名一起在 `_relocate` 里交给读取子进程，卡在这一步等同网盘改名卡住。
+        original = post.organize._relocate
+
+        def stuck(source, target, worker):
+            entered.set()
+            release.wait(10)
+            return original(source, target, worker)
+
+        outcome = {}
+
+        def organize():
+            try:
+                outcome['result'] = post._organize(self.contract, self.task, self.asset_id)
+            except BaseException as error:
+                outcome['error'] = error
+
+        with patch.object(post.organize, '_relocate', side_effect=stuck):
+            worker = threading.Thread(target=organize)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(10))
+                with self.database.write_transaction(timeout=1) as connection:
+                    connection.execute("UPDATE download_task SET postprocess_detail='other write' WHERE id=?",
+                                       (self.task.id,))
+            finally:
+                release.set()
+                worker.join(10)
+        self.assertNotIn('error', outcome)
+        self.assertEqual(outcome['result']['moved'], 1)
+        self.assertTrue(self.target.exists())
+        with self.database.read_connection() as connection:
+            self.assertEqual(connection.execute('SELECT path FROM asset WHERE id=?', (self.asset_id,)).fetchone()[0],
+                             str(self.target))
 
     def test_retry_uses_the_bound_asset_after_a_move(self):
         post._organize(self.contract, self.task, self.asset_id)
@@ -244,6 +330,24 @@ class DownloadPostprocessTests(unittest.TestCase):
                 patch.object(post, 'process_library', return_value={**held, 'issue_count': 2}):
             with self.assertRaisesRegex(RuntimeError, '来源限流'):
                 self.collect_source(self.contract, self.asset_id, self.handle)
+
+    def test_a_finished_postprocess_drops_its_resume_state_and_a_failed_one_keeps_it(self):
+        config = SimpleNamespace(configured=True, directory=lambda name: self.root)
+        state = post.collect_state_file(config, self.asset_id)
+        state.parent.mkdir(parents=True)
+        for path in (state, state.with_suffix('.issues.jsonl')):
+            path.write_text('{}', encoding='utf-8')
+        (state.parent / f'{self.asset_id}-items').mkdir()
+        with patch.object(post.settings_file, 'active', return_value=config), \
+                patch.object(post, '_collect', side_effect=RuntimeError('simulated stage failure')), \
+                self.assertRaises(RuntimeError):
+            self.run_task()
+        self.assertTrue(state.exists())
+        with patch.object(post.settings_file, 'active', return_value=config), \
+                patch.object(post, '_collect', return_value={}), \
+                patch.object(post, '_organize', return_value={'moved': 0, 'skipped': ''}):
+            self.run_task()
+        self.assertEqual(list(state.parent.iterdir()), [])
 
     def test_metadata_or_organization_failure_never_dispatches_followups(self):
         self.handle.run_id = 123

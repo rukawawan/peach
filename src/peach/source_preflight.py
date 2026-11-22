@@ -17,7 +17,7 @@ OUTCOMES = {
     "rate_limited": "http", "server_error": "http", "not_found": "http", "http_error": "http",
     "cooldown": "cooldown",
     "proxy": "network", "timeout": "network", "network": "network",
-    "needs_code": "skipped",
+    "needs_code": "skipped", "no_image_host": "skipped", "not_configured": "skipped",
 }
 #: 口径的说法，`outcome_label` 是 zh-CN 原文，`outcome_label_code` 给界面取译文。
 OUTCOME_LABEL_CODES = {
@@ -68,6 +68,6 @@ def check_sources(secrets_root: Path, sources: list[str] | None = None, *,
         # 任务中心取消时 `on_result` 抛出：只等已在检查的来源，排队的不再开始。
         pool.shutdown(wait=True, cancel_futures=True)
     results = [finished[source] for source in selected]
-    return {"ok": all(target["ok"] or target.get("reason") == "needs_code"
+    return {"ok": all(target["ok"] or target.get("reason") in {"needs_code", "not_configured"}
                       for source in results for target in source["results"]),
             "sources": results, "elapsed_s": round(time.monotonic() - started, 2)}

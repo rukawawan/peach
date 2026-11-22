@@ -90,6 +90,9 @@ describe('视频预览设置', () => {
       const { page } = opened;
       try {
         const section = page.getByRole('region', { name: '视频播放', exact: true });
+        const toc = page.getByRole('navigation', { name: '本页目录', exact: true });
+        await toc.getByRole('link', { name: '运行与存储', exact: true }).click();
+        assert.equal(new URL(page.url()).hash, '#maintenance-runtime');
         const trigger = section.locator('#playbackAccelerationSetting button');
         await trigger.waitFor({ state: 'visible' });
         await page.waitForFunction(() => document.querySelector('#playbackAccelerationSetting button')?.hasAttribute('disabled') === false);
@@ -106,10 +109,10 @@ describe('视频预览设置', () => {
         assert.equal(state.previewAcceleration, 'auto');
         assert.deepEqual(writes, [{ playback_acceleration: 'software' }]);
         // 「视频播放」排在「开机自启」之后、「存储空间」之前（没有这两张卡的环境只比相对次序）。
-        const order = await page.locator('.ui-board-group-active').evaluate((group) =>
+        const order = await page.getByRole('region', { name: '运行与存储', exact: true }).evaluate((group) =>
           [...group.querySelectorAll('section[aria-label], form[aria-label]')].map((node) => node.getAttribute('aria-label')));
         const at = order.indexOf('视频播放');
-        assert.ok(at >= 0 && order.slice(0, at).every((name) => ['检查更新', '自动修复', '自动更新', '开机自启'].includes(name ?? '')), JSON.stringify(order));
+        assert.ok(at >= 0 && order.slice(0, at).every((name) => name === '开机自启'), JSON.stringify(order));
         await page.reload();
         await trigger.waitFor({ state: 'visible' });
         await page.waitForFunction(() => /软件编解码/.test(document.querySelector('#playbackAccelerationSetting button')?.textContent || ''));

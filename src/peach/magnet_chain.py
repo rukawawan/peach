@@ -17,16 +17,19 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from .catalog_rules import normalise_code_key, release_code_from_text, same_release_code
+from .catalog_rules import UNCENSORED_EDITIONS, jav_edition_badges, normalise_code_key, release_code_from_text, same_release_code
+from .catalog_vocabulary import CENSORED, CHINESE_SUBTITLES
 from .coded_text import Said, coded, parallel
 from .content_words import PROMO_NAME, TRAILER_NAME
 from .downloads import parse_magnet
 from .jav_cover_fetch import HostLimitedTransport
+from .scripting import HostLimiter
 from .metadata import relay_args
 from .javdb_public import (_CACHE_ROOT, PUBLIC_API, PublicIdentityAmbiguous, PublicNotFound, PublicRequestBudget,
                            PublicSourceUnavailable, public_cache_scope)
 from .resource_search import qualities
-from .scraping_access import SourcePaused, SourceTransport, paused_until
+from .source_page_words import JAVBUS_SUBTITLES
+from .scraping_access import SourceTransport, paused_until
 from .sources import FailureReason, Session, SourceFailure
 from .sources.base import PERMANENT_REASONS
 from .task_retry import transient_delay
@@ -147,16 +150,44 @@ def _normalise(item: dict, source: Source, code: str) -> dict | None:
     }
 
 
-def rank_candidates(items: list[dict], goal: str = "quality") -> list[dict]:
+def _candidate_editions(item: dict, code: str) -> list[str]:
+    attributes = item.get("attributes") or []
+    uri = str(item.get("uri") or "")
+    names = urllib.parse.parse_qs(urllib.parse.urlsplit(uri).query).get("dn", []) if uri.startswith("magnet:") else []
+    names.extend(str(name) for name in item.get("file_list") or ())
+    editions = jav_edition_badges(item.get("name"), code, attributes, names)
+    if CHINESE_SUBTITLES not in editions and (item.get("chinese") or CHINESE_SUBTITLES in attributes):
+        editions.append(CHINESE_SUBTITLES)
+    return list(dict.fromkeys([*item.get("edition_badges", ()), *editions]))
+
+
+def edition_rank(item: dict, code: str, preferences: tuple[str, ...]) -> int:
+    """在配置中第一条命中的版次。无匹配时排在已配置的版次之后。"""
+    editions = item.get("edition_badges")
+    if editions is None:
+        editions = _candidate_editions(item, code)
+    elif item.get("chinese") or CHINESE_SUBTITLES in (item.get("attributes") or ()):
+        editions = [*editions, CHINESE_SUBTITLES]
+    if not any(edition in editions for edition in UNCENSORED_EDITIONS):
+        editions = [*editions, CENSORED]
+    return next((index for index, edition in enumerate(preferences) if edition in editions), len(preferences))
+
+
+def rank_candidates(items: list[dict], goal: str = "quality", *, code: str = "",
+                    edition_preferences: tuple[str, ...] = ()) -> list[dict]:
     """先画质、再做种、最后正片体积；附属文件只轻微降序，不作硬门槛。"""
     unique: dict[str, dict] = {}
     for item in items:
+        if edition_preferences:
+            item = {**item, "edition_badges": _candidate_editions(item, code)}
         prior = unique.get(item["info_hash"])
         if prior is None:
             unique[item["info_hash"]] = item
             continue
         prior["origins"] = list(dict.fromkeys(prior["origins"] + item["origins"]))
         prior["seeders"] = max(prior["seeders"], item["seeders"])
+        if edition_preferences:
+            prior["edition_badges"] = list(dict.fromkeys(prior["edition_badges"] + item["edition_badges"]))
         if not prior["file_list"] and item["file_list"]:
             prior["file_list"] = item["file_list"]
             prior["file_count"] = item["file_count"]
@@ -164,20 +195,28 @@ def rank_candidates(items: list[dict], goal: str = "quality") -> list[dict]:
     def rank(row):
         trailer = bool(re.search(TRAILER_NAME, row["name"]))
         preferred = bool(row.get(goal)) if goal in {"chinese", "uncensored"} else False
-        return (trailer, -int(preferred), -row["resolution"], -row["seeders"], row["promo_files"],
+        priority = edition_rank(row, code, edition_preferences) if edition_preferences else 0
+        return (trailer, priority, -int(preferred),
+                -row["resolution"], -row["seeders"], row["promo_files"],
                 -row["size"], row["info_hash"])
     return sorted(unique.values(), key=rank)[:MAX_RESULTS]
+
+
+#: 磁链来源的主机间隔，整个进程共用：浏览器添加、想要定时查找与查找资源弹层一个接一个地查番号时，
+#: 同一主机的请求不因为每次新建 `Fetcher` 而各算各的间隔、叠在一起撞限流。
+MAGNET_LIMITER = HostLimiter({}, default_interval=3.0)
 
 
 class Fetcher:
     def __init__(self, root: Path, *, transport=None, deadline: float | None = None):
         self.root = Path(root)
         self.resource_result = {}
+        self.source_pages = []
         self.deadline = deadline or time.monotonic() + 45
         self._owned = transport is None
         self.transport = transport or HostLimitedTransport(
             SourceTransport(self.root, max_requests=18, max_bytes=24 * 1024 * 1024,
-                            max_seconds=45), 3)
+                            max_seconds=45), 3, limiter=MAGNET_LIMITER)
         self.session = Session(self.transport, self.deadline)
 
     def close(self):
@@ -242,9 +281,51 @@ class Fetcher:
             raise SourceFailure(reason, *relay_args(error)) from error
         stale = [Said("labels.magnetChain.staleReused", error=read['error']) for read in reads if read['error']]
         result["warnings"] = list(dict.fromkeys([*result["warnings"], *stale]))
+        result['cache_stale'] = bool(stale)
         self.resource_result = result
+        if result.get('source_url'):
+            self.source_pages.append({'source': source.key, 'label': source.label, 'url': result['source_url']})
         return rank_candidates([candidate for item in result["items"] if (candidate := _normalise(
             {**item, "file_count": int(item["files"]) if item["files"].isdigit() else 0}, source, code))])
+
+    def javbus(self, code: str) -> list[dict]:
+        """JavBus 作品页带 `gid`／`img`／`uc`，磁链表由站内接口按它们返回（2026-11-16 实测 SSIS-001 有 43 条）。
+
+        作品页与资料刮削同一页、同一份年龄门 Cookie；页面番号与问的对不上（JavBus 会给近似命中）就当站上没有。
+        表格每行三列：名称（带「高清」「字幕」标签）、大小、日期。
+        """
+        from .sources.javbus import JAVBUS, JavBusSource
+        source = Source("javbus", "JavBus")
+        site = JavBusSource(JAVBUS)
+        page = site.fetch(code, session=self.session)
+        site.parse(page, code)
+        self.source_pages.append({'source': source.key, 'label': source.label, 'url': page.url})
+        values = {key: (re.search(rf"var\s+{key}\s*=\s*['\"]?([^'\";\s]+)", page.text) or [None, ""])[1]
+                  for key in ("gid", "uc", "img")}
+        if not values["gid"].isdigit():
+            return []
+        query = urllib.parse.urlencode({"gid": values["gid"], "lang": "zh", "img": values["img"],
+                                        "uc": values["uc"] or "0", "floor": int(time.time() * 1000) % 1000})
+        table = self.session.get(f"{JAVBUS.base_url}/ajax/uncledatoolsbyajax.php?{query}", config=JAVBUS,
+                                 referer=page.url, headers={"X-Requested-With": "XMLHttpRequest"})
+        found = []
+        for row in BeautifulSoup(table.text, "html.parser").select("tr"):
+            link = row.select_one('a[href^="magnet:"]')
+            cells = row.select("td")
+            if link is None or len(cells) < 2:
+                continue
+            labels = [tag.get_text(strip=True) for tag in cells[0].select("a.btn")]
+            name = cells[0].get_text(" ", strip=True)
+            for label in labels:
+                name = name.replace(label, " ")
+            item = {"uri": html.unescape(str(link.get("href") or "")), "name": " ".join(name.split()),
+                    "size": cells[1].get_text(" ", strip=True), "attributes": labels,
+                    "chinese": JAVBUS_SUBTITLES in labels,
+                    "date": cells[2].get_text(" ", strip=True) if len(cells) > 2 else "", "source_url": page.url}
+            candidate = _normalise(item, source, code)
+            if candidate:
+                found.append(candidate)
+        return rank_candidates(found)
 
     def sukebei(self, code: str) -> list[dict]:
         from .sources.base import SiteConfig
@@ -254,6 +335,7 @@ class Fetcher:
                             page_limit=4 * 1024 * 1024)
         url = f"https://sukebei.nyaa.si/?f=0&c=0_0&q={urllib.parse.quote(code)}"
         page = self.session.get(url, config=config)
+        self.source_pages.append({'source': source.key, 'label': source.label, 'url': page.url})
         found = []
         for row in BeautifulSoup(page.text, "html.parser").select("table tbody tr"):
             text = row.get_text(" ", strip=True)
@@ -286,23 +368,60 @@ class Fetcher:
         return rank_candidates(found)
 
 
+def _search_status(root, linked, *, warnings, warning_sources, unfetched, retry_delays, available):
+    """合并完整性、部分失败与来源冷却，保留已取得资源的可用状态。"""
+    failed = bool(warnings) or bool(linked.get('magnet_failed') or linked.get('comments_failed') or linked.get('cache_stale'))
+    if linked.get('magnet_failed') or linked.get('comments_failed') or linked.get('cache_stale'):
+        unfetched.append(CHAIN[1].label)
+    for source in CHAIN[:4]:
+        if source.label in unfetched and (until := paused_until(Path(root), source.key)):
+            retry_delays.append(max(0.0, until - time.time()))
+    warnings.extend(linked.get('warnings') or [])
+    warning_sources.extend(['javdb'] * len(linked.get('warnings') or []))
+    incomplete = failed and not available
+    return {"warnings": warnings, 'warning_sources': warning_sources, 'complete': not failed,
+            'retry_after': max(retry_delays) if retry_delays else None, "unfetched_sources": unfetched,
+            'state': 'error' if incomplete else 'ready',
+            **coded('error', Said('labels.magnetChain.incomplete') if incomplete else '')}
+
+
+def _source_pages(fetcher, found):
+    """每个已取得的来源页面只展示一次，补入候选自带的页面证据。"""
+    pages = {page['url']: page for page in getattr(fetcher, 'source_pages', [])}
+    for item in found:
+        if item.get('source_url'):
+            key = next((source.key for source in CHAIN if source.label == item['source']), item['source'])
+            pages.setdefault(item['source_url'], {'source': key, 'label': item['source'], 'url': item['source_url']})
+    return list(pages.values())
+
+
 def search(root: Path, code: str, *, transport=None, min_size: int = 0,
-           max_size: int = 1024 ** 4, goal: str = "quality", stop_on_preferred: bool = True) -> dict:
-    """有界查询三个可直连来源；直接添加允许在 manko 高清命中时结束。
+           max_size: int = 1024 ** 4, goal: str = "quality", stop_on_preferred: bool = True,
+           skip_javdb_after_preferred: bool = False, edition_preferences: tuple[str, ...] = ()) -> dict:
+    """有界查询四个可直连来源（manko.fun、JavDB、sukebei、JavBus），结果按 infohash 去重合并。
+
+    直接添加允许在 manko 高清命中时结束；`skip_javdb_after_preferred`（想要定时查找）在 manko 已有高清时
+    只跳过 JavDB，其余来源照查，少花 JavDB 的请求。
 
     `unfetched_sources` 列出这一轮没给出答复的来源：站上没有这个番号、身份对不上属于答复，不算在内。
     来源在冷却时，`retry_after` 至少等到冷却结束。"""
     fetcher = Fetcher(root, transport=transport)
-    trace, warnings, found, retry_delays, unfetched = [], [], [], [], []
+    trace, warnings, warning_sources, found, retry_delays, unfetched = [], [], [], [], [], []
     try:
         for source, collect in ((CHAIN[0], fetcher.manko), (CHAIN[1], fetcher.javdb),
-                                (CHAIN[2], fetcher.sukebei)):
+                                (CHAIN[2], fetcher.sukebei), (CHAIN[3], fetcher.javbus)):
+            if (skip_javdb_after_preferred and not edition_preferences and source.key == "javdb"
+                    and any(item["resolution"] >= HIGH_QUALITY for item in found)):
+                trace.append(f"{source.label}: skipped, manko.fun already had 1080p/2160p")
+                continue
             try:
                 items = collect(code)
             except SourceFailure as error:
                 items = []
-                warnings.append(Said("labels.magnetChain.sourceFailed", source=source.label,
-                                     error=nested_message(error)))
+                if error.reason != FailureReason.NOT_FOUND:
+                    warnings.append(Said("labels.magnetChain.sourceFailed", source=source.label,
+                                         error=nested_message(error)))
+                    warning_sources.append(source.key)
                 if error.reason != FailureReason.NOT_FOUND and error.reason not in PERMANENT_REASONS:
                     unfetched.append(source.label)
                 if (delay := transient_delay(error)) is not None:
@@ -310,29 +429,29 @@ def search(root: Path, code: str, *, transport=None, min_size: int = 0,
             except Exception as error:
                 items = []
                 warnings.append(Said("labels.magnetChain.sourceUnfetched", source=source.label))
+                warning_sources.append(source.key)
                 unfetched.append(source.label)
                 if (delay := transient_delay(error)) is not None:
                     retry_delays.append(delay)
-                elif isinstance(error, SourcePaused) and (until := paused_until(Path(root), source.key)):
-                    retry_delays.append(max(0.0, until - time.time()))
             items = [item for item in items if min_size <= item["size"] <= max_size]
             found.extend(items)
-            if stop_on_preferred and source.key == "manko" and any(item["resolution"] >= HIGH_QUALITY for item in items):
+            if (stop_on_preferred and not edition_preferences and source.key == "manko"
+                    and any(item["resolution"] >= HIGH_QUALITY for item in items)):
                 trace.append(f"{source.label}: 1080p/2160p found, stopped early")
                 break
             trace.append(f"{source.label}: {len(items)} found" if items else f"{source.label}: no results")
     finally:
         fetcher.close()
-    incomplete = bool(warnings) and not found
-    result = {"items": rank_candidates(found, goal), "warnings": warnings, "trace": trace,
-            'retry_after': max(retry_delays) if retry_delays else None, "unfetched_sources": unfetched,
-            'state': 'error' if incomplete else 'ready',
-            **coded('error', Said('labels.magnetChain.incomplete') if incomplete else ''),
-            "next_sources": [source.label for source in CHAIN[3:]],
+    linked = getattr(fetcher, 'resource_result', {})
+    status = _search_status(root, linked, warnings=warnings, warning_sources=warning_sources,
+                            unfetched=unfetched, retry_delays=retry_delays,
+                            available=found or (not stop_on_preferred and linked.get('items')))
+    result = {"items": rank_candidates(found, goal, code=code, edition_preferences=edition_preferences),
+              "trace": trace, **status,
+              'source_pages': _source_pages(fetcher, found),
+            "next_sources": [source.label for source in CHAIN[4:]],
             "reference_only": list(REFERENCE_ONLY)}
     if not stop_on_preferred:
-        linked = getattr(fetcher, 'resource_result', {})
         result.update(linked_resources=linked.get('items', []), source_url=linked.get('source_url', ''))
-        result['warnings'].extend(linked.get('warnings') or [])
     result.update(parallel('warning', result['warnings']))
     return result

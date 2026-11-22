@@ -360,7 +360,7 @@ class TasksEndpointTests(unittest.TestCase):
         self.assertNotEqual(web_tasks.q_tasks(self.contract, {})['result_versions']['review'], committed['review'])
 
     def test_the_page_wide_poll_carries_versions_and_notices_without_the_task_list(self):
-        """每个页面常驻的那份轮询只带结果版本、入库通知、忙不忙与在跑任务，和任务中心那份版本一致。"""
+        """全站轮询另外带扫描任务结果版本，账本结果版本和任务中心一致。"""
         from pathlib import Path
         self.contract.candidate_root = Path(self.tmp.name) / 'candidates'
         self.contract.candidate_root.mkdir()
@@ -368,7 +368,8 @@ class TasksEndpointTests(unittest.TestCase):
         self.assertEqual(set(idle), {'ok', 'result_versions', 'ingest_notices', 'busy', 'running_tasks'})
         self.assertFalse(idle['busy'])
         self.assertEqual(idle['running_tasks'], [])
-        self.assertEqual(idle['result_versions'], web_tasks.q_tasks(self.contract, {})['result_versions'])
+        self.assertEqual(idle['result_versions'],
+                         {**web_tasks.q_tasks(self.contract, {})['result_versions'], 'library_processing': '0'})
         run = self.store.start('library-processing', trigger='manual')
         busy = web_tasks.q_result_updates(self.contract, {})
         self.assertTrue(busy['busy'])
@@ -378,6 +379,17 @@ class TasksEndpointTests(unittest.TestCase):
         settled = web_tasks.q_result_updates(self.contract, {})
         self.assertFalse(settled['busy'])
         self.assertEqual(settled['running_tasks'], [])
+        self.assertEqual(settled['result_versions']['library_processing'], str(run.id))
+
+    def test_a_library_run_that_settles_between_polls_changes_the_result_version(self):
+        before = web_tasks.q_result_updates(self.contract, {})
+        run = self.store.start('library-processing', trigger='cli')
+        self.store.finish(run.id, 'succeeded')
+        after = web_tasks.q_result_updates(self.contract, {})
+        self.assertEqual((before['running_tasks'], after['running_tasks']), ([], []))
+        self.assertNotEqual(before['result_versions']['library_processing'],
+                            after['result_versions']['library_processing'])
+        self.assertEqual(after['result_versions']['library_processing'], str(run.id))
 
     def test_running_tasks_list_each_kind_once_and_prefer_the_running_round(self):
         """在排在跑的任务按种类各报一项：在跑的那轮压过排队的，多条后继也只占一项。"""

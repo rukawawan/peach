@@ -244,6 +244,137 @@ describe('侧栏岛', () => {
     }
   });
 
+  it('桌面侧栏越过最窄宽度后折叠，折叠后向右拖可重新展开', { timeout: 60_000 }, async () => {
+    const opened = await openHome(browser);
+    const { page } = opened;
+    try {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const handle = page.locator('[data-sidebar-resize]');
+      const toggle = page.locator('#filterBtn');
+      const widths = await page.locator('#drawer').evaluateHandle(drawer => {
+        const samples: number[] = [];
+        drawer.addEventListener('transitionrun', event => {
+          if (event instanceof TransitionEvent && event.target === drawer && event.propertyName === 'width') {
+            samples.push(drawer.getBoundingClientRect().width);
+          }
+        });
+        return samples;
+      });
+      const beginDrag = async () => {
+        await handle.waitFor();
+        const box = await handle.boundingBox();
+        assert.ok(box);
+        const x = box.x + box.width / 2, y = box.y + box.height / 2;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        return { x, y };
+      };
+      const open = await beginDrag();
+      await page.mouse.move(open.x - 40, open.y);
+      assert.equal(await handle.getAttribute('aria-valuenow'), '220');
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      await page.mouse.move(open.x - 64, open.y);
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await page.waitForFunction(samples => samples.some(width => width > 60), widths);
+      await page.mouse.move(open.x - 40, open.y);
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      await page.mouse.move(open.x - 64, open.y);
+      await page.mouse.up();
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForFunction(() => document.querySelector('#drawer')?.getBoundingClientRect().width === 60);
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+
+      const closed = await beginDrag();
+      await page.mouse.move(closed.x + 24, closed.y);
+      assert.equal(await page.locator('#drawer').evaluate(node => node.getBoundingClientRect().width), 84);
+      const pulled = await handle.boundingBox();
+      assert.ok(pulled);
+      assert.equal(pulled.x + pulled.width / 2, closed.x + 24);
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('#drawer')?.getBoundingClientRect().width === 60);
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+
+      const retry = await beginDrag();
+      await page.mouse.move(retry.x + 41, retry.y);
+      await page.mouse.up();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      await page.waitForFunction(() => document.querySelector('#drawer')?.getBoundingClientRect().width === 220);
+      assert.equal(await page.evaluate(() => localStorage.getItem('peach.sidebar.width')), '220');
+
+      await toggle.click();
+      await page.waitForFunction(() => document.querySelector('#drawer')?.getBoundingClientRect().width === 60);
+      const longPull = await beginDrag();
+      await page.mouse.move(longPull.x + 120, longPull.y);
+      assert.equal(await page.locator('#drawer').evaluate(node => node.getBoundingClientRect().width), 180);
+      await page.mouse.move(longPull.x + 180, longPull.y);
+      assert.equal(await page.locator('#drawer').evaluate(node => node.getBoundingClientRect().width), 240);
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      await page.mouse.up();
+      assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('侧栏宽度拖动吸附后保存，取消拖动保持展开，双击重置并支持键盘边界', { timeout: 60_000 }, async () => {
+    const opened = await openHome(browser);
+    const { page } = opened;
+    try {
+      const handle = page.locator('[data-sidebar-resize]');
+      await handle.waitFor();
+      const box = await handle.boundingBox();
+      assert.ok(box);
+      assert.equal(box.y, 0);
+      assert.equal(box.height, page.viewportSize()!.height);
+      const x = box.x + box.width / 2, y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 64, y);
+      assert.equal(await page.locator('#drawer').evaluate(node => node.getBoundingClientRect().width), 320);
+      assert.equal(await page.locator('#drawer').evaluate(node => (node as HTMLElement).style.getPropertyValue('--glass-optic')), 'blur(14px)',
+        '拖宽时须使用覆盖整个侧栏的模糊面');
+      await page.mouse.move(x + 83, y);
+      assert.equal(await page.locator('#drawer').evaluate(node => node.getBoundingClientRect().width), 343);
+      await page.mouse.move(x + 71, y);
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 320);
+      await page.waitForFunction(() => {
+        const drawer = document.querySelector<HTMLElement>('#drawer')!;
+        const id = /#(peach-optic-\d+)/.exec(drawer.style.getPropertyValue('--glass-optic'))?.[1];
+        return !!id && Number(document.getElementById(id)?.getAttribute('width')) === drawer.clientWidth;
+      });
+      await page.reload({ waitUntil: 'load' });
+      await handle.waitFor();
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 320);
+      await handle.focus();
+      await page.keyboard.press('ArrowRight');
+      assert.equal(await page.evaluate(() => localStorage.getItem('peach.sidebar.width')), '321');
+      const next = await handle.boundingBox();
+      assert.ok(next);
+      await page.mouse.move(next.x + next.width / 2, y);
+      await page.mouse.down();
+      await page.mouse.move(next.x + next.width / 2 + 50, y);
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 321);
+      assert.equal(await page.evaluate(() => localStorage.getItem('peach.sidebar.width')), '321');
+      assert.ok(await page.locator('#drawer').evaluate(node => node.classList.contains('open')));
+      await handle.dblclick();
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 260);
+      await handle.focus();
+      await page.keyboard.press('Home');
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 220);
+      await page.keyboard.press('End');
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 480);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('#drawer')!.getBoundingClientRect().width === 260);
+      assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
   it('关注页侧栏有来源、时长、内容标签三组；来源与时长进地址、按它向服务端取数，抽屉不收；刷新照地址按下', { timeout: 60_000 }, async () => {
     const opened = await openFollowFeed(browser, '/follow', DESKTOP);
     const { page } = opened;
@@ -271,15 +402,29 @@ describe('侧栏岛', () => {
       await openGroup(page, '时长');
       await page.locator('#durMin').focus();
       await page.keyboard.press('ArrowRight');
-      await page.waitForFunction(() => new URL(location.href).searchParams.get('dur_min') === '300', undefined, { timeout: 5_000 });
+      await page.waitForFunction(() => new URL(location.href).searchParams.get('dur_min') === '60', undefined, { timeout: 5_000 });
       await page.waitForFunction(() => document.querySelector('#drawer')?.classList.contains('open'), undefined, { timeout: 5_000 });
-      assert.ok(lists.some((params) => params.get('dur_min') === '300' && params.get('provider') === 'rule34xxx'),
+      assert.ok(lists.some((params) => params.get('dur_min') === '60' && params.get('provider') === 'rule34xxx'),
         '拉时长之后没有带着两条筛选向服务端取数');
       assert.ok(!new URL(page.url()).searchParams.has('dur_max'), '右端没动却写进了上限');
 
       await page.reload({ waitUntil: 'load' });
       await page.locator('#drawer [data-sidebar-chip][data-val="rule34xxx"][aria-pressed="true"]').waitFor({ state: 'attached', timeout: 10_000 });
-      assert.equal(await page.locator('#durMin').inputValue(), '5', '刷新之后时长左端没有照地址回到 5 分钟');
+      assert.equal(await page.locator('#durMin').inputValue(), '1', '刷新之后时长左端没有照地址回到 1 分钟');
+      await openGroup(page, '时长');
+      await page.locator('#durMinNumber').fill('12.5');
+      await page.locator('#durMinNumber').press('Enter');
+      await page.locator('#durMaxNumber').fill('180');
+      await page.locator('#durMaxNumber').press('Enter');
+      await page.waitForFunction(() => {
+        const params = new URL(location.href).searchParams;
+        return params.get('dur_min') === '750' && params.get('dur_max') === '10800';
+      }, undefined, { timeout: 5_000 });
+      assert.ok(lists.some(params => params.get('dur_min') === '750' && params.get('dur_max') === '10800'),
+        '精确数字时长没有按秒传给关注接口');
+      await page.locator('#durMaxNumber').fill('');
+      await page.locator('#durMaxNumber').press('Enter');
+      await page.waitForFunction(() => !new URL(location.href).searchParams.has('dur_max'), undefined, { timeout: 5_000 });
       assert.deepEqual(withoutPlayer(opened.problems), []);
     } finally {
       await opened.close();

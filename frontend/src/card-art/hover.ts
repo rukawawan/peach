@@ -4,12 +4,14 @@
  * 卡片有两种：壳拼的 `.card`，和 React 网格里的 `[data-media-card]`／`[data-mix-card]`。
  * 悬停态写在卡上的 `data-previewing`／`data-longhover`：卡的类名归 React 管，壳不往上加。
  *
- * 要不要起预览，判据在壳里（多选、遮挡、悬停延时设置），由 `configureHoverPreview` 以取值函数
+ * 要不要起预览，判据在壳里（预览开关、多选、遮挡、悬停延时设置），由 `configureHoverPreview` 以取值函数
  * 交进来：延时在计时器里还要再读一次，设置中途改了，下一拍读到的就是新值，所以不能抄一份
  * 快照。没配置时按「不拦、不延时」处理。 */
 
-/** 起预览前要问壳的三件事。都是取值函数，每次用时现读。 */
+/** 起预览前要问壳的几件事。都是取值函数，每次用时现读。 */
 export interface HoverPreviewConfig {
+  /** 设置「卡片悬停时播放视频预览」（#170）：关掉后悬停只显示静态图，不发 `/stream`，也不扫接触印相。 */
+  enabled?(): boolean;
   /** 多选模式开着：这时不起预览。 */
   selecting(): boolean;
   /** 遮挡开着：这时不起预览，已经排上的那一段到点也不放。 */
@@ -19,7 +21,7 @@ export interface HoverPreviewConfig {
 }
 
 /** 卡片上那几个要用到的字段。 */
-export interface HoverItem { id: number; location?: string; has_thumb?: boolean }
+export interface HoverItem { id: number; location?: string; cost?: string; has_thumb?: boolean }
 
 type HoverCard = HTMLElement & { _stopHover?: () => void; _hoverEvents?: AbortController };
 type HoverVideo = HTMLVideoElement & { _hop?: ReturnType<typeof setInterval> };
@@ -27,6 +29,7 @@ type HoverVideo = HTMLVideoElement & { _hop?: ReturnType<typeof setInterval> };
 const HOVER_CARDS = '.card,[data-media-card],[data-mix-card]';
 
 let config: HoverPreviewConfig = { selecting: () => false, censored: () => false, delaySeconds: () => 0 };
+const disabled = () => config.enabled?.() === false;
 
 export function configureHoverPreview(next: HoverPreviewConfig): void {
   config = next;
@@ -68,14 +71,15 @@ export function wireHover(el: HTMLElement, it: HoverItem): void {
   card._hoverEvents?.abort(); card._stopHover?.(); delete card._stopHover;
   const pic = el.querySelector('[data-media-pic]'); if (!pic) return;
   const events = new AbortController(); card._hoverEvents = events;
-  el.dataset.hoverMode = it.location === 'local' ? 'video' : 'frames';
+  const previewVideo = it.location === 'local' && it.cost !== 'metered';
+  el.dataset.hoverMode = previewVideo ? 'video' : 'frames';
   let longTimer: ReturnType<typeof setTimeout> | undefined;
   const armLong = () => {
     clearTimeout(longTimer); if (!config.delaySeconds()) return; setHoverState(el, 'previewing', true);
     longTimer = setTimeout(() => { if (config.delaySeconds()) setHoverState(el, 'longhover', true); }, config.delaySeconds() * 1000);
   };
   const clearLong = () => { clearTimeout(longTimer); setHoverState(el, 'previewing', false); setHoverState(el, 'longhover', false); };
-  if (it.location !== 'local') {        // 远端源：只在接触印相的格子间扫视，零网络流量
+  if (!previewVideo) {        // 远端或计费来源只使用已有的接触印相。
     /* 扫视图是叠在画面之上新建的一层，不改任何已有 `<img>` 的 src。JAV 大图和小图
        版式里画面就是封面本身（`.poster.cover`），改它的 src 等于把封面当场换掉；
        按类名把封面排掉又等于这两种版式整个没有悬停预览，连 `data-longhover` 都不进，
@@ -85,7 +89,7 @@ export function wireHover(el: HTMLElement, it: HoverItem): void {
     if (!it.has_thumb) return;        // 没有接触印相就没有可扫的格子
     let t: ReturnType<typeof setInterval> | undefined, i = 4, layer: HTMLImageElement | null = null, loading = false;
     el.addEventListener('mouseenter', () => {
-      if (config.selecting() || config.censored()) return;
+      if (disabled() || config.selecting() || config.censored()) return;
       if (!layer) {
         layer = document.createElement('img');
         layer.className = 'ui-hvframes'; layer.alt = '';
@@ -117,9 +121,9 @@ export function wireHover(el: HTMLElement, it: HoverItem): void {
   }
   let timer: ReturnType<typeof setTimeout> | undefined, v: HoverVideo | null = null;
   el.addEventListener('mouseenter', () => {
-    if (config.selecting() || config.censored() || scrolling()) return;   // 多选、遮挡或滚动中不启动预览
+    if (disabled() || config.selecting() || config.censored() || scrolling()) return;   // 关了预览、多选、遮挡或滚动中不启动
     timer = setTimeout(() => {
-      if (scrolling() || config.censored()) return;
+      if (disabled() || scrolling() || config.censored()) return;
       releaseHoverPreviews(document, el);   // 同一时间只保留一个本地视频预览
       const video = document.createElement('video') as HoverVideo;
       v = video;

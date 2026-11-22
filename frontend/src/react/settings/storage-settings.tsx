@@ -114,18 +114,21 @@ function CategoryRow(
   );
 }
 
-export function StorageSettings({ initial, receipt }: { initial: StorageState; receipt(message: string): void }) {
+export function StorageSettings({ initial, receipt, active = true }: { initial: StorageState; receipt(message: string): void; active?: boolean }) {
   const [storage, setStorage] = useState(initial);
   const [accepted, setAccepted] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const action = useAction();
   const running = storage.job.state !== 'idle';
   const reported = useRef(running);
+  const opened = useRef(false);
 
   useEffect(() => {
+    if (!active || opened.current) return;
+    opened.current = true;
     if (initial.usage || initial.job.state !== 'idle' || document.body.classList.contains('peach-guiding')) return;
     void action.run('measure', signal => apiSend<StorageState>(`${STORAGE_URL}/measure`, {}, 'POST', signal), setStorage);
-  }, []);
+  }, [active, initial, action.run]);
 
   /* 有一轮在跑时 1.5 秒读一次，读失败退避，页面不可见时暂停，跑满上限就停。 */
   useEffect(() => {
@@ -164,6 +167,7 @@ export function StorageSettings({ initial, receipt }: { initial: StorageState; r
       body: t('settings:storageSpace.cleanBody', { size: fmtSize(total), items: joinList(targets.map((category) =>
         t('settings:storageSpace.cleanItem', { label: category.label, size: fmtSize(category.reclaimable), effect: category.note }))) }),
       confirmLabel: t('settings:storageSpace.cleanSize', { size: fmtSize(total) }),
+      holdToConfirm: true,
       danger: targets.some((category) => category.key === 'backups'),
       onConfirm: async () => setStorage(await apiSend<StorageState>(`${STORAGE_URL}/clean`,
         { categories: targets.map((category) => category.key) })),

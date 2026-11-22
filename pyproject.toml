@@ -26,8 +26,9 @@ classifiers = [
   "Topic :: Multimedia :: Video",
 ]
 dependencies = [
+  "ebmlite==3.4.1",
   "itsdangerous==2.2.0",
-  "filelock==4.2.10",
+  "filelock==4.2.12",
   "tldextract==5.4.0",
   "APScheduler==3.11.3",
   "beautifulsoup4==4.15.0",
@@ -35,12 +36,14 @@ dependencies = [
   "browserexport==0.4.4",
   "pyahocorasick==2.3.1",
   "curl_cffi==0.17.0",
-  "fastapi==0.162.7",
+  "fastapi==0.165.0",
   # grpcio 与 protobuf 给云下载调 CloudDrive2 的 gRPC 接口（`downloads_clouddrive.py`）。
   # 消息代码由 grpcio-tools 1.84.0 生成后提交，它自带的 protoc 对应 protobuf 7.35.1，
   # 运行时 protobuf 必须同一大版本且不低于它。
-  "grpcio==1.85.1",
+  "grpcio==1.85.3",
   "httpx==0.28.1",
+  # 读网卡上的 IPv6 前缀与地址；zeroconf 本身也用它枚举网卡，版本与锁里的传递依赖一致。
+  "ifaddr==0.2.0",
   "m3u8==6.0.0",
   "pillow==13.0.0",
   "protobuf==7.36.2",
@@ -48,7 +51,7 @@ dependencies = [
   "pystray==0.19.5",
   # 配置页让手机扫码下载本机 CA（`routes_configuration.certificate_payload`）；只取模块矩阵，不走 Pillow 出图。
   "qrcode==8.2",
-  "pydantic==2.14.3",
+  "pydantic==2.14.4",
   "resvg-py==0.5.0",
   "sentry-sdk==2.75.0",
   "socksio==1.0.0",
@@ -75,9 +78,9 @@ peach-tray = "peach.error_reporting:tray_main"
 [project.optional-dependencies]
 # 开发工具复用运行依赖 psutil 查询工作树进程。
 dev = [
-    "filelock==4.2.10",
-    "httpx2==2.16.0",
-    "ruff==0.17.5",
+    "filelock==4.2.12",
+    "httpx2==2.16.2",
+    "ruff==0.17.6",
     "seiso==0.4.0",
 ]
 build = [
@@ -87,8 +90,11 @@ build = [
 macos = ["pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"]
 # numpy 本来就是 opencv 的传递依赖，这里显式钉住：`face_detect.decode` 直接 import 它
 # 把字节喂给 `cv2.imdecode`，被 import 的外部模块必须有声明的归属。
-vision = ["opencv-python-headless==5.0.0.93", "numpy==2.5.4"]
-maintenance-115 = ["p115client==0.0.9.7.2"]
+vision = [
+    "opencv-python-headless==5.1.0.95", "numpy==2.5.5",
+    "pyobjc-framework-Vision==12.2.2; sys_platform == 'darwin'",
+]
+maintenance-115 = ["p115client==0.0.9.7.8.3"]
 # 字形复核与英文媒体文件名分词工具。
 naming = [
     "opencc==1.4.2",

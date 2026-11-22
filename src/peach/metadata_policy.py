@@ -40,6 +40,8 @@ HISTORICAL_SOURCES = (
 
 SOURCE_SPECS = {
     name: SourceSpec(name, kind) for name, kind in {
+        # 维护者逐项复核的公共包；保留社区来源级别，不冒充发行方。
+        "public-seed": "community",
         # r18.dev 是 DMM 数字版目录的镜像，采集链有码与素人排在片商站之后的那一档
         # （`library_processing.LibraryMetadataProvider.query`）。
         "r18dev": "official_mirror",
@@ -48,6 +50,9 @@ SOURCE_SPECS = {
         "dmm": "official",
         # FC2 发行方自己的商品页（`peach.sources.fc2`）。
         "fc2": "official",
+        "vixen-network": "official",
+        "stashdb": "community",
+        "theporndb": "community",
         # 历史来源身份，见 `HISTORICAL_SOURCES`。
         "libredmm": "official_mirror",
         "tokyohot": "official",

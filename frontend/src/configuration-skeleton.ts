@@ -10,7 +10,7 @@ import { esc } from '@peach/legacy/core';
 import { islandButton, islandGlyph, islandSelect } from './island-skeleton';
 import { appSettingsStore } from './appearance/settings';
 import { NAVIGATION_GROUPS, normalizeNavigationOrder } from './navigation-order';
-import { diagnosticsSkeleton } from './diagnostics-skeleton';
+import { configurationContentsSkeleton, diagnosticsSkeleton } from './diagnostics-skeleton';
 import { LIBRARY_FOLDER_HELP, POLICY_SUMMARY } from './react/settings/library-policy-copy';
 import { ENTRY_LINKS_HELP, ENTRY_LINKS_HINT } from './configuration-copy';
 import { serverLabel } from './core/server-text';
@@ -36,7 +36,7 @@ export interface NetworkShape { port: boolean; addresses?: number; networkEditab
 export interface DevicesShape { rows: number; manageable: boolean }
 export interface MaintenanceShape {
   releaseFacts: number; releaseNotes: number; autoUpdateHelp: boolean; startupNote: boolean; desktopNote: boolean;
-  storageRows: number; storageNotes: number; reporting: boolean; reportingIdle: boolean; sharing: boolean;
+  storage: boolean; storageRows: number; storageNotes: number; reporting: boolean; reportingIdle: boolean; sharing: boolean;
   sharingNotice: boolean; sharingIdle: boolean; facts: string[]; uninstall: boolean; uninstallHelp: boolean;
 }
 export interface ConfigurationShape {
@@ -264,6 +264,10 @@ const subscriptions = () => `<div>${button(t('settings:sourceSettings.sourcesLin
   + section(t('settings:followFetch.title'), controlRow(t('settings:followFetch.autoCheck'), '', `<span class="flex items-center gap-2"><span class="skeleton ui-configuration-skeleton-toggle"></span><span class="skeleton ui-configuration-skeleton-input" style="width:96px"></span></span>`)
     + valueRow(t('settings:followFetch.feedSchedule')) + row(t('settings:followFetch.initialRange'), t('settings:followFetch.initialRangeHelp'), 'ui-configuration-skeleton-select')
     + valueRow(t('settings:followFetch.avatarRefresh'), t('settings:followFetch.avatarRefreshHelp')) + valueRow(t('settings:followFetch.faviconRefresh'), t('settings:followFetch.faviconRefreshHelp')))
+  + section(t('settings:scrapingBrowser.title'), row(t('settings:scrapingBrowser.mode'), t('settings:scrapingBrowser.modeHelp'), 'ui-configuration-skeleton-select'))
+  + section(t('settings:wantSearch.title'), row(t('settings:wantSearch.interval'), t('settings:wantSearch.intervalHelp'), 'ui-configuration-skeleton-select')
+    + row(t('settings:wantSearch.giveUp'), t('settings:wantSearch.giveUpHelp'), 'ui-configuration-skeleton-select'))
+  + section(t('settings:coverFallback.title'), row(t('settings:coverFallback.javdb'), t('settings:coverFallback.javdbHelp')))
   + indexersSkeleton()
   + section(t('settings:entryLinks.title'), stack(`<p class="text-body-2-regular text-text-secondary">${ENTRY_LINKS_HELP}</p>${inputField(marked(t('settings:entryLinks.siteAddress', { site: 'JavDB' })), ENTRY_LINKS_HINT)}${inputField(marked(t('settings:entryLinks.siteAddress', { site: 'MISSAV' })), ENTRY_LINKS_HINT)}`), button(t('settings:shared.saveSettings')));
 
@@ -358,23 +362,41 @@ const maintenance = () => {
   const idle = `<span class="self-start">${chip('6em')}</span>`;
   /* 数据上传与卸载两块服务端总会给；没有记录时也画上，只是不画随状态出现的提示。 */
   const given = (value: unknown) => shape ? on(value) : true;
+  const storage = shape?.storage !== false;
   const reporting = given(shape?.reporting) ? row(t('settings:dataSharing.reportErrors'), t('settings:dataSharing.reportErrorsHelp')) + (on(shape?.reportingIdle) ? stack(idle, true) : '') : '';
   const sharing = given(shape?.sharing) ? `<div class="border-t border-separator-border">${row(t('settings:librarySharing.uploadDetails'), on(shape?.sharingNotice) ? text('12em') : '')}${on(shape?.sharingIdle) ? stack(idle, true) : ''}${footer(button(t('settings:librarySharing.preview'), 'secondary'))}</div>` : '';
-  return section(t('settings:releaseUpdates.check'), facts(releaseFacts) + (releaseNotes ? stack(help(text('50%')).repeat(releaseNotes), true) : ''),
+  const updates = section(t('settings:releaseUpdates.check'), facts(releaseFacts) + (releaseNotes ? stack(help(text('50%')).repeat(releaseNotes), true) : ''),
     button(t('settings:releaseUpdates.check')), { aside: chip('4em'), status: text('5em') })
-    + section(t('settings:autoUpdate.title'), row(t('settings:autoUpdate.autoCheck')) + row(t('settings:autoUpdate.autoDownload'), t('settings:autoUpdate.autoDownloadHelp')) +row(t('settings:autoUpdate.frequency'), on(shape?.autoUpdateHelp) ? text('12em') : '', 'ui-configuration-skeleton-select'), button(t('settings:shared.saveSettings')))
-    + section(t('settings:startup.title'), row(t('settings:startup.launchAtStartup')) + row(t('settings:startup.trayOnly'), t('settings:startup.trayOnlyHelp')) +row(t('settings:startup.desktopShortcut'), on(shape?.desktopNote) ? text('12em') : '')
+    + section(t('settings:autoUpdate.title'), row(t('settings:autoUpdate.autoCheck')) + row(t('settings:autoUpdate.autoDownload'), t('settings:autoUpdate.autoDownloadHelp')) +row(t('settings:autoUpdate.frequency'), on(shape?.autoUpdateHelp) ? text('12em') : '', 'ui-configuration-skeleton-select'), button(t('settings:shared.saveSettings')));
+  const runtimeCards = section(t('settings:startup.title'), row(t('settings:startup.launchAtStartup')) + row(t('settings:startup.trayOnly'), t('settings:startup.trayOnlyHelp')) +row(t('settings:startup.desktopShortcut'), on(shape?.desktopNote) ? text('12em') : '')
       + (on(shape?.startupNote) ? stack(help(text('60%')), true) : ''), button(t('settings:shared.saveSettings')))
-    + section(t('settings:transcoding.title'), row(t('settings:transcoding.mode'), t('settings:transcoding.modeHelp'), 'ui-configuration-skeleton-select'))
-    + section(t('settings:diskUsage.title'), facts([t('settings:shared.dataDirectory'), t('settings:diskUsage.disk')])
+    + section(t('settings:transcoding.title'), row(t('settings:transcoding.mode'), t('settings:transcoding.modeHelp'), 'ui-configuration-skeleton-select')
+      + row(t('settings:transcoding.quality'), t('settings:transcoding.qualityHelp'), 'ui-configuration-skeleton-select'))
+    + (storage ? section(t('settings:diskUsage.title'), facts([t('settings:shared.dataDirectory'), t('settings:diskUsage.disk')])
       + (storageRows ? Array.from({ length: storageRows }, () => controlRow(text('6em'), '', text('4em'))).join('') : stack(help(t('settings:diskUsage.emptyHelp')), true))
       + (storageNotes ? stack(help(text('80%')).repeat(storageNotes), true) : ''),
-    button(t('settings:diskUsage.changeLocation'), 'secondary') + button(storageRows ? t('settings:diskUsage.measureAgain') : t('settings:diskUsage.measure')))
-    + (reporting || sharing ? section(t('settings:dataSharing.title'), reporting + sharing) : '')
+    button(t('settings:diskUsage.changeLocation'), 'secondary') + button(storageRows ? t('settings:diskUsage.measureAgain') : t('settings:diskUsage.measure'))) : '')
     + section(t('settings:runtimeInfo.title'), facts(runtime.length ? runtime : RUNTIME_FACTS))
-    + `<section aria-label="${t('settings:tour.guidedTour')}" class="w-full"><div class="flex w-full flex-col rounded-2xl bg-background-secondary-default pl-3">${controlRow(t('settings:tour.guidedTour'), t('settings:tour.reopenDescription'), button(t('settings:tour.reopen'), 'secondary'))}</div></section>`
-    + (given(shape?.uninstall) ? section(t('settings:uninstall.title'), (on(shape?.uninstallHelp) ? stack(help(t('settings:uninstall.help'))) : '')
-      + row(t('settings:uninstall.full'), t('settings:uninstall.fullHelp')) + stack(summary(t('settings:shared.dataDirectory')), true), button(t('settings:uninstall.title')), { status: text('16em') }) : '');
+    + `<section aria-label="${t('settings:tour.guidedTour')}" class="w-full"><div class="flex w-full flex-col rounded-2xl bg-background-secondary-default pl-3">${controlRow(t('settings:tour.guidedTour'), t('settings:tour.reopenDescription'), button(t('settings:tour.reopen'), 'secondary'))}</div></section>`;
+  const backupCards = ledgerBackupsSkeleton() + section(t('settings:retention.title'),
+    row(t('settings:retention.backups'), t('settings:retention.backupsHelp'), 'ui-configuration-skeleton-select')
+    + row(t('settings:retention.logs'), t('settings:retention.logsHelp'), 'ui-configuration-skeleton-select'));
+  const groups: [string, string][] = [
+    [t('settings:maintenanceGroups.updates'), updates],
+    [t('settings:maintenanceGroups.runtime'), runtimeCards],
+    ...(storage ? [[t('settings:maintenanceGroups.backups'), backupCards] as [string, string]] : []),
+    [t('settings:maintenanceGroups.privacy'), reporting || sharing ? section(t('settings:dataSharing.title'), reporting + sharing) : ''],
+  ];
+  const uninstall = given(shape?.uninstall) ? section(t('settings:uninstall.title'), (on(shape?.uninstallHelp) ? stack(help(t('settings:uninstall.help'))) : '')
+      + row(t('settings:uninstall.full'), t('settings:uninstall.fullHelp')) + stack(summary(t('settings:shared.dataDirectory')), true), button(t('settings:uninstall.title')), { status: text('16em') }) : '';
+  const labels = groups.map(([label]) => label);
+  if (uninstall) labels.push(t('settings:uninstall.title'));
+  return `<div class="flex min-w-0 flex-col gap-5">${configurationContentsSkeleton(labels)}
+    <div class="flex min-w-0 flex-col gap-8">${groups.map(([label, cards]) => `<div class="flex min-w-0 flex-col gap-3">
+      <h3 class="px-3 text-title-3-medium text-text-primary">${label}</h3>
+      <div class="flex min-w-0 flex-col gap-6">${cards}</div>
+    </div>`).join('')}${uninstall}</div>
+  </div>`;
 };
 
 /** 各分区复用正式表单的 Section、Stack 与 SettingsRow 几何。 */

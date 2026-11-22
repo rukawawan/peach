@@ -14,7 +14,8 @@ import { seekVideoBy, toggleVideoPlayback } from '../../src/player/playback';
 import type { BatchDockApi, BatchDockHost } from '../../src/react/batch-dock/batch-dock-api';
 import { catalogKey, type GridPage } from '../../src/react/catalog-grid/catalog-grid';
 import {
-  FIT_TOLERANCE, extendList, fitMode, immerseQuery, isWide, ownerOf, playable, type ImmerseItem,
+  FIT_TOLERANCE, extendList, fitMode, immerseQuery, isWide, ownerOf, playable, scrubRatio, swipeDelta, swipeSpan, tapSide,
+  type ImmerseItem,
 } from '../../src/react/immerse/immerse';
 import type { ImmerseApi, ImmerseHost } from '../../src/react/immerse/immerse-api';
 import { itemKey, type DetailItem } from '../../src/react/item-detail/item-detail';
@@ -37,6 +38,7 @@ const player = vi.hoisted(() => ({
   sessions: 0,
   /** 每条片子的画面尺寸；没登记的按竖屏。 */
   dims: new Map<number, [number, number]>(),
+  load: new Map<number, Promise<unknown>>(),
 }));
 
 /** 一条假媒体：可读的时长、可写的播放位置，play／pause 改 `paused`。 */
@@ -65,7 +67,7 @@ vi.mock('../../src/player', async (importOriginal) => {
       fakeMedia(video, player.dims.get(options.item.id) ?? [1080, 1920]);
       const dispose = vi.fn();
       player.mounted.push({ video, item: options.item, session: options.session, dispose });
-      queueMicrotask(() => options.onLoaded?.());
+      void Promise.resolve(player.load.get(options.item.id)).then(() => options.onLoaded?.());
       return dispose;
     },
   };
@@ -212,13 +214,11 @@ const current = () => player.mounted.at(-1)!;
 
 /** 等一件事成立：换条要走两帧动画加 210ms 落位，都在 act 里等完。 */
 async function until(condition: () => boolean, ms = 2_000) {
-  await act(async () => {
-    const deadline = Date.now() + ms;
-    while (!condition()) {
-      if (Date.now() > deadline) throw new Error('等不到条件成立');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  });
+  const deadline = Date.now() + ms;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('等不到条件成立');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) });
+  }
 }
 const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)) });
 
@@ -271,7 +271,7 @@ afterEach(async () => {
 describe('片单与起播', () => {
   it('抽样去掉画幅、随机取 60 条且偏移恒为 0；续取按 id 去重接在后面', () => {
     const query = new URLSearchParams(immerseQuery({ q: '', orient: 'portrait', tag: '剧情', jav: null }));
-    expect(Object.fromEntries(query)).toEqual({ tag: '剧情', sort: 'rand', limit: '60', offset: '0', thumb: '' });
+    expect(Object.fromEntries(query)).toEqual({ tag: '剧情', sort: 'rand', limit: '60', offset: '0', count: '0', thumb: '' });
     expect(extendList([row(1), row(2)], [row(2), row(3)]).map((item) => item.id)).toEqual([1, 2, 3]);
   });
 
@@ -315,6 +315,26 @@ describe('片单与起播', () => {
     expect(meta()).toBe('· 1:00 · 竖屏 · 1/7');
     // 插进来时取的那一份就是出画时读的那一份，不再取第二次。
     expect(gets(fetcher, '/api/item?id=42')).toBe(1);
+  });
+
+  it('深链目标按流量计费时不会挂载该视频', async () => {
+    serve({ draws: [[row(1)]], details: { 42: { cost: 'metered' } } });
+    await open(42);
+    expect(player.mounted.map((entry) => entry.item.id)).toEqual([1]);
+    expect(routed()).toEqual([1]);
+  });
+
+  it('片单里已有视频时，详情仍在等待也能先挂载播放器', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve });
+    serve({ draws: [[row(1)]], hold: new Map([[1, hold]]) });
+    try {
+      await open(1);
+      expect(current().item.id).toBe(1);
+      expect(routed()).toEqual([1]);
+    } finally {
+      await act(async () => { release() });
+    }
   });
 
   it('换条与切回都只取一次详情；每换一条交给壳写一次地址', async () => {
@@ -361,15 +381,17 @@ describe('片单与起播', () => {
 
   it('第一条出画前只露加载提示：舞台、作者标题与进度条藏着', async () => {
     const hold = pending<void>();
-    serve({ draws: [[row(1), row(2)]], hold: new Map([[1, hold.answer]]) });
+    serve({ draws: [[row(1), row(2)]] });
+    player.load.set(1, hold.answer);
     let opening!: Promise<void>;
     await act(async () => { opening = api.open(null) });
-    await until(() => !!q('[data-immerse-loader]') && !q('[data-immerse-loader]')!.hidden);
+    await until(() => player.mounted.length === 1 && !q('[data-immerse-loader]')!.hidden);
     expect(root().hasAttribute('data-idle')).toBe(true);
     expect(q('[data-immerse-loader]')!.textContent).toContain('加载中');
     expect(q('[data-immerse-loader]')!.textContent, '转圈已经在动，字不带省略号').not.toContain('…');
     expect(document.body.hasAttribute('data-immerse-open')).toBe(true);
     await hold.release();
+    player.load.delete(1);
     await act(async () => { await opening });
     expect(root().hasAttribute('data-idle')).toBe(false);
     expect(q('[data-immerse-loader]')!.hidden).toBe(true);
@@ -405,9 +427,9 @@ describe('关闭与流会话', () => {
 
   it('关掉之后在途的那一条不再挂播放器', async () => {
     const hold = pending<void>();
-    serve({ draws: [[row(1), row(2)]], hold: new Map([[1, hold.answer]]) });
+    serve({ draws: [[row(1), row(2)]], hold: new Map([[42, hold.answer]]) });
     let opening!: Promise<void>;
-    await act(async () => { opening = api.open(null) });
+    await act(async () => { opening = api.open(42) });
     await until(() => !!q('[data-immerse-loader]') && !q('[data-immerse-loader]')!.hidden);
     act(() => api.close());
     await hold.release();
@@ -426,6 +448,7 @@ describe('动作键', () => {
     const fetcher = serve({ draws: [[row(1), row(2)]] });
     queryClient.setQueryData(catalogKey('q=', 0), { pages: [grid()], pageParams: [0] });
     await open();
+    await until(() => action('标为看过').hasAttribute('aria-pressed'));
     expect(action('标为看过').getAttribute('aria-pressed')).toBe('false');
     expect(action('记一次高潮').hasAttribute('aria-pressed')).toBe(false);
     await click(action('标为看过'));
@@ -441,6 +464,7 @@ describe('动作键', () => {
     serve({ draws: [[row(1), row(2)]] });
     queryClient.setQueryData(catalogKey('q=', 0), { pages: [grid()], pageParams: [0] });
     await open();
+    await until(() => action('记一次高潮').closest('[data-immerse-action]')!.textContent === '高潮 2');
     expect(action('记一次高潮').closest('[data-immerse-action]')!.textContent).toBe('高潮 2');
     await click(action('记一次高潮'));
     await until(() => action('记一次高潮').closest('[data-immerse-action]')!.textContent === '高潮 3');
@@ -481,6 +505,7 @@ describe('动作键', () => {
   it('写失败交给壳报错，按键不卡在忙态', async () => {
     serve({ draws: [[row(1), row(2)]] });
     await open();
+    await until(() => action('标为看过').hasAttribute('aria-pressed'));
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ error: '写不进去' }) })));
     await click(action('标为看过'));
     await until(() => host.failure.mock.calls.length === 1);
@@ -494,6 +519,7 @@ describe('作者与标题', () => {
     serve({ draws: [[row(1), row(2)]], details: { 1: { performers: ['甲', '乙', '丙', '丁'] } } });
     await open();
     const author = q<HTMLAnchorElement>('[data-immerse-author]>a')!;
+    await until(() => Boolean(author.textContent));
     expect(author.textContent).toBe('甲、乙、丙 等 4 人');
     expect(q('[data-immerse-avatar] .ini')!.textContent).toBe('甲');
     expect(q('[data-immerse-avatar] img')!.getAttribute('src')).toBe('/entity-image?kind=performer&id=91&thumb=1');
@@ -506,6 +532,7 @@ describe('作者与标题', () => {
     serve({ draws: [[row(1), row(2)]], details: { 1: { performers: [], creator: '', entity_refs: {} } } });
     await open();
     const author = q<HTMLAnchorElement>('[data-immerse-author]>a')!;
+    await until(() => Boolean(author.textContent));
     expect(author.textContent).toBe('未归属');
     await click(author);
     expect(host.closed).toHaveBeenCalledTimes(1);
@@ -525,6 +552,20 @@ describe('作者与标题', () => {
     expect(api.isOpen()).toBe(false);
     expect(host.closed).toHaveBeenCalledTimes(1);
     expect(host.openItem).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('全屏横置后的手势坐标', () => {
+  it('横置（内容层转 -90°）后位移、半区与进度条落点都按内容坐标系换算', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 400 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+    expect(swipeDelta(10, -50, false)).toEqual({ x: 10, y: -50 });
+    expect(swipeDelta(10, -50, true)).toEqual({ x: 50, y: 10 });
+    expect([swipeSpan(false), swipeSpan(true)]).toEqual([400, 800]);
+    expect([tapSide(100, 700, false), tapSide(100, 700, true), tapSide(100, 100, true)]).toEqual([-1, -1, 1]);
+    const bar = { left: 390, top: 0, width: 10, height: 800 };
+    expect(scrubRatio(395, 600, bar, true)).toBe(.25);
+    expect(scrubRatio(100, 0, { left: 0, top: 790, width: 400, height: 10 }, false)).toBe(.25);
   });
 });
 
@@ -595,6 +636,48 @@ describe('手势', () => {
     expect(video.currentTime).toBe(50);
     await wait(320);
     expect(video.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('按住画面半秒临时倍速，松手恢复且那一下 click 不切播放；长按不弹原生菜单', async () => {
+    await open();
+    const { video } = current();
+    await act(async () => { await video.play() });
+    video.playbackRate = 1;
+    (video.pause as ReturnType<typeof vi.fn>).mockClear();
+    const press = (type: string) => new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 3, clientX: 500, clientY: 400 });
+    await act(async () => { track().dispatchEvent(press('pointerdown')) });
+    await wait(520);
+    expect(video.playbackRate).toBe(2);
+    expect(q('[data-immerse-hold]')?.hasAttribute('data-on')).toBe(true);
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    track().dispatchEvent(menu);
+    expect(menu.defaultPrevented).toBe(true);
+    await act(async () => { window.dispatchEvent(press('pointerup')) });
+    expect(video.playbackRate).toBe(1);
+    expect(q('[data-immerse-hold]')?.hasAttribute('data-on')).toBe(false);
+    await click(track());
+    expect(video.pause).not.toHaveBeenCalled();
+    await act(async () => { track().dispatchEvent(press('pointerdown')) });
+    await act(async () => { window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 3, clientX: 560, clientY: 400 })) });
+    await wait(520);
+    expect(video.playbackRate).toBe(1);
+  });
+
+  it('动作列有字幕键与全屏键；全屏键请求外框全屏', async () => {
+    await open();
+    const requested = vi.fn(async () => {});
+    Object.defineProperty(root(), 'requestFullscreen', { configurable: true, value: requested });
+    expect(q('[data-immerse-subtitles]')?.getAttribute('aria-label')).toBe('字幕');
+    await click(q('[data-immerse-actions] button[aria-label="全屏"]'));
+    expect(requested).toHaveBeenCalledTimes(1);
+  });
+
+  it('返回键落出沉浸地址就地收起，不再让壳导航', async () => {
+    await open();
+    history.replaceState(null, '', '/');
+    await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) });
+    expect(api.isOpen()).toBe(false);
+    expect(host.closed).not.toHaveBeenCalled();
   });
 
   it('横划归进度：拖动中只画进度并拦住页面滚动，抬手才 seek', async () => {
@@ -779,10 +862,11 @@ describe('常驻组件', () => {
     expect(document.body.hasAttribute('data-immerse-open'), '卸组件不清 body 上的打开标记').toBe(true);
     expect(api.isOpen()).toBe(true);
 
-    /* 模块上的监听不随组件卸掉：方向键照旧换条（交给壳写地址），离开页面照旧按会话取消还开着的格。 */
+    /* 模块上的监听不随组件卸掉：方向键仍试切，失败后保留实际出画的地址。 */
     const first = current();
     await key('ArrowDown');
-    await until(() => routed().at(-1) === 2);
+    await until(() => host.failure.mock.calls.length === 1);
+    expect(routed()).toEqual([1]);
     await act(async () => { window.dispatchEvent(new Event('resize')) });
     await act(async () => { window.dispatchEvent(new Event('pagehide')) });
     expect(player.cancelled).toContain(first.session);
@@ -793,7 +877,7 @@ describe('常驻组件', () => {
     expect(host.closed).toHaveBeenCalledTimes(1);
     host.displayName.mockImplementation((item) => `片名 ${String(item.name)}`);
     await open();
-    expect(api.isOpen()).toBe(true);
+    expect(api.isOpen()).toBe(false);
     act(() => { expect(() => api.close()).not.toThrow() });
     expect(container.childNodes.length, '空到刷新为止，不自愈').toBe(0);
     expect(reported, '确定性抛错只报那一次').toHaveBeenCalledTimes(1);

@@ -7,8 +7,7 @@
  * 壳递进来的那一份 `appSettings`（`host.store`），改完一项用 `host.changed(effect)` 告诉壳跟着做什么；跟数据库走的
  * 那几项经 `/api/settings` 写（`settings-data.ts`）。
  *
- * 宿主不在 `.peach-react` 里：行、开关、下拉、拉条与色块都是全站共用的遗留控件，外观由
- * `settings-panel.css` 与遗留样式表给。
+ * 下拉使用 BoardUI Select。行、开关、拉条与色块的外观由 `settings-panel.css` 和共用样式表提供。
  *
  * 每次打开时共用控件重画、数值框回到当前值，并重取共享设置。
  * 焦点先交给关闭钮，Tab 在面板里转圈，关掉后还给打开前那一枚。 */
@@ -19,19 +18,26 @@ import {
 import { flushSync } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { VisuallyHidden } from 'react-aria-components';
+import { UNSAFE_PortalProvider } from 'react-aria';
 import { ButtonLink } from '@/components/base/buttons/button';
 import {
-  attachOverlayScrollbar, closeAnchoredMenu, iconSwapHtml, moveGlidePane, revealTexts,
-  setActionBusy, setIconSwap, wireHorizontalScroller,
+  attachOverlayScrollbar, closeAnchoredMenu, moveGlidePane, revealTexts,
+  setActionBusy, wireHorizontalScroller,
 } from '@peach/legacy/ui';
 
-import { isInterfaceLanguageChoice, t, type InterfaceLanguageChoice } from '../../i18n';
+import { AFTER_PLAYBACK_CHOICES, allowedSetting } from '@peach/appearance';
+
+import { INTERFACE_LANGUAGES, isInterfaceLanguageChoice, LANGUAGE_SELF_NAMES, t, type InterfaceLanguageChoice } from '../../i18n';
 import { PREFERENCE_SECTIONS, sectionId } from '../../history/settings-route';
 import { normalizeJavImage } from '../../jav-artwork';
 import { boundedPreference } from '../../number-setting';
+import { NAME_LANGUAGES, type NameLanguage } from '../../core/entity-names';
+import { normalizeGestures } from '../../player/gesture-settings';
 import { GlowSettings } from './glow-settings';
 import { Icon, RemixIcon } from './icon';
-import { IconSwitch, SelectField } from './legacy-controls';
+import { IconSwitch } from './legacy-controls';
+import { SelectField } from '../components/select-field';
+import { overlayHost } from '../components/overlay-host';
 import { NumberSetting } from './number-setting';
 import type { Choice, PanelSettings, SettingsPanelApi, SettingsPanelHost } from './settings-panel-api';
 import { fetchSettings, refreshPanelData, SETTINGS_KEY, useSaveSettings } from './settings-data';
@@ -56,7 +62,12 @@ const SORT_OPTIONS: readonly Choice[] = [
   ['seed', t('settings:shared.random')], ['rating', t('settings:shared.rating')], ['o', t('settings:shared.climaxCount')], ['plays', t('settings:shared.plays')],
   ['dur', t('settings:shared.duration')], ['size', t('settings:shared.fileSize')], ['new', t('settings:shared.dateAdded')], ['played', t('settings:shared.lastWatched')],
 ];
-const DIRECTION_OPTIONS: readonly Choice[] = [['desc', t('settings:shared.descending')], ['asc', t('settings:shared.ascending')]];
+/* 「播完之后」各档的名字，键同 `AFTER_PLAYBACK_CHOICES`。 */
+const afterPlaybackOptions = (): readonly Choice[] => [
+  ['stop', t('settings:playbackEnd.stop')], ['next', t('settings:playbackEnd.next')], ['repeat-all', t('settings:playbackEnd.repeatAll')],
+  ['shuffle', t('settings:playbackEnd.shuffle')], ['repeat-one', t('settings:playbackEnd.repeatOne')],
+];
+const DIRECTION_OPTIONS: readonly Choice[] =[['desc', t('settings:shared.descending')], ['asc', t('settings:shared.ascending')]];
 const JAV_IMAGE_OPTIONS: readonly Choice[] = [['cover', t('settings:preferencesPanel.officialCover'), ''], ['thumbnail', t('settings:preferencesPanel.previewImage'), '']];
 /* 新作那一行收不收合集由服务端按数据库里的设置筛，这里的开关只是镜像：真相在 `/api/settings`。 */
 const FEED_COMPILATIONS = [
@@ -369,6 +380,7 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
     <section data-settings-panel="" id="settingsPanel" hidden={!shown.open} aria-modal="true" role="dialog"
       aria-labelledby="settingsTitle" data-closing={shown.closing ? '' : undefined} ref={panel} onKeyDown={trapTab}
       onClick={(event) => { if (event.target === event.currentTarget) close() }}>
+      <UNSAFE_PortalProvider getContainer={() => overlayHost(panel.current)}>
       <div data-settings-card="" ref={card}>
         <div data-settings-head="" ref={head}>
           <h2 id="settingsTitle">{SECTIONS[shown.tab].title}</h2>
@@ -392,6 +404,8 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
             </div>
             <ToggleRow id="uiSoundsSetting" title={t('settings:preferencesPanel.interfaceSounds')} checked={settings.uiSounds}
               onToggle={(on) => { settings.uiSounds = on; save(); current.changed('uiSounds') }} />
+            <ToggleRow id="ingestNoticesSetting" title={t('settings:preferencesPanel.ingestNotices')} checked={settings.ingestNotices}
+              onToggle={(on) => { settings.ingestNotices = on; save() }} />
             <ToggleRow id="homeGlowSetting" title={t('settings:preferencesPanel.sidebarGlow')} checked={settings.homeGlow.on}
               onToggle={(on) => { settings.homeGlow.on = on; save(); current.changed('glow') }} />
             </div>
@@ -410,6 +424,9 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
           <JavGroup host={current} tab={shown.tab} epoch={epoch} />
           <Group index={3} tab={shown.tab}>
             <SearchHistoryRow host={current} epoch={epoch} />
+            <ToggleRow id="searchRecommendationsSetting" title={t('settings:preferencesPanel.searchRecommendations')}
+              checked={settings.searchRecommendations}
+              onToggle={(on) => { settings.searchRecommendations = on; save(); current.changed('searchRecommendations') }} />
             <Row title={t('settings:preferencesPanel.relatedLimit')}>
               <div id="relatedLimitSetting">
                 <NumberSetting key={epoch} id="relatedLimitSetting" label={t('settings:preferencesPanel.relatedLimit')} value={settings.relatedLimit}
@@ -426,25 +443,12 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
           </Group>
         </div>
       </div>
+      </UNSAFE_PortalProvider>
     </section>
   );
 }
 
 interface GroupProps { host: SettingsPanelHost; tab: number; epoch: number }
-
-/* 排序方向那一格叠着两枚箭头，换的只是方向这一件事：整格重写会把旧字形连同它的动画一起丢掉，
-   读出来是一次硬切，所以只在这一格还没建起来时写一次。 */
-function decorateDirection(field: HTMLElement, ascending: boolean): void {
-  const mark = field.querySelector('[data-select-label]');
-  if (!mark) return;
-  if (!mark.querySelector('[data-icon-swap]')) {
-    mark.innerHTML = iconSwapHtml('arrow-up', 'arrow-down', 'a', { className: 'gselectmark', iconClass: 'gselectmark' })
-      + '<span data-sort-direction-label></span>';
-  }
-  setIconSwap(mark, ascending ? 'a' : 'b');
-  const label = mark.querySelector('[data-sort-direction-label]');
-  if (label) label.textContent = ascending ? t('settings:shared.ascending') : t('settings:shared.descending');
-}
 
 /* 「浏览与播放」分两段：作品列表（网格、排序、卡片与悬停）在前，播放在后。转码方式写的是运行 Peach
    那台电脑的配置，在 Peach 配置「应用与维护 → 视频播放」，不在这里（ADR-0103）。 */
@@ -469,7 +473,12 @@ function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
           <SelectField id="defaultSortDirectionSetting" label={t('settings:preferencesPanel.defaultSortDirection')} options={DIRECTION_OPTIONS}
             value={ascending ? 'asc' : 'desc'} hidden={random} disabled={random} epoch={epoch}
             onPick={(value) => { settings.defaultSortDirection = value; save(); current.changed('sortDirection') }}
-            decorate={(field) => decorateDirection(field, ascending)} />
+            renderValue={<>
+              <span data-sort-direction-icon="" className={`inline-flex shrink-0 transition-transform duration-200 ${ascending ? 'rotate-180' : ''}`}>
+                <Icon name="arrow-down" />
+              </span>
+              <span data-sort-direction-label="">{ascending ? t('settings:shared.ascending') : t('settings:shared.descending')}</span>
+            </>} />
         </div>
       </Row>
       <Row title={t('settings:preferencesPanel.videoCardSize')}>
@@ -481,14 +490,31 @@ function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
         <input type="checkbox" id="groupCollapseSetting" data-toggle="" role="switch" checked={settings.groupCollapse}
           onChange={(event) => { settings.groupCollapse = event.target.checked; save(); current.changed('groupCollapse') }} />
       </label>
-      <Row title={t('settings:preferencesPanel.hoverDelay')}>
+      <ToggleRow id="hoverPreviewSetting" title={t('settings:preferencesPanel.hoverPreview')} checked={settings.hoverPreview}
+        onToggle={(on) => { settings.hoverPreview = on; save(); current.changed('hoverPreview') }} />
+      {/* SFW 模式与关掉悬停预览时延迟不起作用：禁用，SFW 另加说明。 */}
+      <Row title={t('settings:preferencesPanel.hoverDelay')}
+        description={current.censored() ? t('settings:preferencesPanel.hoverDelaySfw') : undefined}>
         <div id="hoverDelaySetting">
           <NumberSetting key={epoch} id="hoverDelaySetting" label={t('settings:preferencesPanel.hoverDelay')} value={settings.hoverDelaySeconds}
+            disabled={current.censored() || !settings.hoverPreview}
             onApply={(value) => {
               settings.hoverDelaySeconds = boundedPreference(value, 0, 60, 5); save(); current.changed('hoverDelay');
             }} />
         </div>
       </Row>
+      <Row title={t('settings:preferencesPanel.homeShorts')}>
+        <div id="homeShortsSetting">
+          <NumberSetting key={epoch} id="homeShortsSetting" label={t('settings:preferencesPanel.homeShorts')} value={settings.homeShortsLimit}
+            onApply={(value) => { settings.homeShortsLimit = value; save(); current.changed('homeShorts') }} />
+        </div>
+      </Row>
+      <ToggleRow id="homeTiersSetting" title={t('settings:preferencesPanel.homeTiers')} checked={settings.homeTiers}
+        onToggle={(on) => { settings.homeTiers = on; save(); current.changed('homeTiers') }} />
+      <ToggleRow id="homePreviewOnlySetting" title={t('settings:preferencesPanel.homePreviewOnly')} checked={settings.homePreviewOnly}
+        onToggle={(on) => { settings.homePreviewOnly = on; save(); current.changed('homePreviewOnly') }} />
+      <ToggleRow id="completionPromptSetting" title={t('settings:preferencesPanel.completionPrompt')} checked={settings.completionPrompt}
+        onToggle={(on) => { settings.completionPrompt = on; save() }} />
       <h4 data-settings-subheading="">{t('settings:preferencesPanel.playbackHeading')}</h4>
       <PlaybackRows host={current} epoch={epoch} />
     </Group>
@@ -508,24 +534,28 @@ function JavGroup({ host: current, tab, epoch }: GroupProps) {
           onChoose={(choice) => { settings.javImage = normalizeJavImage(choice); save(); current.changed('javImage') }} />
       </Row>
       <h4 data-settings-subheading="">{t('settings:preferencesPanel.newReleases')}</h4>
-      <Row title={t('settings:preferencesPanel.feedLimit')}>
-        <div id="feedLimitSetting">
-          <NumberSetting key={epoch} id="feedLimitSetting" label={t('settings:preferencesPanel.feedLimitInput')} value={settings.feedLimit}
-            onApply={(value) => { settings.feedLimit = boundedPreference(value, 1, 100, 12); save(); current.changed('feedLimit') }} />
-        </div>
-      </Row>
-      <ToggleRow id="feedAutoScrollSetting" title={t('settings:preferencesPanel.autoScroll')} checked={settings.feedAutoScroll}
-        onToggle={(on) => { settings.feedAutoScroll = on; save(); current.changed('feedAutoScroll') }} />
+      <ToggleRow id="feedNewRowsSetting" title={t('settings:preferencesPanel.feedNewRows')} checked={settings.feedNewRows}
+        onToggle={(on) => { settings.feedNewRows = on; save(); current.changed('feedNewRows') }} />
+      {/* 数量与自动滚动只作用于首页和人物页的新作行：行关了就收起；合集开关还管「JAV → 新作」与未读数，照常显示。 */}
+      {settings.feedNewRows ? <>
+        <Row title={t('settings:preferencesPanel.feedLimit')}>
+          <div id="feedLimitSetting">
+            <NumberSetting key={epoch} id="feedLimitSetting" label={t('settings:preferencesPanel.feedLimitInput')} value={settings.feedLimit}
+              onApply={(value) => { settings.feedLimit = boundedPreference(value, 1, 100, 12); save(); current.changed('feedLimit') }} />
+          </div>
+        </Row>
+        <ToggleRow id="feedAutoScrollSetting" title={t('settings:preferencesPanel.autoScroll')} checked={settings.feedAutoScroll}
+          onToggle={(on) => { settings.feedAutoScroll = on; save(); current.changed('feedAutoScroll') }} />
+      </> : null}
       {FEED_COMPILATIONS.map(([id, key, label, title]) => (
         <CompilationToggle key={id} host={current} id={id} settingKey={key} label={label} title={title} />
       ))}
     </Group>
   );
 }
-/* 语言名称写成各自语言的自称，不随界面语言翻译：看不懂当前界面的人也要认得出自己那一项。
-   「自动」只写一个词：手机上选择框窄，括号里再带语言名会把标题挤成两行，页面本身已经在用探测出的语言。 */
+/* 「自动」只写一个词：手机上选择框窄，括号里再带语言名会把标题挤成两行，页面本身已经在用探测出的语言。 */
 const languageChoices = (): readonly (readonly [InterfaceLanguageChoice, string])[] =>
-  [['auto', t('settings:interfaceLanguage.auto')], ['zh-CN', '简体中文'], ['en', 'English']]; // i18n-exempt: 语言名用各自语言的自称
+  [['auto', t('settings:interfaceLanguage.auto')], ...INTERFACE_LANGUAGES.map(code => [code, LANGUAGE_SELF_NAMES[code]] as const)];
 /* 存进数据库、回来交壳对账；壳发现本地那份变了就整页重载，换成新语言。 */
 function InterfaceLanguageSetting({ host: current, epoch }: { host: SettingsPanelHost; epoch: number }) {
   const query = useQuery({ queryKey: SETTINGS_KEY, queryFn: ({ signal }) => fetchSettings(signal), staleTime: 0 });
@@ -556,18 +586,21 @@ function InterfaceLanguageSetting({ host: current, epoch }: { host: SettingsPane
 function NameLanguageSetting({ host: current, epoch }: { host: SettingsPanelHost; epoch: number }) {
   const query = useQuery({ queryKey: SETTINGS_KEY, queryFn: ({ signal }) => fetchSettings(signal), staleTime: 0 });
   const save = useSaveSettings();
-  const [pending, setPending] = useState<'zh-CN' | 'ja' | null>(null);
+  const [pending, setPending] = useState<NameLanguage | null>(null);
   const language = query.data?.performerNameLanguage;
   return <>
     <Row title={t('settings:performerNameLanguage.title')} description={<small data-copy-key="performer-name-language-help">{t('settings:performerNameLanguage.help')}</small>}>
       <SelectField id="performerNameLanguageSetting" label={t('settings:performerNameLanguage.title')} epoch={epoch}
-        options={[["zh-CN", t('settings:performerNameLanguage.chinese')], ["ja", t('settings:performerNameLanguage.japanese')]]}
+        options={[["zh-CN", t('settings:performerNameLanguage.chinese')], ["ja", t('settings:performerNameLanguage.japanese')],
+          ["en", t('settings:performerNameLanguage.romaji')], ["ja-local", t('settings:performerNameLanguage.japaneseThenLocal')],
+          ["local-ja", t('settings:performerNameLanguage.localThenJapanese')]]}
         value={pending ?? language ?? current.store.value.performerNameLanguage}
         disabled={query.isPending || query.isError || save.isPending || !language} busy={save.isPending}
         onPick={(value) => {
-          if (save.isPending || (value !== 'zh-CN' && value !== 'ja') || value === language) return;
-          setPending(value);
-          save.mutate({ performerNameLanguage: value }, {
+          const choice = value as NameLanguage;
+          if (save.isPending || !NAME_LANGUAGES.includes(choice) || choice === language) return;
+          setPending(choice);
+          save.mutate({ performerNameLanguage: choice }, {
             onSuccess: (saved) => { current.syncRemote(saved); current.receipt(t('settings:performerNameLanguage.saved')) },
             onError: (error) => current.failure(t('settings:performerNameLanguage.saveFailed'), error),
             onSettled: () => setPending(null),
@@ -609,6 +642,9 @@ function CompilationToggle({ host: current, id, settingKey, label, title }: {
   );
 }
 
+/** 长按倍速的几档；归一化范围是 1.25～4（`normalizeGestures`）。 */
+const HOLD_RATES = [1.5, 2, 3, 4] as const;
+
 function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
   const settings = current.store.value;
   const save = () => current.store.save();
@@ -616,6 +652,19 @@ function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
     <>
       <ToggleRow id="detailAutoplaySetting" title={t('settings:preferencesPanel.detailAutoplay')} checked={settings.detailAutoplay}
         onToggle={(on) => { settings.detailAutoplay = on; save() }} />
+      <ToggleRow id="autoChineseSubtitlesSetting" title={t('settings:preferencesPanel.autoChineseSubtitles')}
+        description={t('settings:preferencesPanel.autoChineseSubtitlesHelp')}
+        checked={settings.autoChineseSubtitles} onToggle={(on) => { settings.autoChineseSubtitles = on; save() }} />
+      <Row title={t('settings:playbackEnd.title')}>
+        <SelectField id="afterPlaybackSetting" label={t('settings:playbackEnd.title')} options={afterPlaybackOptions()} value={settings.afterPlayback} epoch={epoch}
+          onPick={(value) => { settings.afterPlayback = allowedSetting(value, AFTER_PLAYBACK_CHOICES, 'next'); save() }} />
+      </Row>
+      <Row title={t('settings:playbackEnd.restart')} description={t('settings:playbackEnd.restartHelp')}>
+        <div id="resumeRestartSetting">
+          <NumberSetting key={epoch} id="resumeRestartSetting" label={t('settings:playbackEnd.restart')} value={settings.resumeRestartPercent}
+            onApply={(value) => { settings.resumeRestartPercent = boundedPreference(value, 0, 20, 5); save() }} />
+        </div>
+      </Row>
       <ToggleRow id="miniplayerSetting" title={t('settings:preferencesPanel.miniPlayer')} checked={settings.miniplayer}
         onToggle={(on) => { settings.miniplayer = on; save(); current.changed('miniplayer') }} />
       <Row title={t('settings:preferencesPanel.seekStep')}>
@@ -624,6 +673,30 @@ function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
             onApply={(value) => { settings.seekSeconds = value || 10; save(); current.changed('seekSeconds') }} />
         </div>
       </Row>
+      {/* 长按倍速也管右方向键，不随画面手势开关收起；拖动与双击区只在画面手势开着时有用。 */}
+      <Row title={t('settings:playbackGestures.holdRate')}>
+        <SelectField id="holdRateSetting" label={t('settings:playbackGestures.holdRate')} epoch={epoch}
+          options={HOLD_RATES.map((rate) => [String(rate), `${rate}×`] as Choice)} value={String(settings.holdRate)}
+          onPick={(value) => { settings.holdRate = normalizeGestures({ holdRate: Number(value) }).holdRate; save() }} />
+      </Row>
+      <ToggleRow id="touchGesturesSetting" title={t('settings:playbackGestures.touch')} checked={settings.touchGestures}
+        onToggle={(on) => { settings.touchGestures = on; save() }} />
+      {settings.touchGestures ? <>
+        <Row title={t('settings:playbackGestures.swipeMinutes')}>
+          <div id="swipeMinutesSetting">
+            <NumberSetting key={epoch} id="swipeMinutesSetting" label={t('settings:playbackGestures.swipeMinutes')} value={settings.swipeMinutes}
+              onApply={(value) => { settings.swipeMinutes = normalizeGestures({ swipeMinutes: value }).swipeMinutes; save() }} />
+          </div>
+        </Row>
+        <Row title={t('settings:playbackGestures.doubleTapPercent')}>
+          <div id="doubleTapPercentSetting">
+            <NumberSetting key={epoch} id="doubleTapPercentSetting" label={t('settings:playbackGestures.doubleTapPercent')} value={settings.doubleTapPercent}
+              onApply={(value) => { settings.doubleTapPercent = normalizeGestures({ doubleTapPercent: value }).doubleTapPercent; save() }} />
+          </div>
+        </Row>
+      </> : null}
+      <ToggleRow id="autoFullscreenSetting" title={t('settings:playbackGestures.autoFullscreen')} checked={settings.autoFullscreen}
+        onToggle={(on) => { settings.autoFullscreen = on; save() }} />
       <Row title="Ctrl + 方向键快进 / 快退">
         <div id="longSeekSecondsSetting">
           <NumberSetting key={epoch} id="longSeekSecondsSetting" label="Ctrl + 方向键快进 / 快退" value={settings.longSeekSeconds}

@@ -14,7 +14,7 @@ Peach 是单人自托管应用，由一个人维护。欢迎提 Issue 和 PR。�
 Issue 按 [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) 的模板写：缺陷用 `bug_report.md`，建议用 `feature_request.md`。保留模板的章节标题和顺序，逐节填写；可选章节没有内容可以删掉，原因分析等额外信息放在模板章节之后。从网页「New issue」选模板最省事。用 AI 工具或命令行提交时，复制模板文件，去掉开头的 `---` 信息块和 `<!-- -->` 注释，填好后提交：
 
 ```text
-gh issue create --repo peach-mitao/peach --title "<标题>" --type Bug --body-file <填好的模板>
+gh issue create --repo peach-mitao/peach --title "<标题>" --type Bug --label area:web --body-file <填好的模板>
 ```
 
 建议把 `Bug` 换成 `Feature`；没有设置类型的权限时省略 `--type`，按模板章节写的 issue 会自动补上类型。正文写给维护者和其他用户看，用通用技术说法；`AGENTS.md` 与技能里的术语和交付格式只用于改代码，不用于 issue。外部新 issue 无论通过网页、命令行还是 API 提交，缺少模板章节都会自动关闭；已有类型不豁免检查，按模板补齐章节后自动重开。
@@ -59,6 +59,10 @@ Use demo data without sexually explicit imagery in public screenshots, recording
 
 `bug`、`enhancement` 保留给 PR 和未设置 Type 的 issue；使用 Type 的新 issue 不重复添加同义标签。`dependencies`、`javascript`、`github_actions`、`python:uv`、`docker` 用于对应依赖更新，`documentation`、`accessibility` 等按实际内容使用。标签名称保持稳定，颜色和双语说明以清单为准；修改清单时同步 GitHub 并回读核对，不批量删除或重命名已有标签。
 
+维护者和协助维护的智能体在创建 issue 时选好 Type 和目标仓库中适用的标签。示例中的 `area:web` 适用于网页界面，其他问题按已确认的模块和平台选择。创建后读取 GitHub 右侧字段，确认 Type、标签与预期一致。若创建入口只能设置部分字段，创建成功后补齐剩余字段并回读。
+
+Maintainers and their agents select an issue type and applicable labels from the target repository when opening issues. Use `area:web` for web interface work and choose platform labels only for confirmed impact. Verify the saved type and labels. If the creation tool cannot set all fields, update them after creating the issue and verify again.
+
 ### 关闭、重开与关联
 
 - 修复已发布且有相应验证依据后，回复解决版本和验证结果，再以 Completed 关闭。原用户环境仍待确认时保持 Open，并使用 `status:needs-verification`；仅合并 PR 不作为已解决的依据。
@@ -76,6 +80,12 @@ GitHub 的字段与模板机制见 [Issue types](https://docs.github.com/en/issu
 1. 不用 `git add .`、`git add -A`、目录路径或通配符，只暂存这次改动的文件。
 2. 实现和它的测试放在同一个提交里。
 3. 一个 PR 对应可独立验收的目标。同一目标的实现、测试及必要的 CI、升级补修放在同一个 PR，按逻辑分提交并共享验证；无关需求独立评审，确需拆分时说明独立交付或隔离的理由。在「影响面」表里说明数据层、API、页面、契约、测试和文档的实际影响，不适用的写明原因。
+
+### 创建 PR 时添加标签
+
+维护者和协助维护的智能体按实际 diff 选择目标仓库已有的标签。缺陷修复用 `bug`，功能变化用 `enhancement`，纯文档用 `documentation`，依赖更新用 `dependencies` 及相应生态标签。补充已确认的 `area:*` 和 `platform:*`。用 `gh pr create` 时传入 `--label`，Draft 也一样。创建后回读 GitHub 标签。入口无法设置时立即用 `gh pr edit --add-label` 补齐，再回读。
+
+Maintainers and their agents label pull requests, including drafts, according to the actual diff. Use labels available in the target repository, set them with `gh pr create --label`, and verify the saved labels. If creation cannot set labels, add them immediately after opening the PR.
 
 ### 变更性质与行为边界
 
@@ -141,10 +151,10 @@ Node 脚本与测试写成 `.ts`（前端源码另有 `.tsx` 与少量 `.js`）�
 
 - 源语言是简体中文。英文由改代码的人随功能写进仓库；现有英文是 AI 初稿，在 Weblate 上带「AI draft」标签。发现不准确的地方，可以提建议，也可以给别人的建议投票，由审核者采纳。
 - 其他语言直接在 Weblate 上翻译，没有的语言可以新建。翻到能用后，由维护者登记到设置的界面语言里。
-- 术语按项目术语表（Weblate 上的 Glossary 组件）翻译，不用标为禁用的写法。对术语有不同意见，在该条目下评论并说明理由。
+- 术语按项目术语表（Weblate 上的 Glossary 组件）翻译，不用标为禁用的写法。新语言的术语表会自动列出全部定稿术语，建议先翻术语再翻界面。对术语有不同意见，在该条目下评论并说明理由。
 - `{{count}}` 这类插值占位原样保留，不翻译，也不增删。占位不对的译文，Weblate 不会保存。
 - 译文文件不要绕过 Weblate 直接改了提 PR，否则改动会和 Weblate 上的译文冲突。改代码时新增的界面文字按上一节，在同一个 PR 里写中文和英文。
 
 Weblate 以 PR 的形式把译文推回仓库，提交作者是各位译者。这类 PR 只改 `resources/locales/` 下的译文文件，CI 通过后由维护者合入；不要压缩合并，以保留每位译者的署名。
 
-Interface translation happens on [Hosted Weblate](https://hosted.weblate.org/projects/peach/); no code changes are needed. Simplified Chinese is the source language. English is written into the repository together with each feature; the current English is an AI draft and carries the "AI draft" label on Weblate, so suggest improvements or vote on other people's suggestions, and reviewers approve them. Other languages are translated directly on Weblate, and you can start a new one there; once it is usable, the maintainer adds it to the interface language setting. Follow the project glossary (the Glossary component on Weblate) and avoid terms marked forbidden; if you disagree with a term, comment on it and explain why. Keep placeholders such as `{{count}}` exactly as they are; Weblate rejects translations with broken placeholders. Do not edit translation files in a PR that bypasses Weblate. Weblate sends translations back as pull requests authored by the translators; they only touch files under `resources/locales/`, and the maintainer merges them once CI passes, without squashing, so every translator keeps the credit.
+Interface translation happens on [Hosted Weblate](https://hosted.weblate.org/projects/peach/); no code changes are needed. Simplified Chinese is the source language. English is written into the repository together with each feature; the current English is an AI draft and carries the "AI draft" label on Weblate, so suggest improvements or vote on other people's suggestions, and reviewers approve them. Other languages are translated directly on Weblate, and you can start a new one there; once it is usable, the maintainer adds it to the interface language setting. Follow the project glossary (the Glossary component on Weblate) and avoid terms marked forbidden; every new language gets all the approved terms in its glossary, so translating them first is a good start. If you disagree with a term, comment on it and explain why. Keep placeholders such as `{{count}}` exactly as they are; Weblate rejects translations with broken placeholders. Do not edit translation files in a PR that bypasses Weblate. Weblate sends translations back as pull requests authored by the translators; they only touch files under `resources/locales/`, and the maintainer merges them once CI passes, without squashing, so every translator keeps the credit.

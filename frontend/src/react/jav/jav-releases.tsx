@@ -20,7 +20,8 @@ import { TaskProgress } from '../components/task-progress';
 import { activityKind } from '../../activity-kinds';
 import { EmptyState } from '../components/empty-state';
 import { DataTableFooter } from '../components/table-controls';
-import { FilterGlassRows, FilterPill, GlassPill } from '../components/filter-glass';
+import { CatalogColumnFilterChips } from '../components/column-filter-chips';
+import { FilterGlassRows, FilterPill, FilterActionButton } from '../components/filter-glass';
 import { Segments, Shuffle, SortKeys } from '../entity-filter/entity-filter-page';
 import { Chip } from '@/components/base/badges/chip';
 import { recommendationScore, RELEASE_SORTS, type DiscoveryDirection, type ReleaseSort } from './discovery-sorts';
@@ -29,15 +30,17 @@ import { useAction } from '../settings/use-action';
 import { useEntityNames } from '../use-entity-names';
 import { DiscoveryCard, resourcePrefill } from './discovery-card';
 import { controlReleaseMetadata, coverArrived, DISCOVERY_METADATA_KEY, fetchCoverNow, fetchDiscoveryMetadata, fetchReleases, metadataInterval,
-  releaseFilters, releaseKey, RELEASE_PAGE_SIZE, RELEASE_PAGE_SIZES,
+  releaseFilters, releaseKey, releaseColumnValues, releaseColumnSelection, setReleaseColumn, RELEASE_PAGE_SIZE, RELEASE_PAGE_SIZES,
   type Discovery, type DiscoveryMetadataStatus, type ReleaseFacetPerformer, type ReleaseFacetStudio, type ReleaseFilters,
   writeJavQuery } from './jav';
 import { queryClient } from '../query';
-import { ReleaseTable } from './jav-release-table';
+import { ReleaseTable, type ReleaseRangeKey } from './jav-release-table';
+import { releaseColumns } from './release-table-columns';
 import { CatalogViewToggle } from '../catalog-grid/catalog-view-toggle';
 import { useCatalogView } from '../catalog-grid/catalog-view';
 import { useVisibleJavWorks } from './jav-selection';
 import { t } from '../../i18n';
+import { columnValueSelected, readColumnFilters, toggleColumnValue, writeColumnFilters, type ColumnRange, type ColumnSelection } from '../../column-filters';
 
 type Facet = 'performer' | 'studio' | 'tag';
 /** 等数据时两排头像的占位，与路由骨架（`releasesFilterSkeleton`）同一份。 */
@@ -80,11 +83,21 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
     setFilters(current => ({ ...current, q: query, page: 1 }));
     writeJavQuery({ page: '' });
   }, [query, filters.q]);
-  const choose = (facet: Facet, value: string) => {
-    const next = filters[facet] === value ? '' : value;
-    setFilters(current => ({ ...current, [facet]: next, page: 1 }));
-    writeJavQuery({ [facet]: next, page: '' });
+  const chooseValues = (facet: Facet, values: ColumnSelection | undefined) => {
+    const next = setReleaseColumn(filters, facet, values);
+    setFilters(next);
+    writeJavQuery({ [facet]: '', column_filters: next.column_filters || '', page: '' });
   };
+  const choose = (facet: Facet, value: string) => {
+    const values = releaseColumnSelection(filters, facet);
+    chooseValues(facet, values === undefined ? [value] : toggleColumnValue(values, value, !columnValueSelected(values, value)));
+  };
+  const changeColumns = (column_filters: string) => {
+    setFilters(current => ({ ...current, column_filters, page: 1 }));
+    writeJavQuery({ column_filters, page: '' });
+  };
+  const chooseRange = (column: ReleaseRangeKey, value: ColumnRange | undefined) =>
+    changeColumns(writeColumnFilters(readColumnFilters(filters.column_filters), column, value));
   const section = useRef<HTMLElement>(null);
   const changePage = ({ pageIndex, pageSize }: { pageIndex: number; pageSize: number }) => {
     const page = pageIndex + 1;
@@ -93,8 +106,8 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
     section.current?.scrollIntoView({ block: 'start' });
   };
   const clear = () => {
-    setFilters(current => ({ ...current, performer: '', studio: '', tag: '', q: '', page: 1 }));
-    writeJavQuery({ performer: '', studio: '', tag: '', page: '' });
+    setFilters(current => ({ ...current, performer: '', studio: '', tag: '', column_filters: '', q: '', page: 1 }));
+    writeJavQuery({ performer: '', studio: '', tag: '', column_filters: '', page: '' });
     clearText();
   };
   /* 点选中的那一枚翻方向；换一枚时番号默认正序，其余倒序（同「发现」）。 */
@@ -147,7 +160,7 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
   }, [reading, releases]);
   /* 筛选结果里有从没读过的就起一轮；同一组筛选每次挂载只起一次，停下、失败的那一轮不在这里重启。 */
   const started = useRef('');
-  const scope = JSON.stringify([filters.performer, filters.studio, filters.tag, filters.q, filters.sort, filters.dir, filters.seed]);
+  const scope = JSON.stringify([filters.performer, filters.studio, filters.tag, filters.column_filters, filters.q, filters.sort, filters.dir, filters.seed]);
   const unread = !releases.isPlaceholderData && (releases.data?.metadata_unread || 0) > 0 && !reading;
   useEffect(() => {
     if (!unread || started.current === scope) return;
@@ -165,7 +178,7 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
   const data = releases.data;
   useVisibleJavWorks(data?.items || []);
   const waiting = releases.isPending;
-  const filtered = !!(filters.performer || filters.studio || filters.tag || filters.q);
+  const filtered = !!(filters.performer || filters.studio || filters.tag || filters.column_filters || filters.q);
   const pages = Math.max(1, Math.ceil((data?.total || 0) / filters.size));
   useEffect(() => {
     if (!data || releases.isPlaceholderData || filters.page <= pages) return;
@@ -177,7 +190,7 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
     {data && (data.facets.performers.length || data.facets.studios.length) ? <div data-catalog-tiers="" data-release-tiers="">
       {data.facets.performers.length ? <div data-catalog-tier="performers" role="group" aria-label={t('catalog:javReleases.filterByActress')}>
         {data.facets.performers.map(person => <button key={person.name} type="button" data-tier-performer=""
-          aria-pressed={filters.performer === person.name} title={t('catalog:javReleases.facetCount', { name: entityDisplayName('performer', person.name, person.id), count: person.count })}
+          aria-pressed={releaseColumnValues(filters, 'performer').includes(person.name)} title={t('catalog:javReleases.facetCount', { name: entityDisplayName('performer', person.name, person.id), count: person.count })}
           onClick={() => choose('performer', person.name)}>
           <span data-tier-ring="" dangerouslySetInnerHTML={{ __html: performerRing(person) }} />
           <span data-tier-name="">{entityDisplayName('performer', person.name, person.id)}</span>
@@ -185,7 +198,7 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
       </div> : null}
       {data.facets.studios.length ? <div data-catalog-tier="studios" role="group" aria-label={t('catalog:javReleases.filterByLabel')}>
         {data.facets.studios.map(studio => <button key={studio.name} type="button" data-tier-studio=""
-          aria-pressed={filters.studio === studio.name} title={t('catalog:javReleases.facetCount', { name: studio.name, count: studio.count })} onClick={() => choose('studio', studio.name)}>
+          aria-pressed={releaseColumnValues(filters, 'studio').includes(studio.name)} title={t('catalog:javReleases.facetCount', { name: studio.name, count: studio.count })} onClick={() => choose('studio', studio.name)}>
           <StudioMark studio={studio} />{studio.name}<span data-count-badge="">{studio.count}</span>
         </button>)}
       </div> : null}
@@ -194,21 +207,23 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
       busy={waiting} topClassName="gap-1.5 overflow-visible" bottomClassName="min-h-12" top={<div data-catalog-scroll="">
         <div data-catalog-tags="" dangerouslySetInnerHTML={waiting ? { __html: javTagSkeleton() } : undefined}>
           {waiting ? null : data?.facets.tags.map(row => <FilterPill key={row.name} data-catalog-tag={row.name} data-entity-press=""
-            pressed={filters.tag === row.name} onPress={() => choose('tag', row.name)}>
+            pressed={releaseColumnValues(filters, 'tag').includes(row.name)} onPress={() => choose('tag', row.name)}>
             {row.name}<span data-count-badge="">{row.count}</span>
           </FilterPill>)}
         </div></div>} bottom={<>
         <span data-catalog-readout="">{waiting ? <span data-skeleton="count" aria-hidden className="relative inline-block h-3.5 w-37.5 rounded-md align-middle skeleton-sheen" />
           : filtered ? t('catalog:javReleases.matchedCount', { matched: data?.total || 0, count: data?.candidate_total || 0 }) : t('catalog:countLabel.works', { count: data?.total || 0 })}</span>
-        {filtered ? <GlassPill onPress={clear}>{t('catalog:shared.clearFilters')}</GlassPill> : null}
+        {filtered ? <FilterActionButton onPress={clear}>{t('catalog:shared.clearFilters')}</FilterActionButton> : null}
         <span data-entity-sorts="">
           <Shuffle onPress={reshuffle} busy={filters.sort === 'random' && releases.isFetching} />
           {view === 'cards' ? <Segments label={t('catalog:entityFilter.javCardLayout')} value={layout} options={JAV_LAYOUTS} onChange={storeJavLayout} /> : null}
           <CatalogViewToggle />
-          <SortKeys sorts={RELEASE_SORTS.map(([key, label, ariaLabel]) => ({ key, label, ariaLabel, pressed: key === filters.sort, dir: filters.dir }))}
+          <SortKeys group="releases" sorts={RELEASE_SORTS.map(([key, label, ariaLabel]) => ({ key, label, ariaLabel, pressed: key === filters.sort, dir: filters.dir }))}
             onSort={key => sortBy(key as ReleaseSort)} />
         </span>
       </>} />
+    {view === 'cards' && filters.column_filters ? <CatalogColumnFilterChips encoded={filters.column_filters}
+      columns={releaseColumns} onChange={changeColumns} /> : null}
     {waiting && view === 'cards' ? <div role="status" aria-label={t('catalog:javReleases.loading')} dangerouslySetInnerHTML={{ __html: javContentSkeleton('discover', layout) }} /> : null}
     {releases.error ? <Note tone="error" title={t('catalog:javReleases.failed')}>{errorMessage(releases.error)}</Note> : null}
     {reading && metadata ? <div data-jav-metadata="" className="min-w-0"><TaskProgress kind={activityKind('jav-discovery-metadata')}
@@ -219,19 +234,20 @@ export function Releases({ readOnly, receipt, resource, query, navigate, clearTe
         receipt(got === total ? t('catalog:javReleases.coversFetched', { count: total }) : t('catalog:javReleases.coversPartial', { got, count: total }));
         void releases.refetch();
       }} />}
-    {!waiting && !releases.error && !data?.items.length ? <EmptyState icon={RiRssLine} title={filtered ? t('catalog:javReleases.noMatches') : t('catalog:javReleases.emptyTitle')}
+    {!waiting && !releases.error && !data?.items.length && (view === 'cards' || !filtered) ? <EmptyState icon={RiRssLine} title={filtered ? t('catalog:javReleases.noMatches') : t('catalog:javReleases.emptyTitle')}
       actions={filtered ? <Button size="small" onClick={clear}>{t('catalog:shared.clearFilters')}</Button>
         : <ButtonLink size="small" href="/subscriptions?tab=add">{t('catalog:javReleases.addSubscription')}</ButtonLink>}>
       {filtered ? t('catalog:javReleases.clearFiltersHint') : t('catalog:javReleases.emptyHint')}
     </EmptyState> : null}
     {action.error ? <Note tone="error">{action.error}</Note> : null}
-    {view === 'list' ? waiting || data?.items.length ? <ReleaseTable items={data?.items || []} waiting={waiting} filters={filters}
+    {view === 'list' ? waiting || data?.items.length || filtered ? <ReleaseTable items={data?.items || []} waiting={waiting} filters={filters}
       studios={data?.facets.studios || []} javImage={settings.value.javImage} readOnly={readOnly} navigate={navigate}
-      onTag={value => choose('tag', value || filters.tag)} onSort={setSort} wanting={item => action.busy === String(item.id)}
+      facets={data?.facets} onFilter={chooseValues} onRange={chooseRange}
+      onTag={value => choose('tag', value)} onSort={setSort} wanting={item => action.busy === String(item.id)}
       onWant={want} onResource={item => resource(resourcePrefill(item))} /> : null
     : <div data-media-grid="" className={JAV_RECOMMENDATION_GRID} style={{ '--card-ratio': ratio } as CSSProperties}>
       {(data?.items || []).map(item => <DiscoveryCard key={item.id} item={item} layout={layout} javImage={settings.value.javImage}
-        readOnly={readOnly} navigate={navigate} tag={filters.tag} onTag={value => choose('tag', value || filters.tag)}
+        readOnly={readOnly} navigate={navigate} tag={releaseColumnValues(filters, 'tag')} onTag={value => choose('tag', value)}
         wanting={action.busy === String(item.id)} onWant={() => want(item)}
         onResource={() => resource(resourcePrefill(item))} badge={filters.sort === 'taste' ? <TasteChip value={item.taste_score} /> : undefined} />)}
     </div>}

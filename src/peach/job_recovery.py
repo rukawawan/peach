@@ -76,6 +76,9 @@ def finish(db: Path, key: str, job_id: str, status: str) -> None:
         data = read(db, key)
         if data.get("job_id") == job_id:
             data["status"] = status
+            if isinstance(data.get('checkpoint'), dict) and data['checkpoint']:
+                # 下次启动按进度快照恢复页面状态，快照的状态要与记录一起落到终态。
+                data['checkpoint']['status'] = status
             atomic_write_text(_path(db, key), json.dumps(data, ensure_ascii=False))
 
 
@@ -129,6 +132,21 @@ def _maybe_active(db: Path, key: str) -> bool:
     return not isinstance(data, dict) or data.get('status') == 'active'
 
 
+def library_action(db: Path, data: dict, command: str | None = None) -> str:
+    """同一轮馆藏任务的控制意图，兼容独立保存的旧暂停和取消标记。"""
+    from .processing_control import user_cancelled, user_paused
+    from .task_control import requested
+
+    if command is None:
+        command = requested(db, data.get('run_id'))
+    job_id = data.get('job_id')
+    if command == 'cancel' or user_cancelled(db, job_id):
+        return 'cancel'
+    if command == 'pause' or user_paused(db, job_id):
+        return 'pause'
+    return 'resume'
+
+
 def resume(db: Path, handlers: dict) -> list[str]:
     """领取与起跑在同一把锁内；失败保留参数但不循环重试。"""
     resumed = []
@@ -139,17 +157,16 @@ def resume(db: Path, handlers: dict) -> list[str]:
             with admission(db):
                 data = read(db, key)
                 pid = data.get("pid")
-                if key == 'library-processing':
-                    from .processing_control import user_paused, user_cancelled
-                    if user_paused(db, data.get('job_id')):
-                        continue
                 if (data.get("status") != "active" or not isinstance(data.get("request"), dict)
                         or _worker_alive(db, data)):
                     continue
                 # 当前进程自己的新任务不属于启动恢复。
                 if pid == os.getpid() and not isinstance(data.get('run_id'), int):
                     continue
-                if key == 'library-processing' and user_cancelled(db, data.get('job_id')):
+                action = library_action(db, data) if key == 'library-processing' else 'resume'
+                if action == 'pause':
+                    continue
+                if action == 'cancel':
                     if data.get('run_id') is not None:
                         from .task_runs import TaskRunStore
                         TaskRunStore(db).finish(data['run_id'], 'cancelled', **_stopped())
@@ -213,7 +230,9 @@ def import_legacy_library(db: Path, previous: dict) -> None:
     request = {'stage': previous.get('requested_stage') or 'all'}
     if previous.get('library_id'):
         request['library_id'] = previous['library_id']
-    if previous.get('asset_ids'):
+    if previous.get('directory'):
+        request['directory'] = previous['directory']
+    elif previous.get('asset_ids'):
         request['asset_ids'] = previous['asset_ids']
     save(db, 'library-processing', previous.get('job_id') or 'library-processing',
          request, run_id=run_id, waiting=True)

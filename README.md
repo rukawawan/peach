@@ -16,7 +16,7 @@ A local-first video metadata scraper and media manager.
 
 ## Screenshots
 
-[![Video library with search, filters and posters](https://peach.video/assets/screenshots/home-wide-20261025-2-1280.webp)](https://peach.video/assets/screenshots/home-wide-20261025-2.png)
+[![Video library with search, filters and posters](https://peach.video/assets/screenshots/home-wide-20261118-2-en-1280.webp)](https://peach.video/assets/screenshots/home-wide-20261118-2-en.png)
 
 Movie demo data; see [asset credits and licenses](https://peach.video/en/credits/).
 
@@ -25,19 +25,19 @@ Movie demo data; see [asset credits and licenses](https://peach.video/en/credits
 
 **People and works**
 
-[![Charlie Chaplin's profile and films](https://peach.video/assets/screenshots/profile-wide-20261025-2-1280.webp)](https://peach.video/assets/screenshots/profile-wide-20261025-2.png)
+[![Charlie Chaplin's profile and films](https://peach.video/assets/screenshots/profile-wide-20261118-2-en-1280.webp)](https://peach.video/assets/screenshots/profile-wide-20261118-2-en.png)
 
 **Creator updates**
 
-[![Creator follows and new works](https://peach.video/assets/screenshots/follow-wide-20261025-2-1280.webp)](https://peach.video/assets/screenshots/follow-wide-20261025-2.png)
+[![Creator follows and new works](https://peach.video/assets/screenshots/follow-wide-20261118-2-en-1280.webp)](https://peach.video/assets/screenshots/follow-wide-20261118-2-en.png)
 
 **Library statistics**
 
-[![Library, storage and viewing statistics](https://peach.video/assets/screenshots/stats-wide-20261025-3-1280.webp)](https://peach.video/assets/screenshots/stats-wide-20261025-3.png)
+[![Library, storage and viewing statistics](https://peach.video/assets/screenshots/stats-wide-20261118-2-en-1280.webp)](https://peach.video/assets/screenshots/stats-wide-20261118-2-en.png)
 
 **Player**
 
-[![Big Buck Bunny player](https://peach.video/assets/screenshots/play-wide-20261025-2-1280.webp)](https://peach.video/assets/screenshots/play-wide-20261025-2.png)
+[![Big Buck Bunny player](https://peach.video/assets/screenshots/play-wide-20261118-2-en-1280.webp)](https://peach.video/assets/screenshots/play-wide-20261118-2-en.png)
 
 </details>
 
@@ -55,8 +55,8 @@ Movie demo data; see [asset credits and licenses](https://peach.video/en/credits
 
 | Method | Get started |
 | --- | --- |
-| Windows x64 | [Installer](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-windows-x64-setup.exe) · [Portable](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-windows-x64.zip) |
-| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.57.0/Peach-0.57.0-macos-x86_64.dmg) |
+| Windows x64 | [Installer](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-windows-x64-setup.exe) · [Portable](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-windows-x64.zip) |
+| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-macos-x86_64.dmg) |
 | Docker / NAS | [Deployment guide](docs/DOCKER.md) |
 | Source | [Setup instructions](docs/OPERATIONS.md#从源码运行windowsmacos); requires Git, uv and Python 3.14+ |
 

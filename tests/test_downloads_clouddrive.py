@@ -7,9 +7,14 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import socket
+import tempfile
 import unittest
 from concurrent import futures
+from pathlib import Path
+from types import SimpleNamespace
 
 import grpc
 
@@ -17,7 +22,11 @@ from peach import downloads as dl
 from peach import interface_text
 from peach import downloads_clouddrive as cd
 from peach import downloads_clouddrive_pb2 as pb
+from peach.downloads_channels import LibraryChannels
+from peach.follow_secrets import CredentialStore
 from peach.push_discovery import CloudPrefix
+from peach.repository import LedgerDatabase
+from support.ledger import fresh_ledger
 
 HASH = "c9e15763f722f23e98a29decdfae341b98d53056"
 MAGNET = dl.parse_magnet(f"magnet:?xt=urn:btih:{HASH}&dn=ABC-123")
@@ -40,6 +49,15 @@ class FakeCloudDrive:
         self.files_after_refresh: set[str] = set()
         self.list_error = None
         self.can_manage = True
+        #: 令牌根目录。状态里一律记完整路径；限定了根目录时，收到的路径照 CloudDrive2 实测行为
+        #: 接在根目录后面，所以传完整路径会找到 `<根>/<完整路径>` 去。
+        self.root = "/"
+
+    def _full(self, path: str) -> str:
+        path = "/" + path.strip("/")
+        if self.root == "/":
+            return path
+        return self.root if path == "/" else self.root + path
 
     def _auth(self, name, request, context):
         header = dict(context.invocation_metadata()).get("authorization", "")
@@ -58,7 +76,7 @@ class FakeCloudDrive:
 
     def GetApiTokenInfo(self, request, context):
         self._auth("GetApiTokenInfo", request, context)
-        return pb.TokenInfo(token=request.value, rootDir="/", permissions=pb.TokenPermissions(
+        return pb.TokenInfo(token=request.value, rootDir=self.root, permissions=pb.TokenPermissions(
             allow_add_offline_download=True, allow_list_offline_downloads=True))
 
     def GetAllCloudApis(self, request, context):
@@ -80,11 +98,11 @@ class FakeCloudDrive:
 
     def FindFileByPath(self, request, context):
         self._auth("FindFileByPath", request, context)
-        full = f"{request.parentPath.rstrip('/')}/{request.path}"
+        full = self._full(f"{request.parentPath.rstrip('/')}/{request.path}")
         if full in self.folders:
             root = max((root for root in self.clouds if full == root or full.startswith(root + "/")),
                        key=len, default="/115")
-            return pb.CloudDriveFile(name=request.path, fullPathName=full, isDirectory=True,
+            return pb.CloudDriveFile(id=full, name=request.path, fullPathName=full, isDirectory=True,
                                      isCloudRoot=full == root, canOfflineDownload=self.folders[full],
                                      supportOfflineDownloadManagement=self.can_manage,
                                      CloudAPI=pb.CloudAPI(name=self.clouds.get(root, "115open"),
@@ -105,7 +123,7 @@ class FakeCloudDrive:
         if self.create_error:
             return pb.CreateFolderResult(result=pb.FileOperationResult(
                 success=False, errorMessage=self.create_error))
-        full = f"{request.parentPath.rstrip('/')}/{request.folderName}"
+        full = self._full(f"{request.parentPath.rstrip('/')}/{request.folderName}")
         self.folders[full] = True
         return pb.CreateFolderResult(
             folderCreated=pb.CloudDriveFile(name=request.folderName, fullPathName=full, isDirectory=True),
@@ -187,12 +205,12 @@ class SubmitTests(_Server):
     def test_a_submission_checks_the_folder_and_quota_then_adds(self):
         status = self.provider.submit(MAGNET, TARGET)
         self.assertEqual((status.state, status.adopted), (dl.RUNNING, False))
-        self.assertEqual(self.methods(), ["FindFileByPath", "ListOfflineFilesByPath",
+        self.assertEqual(self.methods(), ["GetApiTokenInfo", "FindFileByPath", "ListOfflineFilesByPath",
                                           "GetOfflineQuotaInfo", "AddOfflineFiles"])
         add = self.fake.calls[-1][1]
         self.assertEqual((add.urls, add.toFolder, add.checkFolderAfterSecs),
                          (MAGNET.uri, TARGET, cd.CHECK_FOLDER_AFTER_SECS))
-        quota = self.fake.calls[2][1]
+        quota = self.fake.calls[3][1]
         self.assertEqual((quota.cloudName, quota.cloudAccountId, quota.path), ("115open", "u1", TARGET))
 
     def test_the_token_travels_only_in_the_metadata(self):
@@ -250,14 +268,14 @@ class SubmitTests(_Server):
             cd.CloudDriveProvider(self.address, "wrong").submit(MAGNET, TARGET)
         self.assertEqual(caught.exception.failure, "config")
         self.assertEqual(caught.exception.code, "errors.downloadsClouddrive.tokenRejected")
-        self.assertEqual(caught.exception.params["action"], {"code": "labels.downloadsClouddrive.action.findTarget"})
-        self.assertTrue(caught.exception.detail.startswith("CloudDrive2 拒绝了这个 API 令牌（查找目标目录）："))
+        self.assertEqual(caught.exception.params["action"], {"code": "labels.downloadsClouddrive.action.verifyToken"})
+        self.assertTrue(caught.exception.detail.startswith("CloudDrive2 拒绝了这个 API 令牌（核对 API 令牌）："))
         self.server.stop(None)
         with self.assertRaises(dl.DownloadError) as caught:
             self.provider.status(dl.DownloadTask(1, HASH, "115", MAGNET.uri, "", TARGET, dl.SUBMITTED))
         self.assertEqual(caught.exception.failure, "network")
         english = interface_text.text(f"server:{caught.exception.code}", caught.exception.params, language="en")
-        self.assertTrue(english.startswith("Cannot reach CloudDrive2 while finding the target directory: "))
+        self.assertTrue(english.startswith("Cannot reach CloudDrive2 while checking the API token: "))
 
 
 class TrackingTests(_Server):
@@ -281,7 +299,7 @@ class TrackingTests(_Server):
     def test_landed_refreshes_the_official_directory_cache(self):
         self.fake.files_after_refresh.add(f'{TARGET}/ABC-123')
         self.assertTrue(self.provider.landed(self.task()))
-        name, request, header = self.fake.calls[0]
+        name, request, header = next(call for call in self.fake.calls if call[0] != 'GetApiTokenInfo')
         self.assertEqual((name, request.path, request.forceRefresh), ('GetSubFiles', TARGET, True))
         self.assertEqual(header, f'Bearer {TOKEN}')
 
@@ -454,6 +472,197 @@ class SuggestionTests(_Server):
         with self.assertRaises(dl.DownloadError) as caught:
             cd.create_folder(self.address, TOKEN, "/甲/另一个", hints=self.hints())
         self.assertIn("没有新建文件夹的权限", caught.exception.detail)
+
+
+class RestrictedRootTests(_Server):
+    """令牌根目录限定在 `/115/Peach`：Peach 照旧记完整路径，发出去的是相对根目录的路径。"""
+
+    ROOT = "/115/Peach"
+
+    def setUp(self):
+        super().setUp()
+        self.fake.root = self.ROOT
+        self.fake.folders = {self.ROOT: True, f"{self.ROOT}/云下载": True}
+
+    def sent(self, method: str):
+        return [request for name, request, _ in self.fake.calls if name == method]
+
+    def test_submitting_and_tracking_send_paths_relative_to_the_token_root(self):
+        for target, inner in ((self.ROOT, "/"), (f"{self.ROOT}/云下载", "/云下载")):
+            with self.subTest(target=target):
+                self.fake.calls.clear()
+                self.fake.offline.clear()
+                self.assertEqual(self.provider.submit(MAGNET, target).state, dl.RUNNING)
+                self.assertEqual([request.toFolder for request in self.sent("AddOfflineFiles")], [inner])
+                self.assertEqual([request.path for request in self.sent("ListOfflineFilesByPath")], [inner])
+                self.assertEqual([request.path for request in self.sent("GetOfflineQuotaInfo")], [inner])
+                task = dl.DownloadTask(1, HASH, "clouddrive:115:test", MAGNET.uri, "ABC-123", target, dl.SUBMITTED)
+                self.assertEqual(self.provider.status(task).state, dl.RUNNING)
+                self.provider.cancel(task)
+                self.assertEqual([request.path for request in self.sent("RemoveOfflineFiles")], [inner])
+        self.fake.files.add(f"{self.ROOT}/云下载/ABC-123")
+        task = dl.DownloadTask(1, HASH, "clouddrive:115:test", MAGNET.uri, "ABC-123", f"{self.ROOT}/云下载",
+                               dl.SUBMITTED, remote_name="ABC-123")
+        self.assertTrue(self.provider.landed(task))
+
+    def test_a_path_outside_the_token_root_is_refused_before_anything_is_written(self):
+        for call in (lambda: self.provider.submit(MAGNET, "/115/云下载"),
+                     lambda: cd.create_folder(self.address, TOKEN, "/115/云下载")):
+            with self.assertRaises(dl.DownloadError) as caught:
+                call()
+            self.assertEqual((caught.exception.failure, caught.exception.code),
+                             ("config", "errors.downloadsClouddrive.outsideTokenRoot"))
+            self.assertIn(self.ROOT, caught.exception.detail)
+        self.assertEqual(self.sent("AddOfflineFiles") + self.sent("CreateFolder"), [])
+
+    def legacy_service(self, target: str, prefix: str) -> dl.DownloadService:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        state = root / "state"
+        state.mkdir()
+        settings = state / dl.SETTINGS_FILENAME
+        settings.write_text(json.dumps({
+            "clouddrive_address": self.address, "targets": {"115": target, "pikpak": "/Movies"},
+            "pikpak_root": "P:\\", "wait_hours": 48,
+        }), encoding="utf-8")
+        credentials = CredentialStore(root / "secrets")
+        credentials.save(dl.CLOUDDRIVE_CREDENTIAL, {"token": TOKEN})
+        push = SimpleNamespace(config=SimpleNamespace(prefixes=(CloudPrefix(prefix, "B:\\"),)))
+        service = dl.DownloadService(database=LedgerDatabase(fresh_ledger(root)), state_root=state,
+                                     credentials=credentials, providers=lambda _: self.provider,
+                                     landing=dl.Landing(push, declared_roots={"115": ("B:\\",)}))
+        service.channel_catalog = LibraryChannels(service, lambda: {})
+        service.landing.channel_catalog = service.channel_snapshot
+        return service
+
+    def test_legacy_settings_and_existing_tasks_are_upgraded_on_the_normal_poll(self):
+        service = self.legacy_service("/云下载", "/115")
+        before = service.settings.path.read_bytes()
+        task = service.store.save(dl.DownloadTask(
+            0, HASH, "115", MAGNET.uri, "ABC-123", "/云下载", dl.REMOTE_RUNNING, remote_id="r1",
+            submitted_at=dl.iso(service.clock())))
+        self.fake.offline.append(pb.OfflineFile(infoHash=HASH, fileId="r1", name="ABC-123",
+                                                status=pb.OFFLINE_DOWNLOADING))
+        self.assertEqual(service.poll_once(), 1)
+        updated = service.settings.load()
+        full_path = f"{self.ROOT}/云下载"
+        self.assertEqual(updated.targets, {"115": full_path, "pikpak": "/Movies"})
+        self.assertEqual(updated.wait_hours, 48)
+        self.assertEqual(updated.pikpak_root, "P:\\")
+        self.assertEqual(updated.legacy_cloud_targets, frozenset())
+        saved = service.store.get(task.id)
+        self.assertEqual((saved.target, saved.state, saved.remote_id), (full_path, dl.REMOTE_RUNNING, "r1"))
+        self.assertEqual(service.landing.ledger_path(saved, updated), ("115", "B:\\Peach\\云下载\\ABC-123"))
+        backup = service.settings.path.with_name("downloads.before-cloud-path-upgrade.json")
+        self.assertEqual(backup.read_bytes(), before)
+        after = service.settings.path.read_bytes()
+        service.config = service.settings.load()
+        self.assertEqual(service.poll_once(), 0)
+        self.assertEqual(service.settings.path.read_bytes(), after)
+        self.assertEqual(backup.read_bytes(), before)
+        self.assertEqual(self.sent("AddOfflineFiles") + self.sent("CreateFolder"), [])
+
+    def test_relative_library_mapping_with_an_already_qualified_target(self):
+        service = self.legacy_service(f"{self.ROOT}/云下载", "/云下载")
+        rows = service.channel_snapshot()["providers"]
+        self.assertEqual([(row["key"], row["target"], row["cloud_root"]) for row in rows],
+                         [("115", f"{self.ROOT}/云下载", f"{self.ROOT}/云下载")])
+        self.assertEqual(service.config.targets["115"], f"{self.ROOT}/云下载")
+        digest = hashlib.sha256("/云下载\0b:".encode()).hexdigest()[:16]
+        old_provider = f"clouddrive:115:{digest}"
+        task = dl.DownloadTask(1, HASH, old_provider, MAGNET.uri, "ABC-123", f"{self.ROOT}/云下载", dl.REMOTE_DONE)
+        self.assertEqual(service.landing.ledger_path(task, service.config), ("115", "B:\\ABC-123"))
+
+    def test_unverified_legacy_directory_is_kept_and_a_new_outside_path_is_not_reinterpreted(self):
+        service = self.legacy_service("/云下载", "/115")
+        before = service.settings.path.read_bytes()
+        del self.fake.folders[f"{self.ROOT}/云下载"]
+        self.assertEqual(service.channel_snapshot()["providers"], [])
+        self.assertEqual(service.settings.path.read_bytes(), before)
+        self.fake.folders[f"{self.ROOT}/新配置"] = True
+        service.save_settings({**service.config.payload(), "targets": {"115": "/新配置"}}, {"pikpak": ("P:\\",)})
+        self.assertEqual(service.config.legacy_cloud_targets, frozenset())
+        self.fake.calls.clear()
+        self.assertNotIn(f"{self.ROOT}/新配置",
+                         [row["target"] for row in service.channel_snapshot()["providers"]])
+        self.assertNotIn("新配置", [request.path for request in self.sent("FindFileByPath")])
+
+    def test_a_failed_upgrade_can_recover_the_remote_task_without_resubmitting(self):
+        service = self.legacy_service(f"{self.ROOT}/云下载", "/115")
+        failure = dl.DownloadError("config", dl.CD2_OUTSIDE_TOKEN_ROOT,
+                                   {"path": "/云下载", "root": self.ROOT})
+        task = service.store.save(dl.DownloadTask(
+            0, HASH, "115", MAGNET.uri, "ABC-123", "/云下载", dl.FAILED,
+            failure=failure.failure, failure_detail=failure.detail,
+            finished_at=dl.iso(service.clock() - dl.STALL_RECHECK_HORIZON - 86400)))
+        service.store.record_submission(task=task, outcome="submitted", now=service.clock() - 2)
+        self.fake.offline.append(pb.OfflineFile(infoHash=HASH, fileId="r1", name="ABC-123",
+                                                status=pb.OFFLINE_FINISHED))
+        self.assertEqual(service.poll_once(), 1)
+        saved = service.store.get(task.id)
+        self.assertEqual((saved.target, saved.state, saved.failure_detail, saved.finished_at),
+                         (f"{self.ROOT}/云下载", dl.REMOTE_DONE, None, None))
+        self.assertEqual(self.sent("AddOfflineFiles"), [])
+
+    def test_a_new_rejected_path_stays_rejected_even_if_the_hash_exists_in_another_folder(self):
+        service = self.legacy_service(f"{self.ROOT}/云下载", "/115")
+        self.fake.offline.append(pb.OfflineFile(infoHash=HASH, fileId="other-id"))
+        failed = service.submit(source=MAGNET.uri, provider="115", target="/云下载")
+        self.assertEqual(failed.outcome, "failed")
+        self.assertEqual(service.poll_once(), 0)
+        self.assertEqual(service.store.get(failed.task.id).target, "/云下载")
+        self.assertEqual(self.sent("AddOfflineFiles") + self.sent("ListOfflineFilesByPath"), [])
+
+    def test_retry_and_cancel_do_not_guess_for_an_unconfirmed_legacy_task(self):
+        task = dl.DownloadTask(1, HASH, "115", MAGNET.uri, "ABC-123", "/云下载", dl.SUBMIT_PENDING, remote_id="r1")
+        self.fake.offline.append(pb.OfflineFile(infoHash=HASH, fileId="other-id"))
+        for action in (lambda: self.provider.retry_submit(task, MAGNET), lambda: self.provider.cancel(task)):
+            with self.assertRaises(dl.DownloadError) as caught:
+                action()
+            self.assertEqual(caught.exception.code, dl.CD2_OUTSIDE_TOKEN_ROOT)
+            self.assertEqual(task.target, "/云下载")
+        self.assertEqual(self.sent("AddOfflineFiles") + self.sent("RemoveOfflineFiles"), [])
+        self.fake.offline[0].fileId = "r1"
+        self.fake.offline[0].parentId = f"{self.ROOT}/别的目录"
+        self.assertIsNone(self.provider.recover_legacy_target(task))
+        self.assertEqual(task.target, "/云下载")
+        self.fake.offline[0].parentId = f"{self.ROOT}/云下载"
+        self.assertTrue(self.provider.retry_submit(task, MAGNET).adopted)
+        self.provider.cancel(task)
+        self.assertEqual(self.sent("AddOfflineFiles"), [])
+        self.assertEqual([request.path for request in self.sent("RemoveOfflineFiles")], ["/云下载"])
+
+    def test_the_check_suggests_the_token_root_under_a_115_prefix(self):
+        report = cd.check(self.address, TOKEN, "", hints=cd.Hints((CloudPrefix("/115", "B:\\"),), {"115": ("B:\\",)}))
+        self.assertEqual(report["root"], self.ROOT)
+        self.assertEqual(report["suggested_target"], {"path": self.ROOT, "exists": True})
+        self.assertEqual(report["folder"], {"path": self.ROOT, "can_offline": True, "cloud": "115open"})
+        self.assertEqual(report["problems"], [])
+        report = cd.check(self.address, TOKEN, f"{self.ROOT}/云下载")
+        self.assertEqual((report["folder"]["path"], report["problems"]), (f"{self.ROOT}/云下载", []))
+
+    def test_new_folders_are_created_inside_the_token_root(self):
+        cd.create_folder(self.address, TOKEN, f"{self.ROOT}/新目录")
+        self.assertEqual([(request.parentPath, request.folderName) for request in self.sent("CreateFolder")],
+                         [("/", "新目录")])
+        self.assertIn(f"{self.ROOT}/新目录", self.fake.folders)
+
+
+class TokenPathTests(unittest.TestCase):
+    def test_paths_map_onto_the_token_root(self):
+        self.assertEqual(cd.token_path("/", "/115/云下载"), "/115/云下载")
+        self.assertEqual(cd.token_path("", "/115/云下载"), "/115/云下载")
+        self.assertEqual(cd.token_path("/115open/Peach", "/115open/Peach"), "/")
+        self.assertEqual(cd.token_path("/115open/Peach/", "/115open/peach/云下载"), "/云下载")
+        self.assertIsNone(cd.token_path("/115open/Peach", "/115open"))
+        self.assertIsNone(cd.token_path("/115open/Peach", "/115open/Peach2"))
+
+    def test_a_prefix_above_the_token_root_becomes_the_root(self):
+        self.assertEqual(cd.within_token_root("/115open/Peach", "/115open"), "/115open/Peach")
+        self.assertEqual(cd.within_token_root("/115open/Peach", "/115open/Peach/云下载"), "/115open/Peach/云下载")
+        self.assertEqual(cd.within_token_root("/115open/Peach", "/PikPak"), "/PikPak")
+        self.assertEqual(cd.within_token_root("/", "/115open"), "/115open")
 
 
 if __name__ == "__main__":

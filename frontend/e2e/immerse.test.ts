@@ -9,7 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import type { Browser, Page } from 'playwright-core';
 
 import { launch, stubTimelineSheets, visit, VIEWPORTS } from './harness.ts';
-import { currentVideo, muteVideos, openImmerse, pickClips, pinQueue, settledClip } from './immerse-fixture.ts';
+import { assertLandscapeActions, currentVideo, muteVideos, openImmerse, pickClips, pinQueue, settledClip } from './immerse-fixture.ts';
 
 const DESKTOP = VIEWPORTS.find((viewport) => !viewport.mobile)!;
 const MOBILE = VIEWPORTS.find((viewport) => viewport.mobile)!;
@@ -93,6 +93,7 @@ describe('沉浸模式', () => {
       holds.get(wide.id)!.release();
       await settled(page);
       assert.deepEqual(await sample(page), { wide: true, shown: true, slides: [''] });
+      await assertLandscapeActions(page);
       assert.deepEqual(planned, [wide.id]);
 
       await page.dispatchEvent('[data-immerse]', 'wheel', { deltaY: 100 });
@@ -173,11 +174,21 @@ describe('沉浸模式', () => {
   it('手机 390 宽：竖划换条，横划拖进度（拖动中进度条变粗），同一半区双击快进且不切播放', async () => {
     const opened = await visit(browser, '/', MOBILE);
     const { page } = opened;
+    const refill = Promise.withResolvers<void>();
+    let holdRefill = false;
+    let refillRequested = false;
     try {
       const { wide, tall } = await pickClips(page);
-      await pinQueue(page, [tall, wide]);
+      await page.route(/\/api\/items\?.*sort=rand/, async (route) => {
+        if (holdRefill) {
+          refillRequested = true;
+          await refill.promise;
+        }
+        await route.fulfill({ json: { items: [tall, wide] } });
+      });
       await muteVideos(page);
       await openImmerse(page, tall.id);
+      await page.locator(currentVideo).evaluate((video: HTMLVideoElement) => video.pause());
       const cdp = await page.context().newCDPSession(page);
       const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x = 0, y = 0) =>
         cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
@@ -193,9 +204,16 @@ describe('沉浸模式', () => {
         return { time: video.currentTime, duration: video.duration, paused: video.paused };
       }, currentVideo);
 
-      await drag([195, 640], [195, 300]);
-      await page.waitForFunction((want) => location.search === `?id=${want}`, wide.id);
+      // 首条的位置随抽样变化。向队列里已有的另一条划动，并保持补队列响应挂起。
+      const position = await page.locator('[data-immerse-author] > span').innerText();
+      assert.match(position, /[12]\/2$/);
+      holdRefill = true;
+      if (position.endsWith('1/2')) await drag([195, 640], [195, 300]);
+      else await drag([195, 300], [195, 640]);
+      await page.waitForFunction((want) => location.search === `?id=${want}`, wide.id, { timeout: 10_000 });
       await settledClip(page);
+      assert.ok(refillRequested, '补队列已发起时，队列里已有的下一条仍可出画');
+      refill.resolve();
 
       await page.evaluate((selector) => {
         const video = document.querySelector<HTMLVideoElement>(selector)!;
@@ -220,6 +238,7 @@ describe('沉浸模式', () => {
       assert.equal(seeked.paused, true, '双击与随后合成的 click 都不该切播放');
       assert.deepEqual(opened.problems, [], JSON.stringify(opened.problems));
     } finally {
+      refill.resolve();
       await opened.close();
     }
   });

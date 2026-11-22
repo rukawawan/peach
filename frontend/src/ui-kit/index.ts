@@ -4,7 +4,6 @@
 export { attachOverlayScrollbar } from './overlay-scrollbar';
 export { growCollapse, setCollapseOpen, setCollapseRegionOpen, wireCollapse } from './collapse';
 export { closeAnchoredMenu, dismissMenu, presentMenu, scrollMovesAnchor, wireAnchoredMenu } from './anchored-menu';
-export { selectFieldHtml, selectOptionIconHtml, wireSelectField } from './select-field';
 export { MEDIA_SOURCE_ICONS } from './media-source-icons';
 export {
   badgeHtml, boardTabsHtml, checkboxHtml, collectionHeaderHtml, emptyStateHtml, LOAD_MORE_STATUS, noteHtml,
@@ -18,7 +17,7 @@ export {
 } from './skeleton';
 export { gateSweep, releaseSweep } from './sweep-gate';
 export {
-  cancelGlide, glideEase, moveGlidePane, rubberBand, scrollerHtml, stopAutoScroll, wireAutoScroll, wireHorizontalScroller,
+  afterGlide, cancelGlide, glideEase, moveGlidePane, rubberBand, scrollerHtml, stopAutoScroll, wireAutoScroll, wireHorizontalScroller,
   observeScrollRegions, wireOverlayScrollbars, wireScrollers,
 } from './scroll';
 export {
@@ -26,3 +25,4 @@ export {
   wireIconSwitch,
 } from './controls';
 export { confirmModal, formModal } from './modal';
+export { attachHoldToConfirm } from './hold-to-confirm';

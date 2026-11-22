@@ -16,10 +16,9 @@ import { Note } from '../components/note';
 import { SortableBoardTabs } from '../components/navigation-order';
 import { CONFIGURATION_KEY, fetchConfiguration } from './configuration';
 import { DownloadGroup } from './download-settings';
-import { GeneralSettings } from './general-settings';
 import { MaintenanceSettings } from './maintenance-settings';
 import { MediaSettings } from './media-settings';
-import { MediaProcessingSettings, PlaybackTranscodeSettings } from './media-processing-settings';
+import { MediaProcessingSettings } from './media-processing-settings';
 import { TaskSpeedSettings } from './service-preferences';
 import { CodePatternSettings } from './code-pattern-settings';
 import { NetworkSettings } from './network-settings';
@@ -73,6 +72,7 @@ function ConfigurationGroups(
   const [prefix] = useState(() => `board-tabs-${++tabSequence}`);
   const [chosen, setChosen] = useState(section);
   const workspace = useRef<HTMLDivElement>(null);
+  const primaryNav = useRef<HTMLDivElement>(null);
   const previous = useRef(chosen);
   useEffect(() => { setChosen(section) }, [section]);
   /* 下载渠道、网络与访问、应用与维护随这份配置一次画齐：记下结构，下次整页骨架照它排。 */
@@ -82,6 +82,15 @@ function ConfigurationGroups(
     rememberShape('network', networkShape(data));
     rememberShape('maintenance', maintenanceShape(data));
   }, [data]);
+  useLayoutEffect(() => {
+    const nav = primaryNav.current!;
+    const root = workspace.current!;
+    const measure = () => root.style.setProperty('--settings-nav-height', `${nav.offsetHeight}px`);
+    measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(nav);
+    return () => resize.disconnect();
+  }, []);
   useLayoutEffect(() => {
     if (previous.current === chosen) return;
     previous.current = chosen;
@@ -129,9 +138,7 @@ function ConfigurationGroups(
       id: 'maintenance', title: CONFIGURATION_SECTIONS.maintenance,
       body: (panel) => <div {...groupRoot(panel)}>
         {issues(['startup', 'uninstall', 'storage', 'remote_reporting', 'library_sharing', 'updates', 'update_job', 'automatic_updates', 'facts'])}
-        <GeneralSettings {...group} />
-        <PlaybackTranscodeSettings receipt={receipt} />
-        <MaintenanceSettings {...group} reopenTutorial={reopenTutorial} />
+        <MaintenanceSettings {...group} active={panel.active} reopenTutorial={reopenTutorial} />
       </div>,
     },
     { id: 'diagnostics', title: CONFIGURATION_SECTIONS.diagnostics, body: panel => <div {...groupRoot(panel)}>{panel.active ? diagnostics : null}</div> },
@@ -139,7 +146,7 @@ function ConfigurationGroups(
   const at = Math.max(0, groups.findIndex((item) => item.title === sectionTitle(chosen)));
   return (
     <div ref={workspace} className="ui-configpage">
-      <div className="ui-board-local-nav" data-section-nav="">
+      <div ref={primaryNav} className="ui-board-local-nav" data-section-nav="">
         <SortableBoardTabs group="configuration" label={t('settings:configurationPage.sectionsLabel')} value={groups[at].id}
           tabs={groups.map(({ id, title }) => ({ value: id, label: title }))} sectionItems panelPrefix={prefix}
           orientation={narrow ? 'horizontal' : 'vertical'} className=""

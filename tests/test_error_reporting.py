@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -343,6 +344,8 @@ class ErrorReportingTests(unittest.TestCase):
         path = state / 'library-processing.json'
         payload = {'local_metadata': {str(index): r'D:\private\movie.mp4' for index in range(10000)},
                    'job_id': 'task-23', 'status': 'running', 'stage': 'previews', 'checked': 423,
+                   'scan_checkpoints': {'local:D:\\private': {'result': {'timings': {
+                       'directory_read': {'count': 40, 'seconds': 20.0, 'max_seconds': 3.0}}}}},
                    'issue_count': 1, 'issue_preview': [{'asset_id': 23, 'title': 'private-movie',
                        'diagnostics': {'reason': 'timeout', 'stderr': 'token=private-token'}}]}
         path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
@@ -355,6 +358,8 @@ class ErrorReportingTests(unittest.TestCase):
         self.assertEqual((exported['job_id'], exported['status'], exported['stage'], exported['checked']),
                          ('task-23', 'running', 'previews', 423))
         self.assertEqual(exported['issue_preview'][0]['diagnostics']['reason'], 'timeout')
+        self.assertEqual(exported['scan_checkpoints']['local:<path>']['result']['timings']['directory_read'],
+                         {'count': 40, 'seconds': 20.0, 'max_seconds': 3.0})
         self.assertNotIn(b'private-', content)
         entry = next(row for row in report['logs'] if row['name'] == path.name)
         self.assertEqual(entry['status'], 'included')
@@ -1199,7 +1204,7 @@ class ErrorReportingTests(unittest.TestCase):
         self.assertTrue(record['listener_closed'])
         self.assertFalse(record['listener_rearm'])
 
-    def serve_with_accept_abort(self, *, bind_failure=None):
+    def serve_with_accept_abort(self, *, bind_failure=None, dualstack=False):
         """起真 uvicorn，让下一次重新挂 accept 时抛 WinError 64，走标准库 `_start_serving` 原路径。"""
         import functools
         import socket
@@ -1231,7 +1236,9 @@ class ErrorReportingTests(unittest.TestCase):
             loop = asyncio.get_running_loop()
             server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=0, lifespan='off', log_config=None))
             loop.set_exception_handler(functools.partial(error_reporting.asyncio_handler, uvicorn_server=server))
-            serving = asyncio.create_task(server.serve())
+            # 双栈监听（`listening.bind`）：IPv4 连接从 `::` 套接字进来，重新监听后也要照样能连。
+            listener = socket.create_server(('::', 0), family=socket.AF_INET6, dualstack_ipv6=True)                 if dualstack else None
+            serving = asyncio.create_task(server.serve(sockets=[listener] if listener else None))
             while not server.started:
                 await asyncio.sleep(0.01)
             port = server.servers[0].sockets[0].getsockname()[1]
@@ -1269,6 +1276,13 @@ class ErrorReportingTests(unittest.TestCase):
         record = next(row for row in self.records() if row.get('classification') == 'accept-aborted')
         self.assertTrue(record['listener_closed'])
         self.assertTrue(record['listener_rearm'])
+
+    @unittest.skipUnless(os.name == 'nt' and socket.has_dualstack_ipv6(), 'Proactor 事件循环只在 Windows 上，且要有双栈')
+    def test_a_dual_stack_listener_still_accepts_ipv4_after_listening_again(self):
+        first, again, server, send = self.serve_with_accept_abort(dualstack=True)
+        self.assertEqual((first, again), (204, 204))
+        self.assertEqual(len(server.servers), 2)
+        send.assert_not_called()
 
     @unittest.skipUnless(os.name == 'nt', 'Proactor 事件循环只在 Windows 上')
     def test_a_listener_that_cannot_be_bound_again_stops_the_service_and_reports(self):

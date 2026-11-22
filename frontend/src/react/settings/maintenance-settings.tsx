@@ -1,6 +1,4 @@
-/* 「应用与维护」的后半段：存储空间、数据上传、运行信息、新手教程与卸载。少改的隐私开关和只读信息在后，
- * 卸载是不可逆动作，留在整组最后。 */
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { confirmModal } from '@peach/legacy/ui';
 
 import { SettingsCard, SettingsRow } from '@/components/application/settings/settings-rows';
@@ -13,12 +11,18 @@ import type {
   AutomaticUpdateState, ConfigurationFact, ConfigurationGroupProps, ConfigurationProps, UninstallState,
 } from '../bundle';
 import { PathLine } from '../components/path-line';
-import { groupRoot } from './configuration-panel';
+import { SectionToc, type TocEntry } from '../components/section-toc';
+import { StartupSettings } from './general-settings';
 import { LedgerBackupSettings } from './ledger-backup-settings';
+import { PlaybackTranscodeSettings } from './media-processing-settings';
+import { ReleaseUpdates } from './release-updates';
+import { RetentionSettings } from './retention-settings';
 import { LibrarySharingSettings } from './library-sharing-settings';
+import { SeedSharingSettings } from './seed-sharing-settings';
 import { RemoteReportingSettings } from './remote-reporting-settings';
 import { Disclosure, ErrorText, ExternalLink, Fact, FactList, Footer, Help, Rows, Section, Stack } from './section';
 import { StorageSettings } from './storage-settings';
+import { UpgradeRepairs } from './upgrade-repairs';
 import { busyProps, useAction } from './use-action';
 import { localizedFact } from './coded-text';
 import { codedText, serverText } from '../../core/server-text';
@@ -26,23 +30,51 @@ import { t } from '../../i18n';
 
 const INTERVALS = [['6', t('settings:automaticUpdates.every6Hours')], ['24', t('settings:automaticUpdates.daily')], ['168', t('settings:automaticUpdates.weekly')]] as const;
 
+function MaintenanceGroup({ entry, children }: { entry: TocEntry; children: ReactNode }) {
+  return <section id={entry.id} aria-labelledby={`${entry.id}-title`} className="flex min-w-0 flex-col gap-3">
+    <h3 id={`${entry.id}-title`} className="px-3 text-title-3-medium text-text-primary"><span>{entry.label}</span></h3>
+    <div className="flex min-w-0 flex-col gap-6">{children}</div>
+  </section>;
+}
+
 export function MaintenanceSettings(
-  { data, receipt, reopenTutorial, panel }: ConfigurationGroupProps & Pick<ConfigurationProps, 'reopenTutorial'>,
+  { data, receipt, reopenTutorial, active }: ConfigurationGroupProps & Pick<ConfigurationProps, 'reopenTutorial'> & { active: boolean },
 ) {
+  const updates = { id: 'maintenance-updates', label: t('settings:maintenanceGroups.updates') };
+  const runtime = { id: 'maintenance-runtime', label: t('settings:maintenanceGroups.runtime') };
+  const backups = { id: 'maintenance-backups', label: t('settings:maintenanceGroups.backups') };
+  const privacy = { id: 'maintenance-privacy', label: t('settings:maintenanceGroups.privacy') };
+  const entries = [updates, runtime, ...(data.storage ? [backups] : []), privacy,
+    ...(data.uninstall ? [{ id: 'uninstallPeach', label: t('settings:uninstall.title') }] : [])];
   return (
-    <div {...groupRoot(panel)}>
-      {data.storage ? <StorageSettings initial={data.storage} receipt={receipt} /> : null}
-      {data.storage ? <LedgerBackupSettings receipt={receipt} /> : null}
-      {data.remote_reporting || data.library_sharing ? <Section id="librarySharing" guide="reporting" title={t('settings:dataSharing.title')}>
-        {data.remote_reporting ? <RemoteReportingSettings initial={data.remote_reporting} receipt={receipt} /> : null}
-        {data.library_sharing ? <div className="border-t border-separator-border">
-          <LibrarySharingSettings initial={data.library_sharing} receipt={receipt} />
-        </div> : null}
-      </Section> : null}
-      <Facts facts={data.facts} receipt={receipt} />
-      <TutorialSettings receipt={receipt} reopenTutorial={reopenTutorial} />
+    <SectionToc inline label={t('settings:configurationPage.contents')} entries={entries}>
+      <MaintenanceGroup entry={updates}>
+        {data.updates ? <ReleaseUpdates initial={data.updates} initialJob={data.update_job} /> : null}
+        <UpgradeRepairs />
+        {data.automatic_updates ? <AutomaticUpdates initial={data.automatic_updates} receipt={receipt} /> : null}
+      </MaintenanceGroup>
+      <MaintenanceGroup entry={runtime}>
+        {data.startup ? <StartupSettings startup={data.startup} receipt={receipt} /> : null}
+        <PlaybackTranscodeSettings receipt={receipt} />
+        {data.storage ? <StorageSettings initial={data.storage} receipt={receipt} active={active} /> : null}
+        <Facts facts={data.facts} receipt={receipt} />
+        <TutorialSettings receipt={receipt} reopenTutorial={reopenTutorial} />
+      </MaintenanceGroup>
+      {data.storage ? <MaintenanceGroup entry={backups}>
+        <LedgerBackupSettings receipt={receipt} />
+        <RetentionSettings receipt={receipt} />
+      </MaintenanceGroup> : null}
+      <MaintenanceGroup entry={privacy}>
+        {data.remote_reporting || data.library_sharing ? <Section id="librarySharing" guide="reporting" title={t('settings:dataSharing.title')}>
+          {data.remote_reporting ? <RemoteReportingSettings initial={data.remote_reporting} receipt={receipt} /> : null}
+          {data.library_sharing ? <div className="border-t border-separator-border">
+            <LibrarySharingSettings initial={data.library_sharing} receipt={receipt} />
+          </div> : null}
+        </Section> : null}
+        <SeedSharingSettings receipt={receipt} />
+      </MaintenanceGroup>
       {data.uninstall ? <UninstallSettings uninstall={data.uninstall} receipt={receipt} /> : null}
-    </div>
+    </SectionToc>
   );
 }
 
@@ -87,7 +119,7 @@ export function AutomaticUpdates({ initial, receipt }: { initial: AutomaticUpdat
             onChange={(on) => setMode(on ? 'download' : 'check')} />
         </SettingsRow>
         <SettingsRow label={t('settings:autoUpdate.frequency')} description={help}>
-          <Select aria-label={t('settings:autoUpdate.frequency')} selectedKey={String(hours)} isDisabled={!initial.available}
+          <Select aria-label={t('settings:autoUpdate.frequency')} selectedKey={String(hours)} isDisabled={!initial.available || mode === 'off'}
             onSelectionChange={(key) => { if (key !== null) setHours(Number(key)); }}>
             {INTERVALS.map(([key, name]) => <SelectItem key={key} id={key}>{name}</SelectItem>)}
           </Select>
@@ -141,6 +173,7 @@ export function UninstallSettings(
   const [accepted, setAccepted] = useState('');
   const remove = () => void confirmModal({
     title: t('settings:uninstall.title'),
+    holdToConfirm: true,
     danger: true,
     body: removeData
       ? t('settings:uninstall.confirmFull')

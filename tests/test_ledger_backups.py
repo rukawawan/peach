@@ -6,15 +6,16 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from peach import ledger_backups, migrations, settings_file, update_tasks, web_organize
+from peach import ledger_backups, migrations, retention_settings, settings_file, update_tasks, web_organize
 from peach.task_runs import TaskRunStore
-from support.ledger import MIGRATIONS_DIR, fresh_ledger
+from support.ledger import MIGRATIONS_DIR, damage_task_pages, fresh_ledger
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -622,6 +623,19 @@ class LedgerBackupManagerTests(unittest.TestCase):
             return [row[0] for row in connection.execute(
                 "SELECT status FROM task_run WHERE task_key = ? ORDER BY id", (task_key,))]
 
+    def test_a_manual_backup_prunes_down_to_the_count_kept_on_this_computer(self):
+        retention_settings.save(self.config.directory("state"), {"backup_keep": 2})
+        old = time.time() - 3 * 86400
+        for day in range(1, 5):
+            path = self.root / "database" / f"ledger.pre-migrate-2026010{day}-000000.db"
+            path.write_bytes(b"old")
+            os.utime(path, (old + day, old + day))
+        self.manager.start_backup()
+        state = self.finish(self.manager.backup_job)
+        self.assertEqual(state["status"], "complete", state)
+        self.assertEqual(sorted(path.name for path in (self.root / "database").glob("ledger.pre-*.db")),
+                         sorted(["ledger.pre-migrate-20260104-000000.db", state["name"]]))
+
     def test_backup_and_restore_run_as_background_tasks_in_the_task_center(self):
         self.manager.start_backup()
         state = self.finish(self.manager.backup_job)
@@ -648,6 +662,38 @@ class LedgerBackupManagerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger_backups.BackupRejected, "扫描与采集"):
                 self.manager.start_restore(f"database/{backup.name}")
         self.assertEqual(self.manager.snapshot()["restore"], {"status": "idle"})
+
+    def test_partially_damaged_task_table_can_be_restored_offline(self):
+        from peach.health import inspect_database
+        from peach.repository import LedgerWriteCorrupt
+
+        backup = ledger_backups.create(self.live)
+        damage_task_pages(self.live)
+        damaged = self.live.read_bytes()
+        self.assertTrue(inspect_database(self.live)["readable"])
+        with self.assertRaises(sqlite3.DatabaseError), self.runs.database.read_connection() as connection:
+            connection.execute("SELECT id FROM task_run").fetchall()
+        with self.assertRaises(LedgerWriteCorrupt), self.runs.database.write_transaction():
+            self.fail("损坏账本不应开始写事务")
+
+        self.manager.start_restore(f"database/{backup.name}")
+        state = self.finish(self.manager.offline_restore)
+        self.assertEqual(state["status"], "complete", state)
+        self.assertEqual(ledger_backups.integrity(self.live), "ok")
+        self.assertEqual(notes(self.live), ["before"])
+        self.assertEqual((self.live.parent / state["saved"]).read_bytes(), damaged)
+        with self.runs.database.write_transaction() as connection:
+            connection.execute("SELECT id FROM task_run").fetchall()
+
+    def test_restore_preflight_detects_task_table_damage_before_a_normal_query(self):
+        backup = ledger_backups.create(self.live)
+        damage_task_pages(self.live)
+        self.assertFalse(self.runs.database.corrupted)
+
+        self.manager.start_restore(f"database/{backup.name}")
+        state = self.finish(self.manager.offline_restore)
+        self.assertEqual(state["status"], "complete", state)
+        self.assertEqual(ledger_backups.integrity(self.live), "ok")
 
     def test_restore_is_refused_on_a_reading_device(self):
         backup = ledger_backups.create(self.live)
@@ -682,6 +728,11 @@ class LedgerBackupManagerTests(unittest.TestCase):
             self.assertIn("已经不在", missing.json()["detail"]["message"])
             self.assertEqual(client.post("/api/configuration/ledger-backups/backup",
                                          headers={"origin": "https://other.invalid"}).status_code, 403)
+            self.assertEqual(client.get("/api/configuration/retention").json(), {"backup_keep": 5, "log_days": 183})
+            self.assertEqual(client.post("/api/configuration/retention", json={"log_days": 7}).status_code, 400)
+            self.assertEqual(client.post("/api/configuration/retention", json={"backup_keep": 10}).json(),
+                             {"backup_keep": 10, "log_days": 183})
+            self.assertEqual(self.manager.keep_recent(), 10)
 
 
 if __name__ == "__main__":

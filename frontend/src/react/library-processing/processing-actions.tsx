@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { RiArrowDownSLine, RiArrowRightLine } from '@remixicon/react';
+import { RiArrowRightLine } from '@remixicon/react';
+import { MenuChevron } from '../components/menu-chevron';
 import { Dialog, Popover } from 'react-aria-components';
 import { Button } from '@/components/base/buttons/button';
 import { LinkButton } from '@/components/base/buttons/link-button';
@@ -13,6 +14,7 @@ import { errorMessage } from '../../api';
 import { fetchProcessingEstimate, type LibraryProcessingCommand, type ProcessingSpeed, type ProcessingTraffic } from './library-processing';
 import { ProcessingEffort } from './processing-effort';
 import { TrafficProgress } from './processing-traffic';
+import { ScanDirectoryPicker } from './scan-directory-picker';
 import { quoted, t } from '../../i18n';
 
 interface ProcessingOption {
@@ -96,12 +98,15 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
   const prompt = useRef<ReturnType<typeof formModal> | null>(null);
   const [promptView, setPromptView] = useState<{ host: HTMLElement; footer: HTMLElement; dialog: ReturnType<typeof formModal>; command: LibraryProcessingCommand } | null>(null);
   const selectedSpeed = useRef(speedMode);
+  const selectedDirectory = useRef<string>(undefined);
+  const selectDirectory = useCallback((path?: string) => { selectedDirectory.current = path }, []);
   useEffect(() => () => prompt.current?.close(), []);
   const [open, setOpen] = useState(false);
   const primary: ProcessingOption = { label: scan ? t('manage:syncMenu.syncNewFiles') : t('manage:syncMenu.syncTheseVideos'), description: '',
     command: scan ? {incremental:true} : { stage: 'collect' as const } };
   const dailyOptions: ProcessingOption[] = [
     {label:t('manage:syncMenu.findNewOnly'), description:t('manage:syncMenu.findNewOnlyHint'), command:{stage:'scan',incremental:true}},
+    {label:t('manage:syncMenu.scanDirectory'), description:t('manage:syncMenu.scanDirectoryHint'), command:{stage:'scan',directory:''}},
     {label:t('manage:syncMenu.fillPending'), description:libraryId ? t('manage:syncMenu.fillPendingHintLibrary')
       : pendingCount ? t('manage:syncMenu.fillPendingHintCount', { count: pendingCount }) : t('manage:syncMenu.noPending'),
       command:{stage:'collect',scope:'new'}, disabled:!pendingCount},
@@ -111,6 +116,7 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
     ...(scan ? [{ label: t('manage:syncMenu.scanOnly'), description: t('manage:syncMenu.scanOnlyHint'), command: { stage: 'scan' as const } }] : []),
     ...(scan ? [{ label: t('manage:syncMenu.fillMetadataPreviews'), description: metadataOnly ? t('manage:syncMenu.fillMetadataHintNoPreviews') : t('manage:syncMenu.fillMetadataHint'), command: { stage: 'collect' as const } }] : []),
     { label: t('manage:syncMenu.metadataOnly'), description: t('manage:syncMenu.metadataOnlyHint'), command: { stage: 'metadata' as const } },
+    { label: t('manage:syncMenu.coversOnly'), description: t('manage:syncMenu.coversOnlyHint'), command: { stage: 'covers' as const } },
     { label: t('manage:syncMenu.previewsOnly'), description: t('manage:syncMenu.previewsOnlyHint'), command: { stage: 'previews' as const } },
   ];
   const blocked = busy || occupied;
@@ -126,11 +132,15 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
     }
     if (prompt.current) return;
     selectedSpeed.current = speedMode;
+    selectedDirectory.current = undefined;
+    const chooseDirectory = command.directory === '';
     const previews = command.stage === 'previews';
-    const title = command.scope === 'new' ? t('manage:syncMenu.fillPending')
+    const title = chooseDirectory ? t('manage:syncMenu.scanDirectory')
+      : command.scope === 'new' ? t('manage:syncMenu.fillPending')
       : command.incremental ? command.stage === 'scan' ? t('manage:syncMenu.findNewTitle') : t('manage:syncMenu.syncNewFiles')
       : previews ? t('manage:syncMenu.previewsOnly') : command.stage === 'scan' ? t('manage:syncMenu.scanAllTitle')
-      : command.stage === 'metadata' ? t('manage:syncMenu.metadataOnly') : command.stage === 'collect' ? t('manage:syncMenu.fillImportedTitle')
+      : command.stage === 'metadata' ? t('manage:syncMenu.metadataOnly') : command.stage === 'covers' ? t('manage:syncMenu.coversOnly')
+      : command.stage === 'collect' ? t('manage:syncMenu.fillImportedTitle')
       : libraryId ? t('manage:syncMenu.syncSelectedLibrary') : t('manage:syncMenu.syncAllLibraries');
     const work = command.scope === 'new' ? t('manage:syncMenu.workPending')
       : command.incremental
@@ -139,18 +149,23 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
       : previews ? t('manage:syncMenu.workPreviews')
       : command.stage === 'scan' ? t('manage:syncMenu.workScan')
       : command.stage === 'metadata' ? t('manage:syncMenu.workMetadata')
+      : command.stage === 'covers' ? t('manage:syncMenu.workCovers')
       : command.stage === 'collect'
         ? metadataOnly ? t('manage:syncMenu.workCollectNoPreviews') : t('manage:syncMenu.workCollect')
         : metadataOnly ? t('manage:syncMenu.workFullNoPreviews') : t('manage:syncMenu.workFull');
     const dialog = formModal({
       title,
-      description: t('manage:syncPrompt.description', {
+      description: chooseDirectory ? t('manage:syncMenu.scanDirectoryHint') : t('manage:syncPrompt.description', {
         scope: libraryName ? t('manage:syncPrompt.namedLibrary', { name: quoted(libraryName) }) : t('manage:scanFetch.allLibraries'), work,
       }),
       body: '<div class="peach-react" data-processing-prompt></div>',
       confirmLabel: title,
       confirmDisabled: true,
       onConfirm: async () => {
+        if (chooseDirectory) {
+          if (selectedDirectory.current) await onRun({ ...command, directory: selectedDirectory.current });
+          return;
+        }
         await onRun({ ...command, ...(selectedSpeed.current === speedMode ? {} : { speed_mode: selectedSpeed.current }) });
       },
     });
@@ -162,8 +177,10 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
     void dialog.done.then(() => { if (prompt.current === dialog) { prompt.current = null; setPromptView(null) } });
   };
   return <>
-    {promptView ? createPortal(<ProcessingPrompt libraryName={libraryName} command={promptView.command} dialog={promptView.dialog}
-      speed={speedMode} busy={blocked} onSpeed={value => { selectedSpeed.current = value }} />, promptView.host) : null}
+    {promptView ? createPortal(promptView.command.directory === '' ?
+      <ScanDirectoryPicker libraryId={libraryId} confirmButton={promptView.dialog.confirmButton} onSelect={selectDirectory} /> :
+      <ProcessingPrompt libraryName={libraryName} command={promptView.command} dialog={promptView.dialog}
+        speed={speedMode} busy={blocked} onSpeed={value => { selectedSpeed.current = value }} />, promptView.host) : null}
     {promptView ? createPortal(<LinkButton href="/settings/library" size="small" variant="primary" trailingIcon={RiArrowRightLine} disabled={blocked}
       onClick={event => {
         if (promptView.dialog.confirmButton.getAttribute('aria-busy') === 'true') { event.preventDefault(); return }
@@ -171,7 +188,7 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
       }}>{t('manage:syncMenu.manageLibraries')}</LinkButton>, promptView.footer) : null}
     <span data-button-group data-split-button data-variant="primary">
       <Button {...blockedProps} onClick={() => run(primary.command)}>{primary.label}</Button>
-      <Button ref={trigger} iconOnly leadingIcon={RiArrowDownSLine} aria-label={t('manage:syncMenu.moreOptions')}
+      <Button ref={trigger} iconOnly leadingIcon={MenuChevron} aria-label={t('manage:syncMenu.moreOptions')}
         aria-haspopup="dialog" aria-expanded={open} {...blockedProps} onClick={() => {
           if (busy) return;
           if (occupied) onOccupied?.(); else setOpen(!open);

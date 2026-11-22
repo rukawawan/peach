@@ -5,7 +5,7 @@ import * as legacyUi from '@peach/legacy/ui';
 
 import type { StorageCategory, StorageState } from '../../src/react/bundle';
 import { StorageSettings } from '../../src/react/settings/storage-settings';
-import { buttonNamed, click, fetchMock, mount, sentBody, settle, submit, type } from './render';
+import { buttonNamed, click, fetchMock, mount, mountRoot, sentBody, settle, submit, type } from './render';
 
 const category = (key: string, label: string, bytes: number, reclaimable: number, cleanable: boolean,
                   note: string): StorageCategory =>
@@ -45,7 +45,12 @@ const box = (host: HTMLElement, key: string) =>
 it('首次打开维护页自动统计，已有结果时复用统计', async () => {
   const fetcher = fetchMock(200, measured);
   vi.stubGlobal('fetch', fetcher);
-  await mount(<StorageSettings initial={{ ...measured, usage: null }} receipt={vi.fn()} />);
+  const initial = { ...measured, usage: null };
+  const receipt = vi.fn();
+  const { rerender } = await mountRoot(<StorageSettings initial={initial} receipt={receipt} active={false} />);
+  await settle();
+  expect(fetcher).not.toHaveBeenCalled();
+  await rerender(<StorageSettings initial={initial} receipt={receipt} active />);
   await settle();
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(fetcher.mock.calls[0]?.[0]).toBe('/api/configuration/storage/measure');

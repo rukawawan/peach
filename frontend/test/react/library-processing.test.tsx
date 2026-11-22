@@ -408,7 +408,7 @@ it('读不回来时留住已有进度，只在旁边说一句连接中断', asyn
 it('横幅闲着不问，全站那一处报出任务在跑才接上，任务结束就收起、报一次完成，卸载之后不再敲库', async () => {
   vi.useFakeTimers();
   const toast = vi.fn();
-  const job = { at: { status: 'running', stage: '采集缺失资料', checked: 2, total: 5 } as LibraryProcessingData };
+  const job = { at: { status: 'running', job_id: 'one', stage: '采集缺失资料', checked: 2, total: 5 } as LibraryProcessingData };
   const served = await open({ status: 'idle' }, () => job.at);
   const mounted = await mountRoot(notice({ toast, mode: 'notice' }));
 

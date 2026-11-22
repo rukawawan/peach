@@ -9,16 +9,19 @@ import argparse
 import importlib.util
 import io
 import os
+import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from dataclasses import replace
 from pathlib import Path, PureWindowsPath
 from unittest import mock
 
 from peach import cli, onboarding, settings_file
-from peach.migrations import plan
+from peach.migrations import plan, upgrade
 from support.ledger import fresh_ledger
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +40,52 @@ def load_script(name: str):
 
 
 class StatusCommandTests(unittest.TestCase):
+    def test_migrate_upgrades_an_existing_ledger_without_loading_transcodes(self):
+        root = self.root / "legacy-data"
+        config = settings_file.load_config(environ={"PEACH_DATA_ROOT": str(root)})
+        settings_file.write(config)
+        database = config.directory("database") / "ledger.db"
+        database.parent.mkdir()
+        legacy = self.root / "v057-migrations"
+        legacy.mkdir()
+        for script in MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.sql"):
+            if script.name[:4] <= "0054":
+                shutil.copyfile(script, legacy / script.name)
+        upgrade(database, legacy)
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute(
+                "INSERT INTO asset(location,path,name,medium) VALUES('local',?,?,'video')",
+                (r"B:\smoke\fixture.mp4", "fixture.mp4"),
+            )
+            connection.commit()
+        probe = """
+import importlib.abc
+import runpy
+import sys
+
+class UnavailableTranscodes(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "peach.transcodes":
+            raise ImportError("cannot import name 'parse_decode' from 'peach.transcodes'")
+
+sys.meta_path.insert(0, UnavailableTranscodes())
+sys.argv = ["peach", *sys.argv[1:]]
+runpy.run_module("peach", run_name="__main__")
+"""
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", "-c", probe, "migrate", "upgrade", "--yes", "--db", str(database)],
+            cwd=ROOT, env=dict(os.environ, PEACH_DATA_ROOT=str(root), PEACH_HEADLESS_MANAGED="1"),
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(plan(database, MIGRATIONS)[1])
+        backups = list(database.parent.glob("ledger.pre-migrate-*.db"))
+        self.assertEqual(len(backups), 1)
+        self.assertFalse(plan(backups[0], legacy)[1])
+        for path in (database, backups[0]):
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(connection.execute("SELECT name FROM asset").fetchall(), [("fixture.mp4",)])
+
     def test_configured_reader_can_inspect_pending_schema_but_cannot_migrate(self):
         config = settings_file.load_config(environ={'PEACH_DATA_ROOT': str(self.root)})
         database = config.directory('database') / 'ledger.db'
@@ -508,7 +557,6 @@ class ScanCommandTests(unittest.TestCase):
                         mounts={key: tuple(str(item) for item in value)
                                 for key, value in mounts.items()})
         for target in (mock.patch.object(settings_file, "active", lambda: fixed),
-                       mock.patch.object(cli, "location_mounts", lambda: mounts),
                        mock.patch.object(cli, "SETTINGS_ERROR", None)):
             target.start()
             self.addCleanup(target.stop)
@@ -542,6 +590,37 @@ class ScanCommandTests(unittest.TestCase):
         self.assertIn('115', output)
         self.assertEqual(scanner.call_count, 1)
         self.assertEqual(scanner.call_args.args[1:3], ('pikpak', 'A:/'))
+
+    def test_an_smb_mount_reaches_the_scan_verbatim(self):
+        """#693：挂载表里的 `smb://` 地址原样交给扫描，不被改写成本机路径形态。"""
+        address = "smb://192.0.2.20:4450/Share"
+        fixed = replace(settings_file.active(), mounts={"local": (address,)})
+        with mock.patch.object(settings_file, "active", return_value=fixed), \
+             mock.patch.dict(os.environ, {"PEACH_MEDIA_MOUNTS": ""}), \
+             mock.patch.object(cli.scan, "scan_location") as scanner:
+            code, _ = self._run(["scan", "local", "--db", str(self.db)])
+        self.assertEqual(code, 0)
+        self.assertEqual(scanner.call_args.kwargs["mounts"], {"local": (address,)})
+
+    def test_an_unreadable_root_exits_with_a_message_and_keeps_existing_rows(self):
+        """#693：根目录列不出来时报错退出，不按 0 个文件结束、不把已有资产算作消失。"""
+        self.assertEqual(self._run(["scan", "local", "--db", str(self.db)])[0], 0)
+        connection = sqlite3.connect(self.db)
+        try:
+            before = connection.execute("SELECT path,last_seen FROM asset ORDER BY path").fetchall()
+        finally:
+            connection.close()
+        for path in sorted(self.media.rglob("*"), reverse=True):
+            path.rmdir() if path.is_dir() else path.unlink()
+        self.media.rmdir()
+        with self.assertRaises(SystemExit) as caught:
+            self._run(["scan", "local", "--db", str(self.db)])
+        self.assertTrue(str(caught.exception).startswith("✗"), caught.exception)
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute("SELECT path,last_seen FROM asset ORDER BY path").fetchall(), before)
+        finally:
+            connection.close()
 
     def test_an_explicit_subdirectory_is_scanned_alone(self):
         code, _ = self._run(["scan", "local", str(self.media / "sub"), "--db", str(self.db)])

@@ -13,6 +13,7 @@ describe('配置中的系统诊断', () => {
       const opened = await visit(browser, '/settings/diagnostics', viewport, async page => {
         await page.route('**/api/diagnostics', async route => {
           const report = await (await route.fetch()).json();
+          report.sources.find((source: { source: string }) => source.source === 'minnano-av').status = 'ok';
           report.checks.media_mounts = { label: '媒体挂载', status: 'warning', reason: '媒体目录不存在',
             action: '检查媒体目录', target: '/settings/library', details: {} };
           report.library.groups.cover = { label: '缺封面', status: 'ok', count: 31, truncated: false,
@@ -24,6 +25,7 @@ describe('配置中的系统诊断', () => {
       });
       try {
         const { page } = opened;
+        await page.locator('#diagnostics-sessions summary').click();
         const icon = page.locator('[data-diagnostic-source="minnano-av"] img');
         await icon.waitFor();
         assert.equal(await icon.evaluate(node => getComputedStyle(node).borderRadius), '0px');
@@ -55,16 +57,22 @@ describe('配置中的系统诊断', () => {
         assert.ok((await layout(page)).scrollWidth <= viewport.width);
         assert.deepEqual(opened.problems, []);
         await page.goto(new URL('/sources', page.url()).href);
-        const settingsIcon = page.locator('form[aria-label="MGStage"] img');
+        const settingsIcon = page.locator('#source-mgstage summary img');
         await settingsIcon.waitFor();
         assert.equal(await settingsIcon.evaluate(node => getComputedStyle(node).borderRadius), '0px');
       } finally { await opened.close(); }
     });
     it(`配置导航停在搜索栏下方，分区切换保持正文可见（${viewport.name}）`, { timeout: 60_000 }, async () => {
-      const opened = await visit(browser, '/settings/diagnostics', viewport);
+      let measured = 0;
+      const opened = await visit(browser, '/settings/diagnostics', viewport, async page => {
+        await page.route('**/api/configuration/storage/measure', async route => {
+          measured++;
+          await route.continue();
+        });
+      });
       try {
         const { page } = opened;
-        await page.locator('article[data-diagnostic-source]').first().waitFor();
+        await page.locator('#diagnostics-sessions').waitFor();
         await settle(page);
         await page.evaluate(() => window.scrollTo(0, 650));
         const nav = page.getByRole('tablist', { name: '配置分区' });
@@ -78,6 +86,7 @@ describe('配置中的系统诊断', () => {
           nav: document.querySelector('.ui-board-local-nav')!.getBoundingClientRect().bottom,
           search: document.querySelector('.top')!.getBoundingClientRect().bottom }));
         assert.ok(visible.panel >= (viewport.mobile ? visible.nav : visible.search), JSON.stringify(visible));
+        assert.equal(measured, 0);
         assert.deepEqual(opened.problems, []);
       } finally { await opened.close(); }
     });
@@ -103,7 +112,7 @@ describe('配置中的系统诊断', () => {
         assert.ok(pending.width > 0 && pending.height > 0, `诊断分区等待态不可见：${JSON.stringify(pending)}`);
         release();
         await page.getByRole('tab', { name: '系统诊断', selected: true }).waitFor();
-        await page.locator('article[data-diagnostic-source]').first().waitFor();
+        await page.locator('#diagnostics-sessions').waitFor();
         await settle(page);
         await skeleton.waitFor({ state: 'detached' });
         const ready = await panel.boundingBox();
@@ -118,6 +127,9 @@ describe('配置中的系统诊断', () => {
         const { page } = opened;
         await page.route('**/api/diagnostics', async route => {
           const report = await (await route.fetch()).json();
+          for (const source of report.sources) {
+            source.status = source.source === 'minnano-av' ? 'warning' : source.source === 'javdb' ? 'stale' : 'unchecked';
+          }
           report.checks.media_mounts = { label: '媒体挂载', status: 'warning', reason: '本地磁盘：目录不存在',
             action: '检查媒体目录与挂载状态', target: '/settings/library', details: {} };
           await route.fulfill({ json: report });
@@ -126,8 +138,18 @@ describe('配置中的系统诊断', () => {
         await page.locator('section[aria-label="来源会话"]').waitFor();
         await settle(page);
         assert.equal(new URL(page.url()).pathname, '/settings/diagnostics');
-        const source = page.locator('article[data-diagnostic-source]').first();
-        assert.ok(await page.locator('article[data-diagnostic-source]').count() > 1);
+        const toc = page.getByRole('navigation', { name: '本页目录', exact: true });
+        await toc.getByRole('link', { name: '来源会话', exact: true }).click();
+        assert.equal(new URL(page.url()).hash, '#diagnostics-sessions');
+        await settle(page);
+        const sessions = page.locator('#diagnostics-sessions');
+        const source = sessions.locator(':scope > article').first();
+        assert.equal(await sessions.locator(':scope > article').count(), 2);
+        assert.equal(await source.getAttribute('data-diagnostic-source'), 'minnano-av');
+        const other = sessions.locator('summary').filter({ hasText: /其他来源 ·/ });
+        const folded = sessions.locator('details > div article').first();
+        assert.equal(await other.getAttribute('aria-expanded'), 'false');
+        assert.equal(await folded.isVisible(), false);
         assert.ok(await source.locator('img').getAttribute('src'));
         const shape = await source.evaluate(element => {
           const next = element.nextElementSibling!;
@@ -136,6 +158,8 @@ describe('配置中的系统诊断', () => {
         });
         assert.ok(shape.gap >= 12);
         assert.notEqual(shape.background, 'rgba(0, 0, 0, 0)');
+        await other.click();
+        await folded.waitFor();
         const row = page.locator('[data-diagnostic-check="media_mounts"]');
         if (await row.count()) {
           const shown = await row.evaluate(element => {

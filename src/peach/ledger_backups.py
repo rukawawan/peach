@@ -2,7 +2,8 @@
 
 每个 `--apply` 脚本与 `peach migrate` 都在写入前留一份完整备份，每份和账本一样大
 （一百多 MB）。备份的价值只在「这次写入被复核之前」，之后它就是一份没人会再读的旧账本。
-三条规则任一成立就留：最近 `KEEP_RECENT` 份之内、还没满 `MIN_AGE`、或者比当前账本更新
+三条规则任一成立就留：最近 `KEEP_RECENT` 份之内（Peach 配置里能改，存在本机的
+`retention_settings`）、还没满 `MIN_AGE`、或者比当前账本更新
 （正常不会出现，出现了说明有事没弄清，先别删）。三条都不成立才删，连同 `-wal`／`-shm`
 一起删。当前账本 `integrity_check` 不是 `ok` 时拒绝清退任何一份：那正是要回滚的时候。
 
@@ -298,7 +299,8 @@ def _copy(live: Path, destination: Path, progress, stage: str) -> None:
         connection.execute("PRAGMA journal_mode=DELETE")
 
 
-def create(live: Path, *, purpose: str = MANUAL_PURPOSE, progress=None, now: datetime | None = None) -> Path:
+def create(live: Path, *, purpose: str = MANUAL_PURPOSE, progress=None, now: datetime | None = None,
+           keep_recent: int = KEEP_RECENT) -> Path:
     """写一份整库备份：先写 `.part`，完整性检查通过才改成正式文件名，再按保留规则清退。
 
     `.part` 不合 `BACKUP_PATTERN`，列表与清退都看不见它；没通过检查的那份当场删掉。
@@ -318,7 +320,7 @@ def create(live: Path, *, purpose: str = MANUAL_PURPOSE, progress=None, now: dat
     finally:
         _unlink_all(part)
     try:
-        prune(live, apply=True)
+        prune(live, apply=True, keep_recent=keep_recent)
     except Exception:
         log.warning("Ledger backup retention cleanup failed", exc_info=True)
     return target
@@ -471,7 +473,7 @@ def _carry_operational(live: Path, saved: Path) -> None:
 
 
 def restore(live: Path, backup: Path, *, migrations_dir: Path, progress=None,
-            now: datetime | None = None) -> RestoreOutcome:
+            now: datetime | None = None, keep_recent: int = KEEP_RECENT) -> RestoreOutcome:
     """用 `backup` 替换当前账本。
 
     顺序是先查后动：备份完整性 → 复制到暂存 → 迁到当前结构 → 暂存完整性；全部通过才另存当前
@@ -546,7 +548,7 @@ def restore(live: Path, backup: Path, *, migrations_dir: Path, progress=None,
     finally:
         _unlink_all(staging)
     try:
-        prune(live, apply=True)
+        prune(live, apply=True, keep_recent=keep_recent)
     except Exception:
         log.warning("Ledger backup retention cleanup failed", exc_info=True)
     return RestoreOutcome(backup, saved, tuple(migration.version for migration in pending))
@@ -627,11 +629,16 @@ class LedgerBackups:
         self.organize = organize_dir(config.directory("generated"))
         self.migrations_dir = migrations_dir
         self.after_restore = after_restore
+        self.database = runs.database if runs is not None else None
         self.backup_job = BackgroundJob("PeachLedgerBackup", task_key="ledger-backup", runs=runs)
         self.restore_job = BackgroundJob("PeachLedgerRestore", task_key="ledger-restore", runs=runs)
         self.offline_restore = BackgroundJob("PeachLedgerRestore", task_key="ledger-restore")
         self.lock = threading.Lock()
         self._restoring = self.restore_job
+
+    def keep_recent(self) -> int:
+        from .retention_settings import backup_keep
+        return backup_keep(self.config.directory("state"))
 
     def _busy(self) -> bool:
         return any((job.snapshot() or {}).get("status") == "running"
@@ -661,7 +668,8 @@ class LedgerBackups:
             job = self.backup_job
 
             def work(identity):
-                path = create(self.live, progress=lambda **values: job.update(identity, **values))
+                path = create(self.live, progress=lambda **values: job.update(identity, **values),
+                              keep_recent=self.keep_recent())
                 job.update(identity, status="complete", **stage_fields('backup.backupDone'), name=path.name,
                            bytes=path.stat().st_size)
 
@@ -669,21 +677,26 @@ class LedgerBackups:
         return self.snapshot()
 
     def start_restore(self, ident: object) -> dict:
+        import socket
         from .health import inspect_database
-        from .runtime_prepare import configured_ledger_writer
+        from .jobs import process_alive
+        from .runtime_prepare import configured_ledger_writer, task_gate
         from . import update_tasks
         writer, reason = configured_ledger_writer(self.config, language=None)
         if not writer:
             raise BackupRejected("errors.ledgerBackups.writerOnly", {"reason": reason})
         backup = resolve(self.live, self.organize, ident)
-        readable = bool(inspect_database(self.live, self.migrations_dir)["readable"])
+        task_rows = bool(inspect_database(self.live, self.migrations_dir)["readable"])
+        if task_rows:
+            task_rows = not task_gate(self.live, host=socket.gethostname(), alive=process_alive).corrupted
+        damaged = self.database is not None and self.database.corrupted
         with self.lock:
             if self._busy():
                 raise BackupRejected("errors.ledgerBackups.busy")
-            busy = update_tasks.running(self.live, task_rows=readable)
+            busy = update_tasks.running(self.live, task_rows=task_rows)
             if busy:
                 raise BackupRejected("errors.ledgerBackups.tasksRunning", {"tasks": list(busy)})
-            job = self.restore_job if readable else self.offline_restore
+            job = self.offline_restore if damaged or not task_rows else self.restore_job
             self._restoring = job
             migrations_dir = self.migrations_dir
 
@@ -693,19 +706,22 @@ class LedgerBackups:
                 try:
                     own_files, own_runs = job.registration(identity)
                     late = update_tasks.running(self.live, own_files=own_files, own_runs=own_runs,
-                                                task_rows=readable)
+                                                task_rows=task_rows)
                     if late:
                         raise BackupRejected("errors.ledgerBackups.tasksRunningNotRestored",
                                              {"tasks": list(late)})
                     outcome = restore(self.live, backup, migrations_dir=migrations_dir or MIGRATIONS_DIR,
-                                      progress=lambda **values: job.update(identity, **values))
+                                      progress=lambda **values: job.update(identity, **values),
+                                      keep_recent=self.keep_recent())
+                    if self.database is not None:
+                        self.database.record_restored()
+                    if self.after_restore is not None:
+                        try:
+                            self.after_restore()
+                        except Exception:
+                            log.warning("Failed to clear caches after restore", exc_info=True)
                 finally:
                     update_tasks.release(self.live, token)
-                if self.after_restore is not None:
-                    try:
-                        self.after_restore()
-                    except Exception:
-                        log.warning("Failed to clear caches after restore", exc_info=True)
                 job.update(identity, status="complete", **stage_fields('backup.restoreDone'), backup=backup.name,
                            saved=outcome.saved.name if outcome.saved else "",
                            migrated=len(outcome.migrated))

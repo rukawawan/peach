@@ -17,6 +17,7 @@ concurrency:
 env:
   PEACH_SENTRY_DSN: ${{ vars.PEACH_SENTRY_DSN }}
   PEACH_LIBRARY_SENTRY_DSN: ${{ vars.PEACH_LIBRARY_SENTRY_DSN }}
+  PEACH_SOURCE_CACHE_BASE: https://downloads.peach.video/_sources
   PYTHONUTF8: "1"
   PYTHONIOENCODING: "utf-8"
 
@@ -28,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
       - name: 核对标签提交的主线 CI
@@ -48,7 +49,7 @@ jobs:
     if: github.ref_type != 'tag'
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: 安装交叉编译工具
         run: |
           sudo apt-get update
@@ -57,13 +58,13 @@ jobs:
         id: media-identity
         run: echo "key=$(python3 scripts/media_build_cache.py windows --github-key)" >> "$GITHUB_OUTPUT"
       - name: 复用固定源码的媒体工具与对应源码包
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           key: ${{ steps.media-identity.outputs.key }}
           path: build/media-cache/windows-x86_64
       - name: 校验或构建媒体工具与对应源码包
         run: python3 scripts/media_build_cache.py windows
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ffmpeg-windows
           if-no-files-found: error
@@ -71,7 +72,7 @@ jobs:
           path: |
             build/ffmpeg-windows/ffmpeg/
             build/ffmpeg-windows/ffmpeg-corresponding-source.zip
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: untrunc-windows
           if-no-files-found: error
@@ -89,11 +90,11 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
           cache: npm
@@ -107,7 +108,7 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v${ReleaseVersion}") { throw 'Tag 与版本不一致' }
           "version=${ReleaseVersion}" >> $env:GITHUB_OUTPUT
       - name: 安装构建依赖
-        uses: astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -121,11 +122,11 @@ jobs:
       - name: 获取并校验 cloudflared 旁路文件
         shell: pwsh
         run: '& ./scripts/fetch_cloudflared.ps1 -OutputPath "$env:RUNNER_TEMP/cloudflared.exe"'
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ffmpeg-windows
           path: ${{ runner.temp }}/ffmpeg-build
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: untrunc-windows
           path: ${{ runner.temp }}/untrunc-build
@@ -183,8 +184,7 @@ jobs:
           Copy-Item scripts/smoke_split_update.py release/smoke_split_update.py
           python scripts/changelog.py --notes '${{ steps.version.outputs.version }}' --to release/RELEASE_NOTES.md
           if ($LASTEXITCODE -ne 0) { throw 'CHANGELOG.md 缺这一版的一节，不发没有说明的版本' }
-          Add-Content -LiteralPath release/RELEASE_NOTES.md -Value (Get-Content -Raw -Encoding utf8 release/DOWNLOADS.md) -Encoding utf8
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-candidate
           path: release/*
@@ -202,17 +202,17 @@ jobs:
     env:
       PYTHONPATH: ${{ github.workspace }}\source\scripts
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: source
           sparse-checkout: |
             scripts
             src/peach
             tools/amane-bridge
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: desktop-candidate
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
       - name: 在源码树外验证开箱配置与应用
@@ -266,7 +266,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw '任务保护与恢复验收失败' }
       - name: 保留制品验收失败日志
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-smoke-failure
           path: smoke-evidence/
@@ -292,16 +292,16 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '11.0'
       ARCHFLAGS: '-arch ${{ matrix.arch }}'
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -318,7 +318,7 @@ jobs:
         id: media-identity
         run: echo "key=$(.venv/bin/python scripts/media_build_cache.py macos --arch '${{ matrix.arch }}' --github-key)" >> "$GITHUB_OUTPUT"
       - name: 复用固定源码的 macOS 媒体工具与对应源码包
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           key: ${{ steps.media-identity.outputs.key }}
           path: build/media-cache/macos-${{ matrix.arch }}
@@ -342,7 +342,7 @@ jobs:
             exit 0
           fi
           npm --prefix frontend run sentry:upload
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-candidate-${{ matrix.arch }}
           if-no-files-found: error
@@ -351,7 +351,6 @@ jobs:
             release/*.dmg
             scripts/smoke_macos.py
             scripts/smoke_desktop.py
-            scripts/MACOS_DOWNLOADS.md
 
   macos-smoke:
     name: macOS ${{ matrix.arch }} 仅下载制品验收
@@ -371,17 +370,17 @@ jobs:
     env:
       PYTHONPATH: ${{ github.workspace }}/source/scripts
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: source
           sparse-checkout: |
             scripts
             src/peach
             tools/amane-bridge
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: macos-candidate-${{ matrix.arch }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
       - name: 挂载镜像并在源码树外验证应用
@@ -415,11 +414,11 @@ jobs:
       contents: write
       actions: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -445,11 +444,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           cd release
-          {
-            tail -n +4 ../macos-candidates/scripts/MACOS_DOWNLOADS.md
-            printf '\n'
-            tail -n +4 ../scripts/DOCKER_DOWNLOADS.md | sed "s/{version}/${GITHUB_REF_NAME#v}/g"
-          } >> RELEASE_NOTES.md
           files=(./*.zip ./*-setup.exe ./*.dmg SHA256SUMS.txt)
           if [ -f SHA256SUMS.txt.sig ]; then files+=(SHA256SUMS.txt.sig); fi
           gh release create "$GITHUB_REF_NAME" "${files[@]}" --verify-tag --prerelease --title "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
@@ -475,11 +469,11 @@ jobs:
       PEACH_R2_BUCKET: ${{ vars.PEACH_R2_BUCKET }}
       PEACH_R2_PUBLIC_BASE: https://downloads.peach.video
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -541,11 +535,11 @@ jobs:
       PEACH_R2_PUBLIC_BASE: https://downloads.peach.video
       CI_COMMIT_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -559,9 +553,11 @@ jobs:
           set -euo pipefail
           gh release download "$GITHUB_REF_NAME" --dir build/mirror \
             --pattern '*.zip' --pattern '*.exe' --pattern '*.dmg' --pattern 'SHA256SUMS.txt*'
-          # 发布时间取提交时间：release.json 不可覆盖上传，重跑作业必须写出同样的字节。
+          # 发布时间取提交时间、更新说明取标签提交上的 CHANGELOG：release.json 不可覆盖上传，重跑作业必须写出同样的字节。
+          .venv/bin/python scripts/changelog.py --notes "${GITHUB_REF_NAME#v}" --to build/release-notes.md
           CI_COMMIT_TIMESTAMP="$(git show -s --format=%cI "$GITHUB_SHA")" \
-            .venv/bin/python scripts/release_r2.py --root build/mirror --version "${GITHUB_REF_NAME#v}" --apply
+            .venv/bin/python scripts/release_r2.py --root build/mirror --version "${GITHUB_REF_NAME#v}" --apply \
+            --notes build/release-notes.md
 
   # 镜像在演练中按架构各自构建和验收，标签核对相同 image ID 后发布；发布排在 GitHub Release 成功之后：
   # 桌面包任何一步没发出去，Docker Hub 的版本号、edge 与 latest 都不动（ADR-0121）。
@@ -581,16 +577,16 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: 读取镜像版本
         id: version
         run: echo "version=$(PYTHONPATH=src python -c 'from peach import __version__; print(__version__)')" >> "$GITHUB_OUTPUT"
       - name: 构建候选镜像
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           load: true
@@ -609,7 +605,7 @@ jobs:
         run: |
           python scripts/github_release_candidate.py image-record --version '${{ steps.version.outputs.version }}' --arch ${{ matrix.arch }} --destination docker-image-${{ matrix.arch }}.json
           docker image save longmeidao/peach:candidate-${{ matrix.arch }} | gzip > docker-image-${{ matrix.arch }}.tar.gz
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: docker-candidate-${{ matrix.arch }}
           if-no-files-found: error
@@ -629,8 +625,8 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
       - name: 取得并核对已验收镜像
@@ -642,12 +638,12 @@ jobs:
             docker image load --input "docker-candidate/docker-image-$arch.tar.gz"
             python scripts/github_release_candidate.py image-verify --version "${GITHUB_REF_NAME#v}" --arch "$arch" --destination "docker-candidate/docker-image-$arch.json"
           done
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -681,3 +677,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh workflow run project-board.yml --ref master
+
+  gitgud-backup:
+    name: 备份制品到 GitGud
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: 请求 GitGud 备份
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run gitgud-mirror.yml --ref master -f "tag=$GITHUB_REF_NAME"

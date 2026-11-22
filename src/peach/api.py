@@ -23,6 +23,7 @@
 """
 import asyncio
 import logging
+import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -58,7 +59,7 @@ from .media import (
 from .mdns import create_mdns_publisher
 from .mount_reachability import MountReachability
 from .mp4repair import HeaderRepairStore
-from .platform import location_mounts
+from .platform import location_mount_values
 from .previews import (
     COVER_SMALL_THUMB_EDGE,
     COVER_SMALL_THUMB_QUALITY,
@@ -73,7 +74,7 @@ from .previews import (
 from .follow_secrets import credential_store_for
 from .push_discovery import PushDiscoveryService
 from .web_downloads import build_download_service
-from .web_local_access import local_client
+from .web_local_access import local_client, loopback_client
 from .sample_images import SampleCache
 from .sample_images import cache_root as sample_cache_root
 from .providers import OpenCodeGoClient, default_registry
@@ -84,7 +85,7 @@ from .routes_auth import FIRST_ACCESS_DENIED_CODE, AssetLoginRequired, PageLogin
 # tests/test_follow_web.py 按 `api.MEDIA_CACHE_SECONDS` 断言两者的关系。
 from .routes_media import AVATAR_CACHE_SECONDS, MEDIA_CACHE_SECONDS  # noqa: F401
 from .segments import HlsSegmentService
-from .streaming import StreamSessionRegistry
+from .streaming import StreamSessionRegistry, shutdown_stream_executor
 from .sync import LedgerSync
 from .transcodes import TranscodeService
 from .user_messages import UserFacingError, error_fields, message_fields, nested_message, response_status
@@ -130,6 +131,8 @@ class ResponseHeadersMiddleware:
                 kind = headers.get('content-type','').split(';',1)[0].strip().lower()
                 if kind.startswith(('image/','video/','audio/')):
                     headers.update(MEDIA_SECURITY_HEADERS)
+                if kind == 'text/html' and 'content-security-policy' not in headers:
+                    headers['Content-Security-Policy'] = "frame-ancestors 'self'"
                 if (message['status']==200 and kind=='text/html' and scope['method']=='GET'
                         and Request(scope).cookies.get('peach_media_policy')!='1'):
                     headers['Clear-Site-Data']='"cache"'
@@ -337,18 +340,40 @@ WARM_AGGREGATES = (("/api/entity/shapes", {}), ("/api/items", {"limit": "60"}), 
                    ("/api/search/recommendations", {}),
                    ("/api/taste", {"window": "all"}), ("/api/review", {}), ("/api/ads", {}),
                    ("/api/follow", {}))
+#: 关停时最多等在算的那份预热这么久（秒）：比存储卷探测的期限长一点，正常都等得到它放下连接；
+#: 等不到就不再等，免得一份卡住的预热让服务停不下来。
+WARMUP_STOP_SECONDS = 15.0
+
+
+def _prune_ledger_backups(settings: PeachSettings) -> None:
+    """账本旁的写入前备份按保留份数清退，规则与托盘启动时同一份（`ledger_backups.prune`）。
+
+    Docker 与 `peach serve` 没有托盘，只有服务启动这一处能清；有托盘的部署两处都清，删过的
+    再删是空操作。要先做一次整库完整性检查，所以放在后台线程里，不挡后台服务启动；失败只记日志。"""
+    import threading
+    from . import retention_settings
+
+    def prune():
+        try:
+            ledger_backups.prune(settings.db_path, apply=True,
+                                 keep_recent=retention_settings.backup_keep(settings.follow_state_root))
+        except Exception:
+            LOGGER.warning('Database backup retention cleanup failed', exc_info=True)
+
+    threading.Thread(target=prune, name='PeachLedgerBackupPrune', daemon=True).start()
 
 
 def _start_ledger_services(settings: PeachSettings, contract, services, migration: LedgerMigration | None = None) -> bool:
     """只读核对当前账本后，恢复任务并启动依赖账本的后台服务。
 
-    结构待迁移的写入端先整份备份再迁移；`migration` 记下进行中与失败，供请求闸门与状态接口读。"""
+    结构待迁移的写入端先整份备份再迁移；`migration` 记下进行中与失败，供请求闸门与状态接口读。
+    写入端在迁移之后、升级补修之前按保留份数清退账本备份（`_prune_ledger_backups`）。"""
     try:
         # 上次从备份恢复没走完：先把账本收拾到确定的状态，再判它能不能用（ADR-0138）。
         ledger_backups.recover(settings.db_path)
     except Exception:
         LOGGER.exception('Could not process the ledger restore marker')
-    status = inspect_database(settings.db_path)
+    status = inspect_database(settings.db_path, known_corruption=contract.database.corrupted)
     repairs = getattr(contract, 'upgrade_repairs', None)
     if status['schema'] == 'pending' and repairs is not None and repairs.available:
         from .config import MIGRATIONS_DIR
@@ -371,6 +396,8 @@ def _start_ledger_services(settings: PeachSettings, contract, services, migratio
         LOGGER.warning("Database not ready; background tasks that need it stay stopped (database: %s; schema: %s). Restart the service once the database is ready.",
                        status["database"], status["schema"])
         return False
+    if repairs is not None and repairs.available:
+        _prune_ledger_backups(settings)
     if repairs is not None:
         try:
             repairs.prepare()
@@ -378,13 +405,37 @@ def _start_ledger_services(settings: PeachSettings, contract, services, migratio
             repairs.error = str(exc)
             LOGGER.exception('Upgrade repairs did not finish; background tasks stay stopped')
             return False
-    _restore_task_center(contract)
     from .web_job_recovery import restore
-    if contract.task_runs.enabled:
-        restore(contract)
+    try:
+        _restore_task_center(contract)
+        if contract.task_runs.enabled:
+            restore(contract)
+    except sqlite3.DatabaseError:
+        if not contract.database.corrupted:
+            raise
+        LOGGER.warning("Database damaged; background tasks stay stopped until the ledger is restored")
+        return False
     for service in services:
         service.start()
     return True
+
+
+def _configure_follow_backfill(contract, upgrade_repairs):
+    """「修复与迁移」里两项 rule34 补填的后台执行；每趟开始前备份账本，备份与确认项同名同处。"""
+    import time
+    from .follow_backfill import Backfill
+    from .follow_secrets import credential_store_for
+    from .migrations import sqlite_backup
+
+    def backup(prefix: str):
+        path = contract.db_path.with_name(f'ledger.pre-{prefix}{time.time_ns()}.db')
+        sqlite_backup(contract.db_path, path)
+        return path
+
+    return Backfill(contract, runs=contract.task_runs, backup=backup,
+                    credentials=credential_store_for(contract.follow_secrets_root,
+                                                     shared_root=contract.follow_shared_root),
+                    available=lambda: upgrade_repairs.available)
 
 
 async def _warm_ledger_aggregates(ledger_ready: bool, contract, stopping: asyncio.Event) -> None:
@@ -399,6 +450,15 @@ async def _warm_ledger_aggregates(ledger_ready: bool, contract, stopping: asynci
         except Exception:
             # 预热失败不影响服务启动，这一页照旧在第一次打开时自己算。
             LOGGER.debug("aggregate warmup failed: %s", path, exc_info=True)
+
+
+async def _stop_warmup(warmup: asyncio.Task) -> None:
+    """关停时等预热收尾：to_thread 的查询在线程内释放连接后才算结束，最多等 `WARMUP_STOP_SECONDS`。"""
+    try:
+        await asyncio.wait_for(warmup, WARMUP_STOP_SECONDS)
+    except TimeoutError:
+        LOGGER.warning("Aggregate warmup still running after %ss at shutdown; not waiting for it",
+                       WARMUP_STOP_SECONDS)
 
 
 def _server_error_headers(request: Request, error: Exception, status_code=500):
@@ -501,6 +561,11 @@ class _LedgerActivation:
                 self.automatic_started = True
             if ready:
                 self.sharing.start()
+                # 「修复与迁移」里关注旧快照能删多少：启动后就在后台估算，页面第一次打开直接读结果。
+                reclaim = getattr(self.app.state, 'follow_evidence', None)
+                repairs = getattr(self.app.state, 'upgrade_repairs', None)
+                if reclaim is not None and getattr(repairs, 'available', False):
+                    reclaim.prime()
             return ready
 
     async def _wait_for_installation(self):
@@ -523,20 +588,72 @@ class _LedgerActivation:
             await self.task
 
 
-def _readiness_response(app, settings):
+def _health_payload(request, settings, resolver, browser_transport, *, details: bool) -> dict:
+    app = request.app
+    sync = app.state.sync
+    mdns = app.state.mdns
+    # 不探测共享目录或迁移数据库；健康检查必须无副作用。启动迁移期间不碰账本。
+    ffmpeg = resolver.ffmpeg()
+    read_only = bool(sync is not None and sync.read_only)
+    tunnel_state = app.state.tunnel.snapshot()
+    from .diagnostics import health_components
+    migration = app.state.ledger_migration
+    mounts = app.state.mount_reachability.summary()
+    corrupted = app.state.database.corrupted
+    components = health_components(settings, mounts, migrating=migration.running, known_corruption=corrupted)
+    return {"ok": True, "service": "peach-api", "version": __version__,
+            "checks": components if details else {
+                key: {"status": value["status"]} for key, value in components.items()
+            },
+            # 打包这份代码的提交。源码运行时是 null：跑的就是检出本身。
+            "build_commit": BUILD.commit if BUILD else None,
+            # 这台机器跑过 `peach init` 没有。未配置时服务照常起，只是没有数据。
+            "configured": settings.configured,
+            # 这次请求的发起方能不能改这台机器的配置（独立包、回环地址）。它随调用方
+            # 变化，只决定管理菜单里「配置」显不显示；拒绝写入的判定在端点自己那里。
+            "configurable": routes_configuration.configurable(request),
+            "db": _database_field(settings, migration, corrupted),
+            "ledger_migration": migration.payload() if details else {"state": migration.state},
+            "ffmpeg": ffmpeg.source if ffmpeg else "unavailable",
+            "mdns": mdns.status if mdns is not None else "disabled",
+            "mdns_backend": mdns.backend if mdns is not None else None,
+            "ledger_sync": sync.status if sync is not None else "disabled",
+            "ledger_read_only": read_only,
+            **_read_only_fields(sync, read_only, details=details),
+            "scheme": "https" if settings.tls_enabled else "http",
+            # 采集用的浏览器窗口正等着人点验证的站，供排查时看一眼；窗口本身就是提醒，不另弹通知（ADR-0065）。
+            **({
+                "media_mounts": mounts,
+                "mdns_service": mdns.name if mdns is not None else None,
+                "mdns_service_host": mdns.hostname if mdns is not None else None,
+                "mdns_address": mdns.address if mdns is not None else None,
+                "mdns_ipv6_addresses": list(getattr(mdns, "ipv6_addresses", ())),
+                "ledger_writer_origin": settings.review_writer_origin if read_only else None,
+                "attention": browser_transport.attention(),
+            } if details else {}),
+            # 健康检查可能被公网探针访问，不能在这里回传随机 Tunnel URL。
+            "tunnel": {"enabled": settings.tunnel_enabled, "state": tunnel_state.state},
+    }
+
+
+def _readiness_response(app, settings, *, details: bool):
     """`/healthz?ready=1`：迁移进行中直接报未就绪，不碰账本；其余照 `health.readiness` 核对。"""
     from .health import readiness
     migration = app.state.ledger_migration
     deferred = getattr(app.state, 'ledger_background_deferred', False)
     result = readiness(settings, background_ready=None if deferred else getattr(app.state, "ledger_background_ready", None),
-                       migrating=migration.running)
-    result.update(background_deferred=deferred, ledger_migration=migration.payload())
+                       migrating=migration.running, known_corruption=app.state.database.corrupted)
+    result["background_deferred"] = deferred
+    if details:
+        result["ledger_migration"] = migration.payload()
     return JSONResponse(result, status_code=200 if result["ready"] else 503, headers={"Cache-Control": "no-store"})
 
 
-def _database_field(settings, migration: LedgerMigration) -> str:
+def _database_field(settings, migration: LedgerMigration, corrupted: bool) -> str:
     from .health import database_status
-    return "migrating" if migration.running else database_status(settings.db_path)
+    if migration.running:
+        return "migrating"
+    return "corrupt" if corrupted else database_status(settings.db_path)
 
 
 def _configure_capacity_guard(settings, contract, services):
@@ -550,13 +667,14 @@ def _configure_capacity_guard(settings, contract, services):
         service.capacity_guard = guard
 
 
-def _read_only_fields(sync, read_only: bool) -> dict:
+def _read_only_fields(sync, read_only: bool, *, details: bool) -> dict:
     """健康检查里的只读说明：zh-CN 原文给旧页面，旁边是同一句的 code 与参数（ADR-0159），页面按界面语言显示。"""
     if not read_only:
         return {"ledger_read_only_message": None, "ledger_read_only_message_code": None,
                 "ledger_read_only_message_params": None}
-    phrase = sync.read_only_phrase
-    return {"ledger_read_only_message": sync.read_only_message, "ledger_read_only_message_code": phrase["code"],
+    phrase = sync.read_only_phrase if details else {"code": "labels.sync.readOnlyOtherMachine"}
+    message = sync.read_only_message if details else interface_text.text(f"server:{phrase['code']}")
+    return {"ledger_read_only_message": message, "ledger_read_only_message_code": phrase["code"],
             "ledger_read_only_message_params": phrase.get("params", {})}
 
 
@@ -641,7 +759,7 @@ def create_app(
     )
     mdns = create_mdns_publisher(
         settings.mdns_name, settings.mdns_port, secure=settings.tls_enabled,
-        address=settings.mdns_address,
+        address=settings.mdns_address, ipv6=settings.mdns_ipv6,
     ) if settings.mdns_enabled else None
     providers = default_registry()
     opencode_go = OpenCodeGoClient(transport=http_transport)
@@ -662,7 +780,7 @@ def create_app(
         secrets_root=settings.secrets_root,
         db_path=settings.db_path,
         declared_roots=LOCATION_ROOT_DECLARATIONS,
-        mounts=location_mounts(),
+        mounts=location_mount_values(),
         available=_writer(sync),
         ffprobe=resolver.ffprobe,
         after_ingest=contract.cache_bust,
@@ -677,9 +795,9 @@ def create_app(
         after_ingest=lambda task: enqueue_download_postprocess(contract, task))
     contract.downloads = downloads
     from .jav_browser import JavBrowser
-    from .web_resource_search import q_resource_search
+    from .web_resource_search import auto_resource_search
     from .jav_editions import EditionProbe
-    jav_browser = JavBrowser(contract, search=q_resource_search,
+    jav_browser = JavBrowser(contract, search=auto_resource_search,
                              edition_probe=EditionProbe(contract.follow_secrets_root))
     contract.follow_scheduler = follow_scheduler
     # 订阅源拉取（ADR-0042）用同一个调度实现，只换 job id、状态文件与默认间隔。
@@ -709,6 +827,8 @@ def create_app(
     from .library_sharing import Service as LibrarySharing
     from . import settings_file
     sharing = LibrarySharing(settings_file.active(), contract)
+    from .seed_sharing import Service as SeedSharing
+    seed_sharing = SeedSharing(settings_file.active(), contract)
     from .automatic_updates import AutomaticUpdates
     from .routes_configuration import managed_configuration
     automatic_updates = AutomaticUpdates(
@@ -716,6 +836,7 @@ def create_app(
         available=managed_configuration() and bool(settings.configured),
     )
     upgrade_repairs = _configure_upgrade_repairs(settings, contract, sync)
+    follow_backfill = _configure_follow_backfill(contract, upgrade_repairs)
     _configure_capacity_guard(settings, contract,
         (transcode_service, hls_service, entity_thumb_service, cover_thumb_service, cover_small_thumb_service))
 
@@ -737,17 +858,21 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        # asyncio 异常处理器由 `cli._run_uvicorn` 装在 uvicorn 的事件循环上：它要拿着 uvicorn
+        # asyncio 异常处理器由 `listening.serve` 装在 uvicorn 的事件循环上：它要拿着 uvicorn
         # 的 Server，才能在监听被标准库关掉后重新监听。
         # 握手要等 cloudflared 连上边缘，断网时会等满 `wait_timeout`；放在后台，本机访问
         # 不等公网入口。连接进度由 `tunnel_manager.snapshot()` 报告。
         tunnel_startup = asyncio.create_task(asyncio.to_thread(_start_tunnel, settings, tunnel_manager))
-        services = (follow_scheduler, feed_scheduler, push_discovery, downloads, recovery_service, jav_browser, upgrade_repairs)
+        services = (seed_sharing, follow_scheduler, feed_scheduler, push_discovery, downloads, recovery_service, jav_browser, upgrade_repairs,
+                    follow_backfill, _app.state.cover_repair)
         activation = _LedgerActivation(_app, settings, contract, services, automatic_updates, sharing)
         _app.state.ledger_activation = activation
         ledger_ready = await activation.start()
         if settings.configured:
             mount_reachability.start()
+            # javdb 的节拍和独立采集脚本共用数据根里的同一个文件，两边同时跑也不超过它的速率上限。
+            from .library_processing import share_source_limits
+            share_source_limits(settings.follow_state_root)
         warmup = asyncio.create_task(warm_startup_entries())
         aggregate_stop = asyncio.Event()
         aggregate_warmup = asyncio.create_task(_warm_ledger_aggregates(ledger_ready, contract, aggregate_stop))
@@ -766,19 +891,21 @@ def create_app(
             _app.state.ledger_background_ready = False
             aggregate_stop.set()
             warmup.cancel()
-            recovery_service.stop()
+            # 等在途接回收尾有上限，放在线程里等，不占事件循环。
+            await asyncio.to_thread(recovery_service.stop)
             follow_scheduler.stop()
             feed_scheduler.stop()
-            automatic_updates.stop()
+            await asyncio.to_thread(automatic_updates.stop)
             await asyncio.to_thread(upgrade_repairs.stop)
+            await asyncio.to_thread(follow_backfill.stop)
             await asyncio.to_thread(sharing.stop)
+            await asyncio.to_thread(seed_sharing.stop)
             push_discovery.stop()
             await asyncio.to_thread(jav_browser.stop)
             downloads.stop()
             mount_reachability.stop()
             await asyncio.to_thread(network_reachability.stop)
-            # to_thread 的查询在线程内释放连接后才算结束。
-            await aggregate_warmup
+            await _stop_warmup(aggregate_warmup)
             # 死链检查和资源对账的后台线程是 daemon，本来挡不住进程退出；这里显式收
             # 一下，免得在途的那一轮在解释器拆卸期间还继续查库、往没人读的状态里写。
             contract.stop_background_jobs()
@@ -795,6 +922,7 @@ def create_app(
             http_transport.close()
             follow_media_resolver.close()
             hls_plan_executor.shutdown(wait=False, cancel_futures=True)
+            shutdown_stream_executor()
 
     app = FastAPI(
         title="Peach API",
@@ -809,6 +937,7 @@ def create_app(
     app.state.ledger_migration = LedgerMigration()
     app.state.web_contract = contract
     app.state.library_sharing = sharing
+    app.state.seed_sharing = seed_sharing
     app.state.repository = repository
     app.state.media_engine = media_engine
     app.state.preview_service = preview_service
@@ -839,6 +968,11 @@ def create_app(
     from .follow_evidence import Reclaim
     app.state.follow_evidence = Reclaim(Path(contract.follow_sources_root) / "follow", contract,
                                         runs=contract.task_runs)
+    app.state.follow_backfill = follow_backfill
+    from .cover_repair import CoverRepair
+    app.state.cover_repair = CoverRepair(contract.cover_root, upgrade_repairs.root, contract,
+                                         contract.follow_secrets_root, runs=contract.task_runs,
+                                         available=lambda: upgrade_repairs.available and contract.task_runs.enabled)
     app.state.push_discovery = push_discovery
     app.state.downloads = downloads
     app.state.jav_browser = jav_browser
@@ -939,43 +1073,10 @@ def create_app(
     # 都显式声明了 GET+HEAD，只有这个漏了，HEAD 会拿到 405。
     @app.api_route("/healthz", methods=["GET", "HEAD"])
     def healthz(request: Request, ready: bool = False):
+        details = loopback_client(request) or routes_auth.authenticated_client(request)
         if ready:
-            return _readiness_response(request.app, settings)
-        # 不探测共享目录或迁移数据库；健康检查必须无副作用。启动迁移期间不碰账本。
-        ffmpeg = resolver.ffmpeg()
-        read_only = bool(sync is not None and sync.read_only)
-        tunnel_state = tunnel_manager.snapshot()
-        from .diagnostics import health_components
-        migration = app.state.ledger_migration
-        components = health_components(settings, app.state.mount_reachability.summary(), migrating=migration.running)
-        return {"ok": True, "service": "peach-api", "version": __version__,
-                "checks": components,
-                # 打包这份代码的提交。源码运行时是 null：跑的就是检出本身。
-                "build_commit": BUILD.commit if BUILD else None,
-                # 这台机器跑过 `peach init` 没有。未配置时服务照常起，只是没有数据。
-                "configured": settings.configured,
-                # 这次请求的发起方能不能改这台机器的配置（独立包、回环地址）。它随调用方
-                # 变化，只决定管理菜单里「配置」显不显示；拒绝写入的判定在端点自己那里。
-                "configurable": routes_configuration.configurable(request),
-                "db": _database_field(settings, migration),
-                "ledger_migration": migration.payload(),
-                "ffmpeg": ffmpeg.source if ffmpeg else "unavailable",
-                "media_mounts": app.state.mount_reachability.summary(),
-                "mdns": mdns.status if mdns is not None else "disabled",
-                "mdns_backend": mdns.backend if mdns is not None else None,
-                "mdns_service": mdns.name if mdns is not None else None,
-                "mdns_service_host": mdns.hostname if mdns is not None else None,
-                "mdns_address": mdns.address if mdns is not None else None,
-                "ledger_sync": sync.status if sync is not None else "disabled",
-                "ledger_read_only": read_only,
-                **_read_only_fields(sync, read_only),
-                "ledger_writer_origin": settings.review_writer_origin if read_only else None,
-                "scheme": "https" if settings.tls_enabled else "http",
-                # 采集用的浏览器窗口正等着人点验证的站，供排查时看一眼；窗口本身就是提醒，不另弹通知（ADR-0065）。
-                "attention": browser_transport.attention(),
-                # 健康检查可能被公网探针访问，不能在这里回传随机 Tunnel URL。
-                "tunnel": {"enabled": settings.tunnel_enabled, "state": tunnel_state.state},
-        }
+            return _readiness_response(request.app, settings, details=details)
+        return _health_payload(request, settings, resolver, browser_transport, details=details)
 
     # 顺序即契约：catch-all 最后。`routes_media` 里有 `/api/stream-plan` 与
     # `/api/stream-cancel` 两条具名 API，所以它也要排在 `routes_api` 之前。

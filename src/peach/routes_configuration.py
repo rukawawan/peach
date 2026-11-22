@@ -39,7 +39,7 @@ from .web_entry import field_errors, runtime_fact_entries
 from .user_messages import UserFacingError, UserOSError, UserTimeoutError, UserValueError, error_detail, message_fields
 from .web_local_access import local_client, managed_configuration
 from . import (interface_text, release_updates, standalone_update, peach_proxy, desktop_startup, desktop_uninstall,
-               docker_update, media_tools)
+               docker_update, media_tools, listening)
 
 router = APIRouter()
 _SAVE_LOCK = threading.Lock()
@@ -67,21 +67,40 @@ def local_only(request: Request) -> None:
         raise HTTPException(403, message_fields("api.configuration.openOnHost"))
 
 
+def _diagnostics_report(request: Request):
+    from . import diagnostics
+    state = request.app.state
+    return diagnostics.report(state.settings, state.mount_reachability.summary(),
+                              known_corruption=state.database.corrupted)
+
+
 @router.get("/api/diagnostics")
 def system_diagnostics(request: Request, args: dict[str, str] = Depends(require_auth)):
     """本机诊断与 doctor JSON 共用报告；媒体来源只读后台快照。"""
-    from . import diagnostics
     if not local_client(request):
         raise HTTPException(403, message_fields("api.configuration.openDiagnosticsOnHost"))
-    return diagnostics.report(request.app.state.settings, request.app.state.mount_reachability.summary())
+    return _diagnostics_report(request)
+
+
+@router.get("/api/diagnostics/library")
+def library_diagnostic_rows(request: Request, args: dict[str, str] = Depends(require_auth)):
+    """库健康按完整分组筛选，返回上限沿用诊断报告。"""
+    from . import library_diagnostics
+    local_only(request)
+    key = args.get("group", "")
+    if key not in library_diagnostics.GROUP_CODES:
+        raise UserValueError("api.catalog.invalidColumnFilters")
+    data = library_diagnostics.library(request.app.state.settings, settings_file.active(),
+                                       {key: args.get("column_filters")})
+    return data["groups"][key]
 
 
 @router.get("/api/diagnostics/bundle")
 def diagnostic_bundle(request: Request, args: dict[str, str] = Depends(require_auth)):
-    from . import diagnostic_context, diagnostics, support_bundle
+    from . import diagnostic_context, support_bundle
     local_only(request)
     try:
-        report = diagnostics.report(request.app.state.settings, request.app.state.mount_reachability.summary())
+        report = _diagnostics_report(request)
     except Exception as error:
         from .error_reporting import event
         event("diagnostics-report", error)
@@ -104,7 +123,7 @@ def diagnostic_export_status(request: Request, _args=Depends(require_auth)):
 
 @router.post('/api/diagnostics/exports')
 def diagnostic_export_start(request: Request, body: dict = Body(default_factory=dict), _args=Depends(require_auth)):
-    from . import diagnostic_context, diagnostic_exports, diagnostics
+    from . import diagnostic_context, diagnostic_exports
     local_only(request)
     same_origin(request)
     kind, codes = body.get('kind'), body.get('codes', '')
@@ -114,7 +133,7 @@ def diagnostic_export_start(request: Request, body: dict = Body(default_factory=
                                                  user_agent=request.headers.get('user-agent', ''))
     try:
         return diagnostic_exports.manager(request).start(kind, codes, browser=browser,
-            report=lambda: diagnostics.report(request.app.state.settings, request.app.state.mount_reachability.summary()))
+            report=lambda: _diagnostics_report(request))
     except ValueError as error:
         raise HTTPException(400, error_detail(error)) from error
 
@@ -348,10 +367,7 @@ def network_payload(request: Request, config) -> dict[str, Any]:
     """连接地址来自实际监听信息，编辑值来自托盘配置。"""
     settings = request.app.state.settings
     standalone = distribution.standalone()
-    try:
-        local = ipaddress.ip_address(settings.host).is_loopback
-    except ValueError:
-        local = settings.host.lower() == 'localhost'
+    local = listening.is_loopback(settings.host)
     scheme = 'https' if settings.tls_enabled else 'http'
     port = settings.mdns_port if settings.mdns_enabled else settings.port
     suffix = '' if port == (443 if settings.tls_enabled else 80) else f':{port}'
@@ -368,7 +384,8 @@ def network_payload(request: Request, config) -> dict[str, Any]:
     return {'editable': managed_configuration() and standalone,
             'host': config.server.host, 'mdns_name': config.server.mdns_name,
             'scope': 'local' if local else 'lan',
-            'local_url': f'http://127.0.0.1:{settings.port}/' if standalone else str(request.base_url),
+            'local_url': (f'http://{listening.loopback_origin_host(settings.host)}:{settings.port}/'
+                          if standalone else str(request.base_url)),
             'lan_url': f'{scheme}://{hostname}.local{suffix}/' if not local and settings.mdns_enabled else '',
             'ip_url': f'{scheme}://{address}{suffix}/' if not local and address and not settings.tls_enabled else ''}
 
@@ -431,6 +448,41 @@ def save_library_sharing(request: Request, body: dict = Body(...), _args=Depends
         return request.app.state.library_sharing.save(body)
     except ValueError as error:
         raise HTTPException(400, error_detail(error)) from error
+
+
+@router.get('/api/configuration/seed-sharing')
+def read_seed_sharing(request: Request, _args=Depends(require_auth)):
+    local_only(request)
+    return request.app.state.seed_sharing.snapshot()
+
+
+@router.get('/api/configuration/seed-sharing/preview')
+def preview_seed_sharing(request: Request, _args=Depends(require_auth)):
+    local_only(request)
+    same_origin(request)
+    return JSONResponse(request.app.state.seed_sharing.preview(), headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/api/configuration/seed-sharing')
+def save_seed_sharing(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    local_only(request)
+    same_origin(request)
+    return request.app.state.seed_sharing.save(body)
+
+
+@router.get('/api/configuration/seed-sharing/name')
+def seed_name_plan(request: Request, entity_id: int, _args=Depends(require_auth)):
+    local_only(request)
+    from .seed_name_proposals import plan
+    return JSONResponse(plan(request.app.state.web_contract, entity_id), headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/api/configuration/seed-sharing/name')
+def save_seed_name(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    local_only(request)
+    same_origin(request)
+    from .seed_name_proposals import save
+    return save(request.app.state.web_contract, settings_file.active(), body)
 
 
 @router.post("/api/configuration/automatic-updates")
@@ -836,6 +888,28 @@ def restore_ledger(request: Request, body: dict[str, Any] = Body(default_factory
         raise HTTPException(409, error_detail(exc)) from exc
 
 
+@router.get("/api/configuration/retention")
+def read_retention(request: Request, _args=Depends(require_auth)):
+    """「保留期限」：写入前自动备份留几份、日志留多少天，存在本机状态目录。"""
+    from . import retention_settings
+    local_only(request)
+    return retention_settings.read(_storage_config().directory("state"))
+
+
+@router.post("/api/configuration/retention")
+def save_retention(request: Request, body: dict[str, Any] = Body(default_factory=dict),
+                   _args=Depends(require_auth)):
+    from . import retention_settings
+    local_only(request)
+    same_origin(request)
+    try:
+        return retention_settings.save(_storage_config().directory("state"), body)
+    except Timeout as exc:
+        raise HTTPException(409, message_fields("api.configuration.retentionBusy")) from exc
+    except ValueError as exc:
+        raise HTTPException(400, error_detail(exc)) from exc
+
+
 @router.get("/api/configuration/updates")
 def check_updates(request: Request, _args=Depends(require_auth)):
     local_only(request)
@@ -944,10 +1018,21 @@ def _repair_center(request: Request) -> dict:
     except (OSError, ValueError):
         pass
     reclaim = getattr(request.app.state, 'follow_evidence', None)
+    backfill = getattr(request.app.state, 'follow_backfill', None)
+    from . import legacy_repairs
+    covers = getattr(request.app.state, 'cover_repair', None)
     with request.app.state.web_contract.read_connection() as connection:
         result = repair_center.snapshot(connection, receipt, backup_directories=directories,
                                         cloud_pending=service.cloud_display_videos() if service.available else 0,
-                                        follow_evidence_status=reclaim.status() if reclaim and service.available else None)
+                                        follow_evidence_status=reclaim.status() if reclaim and service.available else None,
+                                        confirm_pending=legacy_repairs.confirm_pending(
+                                            connection, service.contract,
+                                            revision=(str(service.contract.db_path),
+                                                      request.app.state.web_contract.ledger_revision()))
+                                        if service.available else {},
+                                        follow_backfill_status=backfill.snapshot(connection)
+                                        if backfill and service.available else None,
+                                        cover_repair_status=covers.status() if covers and service.available else None)
     return {**result, 'available': service.available}
 
 
@@ -985,6 +1070,22 @@ def reclaim_follow_evidence(request: Request, _args=Depends(require_auth)):
         request.app.state.follow_evidence.start()
         return _repair_center(request)
     except ValueError as exc:
+        raise HTTPException(409, error_detail(exc)) from exc
+
+
+@router.post('/api/configuration/repairs/{item}')
+async def apply_confirmed_repair(item: str, request: Request, _args=Depends(require_auth)):
+    """要解除关联、删实体或合并记录的存量修正（`legacy_repairs.CONFIRMS`）：用户看过还剩几处、确认后才做。"""
+    import asyncio
+    local_only(request)
+    same_origin(request)
+    try:
+        service = request.app.state.upgrade_repairs
+        if not service.available:
+            raise UserValueError('api.configuration.primaryOnly')
+        await asyncio.to_thread(service.apply_confirmed, item)
+        return _repair_center(request)
+    except (ValueError, OSError, Timeout) as exc:
         raise HTTPException(409, error_detail(exc)) from exc
 
 

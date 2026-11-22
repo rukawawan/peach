@@ -9,8 +9,6 @@ export class SubtitleSession {
   private cleanup = new AbortController();
   private imported = new Map<string, { node: HTMLTrackElement; url: string }>();
   private selected: string | null | undefined;
-  /** 服务端记忆读完了：之后这部片还没选过字幕时，才默认打开中文字幕。 */
-  private restored = false;
   private memory;
   readonly ready: Promise<void>;
   error = '';
@@ -39,12 +37,7 @@ export class SubtitleSession {
     void this.save({ selected: this.selected }).catch(error => this.failed(error));
   }
   private apply() {
-    if (this.selected === undefined) {
-      // 这部片没选过字幕（关掉也算选过）：有中文字幕就默认显示，例如 AI 字幕生成的 `.zh.srt`。不写进记忆。
-      const chinese = this.restored ? this.tracks().find(track => /^zh/i.test(track.language)) : undefined;
-      if (chinese && chinese.mode !== 'showing') chinese.mode = 'showing';
-      return;
-    }
+    if (this.selected === undefined) return;
     const aliases = [...this.video.querySelectorAll<HTMLTrackElement>('track[data-subtitle-alias]')];
     const selected = this.tracks().find(track => this.key(track) === this.selected
       || aliases.some(node => node.track === track && node.dataset.subtitleAlias === this.selected));
@@ -69,8 +62,7 @@ export class SubtitleSession {
     try {
       const saved = await this.memory.load();
       if (signal.aborted) return;
-      if (this.selected === undefined && (saved.chosen ?? saved.selected !== null)) this.selected = saved.selected;
-      this.restored = true;
+      if (this.selected === undefined) this.selected = saved.selected;
       this.apply();
       let failure: unknown;
       for (const track of saved.tracks) {

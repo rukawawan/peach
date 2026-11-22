@@ -14,6 +14,7 @@ import { firstGrapheme } from '@peach/legacy/core';
 import { ArtSlot } from './art-slot';
 import { spriteGlyph } from './sprite-glyph';
 import { useStackFlip } from './use-stack-flip';
+import { useWorkContextMenu, type WorkContextOperation } from './work-context-menu';
 import { t } from '../../i18n';
 
 export { MIX_FLIP_FACES, MIX_FLIP_LEAD_MS, MIX_FLIP_MS } from './use-stack-flip';
@@ -54,6 +55,7 @@ export interface MixCardProps {
   openLabel: string;
   /** 署名行最右那一格：次要动作的菜单。 */
   menu?: ReactNode;
+  contextOperations?: WorkContextOperation[];
   /** 封面格的宽高比。不给就是 16:9；首页那张跟着这一屏卡片的版式走。 */
   ratio?: number;
   /** 静止封面改用遗留层拼的那段图片 HTML（番号作品的取景链要接管它），封面格同时带上作品卡
@@ -84,7 +86,7 @@ function Poster({ src }: { src: string }) {
 
 /** 圆框共用的那一副：38px 正圆，图铺满，首字母居中。 */
 const RING = 'relative inline-grid size-9.5 flex-none place-items-center overflow-hidden rounded-full'
-  + ' bg-background-secondary-default text-body-2-regular text-text-secondary'
+  + ' bg-media-placeholder text-body-2-regular text-text-secondary'
   + ' [&_img]:absolute [&_img]:inset-0 [&_img]:block [&_img]:size-full [&_img]:object-cover';
 
 /** 圆框里那段 HTML 由 `avatarInner` 拼：有图走图，没图退首字母，代表作头像查同一张代表作表。 */
@@ -108,9 +110,11 @@ function Avatars({ faces, fallback, onOpenEntity }: {
 
 export function MixCard({
   name, caption, count, poster, flipImages, canFlip, faces, onOpenEntity, onOpen, openLabel, menu,
-  ratio, artwork, artworkIdentity, relayoutArt, faceHtml, badge, glyph, wholeCard,
+  ratio, artwork, artworkIdentity, relayoutArt, faceHtml, badge, glyph, wholeCard, contextOperations,
   ...data
 }: MixCardProps & Record<`data-${string}`, string>) {
+  const contextMenu = useWorkContextMenu();
+  const context = contextOperations ? { key: name, operations: contextOperations } : undefined;
   const flip = useStackFlip({ load: flipImages, canFlip });
   /* 壳在滚动、换页和开多选时按 `_stopHover` 收掉一切悬停动效，这张卡的翻页也在其中。 */
   const stop = useRef(flip.onPointerLeave);
@@ -125,7 +129,10 @@ export function MixCard({
   return (
     <article {...data} ref={attach} data-mix-card="" onMouseEnter={flip.onPointerEnter}
       onMouseLeave={flip.onPointerLeave} onClick={wholeCard ? open : undefined}
+      onContextMenu={context ? event => contextMenu.onContextMenu(event, context) : undefined}
+      onKeyDown={context ? event => contextMenu.onKeyDown(event, context) : undefined}
       className="relative flex min-w-0 cursor-pointer flex-col gap-2">
+      {contextMenu.menu}
       <div data-mix-stack="" className="relative isolate rounded-surface">
         <div data-mix-cover="" data-media-pic={cover ? '' : undefined}
           style={ratio !== undefined ? { '--card-ratio': String(ratio) } as CSSProperties : undefined}

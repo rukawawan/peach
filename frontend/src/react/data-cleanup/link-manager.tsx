@@ -8,9 +8,8 @@
  * 链接本身好好的。混成一张会让人顺手把好链接一起删掉，所以「地址已失效」和「本次未
  * 访问成功」各占一张，只有前一张接得上删除。 */
 import { useEffect, useState, type ReactNode } from 'react';
-import { RiExternalLinkLine } from '@remixicon/react';
+import { RiDeleteBinLine, RiExternalLinkLine, RiFileCopyLine, RiRefreshLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
-import { confirmModal } from '@peach/legacy/ui';
 import { entityPath, esc, firstGrapheme } from '@peach/legacy/core';
 import { entityFaceImg } from '@peach/card-art';
 
@@ -21,12 +20,15 @@ import { StatusLabel } from '../components/status-label';
 import { errorMessage } from '../../api';
 import { ErrorExcerpt } from '../activity/error-excerpt';
 import { useBackgroundJob } from '../background-job';
+import { runBulkAction, type BulkAction } from '../components/bulk-action';
 import { DataTable, type DataColumn } from '../components/data-table';
+import type { DockAction } from '../components/selection-dock';
 import {
   Fieldset, FieldsetTitle, RESULT_PANEL, RESULT_SECTION,
 } from '../components/fieldset';
 import { Note } from '../components/note';
 import { SiteMark } from '../components/site-mark';
+import { ColumnFilterAvatar } from '../components/column-filter-avatar';
 import { TaskProgress } from '../components/task-progress';
 import { activityKind } from '../../activity-kinds';
 import { spriteGlyph } from '../components/sprite-glyph';
@@ -66,18 +68,23 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
 }
 
 function LinkTable(
-  { title, items, hint, picked, onPick, children, footer, confirmed = false }:
+  { title, items, hint, picked, onPick, actions, controls, retry, retrying, footer, confirmed = false }:
   {
     title: string; items: LinkRow[]; hint: string;
-    picked: readonly number[]; onPick(next: number[]): void; children?: ReactNode; footer?: ReactNode; confirmed?: boolean;
+    picked: readonly number[]; onPick(next: number[]): void; footer?: ReactNode; confirmed?: boolean;
+    actions?(chosen: LinkRow[]): readonly DockAction[]; controls?: ReactNode;
+    retry?(id: number): void; retrying?: boolean;
   },
 ) {
   if (!items.length) return null;
   const columns: DataColumn<LinkRow>[] = [
     { id: 'entity', label: t('cleanup:links.columnEntry'), width: 180, min: 128, value: (item) => item.entity,
+      filter: { values: item => item.entity, option: (name, item) => ({
+        leading: item && <ColumnFilterAvatar person={{ ...item.face, id: item.entity_id, name }}
+          kind={item.entity_kind} markId={item.entity_kind === 'studio' || item.entity_kind === 'agency' ? item.id : null} /> }) },
       render: (item) => <a className="flex min-w-24 items-center gap-2 text-text-secondary hover:text-text-primary hover:underline"
         href={item.entity_id && item.entity_kind ? entityPath(item.entity_kind, item.entity, item.entity_id) : undefined} data-link-identity="">
-        <span data-link-avatar="" className={`relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background-quaternary-default text-caption-1-medium text-text-primary ${LEGACY_AVATAR_IMG}`}
+        <span data-link-avatar="" className={`relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-media-placeholder text-caption-1-medium text-text-primary ${LEGACY_AVATAR_IMG}`}
           aria-hidden dangerouslySetInnerHTML={{ __html: `<span>${esc(firstGrapheme(item.entity))}</span>` + entityFaceImg({
             kind: item.entity_kind, id: item.entity_id, hasImage: item.face?.has_image,
             version: item.face?.image_version, focus: item.face?.avatar_focus, thumb: true,
@@ -86,18 +93,27 @@ function LinkTable(
         <span className="min-w-0 wrap-anywhere">{item.entity}</span>
       </a> },
     { id: 'kind', label: t('cleanup:shared.type'), width: 128, value: (item) => LINK_KINDS[item.link_kind] || item.link_kind,
+      filter: { values: item => item.link_kind, option: kind => ({ label: LINK_KINDS[kind] || kind }) },
       render: (item) => LINK_KINDS[item.link_kind] || item.link_kind },
     { id: 'label', label: t('cleanup:links.columnName'), min: 128, value: (item) => linkLabel(item.label),
+      filter: { values: item => linkLabel(item.label) || new URL(item.url).hostname,
+        option: (_, item) => ({ leading: item && <SiteMark linkId={item.id} /> }) },
       render: (item) => <span className="flex min-w-24 items-center gap-2" data-link-name="">
         <span className="min-w-0 wrap-anywhere">{linkLabel(item.label) || new URL(item.url).hostname}</span></span> },
     { id: 'note', label: t('cleanup:links.columnResult'), width: 320, min: 192, value: (item) => item.note,
+      filter: { values: item => serverLabel(item.note_code ?? '', item.note, item.note_params) },
       render: (item) => <div className="min-w-0 w-full" data-link-result={confirmed ? 'gone' : 'unclear'}>
         {/^(?:HTTP\s+)?[1-5]\d{2}$/.test(item.note.trim())
           ? <StatusLabel tone={confirmed || /^(?:HTTP\s+)?5\d{2}$/.test(item.note.trim()) ? 'error' : 'warning'} data-link-code="">{item.note.trim()}</StatusLabel>
           : <div className="flex flex-col items-start gap-1"><StatusLabel tone={confirmed ? 'error' : 'warning'}>{confirmed ? t('cleanup:links.dead') : t('cleanup:links.inconclusive')}</StatusLabel>
               <ErrorExcerpt text={serverLabel(item.note_code ?? '', item.note, item.note_params)} className="tabular-nums text-text-secondary" /></div>}
+        {!confirmed && item.temporary && item.attempts
+          ? <span data-link-rechecked="" className="mt-1 block text-body-2-regular text-text-secondary">{t('cleanup:links.rechecked', { count: item.attempts })}</span>
+          : null}
       </div> },
     { id: 'url', label: t('cleanup:links.columnUrl'), width: 360, min: 180, value: (item) => item.url,
+      filter: { values: item => new URL(item.url).hostname,
+        option: (_, item) => ({ leading: item && <SiteMark linkId={item.id} /> }) },
       render: (item) => <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.url} data-link-address=""
         className="flex min-w-0 items-center gap-1 text-text-secondary hover:text-text-primary">
         <SiteMark linkId={item.id} />
@@ -111,7 +127,12 @@ function LinkTable(
         description={hint} unit={t('cleanup:links.unit')} panel={false} footerActions={footer}
         rowLabel={(item) => t('cleanup:links.rowLabel', { entity: item.entity, link: linkLabel(item.label) || item.url })}
         selected={picked.map(String)} onSelected={(ids) => onPick(ids.map(Number))}
-        actions={() => children} />
+        contextOperations={(item) => [
+          { id: 'copy', label: t('cleanup:links.copyLink'), icon: RiFileCopyLine, run: () => navigator.clipboard.writeText(item.url) },
+          ...(retry ? [{ id: 'retry', label: t('manage:shared.retryNow'), icon: RiRefreshLine,
+            disabled: retrying, run: () => retry(item.id) }] : []),
+        ]}
+        actions={(chosen) => actions?.(chosen) ?? []} controls={() => controls} />
     </div>
   );
 }
@@ -149,7 +170,6 @@ export function LinkManager() {
   const gone = state?.gone ?? [];
   const unclear = state?.unclear ?? [];
   const retryable = done ? unclear : [];
-  const selectedGone = gone.filter((item) => gonePicked.includes(item.id)).map((item) => item.id);
   const selectedRetryable = retryable.filter((item) => picked.includes(item.id)).map((item) => item.id);
   const info = stats.data;
   const hosts = (info?.top_hosts ?? []).slice(0, 3);
@@ -158,15 +178,18 @@ export function LinkManager() {
     if (!actionsReady || running || (retry && !retry.length)) return;
     check.start.mutate(retry ? { retry, checkId } : {});
   };
-  const removeGone = (ids?: number[]) => {
+  /* 删除是一趟后台任务，结论由任务那块回执说；删了撤不回，弹窗写明。`all` 时不带 id，删整份清单。 */
+  const removeGone = (label: string, all = false): BulkAction<LinkRow> => ({
+    key: all ? 'prune-all' : 'prune', label, reversal: 'irreversible', danger: true, holdToConfirm: true,
+    confirm: (rows) => ({ title: t('cleanup:links.deleteDead'), danger: true,
+      body: t('cleanup:links.deleteDeadBody', { count: rows.length }) }),
+    run: async (rows) => { await prune.start.mutateAsync({ checkId, ids: all ? undefined : rows.map((row) => row.id) }) },
+    receipt: () => '',
+  });
+  const host = { receipt: () => {} };
+  const removeAll = () => {
     if (!actionsReady || removing || !gone.length) return;
-    void confirmModal({
-      title: t('cleanup:links.deleteDead'),
-      body: t('cleanup:links.deleteDeadBody', { count: ids?.length ?? gone.length }),
-      confirmLabel: t('cleanup:links.deleteDead'),
-      danger: true,
-      onConfirm: () => prune.start.mutateAsync({ checkId, ids }),
-    });
+    void runBulkAction(removeGone(t('cleanup:links.deleteDead'), true), gone, host);
   };
 
   /* 删除那一趟跑完，结论就是那一句回执：旧清单里的行已经删掉或者确认保留了。 */
@@ -201,27 +224,22 @@ export function LinkManager() {
         <LinkTable title={t('cleanup:links.dead')} items={gone} hint={GONE_HINT} picked={gonePicked} onPick={setGonePicked} confirmed
           footer={done && gone.length ? <>
             <p className="mr-auto min-w-0 text-caption-1-regular text-text-secondary">{PRUNE_HINT}</p>
-            <Button variant="danger" {...busyProps(removing)} onClick={() => removeGone()}>
+            <Button variant="danger" {...busyProps(removing)} onClick={removeAll}>
               {t('cleanup:links.deleteDeadCount', { count: gone.length })}
             </Button>
-          </> : null}>
-          <Button variant="danger" size="small" disabled={!done || !selectedGone.length}
-            {...busyProps(removing)} onClick={() => removeGone(selectedGone)}>
-            {t('cleanup:links.deleteSelected', { count: selectedGone.length })}
-          </Button>
-        </LinkTable>
+          </> : null}
+          actions={(chosen) => [{ action: removeGone(t('cleanup:links.deleteSelected', { count: chosen.length })),
+            items: chosen, host, disabled: !done || removing,
+            rowAction: { label: t('cleanup:links.deleteDead'), icon: RiDeleteBinLine } }]} />
         <LinkTable title={t('cleanup:links.unreached')} items={unclear} hint={UNCLEAR_HINT}
-          picked={picked} onPick={setPicked} footer={retryable.length
+          picked={picked} onPick={setPicked} retry={done ? id => run([id]) : undefined} retrying={running} footer={retryable.length
             ? <Button variant="primary" leadingIcon={RETRY} {...busyProps(running)}
                 onClick={() => run(retryable.map((item) => item.id))}>{t('cleanup:links.retryAll', { count: retryable.length })}</Button>
-            : null}>
-          {retryable.length
-            ? <>
-                  <Button variant="secondary" leadingIcon={RETRY} disabled={!selectedRetryable.length} {...busyProps(running)}
-                    onClick={() => run(selectedRetryable)}>{pickedLabel}</Button>
-              </>
             : null}
-        </LinkTable>
+          controls={retryable.length
+            ? <Button variant="secondary" leadingIcon={RETRY} disabled={!selectedRetryable.length} {...busyProps(running)}
+                onClick={() => run(selectedRetryable)}>{pickedLabel}</Button>
+            : null} />
         {done && !gone.length && !unclear.length
           ? <p className={`${RESULT_SECTION} text-body-regular text-notification-success-foreground`}>{t('cleanup:links.allReachable')}</p>
           : null}

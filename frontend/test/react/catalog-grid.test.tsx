@@ -5,6 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MediaCard, cardRatio, type MediaCardVariant } from '../../src/react/components/media-card';
+import { MediaRowActions } from '../../src/react/components/media-actions';
 import { CatalogGridPage, LoadMore } from '../../src/react/catalog-grid/catalog-grid-page';
 import type { CatalogGridProps } from '../../src/react/catalog-grid/types';
 import {
@@ -257,6 +258,39 @@ describe('续页', () => {
     await click(buttonNamed('同步这些影片', host));
     await until(() => posts.length > 0, '提交补全');
     expect(posts[0]).toEqual({ stage: 'collect', asset_ids: [51, 53] });
+    queryClient.removeQueries({ queryKey: ['catalog-grid'] });
+  });
+
+  it('竖屏带一条按设置的张数取，下一条从这一条之后接着取；不插带子时不发竖屏请求', async () => {
+    vi.stubGlobal('IntersectionObserver', FakeObserver);
+    const strips: URLSearchParams[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      const url = new URL(String(input), 'http://peach.test');
+      if (url.searchParams.get('orient') === 'portrait') strips.push(url.searchParams);
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const body = url.pathname === '/api/library-processing' ? { status: 'idle' }
+        : url.searchParams.get('orient') === 'portrait'
+          ? { items: [1, 2].map((n) => item(500 + offset + n)), total: 40, has_more: true }
+          : { items: [1, 2, 3].map((n) => item(offset + n)), total: 9, has_more: offset + 3 < 9 };
+      return Promise.resolve(reply(body));
+    }));
+    const host = await mount(<QueryClientProvider client={queryClient}>
+      <CatalogGridPage {...props({ sort: 'seed', q: '竖屏带张数' })} shorts shortsLimit={6} />
+    </QueryClientProvider>);
+    await until(() => strips.length > 0, '竖屏带请求');
+    expect([strips[0]!.get('limit'), strips[0]!.get('offset')]).toEqual(['6', '0']);
+    await until(() => !!host.querySelector('[data-shorts-strip]'), '竖屏带插进网格');
+    await FakeObserver.latest().near();
+    await until(() => strips.length > 1, '下一页带出第二条竖屏带');
+    expect([strips[1]!.get('limit'), strips[1]!.get('offset')]).toEqual(['6', '6']);
+    queryClient.removeQueries({ queryKey: ['catalog-grid'] });
+    document.body.innerHTML = '';
+    strips.length = 0;
+    await mount(<QueryClientProvider client={queryClient}>
+      <CatalogGridPage {...props({ sort: 'seed', q: '不插竖屏带' })} shorts={false} />
+    </QueryClientProvider>);
+    await until(() => !!document.querySelector('[data-media-card]'), '主网格画出');
+    expect(strips).toEqual([]);
     queryClient.removeQueries({ queryKey: ['catalog-grid'] });
   });
 
@@ -652,16 +686,58 @@ describe('作品卡', () => {
     expect(host.querySelector('[data-later]')?.getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('回收站里的资源按类型起名，卡上那枚键还原这一条，不打开它', async () => {
-    const archive = await render(item(17, { medium: 'archive', name: '资料.zip', disposal: 'trash' }), { variant: 'resource' });
+  it('作品右键菜单操作当前卡片，聚焦滚动保留菜单，页面滚轮关闭菜单', async () => {
+    const { card, onOpen } = await render(item(160));
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+    await act(async () => { card.dispatchEvent(event) });
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.querySelector('[role="menu"]')?.textContent).toContain('选择作品');
+    expect(onOpen).not.toHaveBeenCalled();
+    await act(async () => { document.dispatchEvent(new Event('scroll')) });
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    const copySource = document.createElement('select');
+    copySource.dataset.copyEditor = '';
+    document.body.append(copySource);
+    await act(async () => { copySource.focus() });
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => { document.body.dispatchEvent(new WheelEvent('wheel', { bubbles: true })) });
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it('列表删除失败显示原因并允许重试，回收站只提供还原', async () => {
+    const target = item(161);
+    const actions = actionsFor();
+    vi.mocked(actions.resourceOperation).mockRejectedValueOnce(new Error('写入失败'));
+    const host = await mount(<MediaRowActions item={target} actions={actions} selected={false} onOpen={vi.fn()} />);
+    const remove = host.querySelector<HTMLButtonElement>('[aria-label="删除"]')!;
+    await click(remove);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe('写入失败');
+    expect(remove.disabled).toBe(false);
+    await click(remove);
+    expect(actions.resourceOperation).toHaveBeenLastCalledWith(target, 'dispose');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+
+    const trash = item(162, { disposal: 'trash' });
+    const restored = await mount(<MediaRowActions item={trash} actions={actions} selected={false} onOpen={vi.fn()} />);
+    expect(restored.querySelector('[aria-label="稍后看"]')).toBeNull();
+    await click(restored.querySelector('[aria-label="还原作品"]'));
+    expect(actions.resourceOperation).toHaveBeenLastCalledWith(trash, 'restore');
+  });
+
+  it('回收站里的资源按类型起名，卡底那颗「还原」还原这一条、不打开它，归入原因排在标签行最前', async () => {
+    const archive = await render(item(17, { medium: 'archive', name: '资料.zip', disposal: 'trash', disposal_reason: 'junk' }), { variant: 'resource' });
     expect(archive.host.querySelector('[data-media-who]')?.textContent).toBe('压缩包');
-    await click(archive.host.querySelector('[data-media-resource-action]'));
+    expect(archive.host.querySelector('[data-media-tags] > :first-child')?.textContent).toBe('垃圾');
+    const restore = archive.host.querySelector('[data-jav-actions] [data-media-resource-action="restore"]');
+    expect(restore?.textContent).toBe('还原');
+    await click(restore);
     expect(archive.actions.resourceOperation).toHaveBeenCalledWith(expect.objectContaining({ id: 17 }), 'restore');
     expect(archive.onOpen).not.toHaveBeenCalled();
 
+    /* 不在回收站里的资源卡没有动作行。 */
     const shortcut = await render(item(18, { medium: 'other', name: '入口.URL' }), { variant: 'resource' });
     expect(shortcut.host.querySelector('[data-media-who]')?.textContent).toBe('网址快捷方式');
-    expect(shortcut.host.querySelector('[data-media-resource-action]')?.getAttribute('title')).toBe('移入回收站');
+    expect(shortcut.host.querySelector('[data-jav-actions]')).toBeNull();
   });
 
   it('换大图／小图留着原来那张封面，原地换取景；换了作品才换图', async () => {

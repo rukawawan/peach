@@ -22,7 +22,7 @@ class ReadmeContractsTests(unittest.TestCase):
             root = Path(directory)
             (root / 'src/peach').mkdir(parents=True)
             (root / 'src/peach/__init__.py').write_text('__version__ = "0.8.0"\n', encoding='utf-8')
-            (root / 'CHANGELOG.md').write_text('## [未发布]\n\n## [0.8.0] - 2026-11-08\n\n'
+            (root / 'CHANGELOG.md').write_text('## [Unreleased]\n\n## [0.8.0] - 2026-11-08\n\n'
                                                '## [0.7.9] - 2026-11-01\n\n## [0.7.8] - 2026-10-20\n',
                                                encoding='utf-8')
             for version, problems in (('0.8.0', 0), ('0.7.9', 0), ('0.7.8', 2)):
@@ -30,6 +30,8 @@ class ReadmeContractsTests(unittest.TestCase):
                     (root / name).write_text(f'[Installer]({link.format(version)})\n', encoding='utf-8')
                 with self.subTest(version=version):
                     self.assertEqual(len(readme_link_problems(root)), problems)
+                    self.assertEqual(len(readme_link_problems(root, version="0.8.0")),
+                                     0 if version == "0.8.0" else len(README_FILES))
             (root / 'README.md').write_text(f'[A]({link.format("0.8.0")}) [B]({link.format("0.7.9")})\n',
                                             encoding='utf-8')
             (root / 'README.zh-CN.md').write_text('没有直链\n', encoding='utf-8')

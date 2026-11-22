@@ -1,6 +1,6 @@
 /* 欧美资料刮削（`/data-cleanup/western-scrape`）：填 ThePornDB 的 API Token，开始一轮，看进度。
  *
- * 一轮在服务端后台跑（`src/peach/western_tpdb.py`），页面只轮询 `/api/western-scrape`。
+ * 一轮在服务端后台跑（`src/peach/tpdb_scrape.py`），页面只轮询 `/api/western-scrape`。
  * 查过的作品下次跳过；「重新查没找到的」清掉没查到的记录再跑一遍。 */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';

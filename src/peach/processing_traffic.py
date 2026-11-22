@@ -115,6 +115,8 @@ class ProcessingTraffic:
         self.unknown_files = stage in ('all', 'scan') and asset_ids is None
         from .processing_traffic_plan import TrafficPlan
         self.plan = TrafficPlan(config, stage, self._media_key, allow_metered=allow_metered)
+        from .library_processing import source_budget
+        self.plan.budget_bytes = source_budget(db_path).bytes
         from .processing_storage import ProcessingStorage
         self.storage = ProcessingStorage(config)
         self.plan.completed.update(previous.get('completed_work', []))
@@ -171,7 +173,7 @@ class ProcessingTraffic:
             self.active_sample = dict(profile=profile, blocked=set(),
                 before={key: row['used_bytes'] for key, row in self.rows.items()}) if profile else None
 
-    def finish_work(self, stage, code=None, *, successful=True):
+    def finish_work(self, stage, code=None, *, successful=True, western_asset_id=None):
         with self.lock:
             if stage == 'metadata' and self.active_sample:
                 sample, self.active_sample = self.active_sample, None
@@ -181,7 +183,7 @@ class ProcessingTraffic:
                             self.plan.history.observe(sample['profile'] + ':' + key, self.rows[key]['used_bytes'] - before)
                     self.plan.calibrate()
                     self.plan.history.save()
-            self.plan.finish(stage, code)
+            self.plan.finish(stage, code, western_asset_id=western_asset_id)
 
     def observe_media(self, path, kind, amount):
         key = self._media_key(path)

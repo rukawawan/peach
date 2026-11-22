@@ -1,4 +1,4 @@
-/* 「应用与维护」的前半段：版本更新与开机自启。版本状态最常看，排在整组最前，自动更新的档位紧跟其后。 */
+/* 「应用与维护」中的开机自启与桌面快捷方式。 */
 import { useState, type FormEvent } from 'react';
 
 import { SettingsRow } from '@/components/application/settings/settings-rows';
@@ -7,25 +7,10 @@ import { Switch } from '@/components/base/switch/switch';
 
 import { apiSend } from '../../api';
 import { codedText } from '../../core/server-text';
-import type { ConfigurationGroupProps, StartupState } from '../bundle';
-import { groupRoot } from './configuration-panel';
-import { AutomaticUpdates } from './maintenance-settings';
-import { ReleaseUpdates } from './release-updates';
-import { UpgradeRepairs } from './upgrade-repairs';
+import type { StartupState } from '../bundle';
 import { ErrorText, Footer, Help, Rows, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
 import { t } from '../../i18n';
-
-export function GeneralSettings({ data, receipt, panel }: ConfigurationGroupProps) {
-  return (
-    <div {...groupRoot(panel)}>
-      {data.updates ? <ReleaseUpdates initial={data.updates} initialJob={data.update_job} /> : null}
-      <UpgradeRepairs />
-      {data.automatic_updates ? <AutomaticUpdates initial={data.automatic_updates} receipt={receipt} /> : null}
-      {data.startup ? <StartupSettings startup={data.startup} receipt={receipt} /> : null}
-    </div>
-  );
-}
 
 export function StartupSettings({ startup, receipt }: { startup: StartupState; receipt(message: string): void }) {
   const [enabled, setEnabled] = useState(startup.enabled);
