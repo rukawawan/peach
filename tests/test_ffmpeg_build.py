@@ -104,7 +104,7 @@ class FFmpegSourceBuildTests(unittest.TestCase):
 
     def test_source_lock_pins_all_linked_external_dependencies(self):
         lock = builder.load_sources()
-        self.assertEqual(lock["version"], "9.0.2")
+        self.assertEqual(lock["version"], "9.1")
         self.assertEqual(lock["license"], "GPL-3.0-or-later")
         self.assertEqual({source["name"] for source in lock["sources"]},
                          {"ffmpeg", "x264", "nv-codec-headers", "dav1d", "amf-headers", "libvpl"})

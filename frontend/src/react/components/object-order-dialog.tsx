@@ -9,9 +9,9 @@ import { busyProps } from '../settings/use-action';
 import { t } from '../../i18n';
 
 /** 对象顺序先在弹层内调整，保存时由对象自己的端点一次写入。 */
-export function ObjectOrderDialog({ title, items, save, close }: {
+export function ObjectOrderDialog({ title, items, save, close, dropOnRow }: {
   title: string; items: { id: string; name: string }[];
-  save(keys: string[]): Promise<void>; close(): void;
+  save(keys: string[]): Promise<void>; close(): void; dropOnRow?: boolean;
 }) {
   const [keys, setKeys] = useState(() => items.map(row => row.id));
   const [saving, setSaving] = useState(false);
@@ -26,7 +26,7 @@ export function ObjectOrderDialog({ title, items, save, close }: {
     <div className="flex min-h-0 flex-col">
       <Heading slot="title" className="p-5 text-title-2-semibold text-text-primary">{title}</Heading>
       <div className="min-h-0 overflow-y-auto px-5 pb-5" inert={saving}>
-        <NavigationOrderRows reset={false} order={{ label: title, keys, defaults: [], commit: setKeys }}
+        <NavigationOrderRows reset={false} dropOnRow={dropOnRow} order={{ label: title, keys, defaults: [], commit: setKeys }}
           labels={Object.fromEntries(items.map(row => [row.id, row.name]))} />
       </div>
       {problem ? <Note tone="error">{problem}</Note> : null}

@@ -3,8 +3,7 @@
  *
  * 选择器全用 `data-*`，与遗留层同名的类一条不写（`test/legacy-class-names.test.ts`）。例外有三类：
  * `.peach-react` 是两边约好的名字；`video-js` / `vjs-*` 是 Video.js 的组件契约；壳画出来挂进队列的
- * 头像（`mav`、`mavstack`）与共用拖动排序挂的 `dragging`、`drop-before`、`drop-after` 不是岛挂的，
- * 按 `[class~=…]` 认，权重与类选择器相同。
+ * 头像（`mav`、`mavstack`）按 `[class~=…]` 认，权重与类选择器相同。
  *
  * 选择器不挂 `[data-stage]` 祖先：冷启动深链 `/posts/` 时壳先把同一份详情骨架画进 `#stats`，
  * 那份骨架在舞台外面，格子与详情栏的几何照样要作用到它身上。
@@ -53,12 +52,14 @@
 [data-stage]:is([data-stage-kind="item"],[data-stage-kind="jav"]) [data-stage-media]{height:var(--detail-media-height);min-height:0}
 /* 普通视频也受媒体格高度约束，控制条不能落到 overflow 裁切区外。 */
 [data-stage] [data-stage-media]>.video-js{max-height:100%}
-[data-stage] [data-skeleton="detail"] [data-stage-media]{width:100%;max-width:100%;aspect-ratio:auto;max-height:none}
+[data-stage] [data-skeleton="detail"] [data-stage-media]{width:100%;max-width:100%}
+[data-stage]:is([data-stage-kind="item"],[data-stage-kind="jav"]) [data-skeleton="detail"] [data-stage-media]{aspect-ratio:auto;max-height:none}
 [data-stage] [data-stage-scroll] :is([data-jav-art],[data-item-gallery]){display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) 116px;align-items:center;justify-items:center}
 [data-stage] [data-stage-scroll] :is([data-jav-art],[data-item-gallery])>:is([data-jav-picture],[data-catalog-picture],[data-jav-picture-wait],[data-jav-video],[class~="video-js"],[role="note"]){grid-area:1/1;min-height:0;max-height:var(--detail-gallery-height);height:var(--detail-gallery-height);width:100%;object-fit:contain}
 /* 原图太小的来源图（`data-native-size`）按原尺寸摆在格子正中，不撑满格高：拉大只是一片糊。 */
 [data-stage] [data-stage-scroll] :is([data-jav-art],[data-item-gallery])>[data-jav-picture][data-native-size]{width:auto;height:auto}
 [data-item-samples-state]{position:absolute;right:16px;bottom:44px;z-index:2}
+[data-item-samples-state]:has(>[role="note"]){inline-size:min(24rem,calc(100% - 32px))}
 [data-stage] :is([data-jav-art],[data-item-gallery])>[data-carousel-below]{grid-area:2/1;box-sizing:border-box;min-width:0;align-self:end}
 [data-stage] [data-jav-video]{display:grid;place-items:center}
 [data-stage] [data-stage-scroll] :is([data-jav-video]>[class~="video-js"],[data-item-gallery]>[class~="video-js"]){width:min(100%,calc(var(--detail-gallery-height) * 16 / 9));height:auto;max-height:var(--detail-gallery-height);aspect-ratio:16/9}
@@ -142,13 +143,10 @@ body[data-detail-open] [class~=glowlayer]::before{animation-play-state:paused,pa
 [data-mix-item-meta] [class~="mavstack"] [class~="mav"]{box-shadow:0 0 0 2px var(--ground)}
 [data-mix-item-text]{min-width:0}[data-mix-item-text] b,[data-mix-item-text] span{display:block;overflow:hidden;white-space:nowrap}[data-mix-item-text] [data-truncate-end]{text-overflow:ellipsis}
 [data-mix-item-text] b{font-size:var(--fs-xs);line-height:1.4}[data-mix-item-text] span{font-size:var(--fs-xs);color:var(--muted);margin-top:3px}
-/* 拖动中的行减淡，落点画一条线——和侧栏顺序那一列同一套表现，类名由共用的
-   wireDragReorder 挂上。 */
-[data-mix-row][data-queue-row]{position:relative;cursor:grab}
-[data-mix-row][data-queue-row]:active{cursor:grabbing}
-[data-mix-row][class~="dragging"]{opacity:.42}
-[data-mix-row][class~="drop-before"]::before,[data-mix-row][class~="drop-after"]::after{content:'';position:absolute;z-index:4;left:6px;right:6px;height:2px;border-radius:var(--pill-radius);background:var(--ink)}
-[data-mix-row][class~="drop-before"]::before{top:-3px}[data-mix-row][class~="drop-after"]::after{bottom:-3px}
+/* 触屏滑动卡片区滚动队列，从抓手开始时由排序逻辑接管。 */
+[data-mix-list][data-navigation-order=playlist-queue]>[data-tab]{touch-action:auto}
+[data-mix-list][data-navigation-order=playlist-queue] [data-queue-grip]{touch-action:none}
+[data-mix-list][data-navigation-order=playlist-queue][data-reordering] [data-mix-item]{cursor:grabbing}
 /* 详情下方的集合不是侧栏列表，而是与「接着看」同语义的横向切换带。
    Mix、分卷、播放列表、视频合集与多媒体只改变标题和标识，共用同一套卡片尺寸。 */
 [data-detail-continuation]>[data-mix-queue]{padding:14px 14px 16px;overflow:hidden}
@@ -157,6 +155,8 @@ body[data-detail-open] [class~=glowlayer]::before{animation-play-state:paused,pa
 [data-detail-continuation]>[data-mix-queue] [data-mix-queue-head] span{max-width:72ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 [data-detail-continuation]>[data-mix-queue] [data-mix-list]{display:grid;grid-auto-flow:column;grid-auto-columns:var(--detail-card-width);
   gap:10px;overflow-x:auto;overflow-y:hidden;padding:0 0 3px;overscroll-behavior-inline:contain;scroll-snap-type:x proximity}
+/* 拾起的卡片会跟着指针移动，浏览器暂停追随它的吸附位置。 */
+[data-detail-continuation]>[data-mix-queue] [data-mix-list][data-reordering]{scroll-snap-type:none}
 [data-detail-continuation]>[data-mix-queue] [data-mix-row]{display:block;position:relative;min-width:0;background:transparent;scroll-snap-align:start}
 [data-detail-continuation]>[data-mix-queue] [data-mix-item]{display:flex;flex-direction:column;align-items:stretch;gap:7px;padding:0}
 [data-detail-continuation]>[data-mix-queue] [data-mix-item]:hover,[data-detail-continuation]>[data-mix-queue] [data-mix-item][aria-current="true"]{background:transparent}
@@ -258,7 +258,7 @@ body[data-detail-open] [class~=glowlayer]::before{animation-play-state:paused,pa
 /* 顶上两角让出顶栏：Peach 的顶栏是吸顶的，压在上面搜索和设置就点不到了。 */
 [data-miniplayer][data-corner="tr"]{right:16px;top:calc(var(--topH) + 16px)}
 [data-miniplayer][data-corner="tl"]{left:16px;top:calc(var(--topH) + 16px)}
-[data-miniplayer][data-miniplayer-drag]{cursor:grabbing}
+[data-miniplayer][data-miniplayer-drag]{z-index:calc(var(--layer-tooltip) + 1);cursor:grabbing}
 [data-miniplayer][data-miniplayer-drag] [data-miniplayer-card]{cursor:grabbing}
 /* 吸附回角落：上游 .ytdMiniplayerComponentAnimatingSnap 是 transform .5s cubic-bezier(.05,0,0,1)。 */
 [data-miniplayer][data-miniplayer-snap]{transition:transform .5s cubic-bezier(.05,0,0,1)}
@@ -356,6 +356,7 @@ body[data-detail-open] [class~=glowlayer]::before{animation-play-state:paused,pa
   /* 手机上浮窗自己的上限换了一条，滚动层跟着换，两边仍旧差两条边线。 */
   [data-stage]>[data-stage-scroll]{max-height:calc(100dvh - env(safe-area-inset-top) - 18px)}
   [data-stage-media]>.video-js{aspect-ratio:var(--peach-video-ratio,16/9);max-height:56dvh}
+  [data-stage][data-stage-kind="follow"] [data-skeleton="detail"] [data-stage-media]{max-height:56dvh}
 }
 [data-stage-close]{padding:0;display:grid;place-items:center;line-height:1;border-radius:50%;background:var(--surface);color:var(--ink)}
 [data-stage-close] svg{display:block;margin:0;justify-self:center;align-self:center}

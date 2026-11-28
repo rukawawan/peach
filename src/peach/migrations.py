@@ -58,10 +58,19 @@ def applied(connection: sqlite3.Connection) -> dict[str, str]:
     )}
 
 
+def readonly_uri(db_path: Path | str, *, immutable: bool = False) -> str:
+    """SQLite 只读 URI，路径里的特殊字符按文件名解释。"""
+    uri = Path(db_path).absolute().as_uri()
+    if not uri.startswith("file:///"):
+        # UNC 的服务器名属于路径。SQLite 默认拒绝非本地 URI authority。
+        uri = "file:////" + uri.removeprefix("file://")
+    return uri + ("?mode=ro&immutable=1" if immutable else "?mode=ro")
+
+
 def plan(db_path: Path, directory: Path) -> tuple[list[Migration], list[Migration]]:
     all_migrations = discover(directory)
     # status 对既有数据库使用 SQLite 只读 URI，保证不会创建 journal/WAL 或触发隐式写入。
-    connection = (sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    connection = (sqlite3.connect(readonly_uri(db_path), uri=True)
                   if db_path.exists() else sqlite3.connect(':memory:'))
     try:
         done = applied(connection)

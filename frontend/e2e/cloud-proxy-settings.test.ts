@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
+import { CONFIGURATION_ROUTE, launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
 
 describe('CloudDrive 代理设置', () => {
   let browser: Browser;
@@ -16,7 +16,7 @@ describe('CloudDrive 代理设置', () => {
       const posts: Record<string, unknown>[] = [];
       let reads = 0;
       const opened = await visit(browser, '/settings/library', viewport, async page => {
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
           await route.fulfill({ json: { ...data, media_sources: [{ location: '115', root: 'A:\\Movies', path: 'A:\\Movies', cost: 'metered' }] } });
         });
@@ -47,6 +47,8 @@ describe('CloudDrive 代理设置', () => {
         account = { ...account, revision: '3', data: { ...account.data, mode: 'system' } };
         await page.evaluate(() => window.dispatchEvent(new Event('focus')));
         await page.waitForFunction(() => document.querySelector('[aria-label="数据代理"]')?.textContent?.includes('跟随系统'));
+        await dataSelect().scrollIntoViewIfNeeded();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         await dataSelect().click();
         await page.getByRole('option', { name: '直连', exact: true }).click();
         const before = reads;
@@ -68,7 +70,7 @@ describe('CloudDrive 代理设置', () => {
   }
   it('未填 CloudDrive2 地址时显示设置入口，不报错', async () => {
     const opened = await visit(browser, '/settings/library', VIEWPORTS[0], async page => {
-      await page.route('**/api/configuration', async route => {
+      await page.route(CONFIGURATION_ROUTE, async route => {
         const data = await (await route.fetch()).json();
         await route.fulfill({ json: { ...data, media_sources: [{ location: '115', root: 'B:/', path: '', cost: 'metered' }] } });
       });

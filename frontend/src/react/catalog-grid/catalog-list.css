@@ -11,14 +11,14 @@
 /* 共演叠放与首页卡片同一套几何；卡片里上限按所在行宽的 30% 算，艺人列只有一百多像素，照算会把几张头像
  * 压成完全重叠，这里直接用卡片满员时的上限。 */
 .peach-react [data-catalog-table] [data-list-people] > [data-media-avatars] { flex: none; max-width: 109px; }
-.peach-react [data-catalog-table] [data-list-people] > [data-media-who] { display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.peach-react [data-catalog-table] [data-list-people] > [data-media-who] > span { overflow: hidden; text-overflow: ellipsis; }
-.peach-react [data-catalog-table] [data-list-people] > [data-media-who] > svg { display: none; }
+.peach-react [data-catalog-table] :is([data-list-people], [data-list-person-line]) > [data-media-who] { display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.peach-react [data-catalog-table] :is([data-list-people], [data-list-person-line]) > [data-media-who] > span { overflow: hidden; text-overflow: ellipsis; }
+.peach-react [data-catalog-table] :is([data-list-people], [data-list-person-line]) > [data-media-who] > svg { display: none; }
 .peach-react [data-catalog-table] [data-list-people] > [data-media-who-more] { flex: none; color: var(--muted); }
 /* 数据表给格子里的链接写了 `width: fit-content` 与 `align-self: flex-start`：头像是链接时（新作的来源人物）会被
  * 压成 0 宽，署名是链接时贴在格子上沿、和头像与「等 N 人」对不齐。这里按头像尺寸钉回、署名居中。 */
 .peach-react [data-catalog-table] [data-list-people] a[data-media-avatar] { width: 38px; }
-.peach-react [data-catalog-table] [data-list-people] > a { align-self: center; }
+.peach-react [data-catalog-table] :is([data-list-people], [data-list-person-line]) > a { align-self: center; }
 .peach-react [data-catalog-table] [data-list-people] > a[data-media-who] { text-decoration: none; }
 .peach-react [data-catalog-table] [data-list-people] > a[data-media-who]:hover { text-decoration: underline; }
 /* JAV 新作列表的厂牌格：16px 方形标识，没装标识时画首字，与媒体库格同一行距。 */
@@ -30,6 +30,8 @@
 .peach-react [data-catalog-table] [data-list-picture] :is(img,video) { width: 100%; height: 100%; }
 .peach-react [data-catalog-table] [data-list-picture] :is(img:not([data-jav-image]),video) { object-fit: cover; }
 .peach-react [data-catalog-table] [data-list-text] { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.peach-react [data-catalog-table] a[data-list-work-link] { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 4px; }
+.peach-react [data-catalog-table] [data-list-code] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 标题最多两行再截断：行高按缩略图定，作品列窄时少截一半。 */
 .peach-react [data-catalog-table] [data-list-name] { display: -webkit-box; min-width: 0; overflow: hidden; white-space: normal; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.4; }
 .peach-react [data-catalog-table] [data-list-identity]:has([data-list-open]:hover, [data-list-name]:hover) [data-list-name] { text-decoration: underline; }
@@ -64,6 +66,8 @@
 .peach-react [data-list-skeleton-name] > span { display: flex; flex: 1; flex-direction: column; gap: 8px; min-width: 0; }
 .peach-react [data-list-skeleton-name] > span > i { display: block; width: 72%; height: 14px; border-radius: 6px; }
 .peach-react [data-list-skeleton-name] > span > i + i { width: 44%; height: 12px; }
+.peach-react [data-list-skeleton-name] > [data-list-skeleton-code] > i { width: 72%; height: 14px; }
+.peach-react [data-list-skeleton-name] > [data-list-skeleton-code] > i:is(:first-child,:last-child) { width: 44%; }
 .peach-react [data-list-skeleton-bar] { display: block; width: min(72%, 96px); height: 14px; border-radius: 6px; }
 /* 列表骨架挂在卡片网格容器里时占满整行；不按网格的类名写，免得和旧样式表同名。 */
 [data-skeleton="catalog/list"], [data-skeleton^="queue/"] { grid-column: 1 / -1; }
@@ -71,7 +75,7 @@
   .peach-react [data-catalog-table] .bui-table :is(th,td):first-child { padding-inline: 8px; }
   .peach-react [data-catalog-table] .bui-table :is(th,td):nth-child(2) { padding-inline: 8px; }
   .peach-react [data-catalog-table] [data-list-open] { gap: 12px; }
-  .peach-react [data-catalog-table] [data-list-picture] { width: 80px; height: 45px; }
+  .peach-react [data-catalog-table] :is([data-list-picture], [data-list-skeleton-name] > i) { width: 80px; height: 45px; }
 }
 /* 处理队列页列表（`../components/queue-table.tsx`）：没有缩略图的那几类画类型字形。 */
 .peach-react [data-catalog-table] [data-queue-glyph] { display: grid; place-items: center; color: var(--muted); }

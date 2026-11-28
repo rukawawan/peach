@@ -10,13 +10,16 @@ import { Button } from '@/components/base/buttons/button';
 import { Select, SelectItem } from '../components/select';
 import { exitPageSelection } from '../components/page-selection';
 import { SelectionDock, type DockAction } from '../components/selection-dock';
-import { FilterGlassRows } from '../components/filter-glass';
+import { FilterGlassRows, FilterSearch } from '../components/filter-glass';
 import { useViewGlide } from '../components/use-view-glide';
 import type { ReviewGroup, ReviewGrouping, ReviewQueue, ReviewRow } from './review';
 import { commonReviewSources, REVIEW_QUEUES, REVIEW_QUEUE_LABELS } from './review';
 import { t } from '../../i18n';
 
 export interface BulkToolbarProps {
+  /** 下排的查找词与改词动作；不给 `onSearch` 就不出查找。 */
+  search?: string;
+  onSearch?(q: string): void;
   queueView?: ReviewQueue;
   queueCounts?: Record<ReviewQueue, number>;
   onQueueChange(queue: ReviewQueue): void;
@@ -52,8 +55,10 @@ export function BulkToolbar(props: BulkToolbarProps) {
   const {
     groupOptions, groupBy, onGroupBy, groups, filter, onFilter, pageKeys, allKeys = pageKeys, selected, onSelected,
     selectedRows, metadata, busy, feedback, onUnifySource, actions, queueView = 'pending',
-    queueCounts, onQueueChange, locked, fields, fieldFilter, onFieldFilter, onAdoptOfficial,
+    queueCounts, onQueueChange, locked, fields, fieldFilter, onFieldFilter, onAdoptOfficial, search = '', onSearch,
   } = props;
+  // 筛到一条不剩时下排照样留着：查找框在这一排，词要改得回去。
+  const showControls = pageKeys.length > 0 || (!!onSearch && !!search);
   const shown = pageKeys.filter((key) => selected.has(key));
   const allShown = shown.length > 0 && shown.length === pageKeys.length;
   const everything = allKeys.length > pageKeys.length && allKeys.every((key) => selected.has(key));
@@ -88,7 +93,7 @@ export function BulkToolbar(props: BulkToolbarProps) {
     <>
       <FilterGlassRows label={t('manage:reviewToolbar.filters')} topLabel={t('manage:reviewToolbar.processingStatus')} attrs={{ 'data-review-filter': '' }}
         className="mb-0 flex-row flex-wrap" topClassName="max-w-full flex-none"
-        bottomClassName={pageKeys.length ? 'min-h-12 max-w-full flex-none flex-wrap' : 'hidden'}
+        bottomClassName={showControls ? 'min-h-12 max-w-full flex-none [&>*]:shrink-0' : 'hidden'}
         bottomRef={controlRow}
         panes={<span ref={statePane} data-view-glide="" aria-hidden="true" />}
         top={<div ref={stateRow} role="group" aria-label={t('manage:reviewToolbar.reviewStatus')} data-entity-states=""
@@ -103,7 +108,9 @@ export function BulkToolbar(props: BulkToolbarProps) {
           </button>)}
           <span data-entity-sep="" aria-hidden="true" className={joinedRows ? undefined : 'invisible'} />
         </div>}
-        bottom={pageKeys.length ? <>
+        bottom={showControls ? <>
+        {onSearch ? <FilterSearch compact label={t('manage:reviewPage.search')} value={search} onQuery={onSearch} /> : null}
+        {pageKeys.length ? <>
         {metadata && fields.length ? <Select aria-label={t('manage:reviewToolbar.filterField')} size="sm"
           prefix={<span data-copy-key="review.filter.field" className="pointer-events-auto">{t('manage:reviewToolbar.field')}</span>}
           selectedKey={fieldFilter || '*'} isDisabled={busy}
@@ -141,6 +148,7 @@ export function BulkToolbar(props: BulkToolbarProps) {
           disabled={busy} onClick={() => onSelected(new Set([...selected, ...allKeys]))}>
           {t('manage:reviewToolbar.selectAll', { count: allKeys.length })}
         </Button>}
+        </> : null}
         </> : null} />
 
         <SelectionDock label={t('manage:reviewToolbar.selectedDock')} visible={!locked && selected.size > 0} count={t('manage:reviewToolbar.selectedCount', { count: selected.size })}

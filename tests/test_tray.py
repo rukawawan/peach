@@ -58,6 +58,23 @@ class Response:
 
 
 class TrayTests(unittest.TestCase):
+    def test_open_application_uses_native_window_when_available(self):
+        config = Mock(data_root=Path("sample"))
+        browser = Mock()
+        with patch.object(tray_module, "normal_url", return_value="http://127.0.0.1:8900/"), \
+                patch.object(tray_module, "open_window", return_value=True) as native:
+            tray_module.open_application(config, waiting=False, open_browser=browser)
+        native.assert_called_once_with("http://127.0.0.1:8900/", config.data_root)
+        browser.assert_not_called()
+
+    def test_open_application_falls_back_to_default_browser(self):
+        config = Mock(data_root=Path("sample"))
+        browser = Mock()
+        with patch.object(tray_module, "normal_url", return_value="http://127.0.0.1:8900/"), \
+                patch.object(tray_module, "open_window", return_value=False):
+            tray_module.open_application(config, waiting=False, open_browser=browser)
+        browser.assert_called_once_with("http://127.0.0.1:8900/")
+
     def test_create_icon_has_expected_size_and_alpha(self):
         icon = create_icon(64)
         self.assertEqual(icon.size, (64, 64))
@@ -146,6 +163,30 @@ class TrayTests(unittest.TestCase):
     def test_hidpi_prefers_per_monitor_v2(self, set_context):
         set_context.return_value = True
         self.assertEqual(enable_hidpi(), "per-monitor-v2")
+
+    @patch("peach.tray.ctypes.WinDLL", create=True)
+    @patch("peach.tray.sys.getwindowsversion", create=True)
+    def test_menu_theme_opts_in_without_forcing_dark(self, windows_version, load_dll):
+        from peach import tray
+
+        windows_version.return_value.build = 18362
+        with patch.object(tray.sys, "platform", "win32"):
+            tray.enable_windows_menu_theme()
+
+        load_dll.assert_called_once_with("uxtheme.dll")
+        load_dll.return_value.__getitem__.assert_called_once_with(135)
+        load_dll.return_value.__getitem__.return_value.assert_called_once_with(1)
+
+    @patch("peach.tray.ctypes.WinDLL", create=True)
+    @patch("peach.tray.sys.getwindowsversion", create=True)
+    def test_menu_theme_skips_the_legacy_ordinal(self, windows_version, load_dll):
+        from peach import tray
+
+        windows_version.return_value.build = 17763
+        with patch.object(tray.sys, "platform", "win32"):
+            tray.enable_windows_menu_theme()
+
+        load_dll.assert_not_called()
 
     def test_update_check_is_background_notification_not_modal_dialog(self):
         snapshot = VersionSnapshot("0.2.1", "master", "abc12345", False, False, None)
@@ -535,17 +576,21 @@ class ServiceStatusTests(unittest.TestCase):
 class ReplicationSwitchTests(unittest.TestCase):
     """ADR-0023 第 3 阶段：`replication.enabled = false` 时托盘不装配复制那一层。"""
 
-    def items(self, enabled):
-        with patch("peach.tray.REPLICATION_ENABLED", enabled):
+    def items(self, enabled, packaged):
+        with patch("peach.tray.REPLICATION_ENABLED", enabled), patch("peach.tray.standalone", return_value=packaged):
             return ledger_menu_items(
                 lambda label, action: (label, action), Mock(), Mock())
 
     def test_menu_items_disappear_when_replication_is_off(self):
-        self.assertEqual(self.items(False), [])
+        for packaged in (False, True):
+            with self.subTest(packaged=packaged):
+                self.assertEqual(self.items(False, packaged), [])
 
     def test_menu_items_are_assembled_when_replication_is_on(self):
-        labels = [label for label, _ in self.items(True)]
-        self.assertEqual(labels, ["同步数据库", "由本机接管数据库写入"])
+        for packaged in (False, True):
+            with self.subTest(packaged=packaged):
+                labels = [label for label, _ in self.items(True, packaged)]
+                self.assertEqual(labels, ["同步数据库", "由本机接管数据库写入"])
 
     def test_sync_ledger_refuses_instead_of_probing_a_share(self):
         """菜单项没了，但托盘还有别的入口；这条路径会去探一个不存在的共享。"""

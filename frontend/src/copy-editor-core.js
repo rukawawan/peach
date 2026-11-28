@@ -36,7 +36,7 @@
     let result;
     try { result = JSON.parse(raw); }
     catch {
-      const error = new Error(`未取得保存结果（HTTP ${response.status}），请刷新页面核对；服务未返回 JSON`);
+      const error = new Error(`无法确认修改是否已保存（HTTP ${response.status}）。服务未返回 JSON，请刷新页面核对。`);
       error.unconfirmed = response.ok;
       throw error;
     }
@@ -44,7 +44,7 @@
       throw new Error(result?.error || (typeof result?.detail === 'string' ? result.detail : `请求失败（HTTP ${response.status}）`));
     }
     if (result === null || typeof result !== 'object') {
-      const error = new Error(`未取得保存结果（HTTP ${response.status}），请刷新页面核对`);
+      const error = new Error(`服务没有返回有效的保存结果（HTTP ${response.status}）。请刷新页面核对。`);
       error.unconfirmed = true;
       throw error;
     }
@@ -155,6 +155,7 @@
     document.head.append(css);
     const highlight = document.createElement('div'); highlight.dataset.copyEditor = ''; highlight.dataset.copyHighlight = '';
     const host = document.createElement('div'); host.className = 'peach-react'; host.dataset.copyEditor = ''; host.dataset.batchScope = '';
+    if (options.reactModalHost) host.dataset.reactAriaTopLayer = '';
     for (const type of ['pointerdown', 'click']) host.addEventListener(type, event => event.stopPropagation());
     const bar = document.createElement('div'); bar.dataset.copyEditor = ''; bar.dataset.copyBar = '';
     bar.popover = 'manual'; bar.tabIndex = 0;
@@ -191,7 +192,10 @@
       toolbarDrag.reposition();
     };
     const layout = new ResizeObserver(measureTools); layout.observe(bar);
-    const modalHost = () => [...document.querySelectorAll('dialog:modal'), ...[...document.querySelectorAll('aside')].flatMap(node => [...node.shadowRoot?.querySelectorAll('dialog:modal') || []])].at(-1) || document.body;
+    const modalHost = () => {
+      const nativeHost = [...document.querySelectorAll('dialog:modal'), ...[...document.querySelectorAll('aside')].flatMap(node => [...node.shadowRoot?.querySelectorAll('dialog:modal') || []])].at(-1) || document.body;
+      return options.reactModalHost?.(nativeHost) || nativeHost;
+    };
     function placeTools() {
       for (const aside of document.querySelectorAll('aside')) {
         const root = aside.shadowRoot;
@@ -213,7 +217,9 @@
       }
       for (const [root, style] of localStyles) if (!root.host.isConnected) { style.remove(); localStyles.delete(root); }
       let moved = false;
-      for (const node of [highlight, host, choice?.node]) if (node && node.parentElement !== parent) { parent.append(node); moved = true; }
+      for (const node of [highlight, host]) if (node.parentElement !== parent) { parent.append(node); moved = true; }
+      if (choice?.scope && !choice.scope.isConnected) choice.cancel();
+      if (choice && !choice.scope && choice.node.parentElement !== parent) parent.append(choice.node);
       // 保持模态框内的可交互资格，工具条本身在顶层按整个视口定位，不受弹窗裁切。
       if (!bar.matches(':popover-open')) bar.showPopover();
       const nextFooter = parent.matches('dialog') ? parent.querySelector('footer,.footer') : null;
@@ -232,18 +238,24 @@
           recovery.remove(); recovery = null; action();
         });
       },
-      choose(items, rect, { label = '选项', message = '' } = {}) {
+      choose(items, rect, { label = '选项', message = '', scope = null } = {}) {
         choice?.cancel();
         const select = document.createElement('select'); select.dataset.copyEditor = ''; select.dataset.copyChoice = '';
         select.setAttribute('aria-label', label); select.add(new Option(`请选择${label}`, ''));
         items.forEach((item, index) => select.add(new Option(item.label, String(index))));
         Object.assign(select.style, { left: Math.max(16, Math.min(rect.left, innerWidth - 300)) + 'px',
           top: Math.max(16, Math.min(rect.bottom + 8, innerHeight - 60)) + 'px' });
-        modalHost().append(select); select.focus(); if (message) say(message);
+        if (scope) {
+          select.popover = 'manual';
+          Object.assign(select.style, { right: 'auto', bottom: 'auto', margin: '0' });
+        }
+        (scope || modalHost()).append(select);
+        if (scope) select.showPopover();
+        select.focus(); if (message) say(message);
         return new Promise(resolve => {
           const finish = value => { select.remove(); document.removeEventListener('keydown', cancel, true); choice = null; resolve(value); };
           const cancel = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); finish(null); } };
-          choice = { node: select, cancel: () => finish(null) };
+          choice = { node: select, scope, cancel: () => finish(null) };
           select.onchange = () => { if (select.value !== '') finish(items[Number(select.value)].value); };
           document.addEventListener('keydown', cancel, true);
         });
@@ -328,11 +340,17 @@
           box.value = ed.core;
           const style = getComputedStyle(node.parentElement);
           Object.assign(box.style, { position: 'fixed', boxSizing: 'border-box', font: style.font, letterSpacing: style.letterSpacing });
-          const host = node.parentElement.closest('dialog[open]') || document.body;
+          const host = node.parentElement.closest('dialog[open], [role="dialog"]') || document.body;
+          const layered = host.matches('[role="dialog"]:not(dialog)');
+          if (layered) {
+            box.popover = 'manual';
+            Object.assign(box.style, { inset: 'auto', margin: '0' });
+          }
           ed.placeholder = document.createElement('span'); ed.placeholder.dataset.copyEditor = '';
           ed.placeholder.style.visibility = 'hidden';
           node.replaceWith(ed.placeholder); ed.placeholder.append(node);
           host.append(box);
+          if (layered) box.showPopover();
         } else {
           box.dataset.copyInline = '';
           if (options.inlineClass) box.className = options.inlineClass;

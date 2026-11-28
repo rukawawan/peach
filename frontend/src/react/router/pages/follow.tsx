@@ -53,7 +53,11 @@ async function openFollow(actions: ShellActions, live: () => boolean) {
   }
   await openManagedRoute('/follow', props, { container: stats, isCurrent: live,
     beforePlace: cached ? () => actions.surfaceChanged('follow', '/follow') : undefined });
-  if (live()) void pageNavigationReady(live, stats.querySelector('[data-filter-frame]'));
+  if (live()) {
+    const { selectMode, selected } = shell.props();
+    updateManagedRoute(stats, { selectMode, selected });
+    void pageNavigationReady(live, stats.querySelector('[data-filter-frame]'));
+  }
 }
 
 /* `#stats` 里画着、露着的是关注页。 */

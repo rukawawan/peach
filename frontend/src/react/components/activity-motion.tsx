@@ -3,6 +3,7 @@
  * 画法与遗留层共用 `../../ui-kit/activity-motion.ts` 那一份 HTML，这里用 `dangerouslySetInnerHTML` 插进来，
  * 和 Spinner 的做法一样；类别查 `../../activity-kinds.ts`。用户刚点下的那一下用按钮里的 Spinner，
  * 有真实分母用 `./progress` 的横条或 `./progress-ring` 的小环形。动画已经在动，`label` 不带省略号。 */
+import type { ReactNode } from 'react';
 import { cx } from '@/utils/cx';
 import { activityMotionHtml, type ActivityKind, type ActivitySize } from '../../ui-kit/activity-motion';
 
@@ -14,7 +15,7 @@ export function ActivityMotion({ kind, size = 'inline', still = false }: { kind:
 }
 
 /** 动画加一句状态。`block` 是面板正中的等待：动画大一档，摆在文字上方。 */
-export function ActivityStatus({ kind, label, size = 'inline' }: { kind: ActivityKind; label: string; size?: 'inline' | 'block' }) {
+export function ActivityStatus({ kind, label, size = 'inline' }: { kind: ActivityKind; label: ReactNode; size?: 'inline' | 'block' }) {
   return (
     <p role="status" data-activity-status={size} className={cx('flex min-w-0 text-caption-1-regular text-text-secondary',
       size === 'block' ? 'flex-col items-center gap-2 py-4 text-center' : 'items-center gap-2')}>

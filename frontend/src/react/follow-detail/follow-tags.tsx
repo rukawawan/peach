@@ -1,6 +1,4 @@
 /* 在线标签复用本地详情的标签行与选择器。 */
-import { useState } from 'react';
-import { Button } from '@/components/base/buttons/button';
 import { apiSend } from '../../api';
 import { collectionItems, replaceFollowItem, type FollowGroup } from '../follow-feed/follow-feed';
 import { DetailTags } from '../components/detail-tags';
@@ -11,7 +9,9 @@ import { queryClient } from '../query';
 import { detailTags, tagCategory, type FollowDetailActions, type FollowDetailData, type FollowDetailItem } from './follow-detail';
 import { t } from '../../i18n';
 
-export function FollowTags({ item, label, actions }: { item: FollowDetailItem; label(tag: string): string; actions: FollowDetailActions }) {
+export function FollowTags({ id, item, editing, label, actions }: {
+  id: string; item: FollowDetailItem; editing: boolean; label(tag: string): string; actions: FollowDetailActions;
+}) {
   const action = useAction();
   const refresh = () => queryClient.invalidateQueries({
     predicate: query => ['follow-feed', 'follow', 'tag-management'].includes(String(query.queryKey[0])),
@@ -37,15 +37,11 @@ export function FollowTags({ item, label, actions }: { item: FollowDetailItem; l
       },
     });
   }) };
-  /* 平时只读，点得开；行尾一枚编辑键切到增删，与作品详情「编辑资料」里的标签同一套控件。 */
-  const [editing, setEditing] = useState(false);
-  return <section aria-label={t('follow:followDetail.contentTags')} data-follow-tag-editor="" data-follow-detail-tags="">
+  return <section id={id} aria-label={t('follow:followDetail.contentTags')} data-follow-tag-editor="" data-follow-detail-tags="">
     <DetailTags tags={detailTags(item, label).map(k => ({ k, cat: tagCategory(item, k) }))} scope="online" adding={!!action.busy}
       candidates={[]} editable={editing}
       label={label} onOpen={actions.openTag} onAdd={tag => write('add', tag)} onRemove={tag => write('remove', tag.k)}
-      busyAttrs={() => busyProps(!!action.busy)}
-      trailing={<Button variant="secondary" size="small" data-follow-tags-edit="" aria-pressed={editing} onClick={() => setEditing(!editing)}>
-        {editing ? t('follow:followDetail.tagsDone') : t('follow:followDetail.editTags')}</Button>} />
+      busyAttrs={() => busyProps(!!action.busy)} />
     {action.error ? <Note tone="error">{action.error}</Note> : null}
   </section>;
 }

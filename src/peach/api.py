@@ -38,7 +38,7 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddle
 
 from . import (__version__, browser_transport, distribution, feeds, interface_text, ledger_backups, tunnel, web_contract,
                web_feeds, web_follow, web_settings)
-from . import routes_api, routes_auth, routes_configuration, routes_jav_browser, routes_media, routes_pages, routes_subtitles
+from . import routes_api, routes_auth, routes_configuration, routes_feedback, routes_jav_browser, routes_media, routes_pages, routes_subtitles
 from .buildinfo import frozen_build
 from .config import LOCATION_ROOT_DECLARATIONS, MEDIA_ROOT_DECLARATIONS, PeachSettings
 from .ffmpeg import FFmpegResolver
@@ -174,8 +174,9 @@ class FirstSetupSourceMiddleware:
 
 #: 启动迁移期间，需要账本的请求回 503 时带的那一句（ADR-0159）；前端认这个 code 立即查一次更新状态。
 LEDGER_MIGRATING_CODE = "api.ledger.migrating"
-#: 迁移期间照常回应、且不碰账本的两个接口：服务状态与页面顶部横幅的更新状态。
-MIGRATION_OPEN_PATHS = frozenset({"/healthz", "/api/client-updates"})
+#: 迁移期间照常回应的接口只处理服务状态与用户主动提交的反馈。
+MIGRATION_OPEN_PATHS = frozenset({"/healthz", "/api/client-updates", routes_feedback.PATH,
+                                  routes_feedback.ENVIRONMENT_PATH, routes_feedback.DIAGNOSTICS_PATH})
 
 
 class LedgerMigration:
@@ -638,14 +639,10 @@ def _health_payload(request, settings, resolver, browser_transport, *, details: 
 
 def _readiness_response(app, settings, *, details: bool):
     """`/healthz?ready=1`：迁移进行中直接报未就绪，不碰账本；其余照 `health.readiness` 核对。"""
-    from .health import readiness
-    migration = app.state.ledger_migration
-    deferred = getattr(app.state, 'ledger_background_deferred', False)
-    result = readiness(settings, background_ready=None if deferred else getattr(app.state, "ledger_background_ready", None),
-                       migrating=migration.running, known_corruption=app.state.database.corrupted)
-    result["background_deferred"] = deferred
+    from .health import app_readiness
+    result = app_readiness(app, settings)
     if details:
-        result["ledger_migration"] = migration.payload()
+        result["ledger_migration"] = app.state.ledger_migration.payload()
     return JSONResponse(result, status_code=200 if result["ready"] else 503, headers={"Cache-Control": "no-store"})
 
 
@@ -1083,6 +1080,7 @@ def create_app(
     app.include_router(routes_auth.router)
     app.include_router(routes_pages.router)
     app.include_router(routes_configuration.router)
+    app.include_router(routes_feedback.router)
     app.include_router(routes_jav_browser.create_router(routes_configuration.local_only))
     app.state.local_only = routes_configuration.local_only
     app.include_router(routes_media.router)

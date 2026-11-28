@@ -9,6 +9,14 @@ const stub = (name: string) => fileURLToPath(new URL(`./test/stubs/${name}`, imp
 const source = (path: string) => fileURLToPath(new URL(`./src/${path}`, import.meta.url));
 
 export default mergeConfig(base, defineConfig({
+  server: {
+    fs: {
+      allow: [
+        fileURLToPath(new URL('./', import.meta.url)),
+        fileURLToPath(new URL('../resources/assistant-demo-covers/', import.meta.url)),
+      ],
+    },
+  },
   resolve: {
     alias: {
       // 控制器与 React 组件的共享能力指向同一份 TS 源码。

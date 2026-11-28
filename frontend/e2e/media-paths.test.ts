@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
+import { CONFIGURATION_ROUTE, launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
 
 describe('非 Windows 媒体目录配置', () => {
   let browser: Browser;
@@ -13,7 +13,7 @@ describe('非 Windows 媒体目录配置', () => {
       const { page } = opened;
       const writes: Array<{ media_sources: Array<{ path: string; root: string }> }> = [];
       try {
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           if (route.request().method() === 'POST') {
             writes.push(route.request().postDataJSON());
             await route.fulfill({ json: { saved: true, url: new URL('/configuration', page.url()).href, revision: 'saved' } });

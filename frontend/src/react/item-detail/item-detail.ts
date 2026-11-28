@@ -11,7 +11,8 @@ import { esc, foldName } from '@peach/legacy/core';
 import { mixLabel, type FaceRef } from '@peach/card-art';
 import type { AfterPlayback } from '@peach/appearance';
 
-import { apiGet } from '../../api';
+import { apiGet, errorMessage } from '../../api';
+import { appSettingsStore } from '../../appearance/settings';
 import type { MediaCardActions, MediaCardHelpers, MediaCardLayout, MediaItem } from '../catalog-grid/types';
 import { queryClient } from '../query';
 import type { PendingWorkItem } from '../components/pending-work';
@@ -83,18 +84,20 @@ export interface QueueItem extends MediaItem, PartLabelFields {
   edition_label?: string; edition_label_parts?: TextPart[]; edition?: string; version_id?: number;
 }
 
-export type QueueKind = 'mix' | 'parts' | 'editions' | 'playlist';
+export type QueueKind = 'mix' | 'parts' | 'editions' | 'playlist' | 'filter';
 
 /** 壳递进来的队列引用。`fresh` 为真表示这一下是从外面进这个队列，要重取；同一个队列里
  *  换一条时为假，读缓存。播放列表每次都重取：它的顺序和内容别处也在改。 */
-export interface QueueRef { kind: QueueKind; seedId?: number; playlistId?: number; fresh?: boolean; autoplay?: boolean }
+export interface QueueRef { kind: QueueKind; seedId?: number; playlistId?: number; filterId?: string; fresh?: boolean; autoplay?: boolean }
 
 export interface DetailQueue {
   kind: QueueKind;
   seedId?: number;
   playlistId?: number;
+  filterId?: string;
   title: string;
   items: QueueItem[];
+  hasMore?: boolean;
   /** 播放列表记下的续播位置。 */
   currentAssetId?: number | null;
   versionCount?: number;
@@ -111,7 +114,7 @@ export interface PlaylistPayload {
 /* ── 取数 ── */
 
 export const itemKey = (id: number): QueryKey => ['item', id];
-export const queueKey = (ref: QueueRef): QueryKey => ['item-queue', ref.kind, ref.kind === 'playlist' ? ref.playlistId : ref.seedId];
+export const queueKey = (ref: QueueRef): QueryKey => ['item-queue', ref.kind, ref.filterId ?? ref.playlistId ?? ref.seedId];
 export const relatedKey = (id: number, limit: number): QueryKey => ['item-related', id, limit];
 
 export const ITEM_URL = (id: number) => `/api/item?id=${id}`;
@@ -148,6 +151,11 @@ export async function fetchQueue(ref: QueueRef, helpers: Pick<ItemDetailHelpers,
   if (ref.kind === 'playlist') {
     const playlist = await apiGet<PlaylistPayload>(`${PLAYLIST_URL}?id=${ref.playlistId}`, signal);
     return playlistQueue(playlist);
+  }
+  if (ref.kind === 'filter') {
+    const result = await apiGet<{ name: string; items: QueueItem[]; has_more: boolean }>(
+      `/api/library-shortcuts/queue?${new URLSearchParams({ id: ref.filterId! })}`, signal);
+    return { kind: 'filter', filterId: ref.filterId, title: result.name, items: result.items, hasMore: result.has_more };
   }
   const group = await apiGet<GroupPayload>(`/api/${ref.kind}?id=${ref.seedId}`, signal);
   if (group.error || !group.items?.length) throw new Error(group.error || t('catalog:detailQueue.groupGone'));
@@ -204,7 +212,7 @@ export function queueNext(queue: DetailQueue | null, id: number, mode: AfterPlay
   random: () => number = Math.random): QueueItem | null {
   const part = nextPart(queue, id);
   if (part) return part;
-  if (!queue || (queue.kind !== 'playlist' && queue.kind !== 'mix') || mode === 'stop' || mode === 'repeat-one') return null;
+  if (!queue || (queue.kind !== 'playlist' && queue.kind !== 'mix' && queue.kind !== 'filter') || mode === 'stop' || mode === 'repeat-one') return null;
   const items = queue.items.filter((item) => !isVanished(item));
   if (mode === 'shuffle') {
     const others = items.filter((item) => item.id !== id);
@@ -230,13 +238,17 @@ export async function prefetchItemDetail(props: ItemDetailProps, signal: AbortSi
     } catch (error) {
       if (signal.aborted) throw error;
       if (props.id != null) actions.redirect({ kind: 'item', id: props.id });
+      else if (ref.kind === 'filter') actions.redirect({ kind: 'filter-error', message: errorMessage(error) });
       else actions.redirect({ kind: 'gone' });
       return;
     }
   }
   const id = queue ? chooseItem(queue, props.id) : props.id;
   if (id == null) {
-    actions.redirect(queue?.kind === 'playlist' ? { kind: 'playlists' } : { kind: 'gone' });
+    if (queue?.kind === 'filter') {
+      if (props.id != null) actions.redirect({ kind: 'item', id: props.id });
+      else actions.redirect({ kind: 'filter-error', message: t('catalog:detailQueue.filterEmpty') });
+    } else actions.redirect(queue?.kind === 'playlist' ? { kind: 'playlists' } : { kind: 'gone' });
     return;
   }
   let item: DetailItem;
@@ -284,11 +296,6 @@ export interface ItemDetailHelpers {
   mixRelated(seedId: number): Promise<QueueItem[]>;
   /** 横排接上拖动滚动（遗留层 `wireDrag`）。 */
   wireDrag(el: HTMLElement): void;
-  /** 播放列表那一列拖着排序（遗留层 `wireDragReorder`）：拖动中的行由它挂 `dragging`、
-   *  `drop-before`／`drop-after`，落下时回调新位置。 */
-  wireDragReorder(root: HTMLElement, options: {
-    selector: string; attribute: string; onMove(from: string, target: string, after: boolean): Promise<void> | void;
-  }): void;
 }
 
 /** 壳要转走的几种情形。 */
@@ -296,6 +303,7 @@ export type ItemDetailRedirect =
   | { kind: 'follow'; id: number }
   | { kind: 'item'; id: number }
   | { kind: 'playlists' }
+  | { kind: 'filter-error'; message: string }
   | { kind: 'gone' };
 
 export interface ItemDetailActions {
@@ -328,7 +336,6 @@ export interface ItemDetailActions {
   /** 保存 Mix 那一屏：壳弹表单，确认时调 `save(name)`；存好了壳转去那份播放列表并给撤销。 */
   saveMix(options: { title: string; count: number; save(name: string): Promise<PlaylistPayload> }): void;
   /** 编辑播放列表：去播放列表页。 */
-  editPlaylist(): void;
   /** 播放列表被移空了：回播放列表页。 */
   openPlaylists(): void;
   /** 定位源文件；回的是失败原因，成功是空串（成功的回执归全站 Toast）。 */
@@ -422,22 +429,15 @@ export function detailTags(item: DetailItem, helpers: Pick<ItemDetailHelpers, 't
   return [...byDisplay.values()].slice(0, 40);
 }
 
-const RECENT_TAGS = 'peach.recentTags';
 export function recentTags(): string[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(RECENT_TAGS) || '[]');
-    return Array.isArray(value) ? value.map(String) : [];
-  } catch {
-    return [];
-  }
+  return appSettingsStore().value.recentTags;
 }
 export function rememberTag(tag: string): void {
-  try {
-    const rest = recentTags().filter((name) => foldName(name) !== foldName(tag));
-    localStorage.setItem(RECENT_TAGS, JSON.stringify([tag, ...rest].slice(0, 12)));
-  } catch {
-    // 存储满了或被禁用：最近使用只是便利，不影响添加本身。
-  }
+  if (!tag.trim() || tag.length > 512) return;
+  const store = appSettingsStore();
+  const rest = store.value.recentTags.filter(name => foldName(name) !== foldName(tag));
+  store.value.recentTags = [tag, ...rest].slice(0, 12);
+  store.save();
 }
 
 export interface PickerSections { recent: TagCount[]; results: TagCount[]; create: string }
@@ -459,14 +459,15 @@ export function pickerSections(query: string, candidates: readonly TagCount[], r
 /** 版本名按当前语言拼：版次随语言，规格是文件名里的原样。 */
 export const editionLabel = (row: QueueItem) => (row.edition_label ? partsLabel(row.edition_label_parts, row.edition_label) : '');
 
-const QUEUE_LABEL: Record<QueueKind, string> = { mix: 'Mix', parts: t('catalog:detailQueue.parts'), editions: t('catalog:detailQueue.editions'), playlist: t('catalog:detailQueue.playlist') };
+const QUEUE_LABEL: Record<QueueKind, string> = { mix: 'Mix', parts: t('catalog:detailQueue.parts'), editions: t('catalog:detailQueue.editions'), playlist: t('catalog:detailQueue.playlist'), filter: t('catalog:detailQueue.filter') };
 
 /** 队列头那两行：类别与摘要。版次队列的标题是「版本 · 番号」，而番号就印在正上方的详情标题里，
  *  标题栏又已经写着「版本」——三处说同一件事，这里只留数量。别的队列标题带真信息（播放列表名、
  *  Mix 种子），不能一起砍。 */
 export function queueCopy(queue: DetailQueue): { title: string; summary: string } {
   const count = queue.kind === 'editions' ? queue.versionCount ?? queue.items.length : queue.items.length;
-  const countLabel = queue.kind === 'parts' ? t('catalog:detailQueue.partCount', { count }) : queue.kind === 'editions' ? t('catalog:detailQueue.editionCount', { count }) : t('catalog:countLabel.videos', { count });
+  const countLabel = queue.kind === 'parts' ? t('catalog:detailQueue.partCount', { count }) : queue.kind === 'editions' ? t('catalog:detailQueue.editionCount', { count })
+    : queue.hasMore ? t('catalog:detailQueue.firstFilterMatches', { count }) : t('catalog:countLabel.videos', { count });
   return { title: QUEUE_LABEL[queue.kind], summary: queue.kind === 'editions' ? countLabel : `${queue.title} · ${countLabel}` };
 }
 
@@ -481,14 +482,6 @@ export function partLabel(row: PartLabelFields): string {
 }
 export const partLabelHtml = (item: DetailItem, queue: DetailQueue | null) =>
   ((queue?.kind === 'parts' || queue?.kind === 'editions') && item.part_label ? `<small class="javedition partlabel">${esc(partLabel(item))}</small>` : '');
-
-/** 拖动之后的新顺序：`from` 挪到 `target` 的前面或后面。 */
-export function movedOrder(ids: readonly number[], from: number, target: number, after: boolean): number[] {
-  const rest = ids.filter((id) => id !== from);
-  const at = rest.indexOf(target);
-  rest.splice(at + (after ? 1 : 0), 0, from);
-  return rest;
-}
 
 export const sameOrder = (a: readonly number[], b: readonly number[]) =>
   a.length === b.length && a.every((id, index) => id === b[index]);

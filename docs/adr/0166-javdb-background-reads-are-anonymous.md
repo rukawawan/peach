@@ -3,6 +3,7 @@
 - 状态：已采纳
 - 日期：2026-11-16
 - 关系：修订 [ADR-0160](0160-javdb-scraping-falls-back-to-detail-pages.md)「网页带用户在『来源和凭证』配的 JavDB Cookie」；网页后备本身、主机间隔与快照复用不变
+- 后续：[ADR-0176](0176-javdb-attended-login-and-account-fallback.md) 修订可使用会话的后台入口。
 
 ## 背景
 

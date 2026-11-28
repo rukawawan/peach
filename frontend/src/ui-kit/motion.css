@@ -95,18 +95,9 @@
   white-space:nowrap;pointer-events:none}
 .placeholderroll>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 
-/* ── 计数徽标弹出来 ──
-   从零长到原大小，同时从模糊里清晰起来。整枚一起弹，不按位拆：这一枚说的是「这里有
-   几条」，读的是有没有变多，不是变成了哪几个数字——按位拆是读数那一条的事。
-   `--motion-pop` 的缓动过一点再收住，落位才读成「弹出来的」。
-
-   `.popped` 是起点帧，摘掉就往原位走。它自己那一帧不带过渡：带的话，挂上去这一枚就
-   开始朝零缩，同一次调用里紧接着摘掉时它才走了零点几个像素，回程于是无处可走——屏幕上
-   什么也没发生。首屏那一批不挂这个类：整排计数一起弹是一屏烟花，而它要说的是
-   「这一枚刚变了」。 */
-.countbadge{display:inline-block;transition:transform var(--motion-pop),
-  opacity var(--motion-pop),filter var(--motion-pop)}
-.countbadge.popped{transform:scale(0);opacity:0;filter:blur(2px);transition:none}
+/* 筛选、侧栏与回收分类的计数变化只淡入一次，徽标始终保持原尺寸。 */
+.countbadge{display:inline-block;transition:opacity var(--motion-content)}
+.countbadge.fading{opacity:.55;transition:none}
 
 /* ── 标题从模糊里揭示出来 ──
    每一行从下方 12px 处带模糊长上来，相邻两行差一个 `--motion-stagger`。按行不按词：

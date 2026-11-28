@@ -415,6 +415,17 @@ class OnlineTagManagementTests(unittest.TestCase):
         self.assertIn('outdoors', removed['item']['tags'])
         self.assertEqual(web_follow.q_follow(self.contract, {'tag': '值得重看'})['groups'], [])
 
+    def test_feed_search_narrows_groups_and_counts_by_title_source_and_tags(self):
+        self.seed()
+        titled = web_follow.q_follow(self.contract, {'q': '作品 2'})
+        self.assertEqual([row['primary']['external_id'] for row in titled['groups']], ['2'])
+        self.assertEqual(sum(titled['counts'].values()), 1)
+        # 每个词都要命中，标签和来源名也算；不分大小写。
+        self.assertEqual({row['primary']['external_id'] for row in web_follow.q_follow(
+            self.contract, {'q': 'LANDSCAPE 预览'})['groups']}, {'1', '3'})
+        self.assertEqual(web_follow.q_follow(self.contract, {'q': '作品 outdoors landscape 2'})['groups'], [])
+        self.assertEqual(len(web_follow.q_follow(self.contract, {'q': '  '})['groups']), 3)
+
     def test_content_blocking_applies_to_counts_facets_new_items_and_restore(self):
         source = self.seed()
         self.execute('hide', ['outdoors'])

@@ -436,6 +436,24 @@ class DiscoverTests(_DiscoveryCase):
                          "Ria Collection [2026-08-03] [Ria_neearts]")
         self.assertEqual(found.external_searches, ())
 
+    def test_f95_index_rejection_preserves_the_google_link_without_a_no_match_claim(self):
+        found = self._discover("Ria_neearts", {"latest_data.php": HttpResponse(403, {}, b"")},
+                               providers=("f95zone",))
+        self.assertIn("403", found.failures["f95zone"])
+        self.assertEqual(found.candidates, ())
+        self.assertEqual(len(found.external_searches), 1)
+        self.assertEqual(found.external_searches[0].evidence, "")
+
+    def test_f95_index_rejection_still_allows_searching_the_forum_with_a_session(self):
+        self._write_credential("f95zone", {"cookie": "xf_user=1"})
+        routes = {"latest_data.php": HttpResponse(403, {}, b""),
+                  "/search/search": HttpResponse(200, {}, F95_SEARCH_RESULTS),
+                  "f95zone.to/search/": HttpResponse(200, {}, F95_SEARCH_FORM)}
+        found = self._discover("Ria_neearts", routes, providers=("f95zone",))
+        self.assertEqual([candidate.ref for candidate in found.candidates], ["146348"])
+        self.assertEqual(found.failures, {})
+        self.assertEqual(found.external_searches, ())
+
     def test_half_a_name_is_retried_as_a_prefix(self):
         """站内搜索按整词匹配，半个名字要靠尾部通配才找得到。
 

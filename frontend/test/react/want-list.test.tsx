@@ -224,7 +224,7 @@ it(`一段多于 ${WANT_PAGE_SIZE} 条时分页，页码各段各记各的；报
   expect(unreleased.querySelector('h3')?.textContent).toBe('未发售42');
   expect(unreleased.querySelectorAll('li[data-want-id]')).toHaveLength(WANT_PAGE_SIZE);
   expect(unreleased.querySelector('[data-want-pager]')?.textContent).toContain('1–20 / 42 条');
-  expect(unreleased.querySelector('[data-error-line]')?.textContent).toBe('资料未取得：第一行');
+  expect(unreleased.querySelector('[data-error-line]')?.textContent).toBe('资料采集失败：第一行');
   await click(unreleased.querySelector('button[aria-label="第 3 页"]'));
   expect([...unreleased.querySelectorAll<HTMLElement>('li[data-want-id]')].map((row) => row.dataset.wantId)).toEqual(['41', '42']);
   const acquired = host.querySelector('[data-want-phase="acquired"]')!;

@@ -1001,7 +1001,7 @@ class LocalChannelTests(_ServiceCase):
                                                    self.ledger('local', 'renamed.mp4'), directory=False)
 
     def test_default_native_watcher_is_idle_until_new_files_arrive(self):
-        (self.media/'existing.mp4').write_bytes(b'old')
+        (self.media / 'existing.mp4').write_bytes(b'old')
         service = self.service()
         probe = mock.Mock(wraps=service.queue.probe_many)
         service.queue.probe_many = probe
@@ -1009,20 +1009,16 @@ class LocalChannelTests(_ServiceCase):
         self.assertTrue(service.wait_local(15))
         if not service.local_channel.running:
             self.skipTest(f'本机起不了文件监视：{service.local_channel.message}')
-        started, cpu = time.monotonic(), time.process_time()
+        # 观察已有文件是否误触发。批量读盘另由同目录探测用例验证。
         time.sleep(0.3)
-        elapsed, used = time.monotonic()-started, time.process_time()-cpu
-        self.assertEqual(self.rows(),{})
+        self.assertEqual(self.rows(), {})
         probe.assert_not_called()
-        started = time.monotonic()
-        for index in range(20):
-            (self.media/f'new-{index}.mp4').write_bytes(b'new')
-        _wait_for(lambda: len(self.rows())==20)
-        self.assertEqual(len(self.rows()),20)
-        self.assertNotIn(self.ledger('local','existing.mp4'),self.rows())
-        self.assertEqual(service.snapshot()['queue']['failed'],0)
-        print(f'原生发现：空闲 {elapsed:.3f}s / CPU {used:.3f}s / 媒体探测0次；'
-              f'20个新增文件登记 {time.monotonic()-started:.3f}s')
+        path = self.ledger('local', 'new.mp4')
+        (self.media / 'new.mp4').write_bytes(b'new')
+        _wait_for(lambda: service.snapshot()['queue']['ingested'] == 1)
+        self.assertEqual(self.rows(), {path: ('video', 3)})
+        queue = service.snapshot()['queue']
+        self.assertEqual((queue['ingested'], queue['failed']), (1, 0), queue)
 
     def test_a_file_landing_in_a_watched_root_reaches_the_ledger(self):
         service = self.service()

@@ -111,6 +111,61 @@ describe('图片灯箱', () => {
   before(async () => { browser = await launch(); });
   after(async () => { await browser?.close(); });
 
+  it('错误页反馈的图片灯箱可见关闭、详情和缩放控件', { timeout: 45_000 }, async () => {
+    const opened = await visit(browser, '/feedback-lightbox-missing-page', DESKTOP, page => page.addInitScript(() => {
+      navigator.mediaDevices.getDisplayMedia = () => Promise.reject(new DOMException('Cancelled', 'NotAllowedError'));
+    }));
+    const { page } = opened;
+    try {
+      await page.getByRole('button', { name: '反馈', exact: true }).click();
+      const form = page.locator('form[data-peach-feedback]');
+      await form.locator('input[type="file"]').setInputFiles(['lightbox.png', 'Peach 配置与反馈诊断记录 · Peach.png'].map(name => ({
+        name, mimeType: 'image/png',
+        buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/AFsAAAAASUVORK5CYII=', 'base64'),
+      })));
+      const preview = form.getByRole('button', { name: '查看lightbox.png', exact: true });
+      await preview.waitFor();
+      const sharing = form.getByText('同时发布为 GitHub Issue', { exact: true });
+      const imageOptions = form.getByRole('checkbox', { name: /^公开图片：/ });
+      assert.equal(await imageOptions.count(), 0);
+      await sharing.click();
+      await imageOptions.nth(1).waitFor();
+      const attachments = form.locator('li').filter({ has: page.locator('[data-copy-key="feedback.githubPublishImage"]') });
+      await attachments.nth(1).waitFor();
+      const rows = await attachments.evaluateAll(tiles => tiles.map(tile => {
+        const name = tile.querySelector(':scope > span[title]')!;
+        const choice = tile.querySelector('[data-copy-key="feedback.githubPublishImage"]')!;
+        const text = document.createRange();
+        text.selectNodeContents(choice);
+        return {
+          fileNameHeight: name.getBoundingClientRect().height,
+          choiceTop: choice.getBoundingClientRect().top - tile.getBoundingClientRect().top,
+          choiceLines: text.getClientRects().length,
+        };
+      }));
+      assert.deepEqual(rows[0], rows[1]);
+      assert.equal(rows[0].choiceLines, 1);
+      await sharing.click();
+      await imageOptions.first().waitFor({ state: 'hidden' });
+      assert.equal(await imageOptions.count(), 0);
+      await preview.click();
+      const box = lightbox(page);
+      const controls = await box.evaluate((dialog) => {
+        const glyphs = [...dialog.querySelectorAll<SVGUseElement>(
+          '[data-photo-close] use, [data-photo-detail-toggle] use, [data-zoom-step] use, [data-photo-scale="fit"] use')];
+        return { icons: glyphs.map(glyph => glyph.getBBox().width),
+          trackColor: getComputedStyle(dialog).getPropertyValue('--inset').trim(),
+          zoomRadius: getComputedStyle(dialog.querySelector('[data-photo-zoom]')!).borderRadius };
+      });
+      assert.equal(controls.icons.length, 5);
+      assert.ok(controls.icons.every(width => width > 0), JSON.stringify(controls));
+      assert.ok(controls.trackColor);
+      assert.ok(Number.parseFloat(controls.zoomRadius) >= 24);
+      await box.locator('[data-photo-close]').click();
+      await form.getByRole('button', { name: '查看lightbox.png', exact: true }).waitFor();
+    } finally { await opened.close() }
+  });
+
   it('资料页照片墙点第 3 格：从这一张开始，页码 3 / 5，翻页时页码与缩略图条一起跟上', { timeout: 60_000 }, async () => {
     const opened = await openWall(browser);
     const { page } = opened;

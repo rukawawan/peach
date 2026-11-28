@@ -1,8 +1,10 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
+from peach.migrations import readonly_uri
 from peach.sync import (
     LedgerSync,
     Marker,
@@ -64,6 +66,30 @@ class MarkerTests(unittest.TestCase):
 
 
 class CopyTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows UNC path")
+    def test_unc_path_is_encoded_without_a_uri_authority(self):
+        uri = readonly_uri(r"\\fileserver\share\#%23\ledger.db", immutable=True)
+        self.assertEqual(uri, "file:////fileserver/share/%23%2523/ledger.db?mode=ro&immutable=1")
+
+    def test_a_special_character_in_either_sync_source_keeps_the_intended_database(self):
+        for action, folder in (("push", "本机#账本"), ("pull", "共享%23账本")):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                source, target = root / folder / "ledger.db", root / "target" / "ledger.db"
+                target.parent.mkdir()
+                make_db(source, 3)
+                if action == "pull":
+                    make_db(root / "共享#账本" / "ledger.db", 1)
+                    write_marker(source, Marker(2, "writer", "", 0, 0))
+                    service = LedgerSync(target, source, "reader")
+                else:
+                    service = LedgerSync(source, target, "writer")
+                decision = service.synchronize_now()
+                self.assertEqual(decision.action, action)
+                self.assertEqual(count(target), 3)
+                self.assertIsNotNone(read_marker(target))
+                self.assertFalse((root / "本机").exists())
+
     def test_backup_api_carries_committed_wal_transactions(self):
         """直接拷 `.db` 会漏掉 `-wal` 里已提交未 checkpoint 的事务。"""
         with tempfile.TemporaryDirectory() as tmp:

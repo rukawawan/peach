@@ -113,7 +113,7 @@ export function ProcessingActions({ busy, occupied = false, scan = false, metada
   ];
   const options: ProcessingOption[] = [
     ...(scan ? [{label:libraryId ? t('manage:syncMenu.syncSelectedLibrary') : t('manage:syncMenu.syncAllLibraries'),description:t('manage:syncMenu.syncLibraryHint'),command:{}}] : []),
-    ...(scan ? [{ label: t('manage:syncMenu.scanOnly'), description: t('manage:syncMenu.scanOnlyHint'), command: { stage: 'scan' as const } }] : []),
+    ...(scan ? [{ label: t('manage:syncMenu.scanAllTitle'), description: t('manage:syncMenu.scanOnlyHint'), command: { stage: 'scan' as const } }] : []),
     ...(scan ? [{ label: t('manage:syncMenu.fillMetadataPreviews'), description: metadataOnly ? t('manage:syncMenu.fillMetadataHintNoPreviews') : t('manage:syncMenu.fillMetadataHint'), command: { stage: 'collect' as const } }] : []),
     { label: t('manage:syncMenu.metadataOnly'), description: t('manage:syncMenu.metadataOnlyHint'), command: { stage: 'metadata' as const } },
     { label: t('manage:syncMenu.coversOnly'), description: t('manage:syncMenu.coversOnlyHint'), command: { stage: 'covers' as const } },

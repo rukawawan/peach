@@ -5,16 +5,16 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from .downloads import (
-    CLOUDDRIVE_CREDENTIAL, MAX_WAIT_HOURS, PIKPAK_CREDENTIAL, DownloadError,
-    DownloadService, Landing, OfflineProvider, Problem, clean_address, normalise_target,
-    problem_codes, submit_offline_download,
+    CLOUDDRIVE_CREDENTIAL, MAX_WAIT_HOURS, PIKPAK_CREDENTIAL, QBITTORRENT_CREDENTIAL,
+    DownloadError, DownloadService, Landing, OfflineProvider, Problem, clean_address,
+    normalise_local_target, normalise_target, problem_codes, submit_offline_download,
 )
 from .follow_secrets import CredentialError, CredentialStore
 from .repository import LedgerDatabase
-from .user_messages import UserValueError, message_fields
+from .user_messages import UserFacingError, UserValueError, message_fields
 
 
 def _values(credentials: CredentialStore, provider: str) -> dict:
@@ -36,6 +36,7 @@ def build_download_service(*, database: LedgerDatabase, state_root: Path,
     from .downloads_clouddrive import CloudDriveProvider
     from .downloads_pikpak import PikPakProvider
     from .downloads_pikpak_browser import BrowserLogin, profile_dir
+    from .downloads_qbittorrent import QbittorrentProvider
 
     holder: dict[str, DownloadService] = {}
 
@@ -46,6 +47,12 @@ def build_download_service(*, database: LedgerDatabase, state_root: Path,
         if key == "pikpak":
             return PikPakProvider(lambda: _values(credentials, PIKPAK_CREDENTIAL),
                                   persist=lambda values: credentials.save(PIKPAK_CREDENTIAL, values))
+        if key == "qbittorrent":
+            config = holder["service"].config
+            values = _values(credentials, QBITTORRENT_CREDENTIAL)
+            return QbittorrentProvider(config.qbittorrent_address,
+                                       str(values.get("username", "")),
+                                       str(values.get("password", "")))
         raise DownloadError("config", "errors.webDownloads.unknownChannel", {"key": key})
 
     service = DownloadService(database=database, state_root=state_root, credentials=credentials,
@@ -87,7 +94,7 @@ def q_downloads(contract, args) -> dict:
     page = int(args.get('page') or 1)
     if page < 1 or (before_id is not None and page != 1):
         raise UserValueError("api.downloads.invalidPage")
-    snapshot = _service(contract).snapshot(limit, before_id=before_id, page=page)
+    snapshot = _service(contract).snapshot(limit, before_id=before_id, page=page, q=str(args.get("q") or ""))
     _attach_library_artwork(contract, snapshot["tasks"])
     return snapshot
 
@@ -140,6 +147,17 @@ def w_download_postprocess(contract, body) -> dict:
 # ---------------------------------------------------------------- 设置页
 
 
+def _local_roots(declared_roots) -> list[dict]:
+    from .settings_file import SettingsFileError, active
+    try:
+        names = {str(key).casefold(): value for key, value in active().library_names.items()}
+    except SettingsFileError:
+        names = {}
+    return [{"root": root,
+             "label": names.get(str(root).casefold()) or PureWindowsPath(root).name or root}
+            for root in declared_roots.get("local", ())]
+
+
 def settings_payload(service: DownloadService, declared_roots) -> dict:
     """设置页那一块的形状。读接口和每条写接口都回这一份，页面整块替换本地状态。"""
     from .downloads_pikpak import account
@@ -155,18 +173,32 @@ def settings_payload(service: DownloadService, declared_roots) -> dict:
     except CredentialError:
         token_set = False
         problems.append(Problem("labels.downloadsChannels.clouddriveTokenUnreadable"))
+    try:
+        qbittorrent_values = _values(credentials, QBITTORRENT_CREDENTIAL)
+    except DownloadError:
+        qbittorrent_values = {}
+        problems.append(Problem("labels.downloadsChannels.qbittorrentCredentialsUnreadable"))
     login = _browser_login(service)
     channels = service.channel_snapshot()
+    config = service.config
     problems = list(dict.fromkeys((*problems, *channels.get("problems", ()))))
     return {
         "available": service.available,
         "media_sources": [key for key, roots in declared_roots.items() if roots],
-        "config": service.config.payload(),
+        "config": config.payload(),
         "token_set": token_set,
         "pikpak": pikpak,
         "pikpak_browser": {"available": login is not None and login.available(),
                            **(login.status() if login is not None else {"state": "idle", "message": ""})},
         "pikpak_roots": list(declared_roots.get("pikpak", ())),
+        "local_roots": _local_roots(declared_roots),
+        "qbittorrent": {
+            "address": config.qbittorrent_address,
+            "save_path": config.qbittorrent_save_path,
+            "media_root": config.qbittorrent_media_root,
+            "username": str(qbittorrent_values.get("username", "")),
+            "password_set": bool(qbittorrent_values.get("password")),
+        },
         "providers": channels["providers"],
         "problems": problems,
         "problem_codes": problem_codes(problems),
@@ -189,6 +221,19 @@ def save_settings(service: DownloadService, body: dict, declared_roots) -> dict:
         service.credentials.save(CLOUDDRIVE_CREDENTIAL, {"token": token})
     elif body.get("clear_token"):
         service.credentials.clear(CLOUDDRIVE_CREDENTIAL)
+    try:
+        qb_existing = _values(service.credentials, QBITTORRENT_CREDENTIAL)
+    except DownloadError:
+        qb_existing = {}
+    qb_username = str(body.get("qbittorrent_username") or "").strip()
+    qb_password = str(body.get("qbittorrent_password") or "")
+    if qb_username or qb_password:
+        service.credentials.save(QBITTORRENT_CREDENTIAL, {
+            "username": qb_username or qb_existing.get("username", ""),
+            "password": qb_password or qb_existing.get("password", ""),
+        })
+    elif body.get("clear_qbittorrent_password") is True:
+        service.credentials.clear(QBITTORRENT_CREDENTIAL)
     report = None
     if "token" in service.credentials.describe(CLOUDDRIVE_CREDENTIAL)["fields"]:
         from .downloads_clouddrive import empty_report
@@ -204,7 +249,65 @@ def save_settings(service: DownloadService, body: dict, declared_roots) -> dict:
             filled = config.payload()
             filled["targets"] = {**config.targets, "115": suggested["path"]}
             service.save_settings(filled, declared_roots)
-    return {**settings_payload(service, declared_roots), "report": report}
+    qbittorrent_report = None
+    try:
+        qb_values = _values(service.credentials, QBITTORRENT_CREDENTIAL)
+    except DownloadError:
+        qb_values = {}
+    if (config.qbittorrent_address and config.qbittorrent_save_path
+            and config.qbittorrent_media_root and qb_values.get("username")
+            and qb_values.get("password")):
+        qbittorrent_report = check_qbittorrent(service, {}, declared_roots)
+    return {**settings_payload(service, declared_roots), "report": report,
+            "qbittorrent_report": qbittorrent_report}
+
+
+def check_qbittorrent(service: DownloadService, body: dict, declared_roots) -> dict:
+    """检查 qBittorrent 地址、账号与路径映射；只登录读版本，不提交任务。"""
+    from .downloads_clouddrive import add_problem
+    from .downloads_qbittorrent import check
+    body = body if isinstance(body, dict) else {}
+    config = service.config
+    report = {
+        "ok": False,
+        "address": str(body.get("qbittorrent_address", config.qbittorrent_address) or "").strip(),
+        "version": "", "webapi_version": "", "save_path": "", "media_root": "",
+        "problems": [], "problem_codes": [],
+    }
+    try:
+        report["address"] = clean_address(report["address"], "qBittorrent")
+        save_path = str(body.get("qbittorrent_save_path", config.qbittorrent_save_path) or "").strip()
+        report["save_path"] = normalise_local_target(save_path) if save_path else ""
+        media_root = str(body.get("qbittorrent_media_root", config.qbittorrent_media_root) or "").strip()
+        known = {str(item).casefold(): str(item) for item in declared_roots.get("local", ())}
+        if media_root and media_root.casefold() not in known:
+            raise UserValueError("errors.downloads.notLocalRoot",
+                                 {"root": media_root, "known": list(known.values())})
+        report["media_root"] = known.get(media_root.casefold(), media_root)
+    except UserFacingError as error:
+        add_problem(report, Problem.of(error))
+    if not report["address"]:
+        add_problem(report, Problem("labels.downloadsQbittorrent.addressMissing"))
+    if not report["media_root"]:
+        add_problem(report, Problem("labels.downloadsQbittorrent.mediaRootMissing"))
+    if report["problems"]:
+        return report
+    try:
+        values = _values(service.credentials, QBITTORRENT_CREDENTIAL)
+        username = str(body.get("qbittorrent_username") or values.get("username", "")).strip()
+        password = str(body.get("qbittorrent_password") or values.get("password", ""))
+        checked = check(report["address"], username, password)
+        report.update({key: checked.get(key, report.get(key, "")) for key in
+                       ("ok", "version", "webapi_version")})
+        report["save_path"] = report["save_path"] or checked.get("save_path", "")
+        for problem in checked.get("problems", ()):
+            add_problem(report, problem)
+        if report["ok"] and not report["save_path"]:
+            report["ok"] = False
+            add_problem(report, Problem("labels.downloadsQbittorrent.savePathMissing"))
+    except DownloadError as error:
+        add_problem(report, Problem.of(error))
+    return report
 
 
 def _check_inputs(service: DownloadService, body) -> tuple[dict, str, str]:

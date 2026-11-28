@@ -12,7 +12,7 @@
  * 整块只有一种行：读数写在它所属那个开关的说明里，配置通过共用代码块展示与复制，
  * 前缀表排在最后。读数与配置跟着各自的开关收起：网盘通道关着时那段配置指向一件不会
  * 发生的事；本机监视在总开关关着时读作「没有运行」，分不出是没开还是坏了。 */
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { RiDeleteBinLine } from '@remixicon/react';
 
 import { SettingsRow } from '@/components/application/settings/settings-rows';
@@ -33,6 +33,20 @@ import { joinList, t } from '../../i18n';
 
 const SAVE_URL = '/api/configuration/push-discovery';
 const SECRET_URL = '/api/configuration/push-discovery/secret';
+
+function DiscoveryStatusRow({ label, help, status, children }: {
+  label: string; help: string; status?: string; children: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-13 w-full items-center justify-between gap-4 border-b border-separator-border py-2.5 pr-2.5 last:border-b-0">
+      <div className="flex min-w-0 flex-col">
+        <p className="text-body-regular text-text-primary">{label}</p>
+        <Help><span>{help}</span>{status ? <span className="block">{status}</span> : null}</Help>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 export function PushDiscoveryForm({ initial, receipt }: {
   initial: PushDiscoveryState;
@@ -88,15 +102,17 @@ export function PushDiscoveryForm({ initial, receipt }: {
           <StatusLabel tone={!live.enabled || !live.watch_local ? 'neutral' : live.local_running ? 'progress' : 'warning'}>{!live.enabled || !live.watch_local ? t('settings:shared.notEnabled') : live.local_running ? t('settings:shared.running') : t('settings:pushDiscovery.notRunning')}</StatusLabel></div>
       </Stack>
       <Rows>
-        <SettingsRow label={t('settings:fileDiscovery.autoImport')} description={live.enabled ? ingested : undefined}>
+        <DiscoveryStatusRow label={t('settings:fileDiscovery.autoImport')} help={t('settings:fileDiscovery.autoImportHelp')}
+          status={live.enabled ? ingested : undefined}>
           <Switch aria-label={t('settings:fileDiscovery.autoImport')} isSelected={state.enabled} isDisabled={!state.available}
             onChange={(enabled) => setState({ ...state, enabled })} />
-        </SettingsRow>
-        <SettingsRow label={t('settings:fileDiscovery.monitorLocal')} description={live.enabled && live.watch_local ? watching : undefined}>
+        </DiscoveryStatusRow>
+        <DiscoveryStatusRow label={t('settings:fileDiscovery.monitorLocal')} help={t('settings:fileDiscovery.monitorLocalHelp')}
+          status={live.enabled && live.watch_local ? watching : undefined}>
           <Switch aria-label={t('settings:fileDiscovery.monitorLocal')} isSelected={state.watch_local}
             isDisabled={!state.available || !state.enabled}
             onChange={(watchLocal) => setState({ ...state, watch_local: watchLocal })} />
-        </SettingsRow>
+        </DiscoveryStatusRow>
         <SettingsRow label={t('settings:fileDiscovery.cloudNotify')} description={t('settings:fileDiscovery.cloudNotifyHelp')}>
           <Switch aria-label={t('settings:fileDiscovery.cloudNotify')} isSelected={state.cloud}
             isDisabled={!state.available || !state.enabled}

@@ -131,7 +131,7 @@ export function AutoLandingsCard(
       {query.isError ? (
         <Note tone="error" title={t('manage:autoLandings.loadFailed')}>{errorMessage(query.error)}</Note>
       ) : items.length ? (
-        <DataTable label={t('manage:autoLandings.title')} items={items} columns={columns}
+        <DataTable preferenceId="auto-landings" label={t('manage:autoLandings.title')} items={items} columns={columns}
           title={t('manage:autoLandings.title')} titleId="auto-landings-title" unit={t('manage:autoLandings.unit')}
           description={DESCRIPTION}
           rowId={(item) => item.item_key} rowLabel={(item) => `${workLabel(item)} ${fieldName(item)}`}

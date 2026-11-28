@@ -157,7 +157,7 @@ describe('链接检查身份与断链动效', () => {
         assert.deepEqual(geometry.offenders, []); assert.deepEqual(opened.problems, []);
         const timeOrigin = await page.evaluate(() => performance.timeOrigin);
         await empty.getByRole('button', { name: '添加关注', exact: true }).click();
-        await page.getByRole('textbox', { name: '来源链接、名字或 id', exact: true }).waitFor();
+        await page.getByRole('combobox', { name: '来源链接、名字或 id', exact: true }).waitFor();
         assert.equal(new URL(page.url()).searchParams.get('tab'), 'add');
         assert.equal(await page.evaluate(() => performance.timeOrigin), timeOrigin);
       } finally { await opened.close(); }

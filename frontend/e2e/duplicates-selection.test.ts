@@ -9,7 +9,8 @@ describe('重复文件逐份回收', () => {
   after(async () => { await browser?.close(); });
 
   it('相同名称完整显示，名称和路径差异在宽窄视口切换后保留高亮', { timeout: 60_000 }, async () => {
-    const names = ['ABC-123 演示画面 [1080p] 完整文件名.mp4', 'ABC-123 演示画面 [720p] 完整文件名.mp4'];
+    const prefix = 'ABC-123 ' + '长い日本語のファイル名'.repeat(6);
+    const names = [`${prefix} [1080p] 完整文件名.mp4`, `${prefix} [720p] 完整文件名.mp4`];
     const opened = await visit(browser, '/duplicates', VIEWPORTS[0]!, async page => {
       await page.route('**/thumb?**', route => route.fulfill({
         contentType: 'image/png',
@@ -40,7 +41,33 @@ describe('重复文件逐份回收', () => {
       assert.ok(await identical.locator('mark[data-review-difference]').count() > 0);
       await page.setViewportSize({ width: 390, height: 844 });
       await settle(page);
-      await page.waitForFunction(expected => document.querySelector(`button[title="${expected}"]`)?.textContent?.includes('…'), names[0]);
+      assert.equal(await name.textContent(), names[0]);
+      assert.match((await name.locator('mark').allTextContents()).join(''), /10|8/);
+      const mobile = await layout(page);
+      assert.ok(mobile.scrollWidth <= mobile.viewportWidth);
+      await page.setViewportSize({ width: 320, height: 844 });
+      await settle(page);
+      const drawerToggle = page.locator('#filterBtn');
+      if (await drawerToggle.getAttribute('aria-expanded') === 'true') {
+        await drawerToggle.click();
+        await page.locator('#drawer.open').waitFor({ state: 'detached' });
+      }
+      const bulk = page.locator('[data-duplicates-frame] > [data-filter-row="top"]');
+      const toolbar = await bulk.evaluate(row => ({
+        range: row.scrollWidth - row.clientWidth,
+        clipped: [...row.querySelectorAll('button')].some(button => {
+          const label = document.createRange();
+          label.selectNodeContents(button);
+          return label.getBoundingClientRect().width > button.getBoundingClientRect().width + 1;
+        }),
+      }));
+      assert.ok(toolbar.range > 0);
+      assert.equal(toolbar.clipped, false);
+      await bulk.hover();
+      await page.mouse.wheel(0, 200);
+      await page.waitForFunction(() => (document.querySelector('[data-duplicates-frame] > [data-filter-row="top"]')?.scrollLeft ?? 0) > 0);
+      const narrow = await layout(page);
+      assert.ok(narrow.scrollWidth <= narrow.viewportWidth);
       await page.setViewportSize({ width: 1280, height: 800 });
       await settle(page);
       await page.waitForFunction(expected => document.querySelector(`button[title="${expected}"]`)?.textContent === expected, names[0]);

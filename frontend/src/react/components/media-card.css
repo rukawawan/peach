@@ -13,6 +13,50 @@
  * 目录列表是一叠：连续的一段视频合成一格网格，竖屏带插进来时从行边界剪开，上下两半各是
  * 一段。列距 16px 是给悬停面留的：卡片悬停时底色往盒外多铺 8px，列距再窄就顶到邻卡。 */
 .peach-react [data-media-sections] { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+[data-rectangle-area] { position: relative; }
+[data-rectangle-select]:not([data-board-data-table]),
+[data-board-data-table]:has(> [data-card-selection-rectangle]) { user-select: none; }
+/* 外侧留白可起拖，四边等量抵消，保留内容区域的落点和宽度。 */
+.peach-react :is([data-media-sections], [data-media-grid], [data-follow-list], [data-local-wall],
+  [data-index-grid], [data-alphabet], [data-tag-cloud], [data-rectangle-gutter])[data-rectangle-area] {
+  margin: -16px;
+  padding: 16px;
+}
+.peach-react [data-media-sections][data-rectangle-area] {
+  margin-block-start: 0;
+  padding-block-start: 0;
+}
+.peach-react [data-media-grid][data-rectangle-area] { width: auto; }
+[data-card-selection-rectangle] {
+  position: absolute; z-index: 3; pointer-events: none;
+  border: 1px solid var(--color-accent-500);
+  background: color-mix(in oklab, var(--color-accent-500) 8%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ground) 55%, transparent);
+}
+[data-rectangle-hit] {
+  outline: 2px solid var(--color-accent-500); outline-offset: -2px;
+}
+/* 媒体描边单独铺在封面上方，亮暗图片上都能看清整圈边界。 */
+:is([data-media-card], [data-feed-id], [data-photo-cell])[data-rectangle-hit] { outline: none; }
+:is([data-media-card], [data-feed-id], [data-photo-cell])[data-rectangle-hit]::after,
+[data-feed-id][data-feed-selected]::after,
+[data-photo-cell][data-selected]::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: 7;
+  border: 2px solid var(--ink);
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ground) 68%, transparent);
+  pointer-events: none;
+}
+:is([data-media-card], [data-feed-id], [data-photo-cell])[data-rectangle-hit]::after {
+  border-color: var(--color-accent-500);
+}
+[data-photo-cell]:is([data-selected], [data-rectangle-hit])::after {
+  inset: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ground) 68%, transparent);
+}
 .peach-react [data-media-grid] {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile)), 1fr));
@@ -167,6 +211,8 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
  * 一圈灰黑边。光有 `clip-path` 不够，没有蒙版时 Chrome 照样逐层切。 */
 .peach-react :is([data-media-pic], [data-mix-cover]) {
   --pic-radius: var(--surface-radius);
+  /* 左上角标、右上分卷徽标与右下时长离格边 6px，圆角与格子同心。 */
+  --pic-inner-radius: calc(var(--pic-radius) - 6px);
   clip-path: inset(0 round var(--pic-radius));
   mask-image: linear-gradient(#000 0 0);
 }
@@ -194,8 +240,9 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
   inset: 0;
   z-index: 6;
   box-sizing: border-box;
-  border: 2px solid var(--on-media);
+  border: 2px solid var(--ink);
   border-radius: var(--pic-radius);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ground) 68%, transparent);
   pointer-events: none;
 }
 /* 封面那一层铺满格子，图本身的几何归旧样式表的 `.poster`。 */
@@ -265,7 +312,7 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
   gap: 4px;
   min-height: 24px;
   padding: 4px;
-  border-radius: 10px;
+  border-radius: var(--pic-inner-radius, 8px);
   background: var(--glass-fill);
   box-shadow: inset 0 1px 0 var(--glass-rim), var(--glass-shadow);
   backdrop-filter: blur(16px) saturate(145%);
@@ -284,7 +331,7 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
   bottom: 6px;
   z-index: 2;
   padding: 2px 6px;
-  border-radius: var(--badge-radius);
+  border-radius: var(--pic-inner-radius, 8px);
   background: color-mix(in srgb, #000 70%, transparent);
   color: #f2eadf;
   font-family: "Cascadia Mono", Consolas, ui-monospace, "Microsoft YaHei UI", "PingFang SC", monospace;
@@ -308,12 +355,12 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
 }
 .peach-react [data-media-group] {
   position: absolute;
-  top: 9px;
-  right: 9px;
+  top: 6px;
+  right: 6px;
   z-index: 6;
   min-height: 27px;
   padding: 5px 9px;
-  border-radius: var(--control-radius);
+  border-radius: var(--pic-inner-radius, 8px);
   background: rgb(12 8 8 / .72);
   color: #fff;
   font-size: var(--fs-xs);
@@ -347,7 +394,7 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
 .peach-react [data-media-progress] > i { display: block; width: var(--media-fill); height: 100%; background: var(--tungsten); }
 
 /* 多选的勾是正圆，全站一个形状。多选模式下每张都亮出空圈，选中的那张填满。 */
-.peach-react [data-media-check] {
+:is(.peach-react, [data-feed-selection]) [data-media-check] {
   position: absolute;
   top: 10px;
   right: 10px;
@@ -363,12 +410,14 @@ body[data-density="dense"] .peach-react [data-media-card][data-variant="short"] 
   backdrop-filter: saturate(1.8) blur(12px);
   -webkit-backdrop-filter: saturate(1.8) blur(12px);
 }
-.peach-react :is([data-select-mode] [data-media-check], [data-media-card][data-selected] [data-media-check]) { display: grid; }
-.peach-react [data-media-card][data-selected] [data-media-check] {
-  border-color: var(--on-media);
-  background: var(--on-media);
-  color: var(--on-media-ink);
-  box-shadow: 0 3px 12px #0008;
+.peach-react :is([data-select-mode] [data-media-check], [data-media-card][data-selected] [data-media-check]),
+[data-feed-selection][data-rectangle-select] [data-media-check] { display: grid; }
+:is(.peach-react :is([data-media-card], [data-photo-cell])[data-selected], [data-feed-selection] [data-feed-selected],
+  [data-rectangle-hit]) [data-media-check] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ground);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ground) 68%, transparent), 0 3px 12px #0008;
 }
 .peach-react [data-media-trash-mark] {
   position: absolute;
@@ -409,7 +458,7 @@ body[data-density="dense"] .peach-react :is([data-media-trash-mark], [data-media
   stroke-linejoin: round;
 }
 /* 勾在作品卡以外（照片墙、名册格）也用同一副线稿。 */
-.peach-react [data-media-check] svg {
+:is(.peach-react, [data-feed-selection]) [data-media-check] svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -845,7 +894,7 @@ body[data-density="dense"] .peach-react [data-media-card]:not([data-variant="nex
 
 /* ── 竖屏带 ──
  * 短片带是这一叠卡里的一张，和上下两段视频平级：同一张面、同一圈发丝边、同一个圆角。
- * 宽屏上整块往左铺过侧栏轨道，面板铺到视口边上，左边两个圆角也就去掉了。
+ * 宽屏默认铺到视口左缘；开启「限制首页横滑范围」时，面板收在右侧内容区。
  * 带子的面是 `--ground`，浅色下与全站悬停面 `--hover` 同为 #F7F7F7：卡片和「进入」键的悬停在这里
  * 铺出去等于没铺。带内的悬停面按次级按钮那一档在带子底色上压一层，两种主题都比底色深一档。 */
 .peach-react [data-shorts-strip] {
@@ -906,12 +955,12 @@ body[data-density="dense"] .peach-react [data-media-card]:not([data-variant="nex
 }
 .peach-react [data-shorts-row]::-webkit-scrollbar { display: none; }
 @media (min-width: 761px) {
-  .peach-react [data-shorts-strip] {
+  :where(:root:not([data-contain-home-scroll])) .peach-react [data-shorts-strip] {
     margin-left: calc(-1 * (var(--railW) + 16px));
     padding-left: calc(var(--railW) + 32px);
     border-radius: 0 var(--floating-radius) var(--floating-radius) 0;
   }
-  .peach-react [data-shorts-row] {
+  :where(:root:not([data-contain-home-scroll])) .peach-react [data-shorts-row] {
     margin-left: calc(-1 * (var(--railW) + 32px + 16px));
     padding-left: calc(var(--railW) + 32px + 16px);
   }

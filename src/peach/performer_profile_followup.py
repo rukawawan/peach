@@ -691,7 +691,7 @@ def _visit_javdb(contract, pages, entity_id: int, names, batch: str, base: dict,
         except alias.Unavailable as error:
             notes.append(f"{key} {error}")
             continue
-        if javdb.LOGIN.search(html):
+        if javdb.login_page(html):
             # 回 200 的登入页不是「搜过、站上没有她」：丢掉缓存，按未取得等下一轮。
             pages.forget(url)
             notes.append(_said("note.loginPage", key=key))

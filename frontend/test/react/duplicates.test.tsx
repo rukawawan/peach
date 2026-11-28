@@ -75,7 +75,8 @@ it('重复副本优先显示已有封面，加载失败后依次回退抽帧和�
   expect(advanceImageFallback(images[0])).toBe('retry');
   expect(images[0]!.getAttribute('src')).toBe('/thumb?id=1&c=4');
   expect(advanceImageFallback(images[0])).toBe('drop');
-  expect(host.querySelectorAll('.duplicate-row img')).toHaveLength(1);
+  // React 画的图不从它手里摘节点（卸载时会找不到子节点），只藏起来。
+  expect([...host.querySelectorAll<HTMLImageElement>('.duplicate-row img')].filter(image => image.style.display !== 'none')).toHaveLength(1);
   expect(host.querySelector('button[aria-label="预览 ABC-1.mp4"]')).not.toBeNull();
 });
 
@@ -288,13 +289,12 @@ it('文件名的不同规格用复核高亮显示，原文完整保留', async (
   }
 });
 
-it('中间截断保留可见差异高亮，恢复完整宽度后原文与高亮一起恢复', async () => {
+it('对照名称保留原文并高亮首部和中段差异', async () => {
   const value = '甲ABC-123 [1080p] 演示文件.mp4';
   const reference = '乙ABC-123 [720p] 演示文件.mp4';
-  const host = await mount(<ComparisonText value={value} reference={reference} cut={{ start: 3, end: value.length - 4 }} />);
-  expect(host.textContent).toBe('甲AB….mp4');
-  expect(host.querySelector('mark')?.textContent).toBe('甲');
-  const full = await mount(<ComparisonText value={value} reference={reference} />);
-  expect(full.textContent).toBe(value);
-  expect(full.querySelector('mark')?.textContent).toBe('甲');
+  const host = await mount(<ComparisonText value={value} reference={reference} />);
+  expect(host.textContent).toBe(value);
+  const differences = [...host.querySelectorAll('mark')].map(mark => mark.textContent);
+  expect(differences[0]).toBe('甲');
+  expect(differences.slice(1).join('')).toMatch(/10|8/);
 });

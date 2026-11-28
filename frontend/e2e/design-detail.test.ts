@@ -104,22 +104,30 @@ describe('设计决定：关注详情、作品详情、播放器与侧栏', () =
     }
   });
 
-  it('关注详情标题：来源外链标与标题第一行同心，标题折行时仍贴第一行', { timeout: 60_000 }, async () => {
+  it('关注详情的标题工具使用馆藏按钮尺寸', { timeout: 60_000 }, async () => {
     const opened = await openFollowFeed(browser, `/posts/${DETAIL.gallery}`, DESKTOP,
       { ready: '#stage [data-follow-origin]' });
     try {
-      const page = opened.page;
-      const measure = () => page.evaluate(() => {
-        const name = document.querySelector('#stage [data-follow-detail-name]')!;
-        const mark = document.querySelector('#stage [data-follow-origin] svg')!.getBoundingClientRect();
-        return { line: name.getBoundingClientRect().top + parseFloat(getComputedStyle(name).lineHeight) / 2,
-          mark: (mark.top + mark.bottom) / 2 };
-      });
-      const single = await measure();
-      assert.ok(Math.abs(single.mark - single.line) <= 0.5, `外链标与标题第一行不同心：${JSON.stringify(single)}`);
-      await page.evaluate(() => { document.querySelector('#stage [data-follow-detail-name]')!.textContent = '很长的标题'.repeat(12) });
-      const wrapped = await measure();
-      assert.ok(Math.abs(wrapped.mark - wrapped.line) <= 0.5, `标题折行后外链标离开了第一行：${JSON.stringify(wrapped)}`);
+      const library = await openItemPage(browser, `/assets/${ITEM.plain}`, DESKTOP);
+      try {
+        const read = (page: Page, selector: string) => page.locator(`#stage [data-title-tools] ${selector}`).evaluate(button => {
+          const title = button.closest('[data-item-title]')!.querySelector('[data-detail-title]')!;
+          const style = getComputedStyle(button);
+          return {
+            bounds: [style.width, style.height, style.borderRadius],
+            belowTitle: button.getBoundingClientRect().top >= title.getBoundingClientRect().bottom,
+            clamp: getComputedStyle(title).webkitLineClamp,
+          };
+        });
+        const expected = await read(library.page, '[data-item-edit-open]');
+        assert.equal(expected.belowTitle, true);
+        assert.equal(expected.clamp, '2');
+        assert.deepEqual(await read(opened.page, '[data-follow-origin]'), expected);
+        assert.deepEqual(await read(opened.page, '[data-follow-tags-edit]'), expected);
+        assert.deepEqual(await read(opened.page, '[data-follow-media-hide]'), expected);
+      } finally {
+        await library.close();
+      }
     } finally {
       await opened.close();
     }

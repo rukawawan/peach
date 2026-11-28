@@ -241,6 +241,40 @@ class MagnetChainTests(unittest.TestCase):
         self.assertEqual((unlisted['unfetched_sources'], unlisted['retry_after']), ([], None))
         self.assertEqual((unlisted['state'], unlisted['warnings']), ('ready', []))
 
+    def test_sukebei_warning_preserves_connection_timeout_and_http_failures(self):
+        import httpx
+        from peach.http import HttpResponse
+        from peach.magnet_chain import Fetcher, search
+        from peach.scraping_access import SourceTransport
+
+        cases = [
+            (httpx.ConnectError('private connection details'), '无法访问'),
+            (httpx.ReadTimeout('private connection details'), '请求超时'),
+            (403, '拒绝访问（HTTP 403）'),
+            (429, '请求被限流（HTTP 429）'),
+            (404, '请求失败（HTTP 404）'),
+        ]
+        for failure, expected in cases:
+            def request(*_, failure=failure):
+                if isinstance(failure, Exception):
+                    raise failure
+                return HttpResponse(failure, {}, b'')
+
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with patch.object(Fetcher, 'manko', return_value=[]), patch.object(Fetcher, 'javdb', return_value=[]), \
+                        patch.object(Fetcher, 'javbus', return_value=[]), \
+                        patch.object(SourceTransport, '_transport_for', return_value=request), \
+                        patch('peach.jav_cover_fetch._sleep_within'):
+                    transport = SourceTransport(root)
+                    result = search(root, 'ABC-123', transport=transport)
+                self.assertEqual(result['unfetched_sources'], ['sukebei'])
+                self.assertEqual(result['source_failures'], [f'sukebei：{expected}'])
+                self.assertEqual(result['warnings'], result['source_failures'])
+                self.assertEqual(result['connection_checks'],
+                                 ['sukebei'] if isinstance(failure, httpx.ConnectError) or failure == 403 else [])
+                self.assertNotIn('private connection details', str(result))
+
     def test_base91_decodes_the_api_envelope_payload(self):
         # basE91 官方示例：编码后的这一段解回 ASCII "test"。
         self.assertEqual(decode_base91("fPNKd"), b"test")

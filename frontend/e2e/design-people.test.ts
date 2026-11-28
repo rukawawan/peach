@@ -4,10 +4,14 @@ import { describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
 import { expectBody, layout, requiredEnv, settle, visit, VIEWPORTS } from './harness.ts';
 import {
-  DESKTOP, MOBILE, tokenColor, PIXEL, TASTE_FACE, WIDE, openCatalog, openCatalogFixture, openFollowManage,
+  DESKTOP, MOBILE, tokenColor, PIXEL, TASTE_FACE, WIDE, openCatalog, openCatalogFixture, catalogVideo, openFollowManage,
   openPerformer, openPhotoWall, photoWallFaces, PROFILED, openProfiledPerformer, popmenuShadow, SUGGEST,
   stubSuggest, installDesignBrowser,
 } from './design-fixture.ts';
+
+const performerCard = catalogVideo(91_100, {
+  creator: '', performers: ['演示演员'], performer_total: 1, performer_entities: [{ id: 90_000, has_image: false }],
+});
 
 describe('设计决定：人物与厂牌资料页', () => {
   let browser: Browser;
@@ -47,7 +51,11 @@ describe('设计决定：人物与厂牌资料页', () => {
       const opened = await visit(browser, '/', viewport);
       try {
         const page = opened.page;
-        const kinds = await stubSuggest(page);
+        await stubSuggest(page);
+        await page.route(url => url.pathname === '/api/suggest' && url.searchParams.get('kind') === 'performer', route =>
+          route.fulfill({ json: {
+            q: SUGGEST.q, groups: [{ ...SUGGEST.groups[0], label: '女优补全结果' }],
+          } }));
         await expectBody(page, '/', [page.locator('#grid [data-media-card][data-id]').first()]);
         await settle(page);
         if (viewport.mobile) await page.locator('#searchBtn').click();
@@ -115,13 +123,14 @@ describe('设计决定：人物与厂牌资料页', () => {
         assert.ok(page_.scrollWidth <= page_.viewportWidth, `下拉把页面撑出了横向滚动：${page_.offenders.join('，')}`);
 
         await menu.getByRole('tab', { name: /^女优/ }).click();
+        await menu.getByRole('heading', { name: '女优补全结果', exact: true }).waitFor({ state: 'visible' });
         await page.waitForFunction(() => document.querySelectorAll('#searchMenu [data-search-group][data-kind]').length === 1);
         assert.equal(await menu.isVisible(), true, '点页签把下拉栏收掉了');
-        assert.ok(kinds.includes('performer'), '选了一类没有按这一类去拉满');
         assert.equal(await menu.getByRole('tab', { name: /^女优/ }).getAttribute('aria-selected'), 'true');
 
         // 人名那一行点开的是资料页，不是按名字再搜一遍。
         await page.keyboard.press('ArrowDown');
+        await menu.locator('[data-search-option="person"][data-active]').waitFor({ state: 'visible' });
         await page.keyboard.press('Enter');
         await page.waitForURL('**/performers/90301');
         assert.deepEqual(opened.problems, []);
@@ -911,9 +920,8 @@ describe('设计决定：人物与厂牌资料页', () => {
   });
 
   it('相邻两张稍后看卡的底色之间隔着整段列距', { timeout: 60_000 }, async () => {
-    const opened = await openCatalogFixture(browser, (payload) => {
-      if (payload.items.length < 2) throw new Error('演示目录不足两张卡');
-      for (const item of payload.items.slice(0, 2)) item.watch_later = true;
+    const opened = await openCatalogFixture(browser, {
+      items: [catalogVideo(91_100, { watch_later: true }), catalogVideo(91_101, { watch_later: true })],
     });
     try {
       await opened.page.mouse.move(0, 0);
@@ -935,15 +943,7 @@ describe('设计决定：人物与厂牌资料页', () => {
   });
 
   it('跳过渲染的元信息区不裁掉贴着边的头像悬停描边和焦点环', { timeout: 60_000 }, async () => {
-    /* 演示库的作品都未归属，头像是不可聚焦的 `<span>`；首张卡归给一位女优，头像才是按钮。 */
-    const opened = await openCatalogFixture(browser, (payload) => {
-      const item = payload.items[0];
-      if (!item) throw new Error('演示目录没有可替换的卡片');
-      item.creator = '';
-      item.performers = ['演示演员'];
-      item.performer_total = 1;
-      item.performer_entities = [{ id: 90_000, name: '演示演员', has_image: false }];
-    });
+    const opened = await openCatalogFixture(browser, { items: [performerCard] });
     try {
       /* 视口外跳过渲染连带 paint containment，元信息区里画出 padding box 的像素一律裁掉；
          几何照算，所以这里比的是描边外沿与 padding box，不是与内容盒。头像贴着内容盒的
@@ -985,16 +985,7 @@ describe('设计决定：人物与厂牌资料页', () => {
   });
 
   it('头像圆框里的图按人脸框写进的内联尺寸不被岛里的预检夹回框宽', { timeout: 60_000 }, async () => {
-    /* 演示库没有实体图，往首张卡的头像框里塞一张按人脸框放大的图：宽超过框宽时图就该那么宽，
-       由圆框的 overflow 裁；被夹回框宽的话脸偏到左边，右侧露出底下的首字母。 */
-    const opened = await openCatalogFixture(browser, (payload) => {
-      const item = payload.items[0];
-      if (!item) throw new Error('演示目录没有可替换的卡片');
-      item.creator = '';
-      item.performers = ['演示演员'];
-      item.performer_total = 1;
-      item.performer_entities = [{ id: 90_000, name: '演示演员', has_image: false }];
-    });
+    const opened = await openCatalogFixture(browser, { items: [performerCard] });
     try {
       const avatar = opened.page.locator('#grid [data-media-grid] > [data-media-card] [data-media-meta] > button[data-media-avatar]').first();
       const framed = await avatar.evaluate((element) => {
@@ -1027,7 +1018,7 @@ describe('设计决定：人物与厂牌资料页', () => {
         await opened.page.mouse.move(0, 0);
         const dimensions = await opened.page.evaluate(() => {
           const holder = document.createElement('div');
-          holder.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:10000';
+          holder.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:10000';
           const button = document.createElement('button');
           button.className = 'geist-button';
           button.dataset.buttonProbe = '';
@@ -1143,7 +1134,7 @@ describe('设计决定：人物与厂牌资料页', () => {
         assert.deepEqual(opened.problems, []);
       } finally { await opened.close(); }
     });
-    it(`关注分类使用 Pills，添加关注结果带描边（${viewport.name}）`, { timeout: 60_000 }, async () => {
+    it(`关注分类使用 Pills，两种搜索结果沿用别名表外观（${viewport.name}）`, { timeout: 60_000 }, async () => {
       const opened = await openFollowManage(browser, viewport);
       try {
         const page = opened.page;
@@ -1177,30 +1168,60 @@ describe('设计决定：人物与厂牌资料页', () => {
           const dimensions = await layout(page);
           assert.ok(dimensions.scrollWidth <= dimensions.viewportWidth + 1, JSON.stringify(dimensions));
         }
+        const creatorUrl = 'https://example.com/creator/a-long-address-that-must-stay-on-one-line';
         await page.route('**/api/follow/resolve', (route) => route.fulfill({
           status: 200, contentType: 'application/json', body: JSON.stringify({
             status: 'done', results: [{ line: '主题测试来源', candidates: [{
-              provider: 'kemono', provider_label: 'Kemono', label: '主题测试候选', url: 'https://example.com/creator',
+              provider: 'kemono', provider_label: 'Kemono', label: '主题测试候选', url: creatorUrl,
             }] }],
           }),
         }));
+        const actorUrl = 'https://javdb.com/actors/LongActorId';
+        await page.route(/\/api\/feeds\/lookup\?/, (route) => route.fulfill({
+          status: 200, contentType: 'application/json', body: JSON.stringify({
+            q: '示例演员', candidates: [{ id: 'LongActorId', names: ['示例演员'], url: actorUrl, subscription: 'missing' }],
+            suggested: ['LongActorId'], known: null,
+          }),
+        }));
         await tabs.getByRole('tab', { name: '添加关注', exact: true }).click();
-        await page.getByRole('textbox', { name: '来源链接、名字或 id' }).fill('主题测试来源');
+        await page.getByRole('combobox', { name: '来源链接、名字或 id' }).fill('主题测试来源');
         await page.getByRole('region', { name: '添加创作者关注', exact: true }).getByRole('button', { name: '查找', exact: true }).click();
-        const result = page.getByText('主题测试来源', { exact: true }).locator('..');
-        await result.waitFor();
+        const actor = page.getByRole('region', { name: '添加 JAV 订阅' });
+        await actor.getByRole('combobox', { name: '女优名' }).fill('示例演员');
+        await actor.getByRole('button', { name: '查找', exact: true }).click();
+        const tables = ['查找结果', 'JAV 订阅查找结果'].map(name => page.getByRole('grid', { name, exact: true }));
+        const aliases = page.getByRole('grid', { name: '已保存创作者别名' });
+        for (const table of [...tables, aliases]) await table.waitFor();
         for (const theme of ['light', 'dark']) {
           await page.evaluate((value) => {
             document.documentElement.dataset.theme = value;
             document.documentElement.classList.toggle('dark', value === 'dark');
           }, theme);
-          const surface = await result.evaluate((element) => {
-            const s = getComputedStyle(element);
-            return { shadow: s.boxShadow, width: s.borderTopWidth, border: s.borderTopColor, bg: s.backgroundColor };
-          });
-          assert.equal(surface.shadow, 'none');
-          assert.equal(surface.width, '1px');
-          assert.notEqual(surface.border, surface.bg, '结果分组必须有可辨认边界');
+          const surface = (element: Element) => {
+            const s = getComputedStyle(element.closest('[data-board-data-table]') || element);
+            const header = getComputedStyle(element.querySelector('thead th')!);
+            return { shadow: s.boxShadow, width: s.borderTopWidth, border: s.borderTopColor,
+              bg: s.backgroundColor, radius: s.borderTopLeftRadius, header: header.backgroundColor };
+          };
+          const expected = await aliases.evaluate(surface);
+          assert.equal(expected.width, '1px');
+          assert.notEqual(expected.border, expected.bg);
+          for (const [index, table] of tables.entries()) {
+            assert.deepEqual(await table.evaluate(surface), expected);
+            const url = [creatorUrl, actorUrl][index]!;
+            const link = table.locator(`a[href="${url}"]`);
+            const address = await link.evaluate(node => {
+              const text = node.querySelector('span')!;
+              return { height: text.getBoundingClientRect().height,
+                lineHeight: parseFloat(getComputedStyle(text).lineHeight), title: node.getAttribute('title'),
+                overflow: node.scrollWidth - node.clientWidth };
+            });
+            assert.ok(Math.abs(address.height - address.lineHeight) <= 1, '源地址保留一行');
+            assert.ok(address.overflow <= 1, '源地址和外链图标都在列内');
+            assert.equal(address.title, url);
+          }
+          const dimensions = await layout(page);
+          assert.ok(dimensions.scrollWidth <= dimensions.viewportWidth + 1, JSON.stringify(dimensions));
         }
         assert.deepEqual(opened.problems, []);
       } finally { await opened.close(); }

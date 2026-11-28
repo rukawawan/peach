@@ -12,6 +12,9 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core';
+import type { TableLayout, TableLayoutChange } from '../src/table-column-order.ts';
+
+export const CONFIGURATION_ROUTE = /\/api\/configuration(?:\?.*)?$/;
 
 export interface Viewport {
   name: string;
@@ -31,6 +34,8 @@ export interface Visit {
   problems: string[];
   close(): Promise<void>;
 }
+
+const problemsByPage = new WeakMap<Page, string[]>();
 
 export interface Layout {
   viewportWidth: number;
@@ -57,16 +62,51 @@ export async function launch(): Promise<Browser> {
     args.push(`--log-net-log=${join(networkLogs, filename)}`, '--net-log-capture-mode=HeavilyRedacted');
     console.info(`浏览器网络事件日志：${filename}`);
   }
-  return chromium.launch({
+  const browser = await chromium.launch({
     headless: true,
     executablePath: requiredEnv('PEACH_E2E_CHROME'),
     args,
     // Windows 首次加载浏览器与系统组件使用独立的启动预算，页面等待由各用例限定。
     timeout: 60_000,
   });
+  /* 用例大多自己建上下文、自己关。关上下文时 Playwright 不再分派拦截，这期间页面新发的请求
+   * 被浏览器放行到真实服务，`/jav-image` 这类来源接口就去连外网。所以经这里建的上下文，
+   * 以及 `browser.close()` 时还开着的上下文，关闭前一律先 `quiesce`。 */
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (options) => {
+    const context = await newContext(options);
+    const close = context.close.bind(context);
+    context.close = async (closing) => {
+      await quiesce(context);
+      await close(closing);
+    };
+    return context;
+  };
+  const closeBrowser = browser.close.bind(browser);
+  browser.close = async (closing) => {
+    await Promise.all(browser.contexts().map(quiesce));
+    await closeBrowser(closing);
+  };
+  return browser;
 }
 
-/** 失败时保留焦点、输入和弹层现场；成功路径不额外查询页面。 */
+/** 关上下文之前让它的页面停下来，不再向服务发任何请求。
+ *
+ *  先在上下文装中止规则，再用 `ignoreErrors` 撤掉页面桩：桩回调里的 `route.fetch`、
+ *  `route.continue` 在关闭时可能还没返回，之后会以「Request context disposed」失败，
+ *  `ignoreErrors` 让这类错误静默返回。撤桩之后的新请求由中止规则接住。最后把页面导航到
+ *  `about:blank`：在途请求随导航取消，页面也不再发新请求，关闭期间就没有请求可漏。 */
+export async function quiesce(context: BrowserContext): Promise<void> {
+  const pages = context.pages().filter((page) => !page.isClosed());
+  if (!pages.length) return;
+  await context.route('**/*', (route) => route.abort().catch(() => {})).catch(() => {});
+  await Promise.all(pages.map(async (page) => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+    await page.goto('about:blank', { timeout: 5_000 }).catch(() => {});
+  }));
+}
+
+/** 失败时保留运行期错误、焦点、输入和弹层现场。 */
 export async function withPageDiagnostics<T>(page: Page, where: string | (() => string), action: () => Promise<T>): Promise<T> {
   try {
     return await action();
@@ -85,7 +125,8 @@ export async function withPageDiagnostics<T>(page: Page, where: string | (() => 
         .slice(0, 12).map(node => ({ tag: node.tagName, id: node.id, label: node.getAttribute('aria-label') })),
     })).catch(() => '未取得');
     const tree = await page.locator('body').ariaSnapshot({ timeout: 2000 }).catch(() => '未取得');
-    throw new Error(`${typeof where === 'function' ? where() : where}：${String(error)}\n页面现场：${JSON.stringify(state)}\n无障碍树：\n${tree.slice(0, 4000)}`,
+    const problems = problemsByPage.get(page)?.slice(-12) ?? [];
+    throw new Error(`${typeof where === 'function' ? where() : where}：${String(error)}\n运行期问题：${JSON.stringify(problems)}\n页面现场：${JSON.stringify(state)}\n无障碍树：\n${tree.slice(0, 4000)}`,
       { cause: error });
   }
 }
@@ -153,6 +194,36 @@ export function configurationBody(page: Page): Locator[] {
   ];
 }
 
+/** 同一个临时服务承载多个用例。浏览和表格偏好在当前上下文中跨刷新保留。 */
+export async function isolateBrowseSettings(page: Page, initial: Record<string, unknown> = {}) {
+  const context = page.context();
+  const browse = { ...initial };
+  const tables: Record<string, TableLayout> = {};
+  await page.route(url => url.pathname === '/api/settings', async route => {
+    const request = route.request();
+    const { browsePreferences, tableLayouts, ...shared } = (request.postDataJSON() ?? {}) as {
+      browsePreferences?: Record<string, unknown> & { legacy?: Record<string, unknown> };
+      tableLayouts?: Record<string, TableLayoutChange>;
+    };
+    const isolated = browsePreferences !== undefined || tableLayouts !== undefined;
+    const response = isolated && !Object.keys(shared).length
+      ? await context.request.get(request.url())
+      : await route.fetch(isolated ? { postData: shared } : {});
+    if (!response.ok()) return route.fulfill({ response });
+    if (browsePreferences) {
+      const { legacy, ...patch } = browsePreferences;
+      Object.assign(browse, { ...legacy, ...browse, ...patch }, Object.fromEntries(
+        ['pageSizes', 'queueSort'].filter(key => key in patch || key in (legacy ?? {}))
+          .map(key => [key, { ...Object(legacy?.[key]), ...Object(browse[key]), ...Object(patch[key]) }]),
+      ));
+    }
+    for (const [table, { legacy, ...patch }] of Object.entries(tableLayouts ?? {})) {
+      tables[table] = { ...legacy, ...tables[table], ...patch };
+    }
+    return route.fulfill({ response, json: { ...await response.json(), browsePreferences: browse, tableLayouts: tables } });
+  });
+}
+
 export async function visit(browser: Browser, path: string, viewport: Viewport,
   prepare?: (page: Page) => Promise<void>): Promise<Visit> {
   const origin = requiredEnv('PEACH_E2E_ORIGIN');
@@ -169,6 +240,7 @@ export async function visit(browser: Browser, path: string, viewport: Viewport,
   });
   const page = await context.newPage();
   const problems: string[] = [];
+  problemsByPage.set(page, problems);
   page.on('pageerror', (error) => problems.push(`pageerror ${error.message}`));
   page.on('console', (message) => {
     if (message.type() === 'error') problems.push(`console ${message.text()}`);
@@ -184,19 +256,11 @@ export async function visit(browser: Browser, path: string, viewport: Viewport,
       problems.push(`failed ${request.url().slice(origin.length)} ${reason}`);
     }
   });
-  /* 桩回调里的 `route.fetch`、`route.continue` 可能在关上下文时还没返回，之后会以
-   * 「Request context disposed」失败；没人等它，就成了整个文件的 unhandledRejection。
-   * 先在上下文安装中止规则，再用 `ignoreErrors` 撤掉页面桩，让在途回调的关闭错误静默返回。
-   * 上下文规则覆盖撤桩到关闭之间的新请求，避免来源接口落到真实服务上。 */
-  const close = async () => {
-    if (!page.isClosed()) {
-      await context.route('**/*', (route) => route.abort().catch(() => {}));
-      await page.unrouteAll({ behavior: 'ignoreErrors' });
-    }
-    await context.close();
-  };
+  // 关闭前的撤桩与停页由 `launch` 包好的 `context.close` 完成，见 `quiesce`。
+  const close = () => context.close();
   // 只打开到 load：等哪块主体、何时 settle 由用例决定，见 `settle` 的说明。
   try {
+    await isolateBrowseSettings(page);
     await prepare?.(page);
     await page.goto(origin + path, { waitUntil: 'load' });
   } catch (error) {

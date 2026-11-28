@@ -12,10 +12,56 @@ import tomllib
 
 PACKAGE_FILES = frozenset({"package.json", "frontend/package.json"})
 DISPLAY_FIELDS = frozenset({"description", "keywords"})
+_LOCALE_FILE = re.compile(r"resources/locales/[^/]+/(?:server|cli)\.json")
 
 
 def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def locale_file(path: str) -> bool:
+    """后端语言资源用于 API、托盘与命令行。"""
+    return bool(_LOCALE_FILE.fullmatch(path))
+
+
+@lru_cache(maxsize=64)
+def locale_texts(source: str | None, *, strict: bool = False) -> dict[str, str] | None:
+    """解析语言资源中的文字和条目键。"""
+    if source is None:
+        return None
+    try:
+        data = json.loads(source)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    found, todo = {}, [("", data)]
+    while todo:
+        prefix, node = todo.pop()
+        if isinstance(node, dict):
+            if strict and any(not key or "." in key for key in node):
+                return None
+            todo.extend((f"{prefix}{key}.", value) for key, value in node.items())
+        elif isinstance(node, str):
+            found[prefix[:-1]] = node
+        elif strict:
+            return None
+    return found
+
+
+def recorded_locale_source(manifest: dict, path: str) -> str | None:
+    """只有与该快照的文件摘要一致且可解析的文字才参与比较。"""
+    file = manifest["files"].get(path)
+    sources = manifest.get("locale_sources", {})
+    source = sources.get(path) if isinstance(sources, dict) else None
+    if not isinstance(file, list) or not isinstance(source, str):
+        return None
+    try:
+        if hashlib.sha256(source.encode("utf-8")).hexdigest() == file[1] and locale_texts(source, strict=True) is not None:
+            return source
+    except UnicodeError:
+        pass
+    return None
 
 
 def dependency_inputs(source: str) -> dict:

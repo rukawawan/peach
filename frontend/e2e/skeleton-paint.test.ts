@@ -74,6 +74,13 @@ describe('各页骨架的显示门槛与绘制边界', () => {
         });
         await page.goto(requiredEnv('PEACH_E2E_ORIGIN') + path, { waitUntil: 'load' });
         await page.locator('[data-skeleton]:visible,[data-skeleton-tier]:visible').first().waitFor();
+        if (path === '/posts/1') {
+          const media = page.locator('#stage[open] [data-skeleton="detail"] [data-stage-media]');
+          await media.waitFor();
+          const { width, height } = (await media.boundingBox())!;
+          const expected = Math.min(width * 9 / 16, viewport.height * (viewport.width <= 760 ? 0.56 : 0.76));
+          assert.ok(Math.abs(height - expected) <= 1, `关注深链骨架的媒体格高 ${height}px，应为 ${expected}px`);
+        }
         const leaks = await page.evaluate(() => {
           const roots = [...document.querySelectorAll('[data-skeleton],[data-skeleton-tier]')];
           const marked = roots.filter(node => !node.classList.contains('skeleton-awaiting'));

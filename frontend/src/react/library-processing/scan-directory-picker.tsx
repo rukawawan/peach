@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
-import { RiArrowUpLine, RiFolderLine } from '@remixicon/react';
-import { LinkButton } from '@/components/base/buttons/link-button';
-import { MENU_ITEM, MENU_ITEM_INTERACTIVE } from '@/components/base/dropdown/menu-styles';
-import { cx } from '@/utils/cx';
+import { useEffect, useState, type ReactElement } from 'react';
+import type { Key, Selection } from 'react-aria-components';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { RiFolder3Line, RiFolderOpenLine } from '@remixicon/react';
+import { Button } from '@/components/base/buttons/button';
+import { Note } from '../components/note';
+import { TreeView, TreeViewItem } from '@/components/base/tree-view/tree-view';
 import { errorMessage } from '../../api';
 import { t } from '../../i18n';
 import { fetchScanDirectories, type ScanDirectoryChoices } from './library-processing';
@@ -10,50 +12,59 @@ import { fetchScanDirectories, type ScanDirectoryChoices } from './library-proce
 export function ScanDirectoryPicker({ libraryId, confirmButton, onSelect }: {
   libraryId?: string; confirmButton: HTMLButtonElement; onSelect(path?: string): void;
 }) {
-  const [choices, setChoices] = useState<ScanDirectoryChoices>();
-  const [failure, setFailure] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [request, setRequest] = useState<{ directory?: string }>({});
-  const browse = (directory?: string) => {
-    confirmButton.disabled = true;
-    onSelect();
-    setLoading(true);
-    setFailure('');
-    setRequest({ directory });
-  };
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchScanDirectories(libraryId, request.directory, controller.signal).then(result => {
-      if (controller.signal.aborted) return;
-      setChoices(result);
-      onSelect(result.current);
-      confirmButton.disabled = !result.current;
-    }, error => {
-      if (!controller.signal.aborted) setFailure(errorMessage(error));
-    }).finally(() => {
-      if (!controller.signal.aborted) setLoading(false);
-    });
-    return () => controller.abort();
-  }, [confirmButton, libraryId, onSelect, request]);
+  const [selected, setSelected] = useState<string>();
+  const [expanded, setExpanded] = useState<Set<Key>>(new Set());
+  const directoryQuery = (directory?: string) => ({
+    queryKey: ['library-processing', 'scan-directories', libraryId, directory],
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchScanDirectories(libraryId, directory, signal),
+    retry: false,
+  });
+  const roots = useQuery(directoryQuery());
+  const paths = [...new Set([...expanded, ...(selected ? [selected] : [])])].map(String);
+  const results = useQueries({ queries: paths.map(path => directoryQuery(path)) });
+  const branches = new Map(paths.map((path, index) => [path, results[index]]));
+  const selectedBranch = selected ? branches.get(selected) : undefined;
+  const confirmed = selectedBranch?.isSuccess && !selectedBranch.isFetching ? selectedBranch.data.current : undefined;
 
-  return <div className="flex min-w-0 flex-col gap-2">
-    {choices?.current ? <>
-      <p className="text-body-2-medium wrap-anywhere" data-scan-directory>{choices.current}</p>
-      <LinkButton size="small" leadingIcon={RiArrowUpLine} disabled={loading}
-        onClick={() => browse(choices.parent || undefined)}>{t('manage:syncMenu.parentDirectory')}</LinkButton>
-    </> : null}
-    {failure ? <p role="alert" className="text-body-2-regular text-text-secondary">{failure}</p> : null}
-    {loading ? <p role="status" className="text-body-2-regular text-text-secondary">{t('manage:syncMenu.loadingDirectories')}</p> : null}
-    {!loading && !failure && choices?.directories.length === 0
-      ? <p className="text-body-2-regular text-text-secondary">{t('manage:syncMenu.noChildDirectories')}</p> : null}
-    <div className="flex max-h-60 flex-col overflow-y-auto">
-      {choices?.directories.map(item => <button key={item.path} type="button" disabled={loading}
-        className={cx(MENU_ITEM, MENU_ITEM_INTERACTIVE, 'text-body-2-medium')} onClick={() => browse(item.path)}>
-        <RiFolderLine aria-hidden className="size-4 shrink-0" />
-        <span className="min-w-0 wrap-anywhere">{item.name}
-          {item.library ? <span className="block text-caption-1-regular text-text-secondary">{item.library}</span> : null}
-        </span>
-      </button>)}
-    </div>
+  useEffect(() => {
+    onSelect(confirmed);
+    confirmButton.disabled = !confirmed;
+  }, [confirmButton, confirmed, onSelect]);
+
+  const select = (selection: Selection) => {
+    if (selection === 'all') return;
+    const key = selection.values().next().value;
+    if (typeof key !== 'string') return;
+    onSelect();
+    confirmButton.disabled = true;
+    setSelected(key);
+    setExpanded(previous => new Set([...previous, key]));
+  };
+  const render = (item: ScanDirectoryChoices['directories'][number]): ReactElement => {
+    const branch = branches.get(item.path);
+    return <TreeViewItem key={item.path} id={item.path} label={item.name} icon={RiFolder3Line}
+      expandedIcon={RiFolderOpenLine} iconClassName="size-(--icon-inline)" trailingContent={item.library}>
+      {branch?.data ? branch.data.directories.map(render)
+        : <TreeViewItem id={`loading:${item.path}`} isDisabled
+            label={branch?.error ? errorMessage(branch.error) : t('manage:syncMenu.loadingDirectories')} />}
+    </TreeViewItem>;
+  };
+  const failed = [roots, ...results].filter(result => result.isError);
+  return <div className="flex min-w-0 flex-col gap-3">
+    {roots.isPending ? <p role="status" className="text-body-2-regular text-text-secondary">{t('manage:syncMenu.loadingDirectories')}</p> : null}
+    {failed.length ? <Note tone="error" action={
+      <Button size="small" variant="secondary" onClick={() => { failed.forEach(result => { void result.refetch() }) }}>
+        {t('catalog:shared.retryNow')}
+      </Button>
+    }>{errorMessage(failed[0]?.error)}</Note> : null}
+    {roots.isSuccess ? <div className="max-h-64 min-w-0 overflow-x-hidden overflow-y-auto rounded-3xl">
+      <TreeView aria-label={t('catalog:catalogFolders.mediaDirectories')} size="sm"
+        expandedKeys={expanded} onExpandedChange={setExpanded} disallowEmptySelection
+        selectedKeys={selected ? new Set([selected]) : new Set()} onSelectionChange={select}
+        renderEmptyState={() => <p className="p-2 text-body-2-regular text-text-secondary">{t('catalog:catalogFolders.noDirectories')}</p>}>
+        {roots.data.directories.map(render)}
+      </TreeView>
+    </div> : null}
+    {selected ? <p className="text-body-2-medium wrap-anywhere" data-scan-directory>{selected}</p> : null}
   </div>;
 }

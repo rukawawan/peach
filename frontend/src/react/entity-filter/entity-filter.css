@@ -196,13 +196,8 @@
 /* 读数与操作保持完整，空间不足时整行横滚；最左侧读数和最右侧排序都能到达。 */
 .peach-react :is([data-entity-filter-glass], [data-catalog-frame]) > [data-filter-row="bottom"] {
   flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-inline: contain;
-  scrollbar-width: none;
   touch-action: pan-x pan-y;
 }
-.peach-react :is([data-entity-filter-glass], [data-catalog-frame]) > [data-filter-row="bottom"]::-webkit-scrollbar { display: none; }
 
 .peach-react [data-entity-sorts] {
   display: flex;
@@ -219,24 +214,23 @@
   overflow: visible;
 }
 
-.peach-react [data-entity-sort] {
+.peach-react [data-filter-fields] { display: inline-flex; flex: none; align-items: center; gap: 4px; }
+.peach-react :is([data-entity-sort], [data-filter-field]) {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  justify-content: center;
   height: var(--control-h-compact);
   min-height: var(--control-h-compact);
   padding: 0 8px;
   border-radius: 7px;
   color: color-mix(in srgb, var(--glass-text) 62%, transparent);
-  font-size: 12px;
-  line-height: 20px;
+  font: var(--board-compact);
   white-space: nowrap;
   cursor: pointer;
 }
-.peach-react [data-entity-sort]:hover { color: var(--glass-text); }
-.peach-react [data-entity-sort][aria-pressed="true"] {
+.peach-react :is([data-entity-sort], [data-filter-field]):is(:hover, [data-filter-active], [aria-expanded="true"], [aria-pressed="true"]) {
   color: var(--glass-text);
-  font-weight: 500;
 }
 .peach-react [data-entity-sort] svg {
   flex: none;

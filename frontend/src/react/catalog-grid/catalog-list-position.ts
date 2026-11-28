@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import type { PaginationState, SortingState } from '@tanstack/react-table';
+import { useRememberedPageSize } from '../components/page-size-preferences';
 
 export interface CatalogListPosition {
   sorting: SortingState;
@@ -19,10 +20,15 @@ function subscribe(listener: () => void) {
 }
 
 export function useCatalogListPosition(scope: string) {
-  const position = useSyncExternalStore(subscribe, () => getCatalogListPosition(scope), () => defaultPosition);
+  const saved = useSyncExternalStore(subscribe, () => getCatalogListPosition(scope), () => defaultPosition);
+  const [pageSize, rememberSize] = useRememberedPageSize('catalog');
+  const position = saved.pagination.pageSize === pageSize ? saved : { ...saved, pagination: { pageIndex: 0, pageSize } };
   const setPosition: Dispatch<SetStateAction<CatalogListPosition>> = update => {
-    const next = typeof update === 'function' ? update(getCatalogListPosition(scope)) : update;
+    const current = getCatalogListPosition(scope);
+    const value = current.pagination.pageSize === pageSize ? current : { ...current, pagination: { pageIndex: 0, pageSize } };
+    const next = typeof update === 'function' ? update(value) : update;
     positions.set(scope, next);
+    rememberSize(next.pagination.pageSize);
     listeners.forEach(listener => listener());
   };
   return [position, setPosition] as const;

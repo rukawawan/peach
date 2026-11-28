@@ -26,7 +26,7 @@ describe('我的收藏弹层', () => {
       assert.equal(await avatar.getAttribute('src'), '/test-avatar/archive');
       const missing = page.getByRole('link', { name: '未取得头像', exact: true }).locator('[data-shortcuts-avatar]');
       await missing.locator('svg').waitFor({ state: 'visible' });
-      assert.equal(await missing.locator('img').count(), 0);
+      assert.equal(await missing.locator('img').isVisible(), false);
     } finally { await opened.close() }
   });
   for (const viewport of VIEWPORTS) {

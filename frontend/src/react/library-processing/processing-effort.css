@@ -21,12 +21,3 @@
 .processing-effort-thumb[data-focus-visible]{outline:2px solid var(--color-border-focus-ring);outline-offset:-2px}
 .processing-effort-thumb[data-dragging]{cursor:grabbing}
 .processing-effort-slider[data-disabled]{opacity:.6}
-[data-effort-flow]{position:absolute;inset:0;pointer-events:none;background:color-mix(in srgb,var(--color-accent-950) 80%,var(--color-background-primary-default));overflow:hidden}
-[data-effort-flow] svg{width:100%;height:100%;animation:processing-flow-wave 1s linear infinite}
-.processing-flow-outer{fill:var(--color-accent-500)}
-.processing-flow-middle{fill:var(--color-accent-300)}
-.processing-flow-core{fill:var(--color-accent-50)}
-[data-effort-flow] i{position:absolute;right:0;top:var(--particle-y);width:4px;height:1px;background:var(--color-text-white);opacity:0;animation:processing-flow-particle 1s linear infinite;animation-delay:var(--particle-delay)}
-[data-effort-flow][data-motion=paused] :is(svg,i){animation-play-state:paused}
-@keyframes processing-flow-wave{0%,100%{transform:scaleY(1)}50%{transform:scaleY(.72)}}
-@keyframes processing-flow-particle{0%{transform:translateX(0);opacity:0}15%{opacity:.6}100%{transform:translateX(-240px);opacity:0}}

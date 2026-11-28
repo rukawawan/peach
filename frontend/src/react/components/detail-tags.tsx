@@ -1,6 +1,6 @@
 /* 本地与在线详情共用标签外观与选择器。详情侧栏只读，增删在编辑框里做（`editable`）；
    标签本身的改名、合并在标签管理页。 */
-import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MenuChevron } from './menu-chevron';
 import { spinnerHtml, wireAnchoredMenu } from '@peach/legacy/ui';
@@ -24,13 +24,11 @@ interface DetailTagsProps {
   tags: DetailTag[]; candidates: readonly TagCount[]; scope?: TagScope; id?: string; adding?: boolean;
   /** 编辑框里传 true：每枚带移除键，行尾有「+」。侧栏不传，只能点开标签。 */
   editable?: boolean;
-  /** 排在这一行最后的控件（关注详情的「编辑标签／完成」），与「还有 N 个」「+」同一行。 */
-  trailing?: ReactNode;
   label(tag: string): string; onOpen?(tag: string): void; onAdd?(tag: string): void; onRemove?(tag: DetailTag): void;
   busyAttrs?(tag: string): { 'aria-busy'?: boolean; 'aria-disabled'?: boolean };
 }
 
-export function DetailTags({ tags, candidates, scope = 'local', id, adding, editable = false, trailing, label, onOpen, onAdd, onRemove, busyAttrs }: DetailTagsProps) {
+export function DetailTags({ tags, candidates, scope = 'local', id, adding, editable = false, label, onOpen, onAdd, onRemove, busyAttrs }: DetailTagsProps) {
   const [asked, setAsked] = useState(false);
   const inventory = useQuery({ queryKey:['tag-management', scope],
     queryFn:({ signal }) => apiGet<{ items:ManagedTag[] }>(`/api/tag-management${scope === 'online' ? '?scope=online' : ''}`, signal),
@@ -57,7 +55,6 @@ export function DetailTags({ tags, candidates, scope = 'local', id, adding, edit
         {open ? t('shell:shared.collapse') : t('shell:detailTags.moreCount', { count: tags.length - shown.length })}</Button> : null}
       {editable ? <TagPicker tags={tags} candidates={options} label={label} onAdd={add} adding={adding} scope={scope}
         onOpen={() => setAsked(true)} loading={inventory.isFetching} /> : null}
-      {trailing}
     </div>
     {inventory.isError ? <Note tone="error" action={<Button variant="secondary" onClick={() => void inventory.refetch()}>{t('shell:shared.retryNow')}</Button>}>{t('shell:detailTags.optionsLoadFailed')}</Note> : null}
   </>;
@@ -87,7 +84,7 @@ function TagPicker({ tags, candidates, label, onAdd, adding, scope, onOpen, load
     const [button, menu] = [plus.current, picker.current];
     if (!button || !menu) return undefined;
     if ('showPopover' in menu) menu.setAttribute('popover', 'manual');
-    const control = wireAnchoredMenu(button.parentElement!, button, menu);
+    const control = wireAnchoredMenu(button.parentElement!, button, menu, { fitVisualViewport: true });
     floating.current = control;
     const opened = () => {
       const current = latest.current;

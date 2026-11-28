@@ -283,6 +283,7 @@ class DependencyPolicyTests(unittest.TestCase):
             "tldextract": "tldextract",
             "AppKit": "pyobjc-framework-Cocoa",
             "Foundation": "pyobjc-framework-Cocoa",
+            "WebKit": "pyobjc-framework-WebKit",
             "Vision": "pyobjc-framework-Vision",
             "PIL": "pillow",
             "PyObjCTools": "pyobjc-framework-Cocoa",

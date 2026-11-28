@@ -41,6 +41,14 @@
 }
 .peach-react [data-long-text]:not(:lang(en)) { text-align: justify; }
 
+/* 标题折行时各行等长，末行不剩孤字。只写 `text-wrap-style`：简写会连带改 `text-wrap-mode`，
+ * 把 `truncate` 那类单行省略的标题重新放开折行。
+ * 英文标题字越大字距越紧：20px 及以下不动，往上每大 1px 收 0.05px，最多收 0.022em。
+ * 中日文是方块字，收紧只会挤在一起，所以只认 `:lang(en)`。
+ * 整条包在 `:where()` 里不占优先级，各处自己写的字距与折行照样生效。 */
+:where(h1, h2, h3, h4) { text-wrap-style: balance; }
+:where(h1, h2, h3, h4):where(:lang(en)) { letter-spacing: clamp(-0.022em, calc((20px - 1em) * 0.05), 0px); }
+
 /* 与文字同行的图标画框，按所在文字字号缩放。雪碧图字形在 24 画框里笔画约占 75%，1.2em 让它和
  * 同排汉字的墨迹一样大。遗留壳 `web/css/01-base.css` 的 `:root` 同名同值。写在这里而不进
  * `styles.css` 的 `@theme`：独立页面包也用 `SourceMark` 与带字按键，而 `@theme` 变量按用量裁剪。 */

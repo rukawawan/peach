@@ -98,6 +98,12 @@ class _WorktreeCase(unittest.TestCase):
         self.verification = mock.patch.object(agent_worktree, "require_verified")
         self.verification.start()
         self.addCleanup(self.verification.stop)
+        # 两处向 GitHub 取数的核对各有专门用例；其余用例不联网。
+        self.failed_test = mock.patch.object(agent_worktree, "require_test_not_failed")
+        self.published = mock.patch.object(agent_worktree, "_published_text", return_value="not_found")
+        for patcher in (self.failed_test, self.published):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         if self.mock_pull_request:
             pull_request = mock.patch.object(agent_worktree, "require_pull_request", side_effect=
                 lambda worker, branch, target, head: {"url": "https://github.com/example/peach/pull/1",
@@ -231,6 +237,19 @@ class AgentWorktreeTests(_WorktreeCase):
         self.assertIn("worker.txt", merged["files"])
         self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
 
+    def test_create_reports_unregistered_directories_left_in_the_worktree_root(self):
+        """回收后留在落点里的旧目录在开工时报出；登记过的工作树和别的仓库的工作树不算。"""
+        landing = self.root / "peach-worktrees"
+        stale = landing / "stale-copy"
+        stale.mkdir(parents=True)
+        (stale / "notes.txt").write_text("left behind\n", encoding="utf-8")
+        other = seed_repository(self.root / "other", {"tracked.txt": "base\n"}, "base")
+        _git(other, "worktree", "add", "-b", "side", str(landing / "other-side"), "HEAD")
+        first = create(self.repo, "Claude", "first task")
+        second = create(self.repo, "Claude", "second task")
+        self.assertEqual(Path(first["path"]).parent, landing)
+        self.assertEqual(second["unregistered"], [str(stale)])
+
     def test_ready_rejects_dirty_worker(self):
         result = create(self.repo, "Codex", "dirty task", self.root / "worktrees")
         worker = Path(result["path"])
@@ -312,6 +331,78 @@ class QueuedRebaseTests(_WorktreeCase):
         self.assertIsNone(integrate(self.repo, docs)["refreshed"], "文档集成不持全量锁，不在锁内补验")
         self.verify.assert_not_called()
 
+    def on_main(self, path: str, text: str, message: str) -> None:
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(text, encoding="utf-8")
+        _git(self.repo, "add", path)
+        _git(self.repo, "commit", "-m", message)
+
+    def test_bundles_built_on_both_sides_are_rebuilt_from_the_merged_sources(self):
+        """两边都改了前端产物：rebase 后照合并的源码重建一次并补提交，不再交人逐行合并。"""
+        self.on_main("web/dist/app.js", "base\n", "build(web): 产物")
+        worker, branch = self.worker("bundle", "web/dist/app.js", "worker build\n")
+        (worker / "frontend").mkdir()
+        (worker / "frontend/page.ts").write_text("worker\n", encoding="utf-8")
+        _git(worker, "add", "frontend/page.ts")
+        _git(worker, "commit", "-m", "fix(web): 工作者源码", "-m", AUTHOR)
+        _git(worker, "push", "-q", "origin", branch)
+        self.on_main("web/dist/app.js", "main build\n", "build(web): 主线产物")
+        run = subprocess.run
+        built = []
+
+        def build(command, *args, **kwargs):
+            if command[1:3] != ["--prefix", "frontend"]:
+                return run(command, *args, **kwargs)
+            built.append(command[3:])
+            if command[3] == "run":
+                (worker / "web/dist/app.js").write_text("merged build\n", encoding="utf-8")
+                (worker / "web/dist/chunk.js").write_text("new chunk\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0)
+        with mock.patch.object(agent_worktree.subprocess, "run", side_effect=build):
+            report = integrate(self.repo, branch)
+        self.assertEqual(built, [["ci"], ["run", "build", "--silent"]])
+        self.assertEqual((self.repo / "web/dist/app.js").read_text(encoding="utf-8"), "merged build\n")
+        self.assertTrue((self.repo / "web/dist/chunk.js").is_file())
+        rebuilt = _git(worker, "log", "-1", "--format=%s%n%(trailers:key=Co-Authored-By,valueonly)").stdout
+        self.assertEqual(rebuilt.split(), ["build(web):", "按主线重建前端产物", *AUTHOR.split()[1:]])
+        self.assertEqual(report["refreshed"]["to"], _git(worker, "rev-parse", "HEAD").stdout.strip())
+        self.verify.assert_called_once_with(self.repo, worker, frontend=False)
+
+    def test_a_failed_rebuild_and_overlapping_sources_merge_nothing(self):
+        self.on_main("web/dist/app.js", "base\n", "build(web): 产物")
+        worker, branch = self.worker("broken-bundle", "web/dist/app.js", "worker build\n")
+        self.on_main("web/dist/app.js", "main build\n", "build(web): 主线产物")
+        master = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        run = subprocess.run
+        with mock.patch.object(agent_worktree.subprocess, "run", side_effect=lambda command, *args, **kwargs:
+                               subprocess.CompletedProcess(command, 1) if command[1:3] == ["--prefix", "frontend"]
+                               else run(command, *args, **kwargs)), \
+                self.assertRaisesRegex(WorkspaceError, "integrate-rebuild.log"):
+            integrate(self.repo, branch)
+        self.assertEqual(_git(self.repo, "rev-parse", "HEAD").stdout.strip(), master)
+        self.verify.assert_not_called()
+        _, sources = self.worker("same-source", "tracked.txt", "worker\n")
+        (self.repo / "tracked.txt").write_text("main moved\n", encoding="utf-8")
+        commit(self.repo, "main moved")
+        with self.assertRaisesRegex(WorkspaceError, "same-file review required: tracked.txt"):
+            integrate(self.repo, sources)
+
+    def test_a_changelog_merged_by_union_keeps_both_entries_without_review(self):
+        head = "## [Unreleased]\n\n### Fixed / 修复\n\n"
+        self.on_main(".gitattributes", "CHANGELOG.md merge=union\n", "chore: 合并方式")
+        self.on_main("CHANGELOG.md", head, "docs: 变更日志")
+        worker, branch = self.worker("entry", "CHANGELOG.md", head + "- worker entry\n")
+        (worker / "worker.txt").write_text("worker\n", encoding="utf-8")
+        _git(worker, "add", "worker.txt")
+        _git(worker, "commit", "-m", "fix(tooling): 工作者代码")
+        _git(worker, "push", "-q", "origin", branch)
+        self.on_main("CHANGELOG.md", head + "- main entry\n", "docs(changelog): 主线条目")
+        self.assertIsNotNone(integrate(self.repo, branch)["refreshed"], "代码分支在锁内 rebase，变更日志不挡")
+        merged = (self.repo / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn("- worker entry\n", merged)
+        self.assertIn("- main entry\n", merged)
+        self.assertNotIn("<<<<<<<", merged)
+
     def test_reverification_follows_the_test_entry_and_keeps_the_full_lock(self):
         self.verifier.stop()
         worker = self.root / "worker"
@@ -321,8 +412,9 @@ class QueuedRebaseTests(_WorktreeCase):
                                or subprocess.CompletedProcess(command, 0)):
             agent_worktree._verify_worker(self.repo, worker, frontend=True)
         commands = [command for command, _ in calls]
-        self.assertIn("scripts/test_environment.py", commands[0])
-        self.assertEqual(commands[1][-3:], ["--prefix", "frontend", "ci"])
+        # 先装前端依赖：环境准备会把与新锁文件对不上的旧 node_modules 拦下。
+        self.assertEqual(commands[0][-3:], ["--prefix", "frontend", "ci"])
+        self.assertIn("scripts/test_environment.py", commands[1])
         self.assertEqual(commands[2][1:], ["scripts/test_runner.py", "--scope", "auto", "--jobs", "auto",
                                            "--full-lock-held"])
         self.assertTrue(all(kwargs["cwd"] == worker for _, kwargs in calls))
@@ -490,6 +582,33 @@ class PullRequestIntegrationTests(_WorktreeCase):
         self.assertIn("isCrossRepository", query.call_args.args[0][-1])
         self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
 
+    def test_a_pull_request_head_whose_latest_test_run_failed_is_not_merged(self):
+        """PR 头上最近一次 Test 已失败时拒收；通过、仍在跑、被取消、没有运行或取不到时照常合入。"""
+        self.failed_test.stop()
+        self.addCleanup(self.failed_test.start)
+        from scripts import ci_test_evidence
+
+        def runs(*rows):
+            return {"workflow_runs": [
+                {"id": index, "created_at": f"2026-11-25T0{index}:00:00Z", "status": status,
+                 "conclusion": conclusion, "html_url": f"https://github.com/example/peach/actions/runs/{index}"}
+                for index, (status, conclusion) in enumerate(rows, 1)]}
+        with mock.patch.object(ci_test_evidence, "repository", return_value="example/peach"), \
+                mock.patch.object(ci_test_evidence, "api") as api:
+            api.return_value = runs(("completed", "success"), ("completed", "failure"))
+            with self.github():
+                self.assert_refused("runs/2")
+            self.assertIn(f"head_sha={self.head}", api.call_args.args[1])
+            for allowed in (runs(("completed", "failure"), ("completed", "success")),
+                            runs(("completed", "failure"), ("in_progress", None)),
+                            runs(("completed", "cancelled")), runs()):
+                api.return_value = allowed
+                agent_worktree.require_test_not_failed(self.worker, self.head)
+            api.side_effect = subprocess.CalledProcessError(1, ["gh"])
+            with self.github():
+                integrate(self.repo, self.branch)
+        self.assertEqual((self.repo / "worker.txt").read_text(encoding="utf-8"), "worker\n")
+
     def test_insider_terms_in_the_pr_body_are_refused_but_commit_messages_may_name_the_tooling(self):
         with mock.patch.object(check_public_text, "load_library", return_value=None):
             self.assertRaisesRegex(WorkspaceError, "内部用语.*合批", agent_worktree.require_public_text,
@@ -590,10 +709,48 @@ class PreflightTests(_WorktreeCase):
         with self.assertRaisesRegex(WorkspaceError, "dirty"):
             agent_worktree.preflight(worker)
         path.write_text("VALUE = 1\n", encoding="utf-8")
+        self.assertEqual(agent_worktree.preflight(worker)["behind"], 0)
+
+    def test_a_newer_target_is_reported_and_left_for_integration_to_rebase(self):
+        """落后目标分支不挡预检与 ready，回执写明落后几个提交；合入前的核验仍要求已纳入。"""
+        worker = self.worker()
         (self.repo / "tracked.txt").write_text("parallel\n", encoding="utf-8")
         commit(self.repo, "docs(tooling): 并行变更")
+        for report in (agent_worktree.preflight(worker), ready(worker)):
+            self.assertEqual((report["ok"], report["behind"]), (True, 1))
+            self.assertIn("integrate", report["note"])
+            self.assertEqual(report["files"], ["src/peach/module.py"])
+        self.assertTrue(agent_worktree.require_verified.call_args.kwargs["allow_behind"])
         with self.assertRaisesRegex(WorkspaceError, "已前进"):
-            agent_worktree.preflight(worker)
+            agent_worktree.require_metadata(worker, "master")
+        self.assertEqual(agent_worktree.require_metadata(worker, "master", allow_behind=True),
+                         _git(worker, "rev-parse", "HEAD").stdout.strip())
+
+    def test_ready_checks_the_published_pull_request_body_before_integration_does(self):
+        worker = self.worker()
+        self.published.stop()
+        body = "合批验证：两处反馈修复。"
+        answers = iter([subprocess.CompletedProcess(["gh"], 0, body, ""),
+                        subprocess.CompletedProcess(["gh"], 1, "", "no pull requests found for branch"),
+                        OSError("gh 不在 PATH")])
+        run = subprocess.run
+
+        def call(command, *args, **kwargs):
+            if command[0] != "gh":
+                return run(command, *args, **kwargs)
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        try:
+            with mock.patch.object(agent_worktree.subprocess, "run", side_effect=call), \
+                    mock.patch.object(check_public_text, "load_library", return_value=None):
+                with self.assertRaisesRegex(WorkspaceError, "内部用语"):
+                    ready(worker)
+                self.assertEqual(ready(worker)["pull_request"], "not_found")
+                self.assertEqual(ready(worker)["pull_request"], "unavailable")
+        finally:
+            self.published.start()
 
 
 class MasterCommitGuardTests(_WorktreeCase):
@@ -1240,7 +1397,13 @@ class CoAuthorTests(unittest.TestCase):
         self.assertEqual(
             self.signed("Co-Authored-By: Codex (GPT-5.5) <noreply@openai.com>"), [])
         self.assertEqual(
-            self.signed("Co-Authored-By: opencode (GLM 5.3 Flash) <noreply@opencode.ai>"), [])
+            self.signed("Co-Authored-By: opencode (GLM 5.3 Flash) "
+                        "<219766164+opencode-agent[bot]@users.noreply.github.com>"), [])
+
+    def test_a_new_opencode_signature_uses_the_github_bot_address(self):
+        problems = self.signed("Co-Authored-By: opencode (GLM 5.3 Flash) <noreply@opencode.ai>")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("219766164+opencode-agent[bot]@users.noreply.github.com", problems[0])
 
     def test_an_address_that_does_not_belong_to_the_tool_is_rejected(self):
         self.assertTrue(self.signed("Co-Authored-By: Codex (GPT-5.5) <noreply@anthropic.com>"))
@@ -1278,6 +1441,10 @@ class CoAuthorTests(unittest.TestCase):
         """工具名单约束的是本机智能体，贡献者用什么工具是他自己的事。"""
         self.assertEqual(self.contributed("Co-Authored-By: Qoder (Qwen 3) <noreply@qoder.com>"), [])
 
+    def test_a_contributor_may_keep_the_previous_opencode_signature(self):
+        self.assertEqual(
+            self.contributed("Co-Authored-By: opencode (GLM 5.3 Flash) <noreply@opencode.ai>"), [])
+
     def test_a_contributor_signature_still_has_to_be_well_formed(self):
         self.assertTrue(self.contributed("Co-Authored-By: Codex (GPT-6) <noreply@anthropic.com>"))
         self.assertTrue(co_author.problems("测试", ["Codex <someone@example.invalid>"], own=False))
@@ -1306,7 +1473,8 @@ class CoAuthorTests(unittest.TestCase):
     def test_registered_agent_and_vendor_addresses_require_model_metadata(self):
         agent = "Codex (GPT-6) <noreply@openai.com>"
         for signature in ("Codex <someone@example.invalid>",
-                          "Contributor <noreply@openai.com>"):
+                          "Contributor <noreply@openai.com>",
+                          "Contributor <noreply@opencode.ai>"):
             with self.subTest(signature=signature):
                 self.assertTrue(co_author.problems("测试", [agent, signature]))
 

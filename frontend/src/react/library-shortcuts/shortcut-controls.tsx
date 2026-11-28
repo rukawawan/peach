@@ -1,9 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react';
 import { VisuallyHidden } from 'react-aria-components';
 import { attachOverlayScrollbar, revealTexts, spinnerHtml, wireHorizontalScroller } from '@peach/legacy/ui';
 import { Button, ButtonLink } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
 import { ObjectOrderDialog } from '../components/object-order-dialog';
+import { DataTable } from '../components/data-table';
 import { errorMessage } from '../../api';
 import { entityDisplayName } from '../../core/entity-names';
 import { useEntityNames } from '../use-entity-names';
@@ -17,7 +18,8 @@ import { useViewGlide } from '../components/use-view-glide';
 import { NavigationDropLine, NavigationOrderMenu, useNavigationOrder } from '../components/navigation-order';
 import { useSidebarReorder } from '../sidebar/use-sidebar-reorder';
 import { busyProps } from '../settings/busy-props';
-import { favoriteHref, isFavorite, useShortcuts, useShortcutWrite, type Favorite } from './library-shortcuts';
+import { ShellActionsContext } from '../router/router';
+import { favoriteHref, isFavorite, useShortcuts, useShortcutWrite, type Favorite, type SavedFilter } from './library-shortcuts';
 import { t } from '../../i18n';
 import { codedText } from '../../core/server-text';
 import './shortcuts.css';
@@ -48,15 +50,18 @@ function FavoriteChoice({ item }: { item: Favorite }) {
   const selected = query.data && query.data !== initial.current
     ? isFavorite(query.data.favorites || [], item)
     : item.favorite ?? (query.data ? isFavorite(query.data.favorites || [], item) : false);
-  return <span className="inline-flex min-w-0 flex-col gap-1">
+  return <div className="inline-flex min-w-0 flex-col gap-1">
     <EntityActionButton data-favorite="" aria-pressed={!!selected}
       label={t(selected ? 'settings:favoritesPanel.unfavoriteLabel' : 'settings:favoritesPanel.favoriteLabel', { name: entityDisplayName(item.kind, item.name, item.entity_id) })}
       {...busyProps(write.isPending)} onClick={() => {
         if (!write.isPending) write.mutate({ action: 'favorite', ...item, on: !selected });
       }}>{write.isPending ? <span aria-hidden dangerouslySetInnerHTML={{ __html: spinnerHtml('') }} /> : <Star />}</EntityActionButton>
     {write.isError ? <Note tone="error">{errorMessage(write.error)}</Note> : null}
-    {query.isError ? <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.retryLoadLabel')} onClick={() => void query.refetch()}>{t('settings:shared.retryNow')}</Button> : null}
-  </span>;
+    {query.isError ? <Note tone="error" action={
+      <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.retryLoadLabel')}
+        {...busyProps(query.isFetching)} onClick={() => void query.refetch()}>{t('settings:shared.retryNow')}</Button>
+    }>{errorMessage(query.error)}</Note> : null}
+  </div>;
 }
 
 /** 实体收藏、作品清单与保存筛选的管理入口。 */
@@ -73,6 +78,7 @@ export function LibraryShortcuts({ currentHref, kind }: { currentHref?: () => st
 
 function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => string; kind?: string; close(): void }) {
   useEntityNames();
+  const actions = useContext(ShellActionsContext);
   const query = useShortcuts();
   const write = useShortcutWrite();
   const [name, setName] = useState('');
@@ -193,16 +199,24 @@ function ShortcutContents({ currentHref, kind, close }: { currentHref?: () => st
           onClick={() => { if (!write.isPending) write.mutate({ action: 'favorite', ...row, on: false }) }}>{t('settings:favoritesPanel.unfavorite')}</Button>
       </div>)}</div>
     </> : <>
-      {data.filters.length > 1 ? <Button variant="secondary" size="small" onClick={() => setSorting(true)}>{t('settings:favoritesPanel.reorderFilters')}</Button> : null}
       {sorting ? <ObjectOrderDialog title={t('settings:favoritesPanel.reorderFilters')} items={data.filters} close={() => setSorting(false)}
         save={async ids => { await write.mutateAsync({ action: 'reorder_filters', ids }); setMessage(t('settings:favoritesPanel.filterOrderSaved')) }} /> : null}
       {!data.filters.length ? <EmptyState size="compact" icon={spriteGlyph('list-filter')} title={t('settings:favoritesPanel.noSavedFilters')}
         actions={<ButtonLink size="small" href="/" onClick={close}>{t('settings:favoritesPanel.browseCollection')}</ButtonLink>}>{t('settings:favoritesPanel.noSavedFiltersHelp')}</EmptyState> : null}
-      {data.filters.map((row) => <div key={row.id} className="flex min-w-0 items-center justify-between gap-2">
-        <a href={row.href} onClick={close} className="min-w-0 flex-1 break-all text-body-regular text-text-primary underline">{row.name}</a>
-        <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.deleteFilterLabel', { name: row.name })} {...busyProps(write.isPending)}
-          onClick={() => { if (!write.isPending) write.mutate({ action: 'delete_filter', id: row.id }) }}>{t('settings:shared.delete')}</Button>
-      </div>)}
+      {data.filters.length ? <DataTable<SavedFilter> preferenceId="saved-filters" label={t('settings:favoritesPanel.savedFilters')} title={false} panel={false}
+        items={data.filters} rowId={row => row.id} toolbarActions={data.filters.length > 1
+          ? <Button variant="secondary" size="small" onClick={() => setSorting(true)}>{t('settings:favoritesPanel.reorderFilters')}</Button> : null}
+        columns={[
+          { id: 'name', label: t('settings:favoritesPanel.filterName'), value: row => row.name, width: 128, min: 96,
+            render: row => <a href={row.href} onClick={close} className="block min-w-0 wrap-anywhere text-body-regular text-text-primary underline">{row.name}</a> },
+          { id: 'actions', label: t('settings:favoritesPanel.filterActions'), width: 156, min: 126, required: true,
+            render: row => <div className="flex flex-wrap items-center gap-1.5">
+              {actions ? <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.playFilterLabel', { name: row.name })}
+                onClick={() => { close(); actions.playSavedFilter(row.id) }}>{t('settings:favoritesPanel.playFilter')}</Button> : null}
+              <Button variant="secondary" size="small" aria-label={t('settings:favoritesPanel.deleteFilterLabel', { name: row.name })} {...busyProps(write.isPending)}
+                onClick={() => { if (!write.isPending) write.mutate({ action: 'delete_filter', id: row.id }) }}>{t('settings:shared.delete')}</Button>
+            </div> },
+        ]} /> : null}
       {currentHref ? <form onSubmit={submit} className="flex flex-col gap-3" aria-label={t('settings:favoritesPanel.saveCurrentFilter')}>
         <Input label={t('settings:favoritesPanel.filterName')} value={name} onChange={setName} maxLength={80} />
         <Button type="submit" disabled={!name.trim()} {...busyProps(write.isPending)}>{t('settings:favoritesPanel.saveCurrentFilter')}</Button>

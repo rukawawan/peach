@@ -1,0 +1,20 @@
+[data-sidebar-order]{display:grid;gap:6px;min-width:0}
+[data-ordered-preference-scroll]{max-height:16rem;overflow:auto;overscroll-behavior:contain}
+[data-navigation-order=preferences][data-navigation-rows]{--navigation-pick-scale:1;overflow:visible;padding-block:2px}
+[data-navigation-order=preferences]>[data-sidebar-row]{position:relative;display:flex;align-items:center;justify-content:space-between;min-height:var(--control-h);padding:1px 5px;border:1px solid var(--line-soft);border-radius:var(--surface-radius);background:var(--surface);cursor:grab}
+[data-navigation-order=preferences]>[data-sidebar-row]:active{cursor:grabbing}
+[data-navigation-order=preferences]>[data-sidebar-row]:focus-visible{outline:2px solid var(--tungsten);outline-offset:-2px}
+[data-sidebar-order] :is([data-sidebar-label],[data-sidebar-actions]){display:flex;align-items:center;gap:8px}
+[data-sidebar-order] [data-sidebar-label]{min-width:0}
+[data-sidebar-order] :is([data-sidebar-label],[data-sidebar-picker-icon])>svg{width:var(--icon-inline);height:var(--icon-inline);stroke:currentColor;fill:none;flex:none}
+[data-sidebar-order] [data-sidebar-grip]{flex:none;color:var(--muted);touch-action:none}
+[data-sidebar-order] [data-sidebar-grip]>svg{display:block;width:24px;height:20px}
+[data-sidebar-order] [data-sidebar-actions]{flex:none;gap:2px}
+[data-sidebar-actions]>button{border:0;background:transparent;color:var(--muted)}
+[data-sidebar-actions]>button:hover:not(:disabled){background:var(--hover);color:var(--ink)}
+[data-sidebar-actions]>button:disabled{opacity:.4}
+[data-sidebar-order] [data-sidebar-add-row]{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:5px}
+/* 触屏从拖柄排序，手指扫过名称时仍能滚动模型列表。 */
+@media (pointer:coarse){
+  [data-ordered-preference-scroll]>[data-navigation-order=preferences]>[data-tab]{touch-action:auto}
+}

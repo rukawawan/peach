@@ -10,6 +10,7 @@ export const SORTS: readonly (readonly [key: string, label: string])[] = [
 /** 发行时间排序，首页馆藏与 JAV 馆藏共用同一个键。 */
 export const JAV_RELEASE_SORT: readonly [key: string, label: string] = ['release', t('settings:sortOrder.releaseDate')];
 export const SORT_KEYS: readonly string[] = [...SORTS, JAV_RELEASE_SORT].map(([key]) => key);
+export type SortDirection = 'asc' | 'desc';
 
 /** `[desc, asc]` 两种方向的说法。 */
 export type SortDirWords = Readonly<Record<string, readonly [desc: string, asc: string]>>;

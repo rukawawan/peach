@@ -1,73 +1,112 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutationState, useQuery } from '@tanstack/react-query';
 import type { ResizableTableContainerProps } from 'react-aria-components';
 import type { ColumnVisibilityState, OnChangeFn } from '@tanstack/react-table';
+import { clearLegacyTableLayout, orderTableColumns, readLegacyTableLayout, type LegacyTableKeys,
+  type TableLayout, type TableLayoutChange } from '../../table-column-order';
+import { errorMessage } from '../../api';
+import { esc } from '../../core';
+import { t } from '../../i18n';
+import { queryClient } from '../query';
+import { fetchSettings, SETTINGS_KEY, settingsMutationKey, useSaveSettings, type SettingsPatch } from '../settings-panel/settings-data';
+import { showToast } from '../toaster';
 
-export interface ColumnSize { width: number; min: number; max: number; flex?: boolean }
 export interface TableColumnSpec {
   id: string; label: string; width?: number; min?: number; max?: number; required?: boolean; visible?: boolean; flex?: boolean;
 }
 
-function read(key: string): Record<string, unknown> {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(key) || '{}');
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  } catch { return {} }
-}
-function persist(key: string, value: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* 当前页面保留选择。 */ }
-}
+const LAYOUT_SCOPE = 'table-layouts';
+const NO_LAYOUT: TableLayout = {};
 
-export function useTableColumnWidths(key: string, sizes: Record<string, ColumnSize>) {
-  const bounded = (value: Record<string, unknown>): Record<string, number | '1fr'> => Object.fromEntries(Object.entries(sizes).map(([id, size]) => {
-    const width = value[id];
-    return [id, typeof width === 'number' && Number.isFinite(width) ? Math.max(size.min, Math.min(size.max, width)) : size.flex ? '1fr' : size.width];
-  }));
-  const [widths, setWidths] = useState(() => {
-    const saved = read(key);
-    // 历史偏好包含整张表的默认像素值；默认身份宽度采用自适应，定制宽度保留。
-    for (const [id, size] of Object.entries(sizes)) if (size.flex && saved[id] === size.width) delete saved[id];
-    return bounded(saved);
+function useInstanceTableLayout(id: string, legacyKeys?: LegacyTableKeys) {
+  const legacyId = legacyKeys?.order ?? id;
+  const legacy = useMemo(() => readLegacyTableLayout(id, legacyKeys), [id, legacyId, legacyKeys?.widths, legacyKeys?.visibility]);
+  const query = useQuery({ queryKey: SETTINGS_KEY, queryFn: ({ signal }) => fetchSettings(signal) }, queryClient);
+  const save = useSaveSettings(LAYOUT_SCOPE);
+  const pending = useMutationState<TableLayoutChange | undefined>({
+    filters: { mutationKey: settingsMutationKey(LAYOUT_SCOPE), exact: true, status: 'pending' },
+    select: mutation => (mutation.state.variables as SettingsPatch | undefined)?.tableLayouts?.[id],
+  }, queryClient);
+  const remote = query.data?.tableLayouts?.[id] ?? NO_LAYOUT;
+  const migration = useRef<'attempted' | 'done' | null>(null);
+  const hasLegacy = Object.keys(legacy).length > 0;
+  const legacyMissing = (Object.keys(legacy) as (keyof TableLayout)[]).some(field => remote[field] === undefined);
+  useEffect(() => {
+    if (migration.current === 'done' || !hasLegacy || query.data?.tableLayouts === undefined) return;
+    if (!legacyMissing) {
+      clearLegacyTableLayout(id, legacyKeys);
+      migration.current = 'done';
+      return;
+    }
+    if (migration.current || pending.some(Boolean)) return;
+    migration.current = 'attempted';
+    save.mutate({ tableLayouts: { [id]: { legacy } } });
+  }, [hasLegacy, id, legacy, legacyKeys, legacyMissing, pending, query.data?.tableLayouts, save.mutate]);
+
+  const layout: TableLayout = { ...legacy, ...remote };
+  for (const change of pending) Object.assign(layout, change);
+  const commit = (patch: TableLayout) => save.mutate({
+    tableLayouts: { [id]: { ...patch, ...(legacyMissing && { legacy }) } },
+  }, {
+    onError: cause => showToast(`table-layout-${id}`, {
+      html: esc(t('shell:tableColumns.saveFailed', { error: errorMessage(cause) })), alert: true, timeout: 6000, action: null,
+    }),
   });
-  const resize: NonNullable<ResizableTableContainerProps['onResize']> = values => {
-    setWidths(current => bounded({ ...current, ...Object.fromEntries(values) }));
-  };
-  const save: NonNullable<ResizableTableContainerProps['onResizeEnd']> = values => {
-    const next = bounded({ ...widths, ...Object.fromEntries(values) });
-    setWidths(next); persist(key, next);
-  };
-  const reset = () => {
-    setWidths(bounded({}));
-    try { localStorage.removeItem(key) } catch { /* 当前页面使用默认列宽。 */ }
-  };
-  return { widths: bounded(widths), resize, save, reset };
+  return { layout, commit };
 }
 
-export function useTableColumnVisibility(key: string, ids: string[], required: string[], defaults: ColumnVisibilityState = {}) {
-  const valid = (value: Record<string, unknown>): ColumnVisibilityState => ({ ...defaults, ...Object.fromEntries(ids
-    .filter(id => !required.includes(id) && typeof value[id] === 'boolean').map(id => [id, value[id] === true])) });
-  const [visibility, setVisibility] = useState(() => valid(read(key)));
-  const change: OnChangeFn<ColumnVisibilityState> = updater => {
-    const next = valid(typeof updater === 'function' ? updater(visibility) : updater);
-    setVisibility(next); persist(key, next);
-  };
-  return { visibility, change };
-}
-
-/** 每张表使用独立偏好；身份列和勾选列保留，隐藏列仍可排序。 */
-export function useTablePreferences(id: string, columns: TableColumnSpec[], keys?: { widths: string; visibility: string }) {
-  const sizes = useMemo(() => Object.fromEntries(columns.map(column => [column.id, {
+/** 列偏好跟实例的用户设置走，列宽拖动中的草稿只保留在当前页面。 */
+export function useTablePreferences<Column extends TableColumnSpec>(id: string, columns: readonly Column[], keys?: LegacyTableKeys) {
+  const { layout, commit } = useInstanceTableLayout(id, keys);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const columnSizes = useMemo(() => Object.fromEntries(columns.map(column => [column.id, {
     width: column.width ?? 180, min: column.min ?? 96, max: column.max ?? (column.flex ? 2000 : 800), flex: column.flex,
   }])), [columns]);
-  const sizing = useTableColumnWidths(keys?.widths ?? `peach.table.${id}.widths.v1`, sizes);
-  const visible = useTableColumnVisibility(keys?.visibility ?? `peach.table.${id}.visibility.v1`,
-    columns.map(column => column.id), columns.filter(column => column.required).map(column => column.id),
-    Object.fromEntries(columns.filter(column => column.visible === false).map(column => [column.id, false])));
-  const flexible = columns.some(column => column.flex && visible.visibility[column.id] !== false && sizing.widths[column.id] === '1fr');
-  return { ...sizing, ...visible, columns, spaceWidth: flexible ? 0 : '1fr' as const,
-    // 自适应列只承接多出来的空间，窄屏上不缩到默认宽度以下；手动调整后才允许到最小宽度。
-    columnProps: (column: string) => sizing.widths[column] === '1fr'
+  const visibleCount = columns.filter(column => column.id !== 'select' && (column.required
+    || (layout.visibility?.[column.id] ?? column.visible !== false))).length;
+  // 窄屏给下一列留一点可见区域。实例存的像素宽度在宽屏回来后照原值显示。
+  const viewportMax = viewportWidth > 0 && viewportWidth <= 600 && visibleCount > 1 ? Math.max(96, viewportWidth - 56) : Infinity;
+  const sizes = Object.fromEntries(Object.entries(columnSizes).map(([key, size]) => [key, {
+    ...size, min: Math.min(size.min, viewportMax), max: Math.min(size.max, viewportMax), width: Math.min(size.width, viewportMax),
+  }]));
+  const bounded = (value: Record<string, unknown>): Record<string, number | '1fr'> => Object.fromEntries(Object.entries(sizes).map(([key, size]) => {
+    const width = value[key];
+    return [key, typeof width === 'number' && Number.isFinite(width) ? Math.max(size.min, Math.min(size.max, width))
+      : size.flex ? '1fr' : size.width];
+  }));
+  const [draftWidths, setDraftWidths] = useState<Record<string, number | '1fr'> | null>(null);
+  // 旧版会保存整张表的默认像素值。默认名称宽度仍采用自适应。
+  const savedWidths = Object.fromEntries(Object.entries(layout.widths ?? {}).filter(([key, width]) =>
+    !columnSizes[key]?.flex || columnSizes[key].width !== width));
+  const widths = draftWidths ?? bounded(savedWidths);
+  const resize: NonNullable<ResizableTableContainerProps['onResize']> = values =>
+    setDraftWidths(bounded({ ...savedWidths, ...Object.fromEntries(values) }));
+  const save = (values: Parameters<NonNullable<ResizableTableContainerProps['onResizeEnd']>>[0], column?: string) => {
+    setDraftWidths(null);
+    if (!column || typeof values.get(column) !== 'number') return;
+    const width = bounded(Object.fromEntries(values))[column];
+    if (typeof width === 'number') commit({ widths: { ...savedWidths, [column]: width } });
+  };
+  const reset = () => { setDraftWidths(null); commit({ widths: {} }) };
+
+  const validVisibility = (value?: ColumnVisibilityState): ColumnVisibilityState => Object.fromEntries(columns
+    .filter(column => !column.required)
+    .map(column => [column.id, value?.[column.id] ?? column.visible !== false]));
+  const visibility = validVisibility(layout.visibility);
+  const change: OnChangeFn<ColumnVisibilityState> = updater =>
+    commit({ visibility: validVisibility(typeof updater === 'function' ? updater(visibility) : updater) });
+  const orderedColumns = useMemo(() => orderTableColumns(columns, layout.order), [columns, layout.order]);
+  const columnOrder = useMemo(() => orderedColumns.map(column => column.id), [orderedColumns]);
+  const defaultOrder = columns.map(column => column.id);
+  const changeOrder = (next: string[]) => commit({ order: orderTableColumns(columns, next).map(column => column.id) });
+  const resetOrder = () => commit({ order: [] });
+  const flexible = columns.some(column => column.flex && visibility[column.id] !== false && widths[column.id] === '1fr');
+  return { widths, resize, save, reset, setViewportWidth, visibility, change, columns: orderedColumns, columnOrder, defaultOrder, changeOrder, resetOrder,
+    spaceWidth: flexible ? 0 : '1fr' as const,
+    // 自适应列只承接多出来的空间，手动调整前使用默认宽度作为下限。
+    columnProps: (column: string) => widths[column] === '1fr'
       ? { width: '1fr' as const, minWidth: sizes[column]!.width, maxWidth: undefined }
-      : { width: sizing.widths[column], minWidth: sizes[column]!.min, maxWidth: sizes[column]!.max },
+      : { width: widths[column], minWidth: sizes[column]!.min, maxWidth: sizes[column]!.max },
     canResize: (column: string) => sizes[column]!.max > sizes[column]!.min,
   };
 }

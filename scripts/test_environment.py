@@ -69,9 +69,19 @@ def prepare(root: Path, main: Path, *, run=subprocess.run, which=shutil.which,
                   "--project", str(root)], cwd=str(root), env=environment, check=False)
     if result.returncode:
         raise RuntimeError(t("test_environment.syncFailed", code=result.returncode))
-    # Python 依赖上面自动同步；前端依赖装一次要一两分钟，不替人装，只在开跑前拦下，
-    # 免得跑满一轮才在前端用例上整组失败。
+    # 新工作树还没有 `frontend/node_modules`：目录不存在，不会被预览服务占着，照锁文件装一遍。
+    # 已有目录却对不上的不替人重装：Windows 上 npm ci 先删后装，被占用时会留下半个目录，
+    # 这种只在开跑前拦下并给出命令，免得跑满一轮才在前端用例上整组失败。
     drift = frontend_drift(root)
+    npm = which("npm")
+    if drift is not None and npm is not None and not (root / "frontend" / "node_modules").exists():
+        print(t("test_environment.installingFrontend", path=root / "frontend"), flush=True)
+        installed = run([str(npm), "ci", "--prefix", str(root / "frontend")], cwd=str(root),
+                        env=environment, check=False)
+        if installed.returncode:
+            raise RuntimeError(t("test_environment.frontendInstallFailed", code=installed.returncode,
+                                 command=f'npm ci --prefix "{root / "frontend"}"'))
+        drift = frontend_drift(root)
     if drift is not None:
         raise RuntimeError(t("test_environment.frontendDrift", package=drift,
                              command=f'npm ci --prefix "{root / "frontend"}"'))

@@ -35,14 +35,14 @@
       "id": "open-claude-ui-design-manual",
       "cadence": "monthly",
       "name": "Open Claude UI 完整设计手册",
-      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/501c05a587404048c6877b1358b70d4a17f20169/docs/Claude%20Design%20System%20(CDS).full.md",
+      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/beb521e940db340a5f36a8bf6f34d21528adc37a/docs/v1/Claude%20Design%20System%20(CDS).full.md",
       "snapshot": "docs/reference-snapshots/upstream/open-claude-ui-design-system.md",
-      "checked_on": "2026-10-15",
-      "sha256": "98d6f3015578ecea089f5cc83acfd5fe1f5123d826d26c6f82a19da0c1d2fd70",
+      "checked_on": "2026-11-25",
+      "sha256": "8e870f2fd001314f6b803b8a45747dd66c1692fa41aee50d95361459b1b644cf",
       "git": {
         "repository": "https://github.com/Caho1/open-claude-ui.git",
         "ref": "refs/heads/main",
-        "revision": "501c05a587404048c6877b1358b70d4a17f20169"
+        "revision": "beb521e940db340a5f36a8bf6f34d21528adc37a"
       },
       "role": "MIT 的第三方设计手册，仅采用可解释 Peach 需求的原则；官方还原与参数自述不视为实测。",
       "consumers": [
@@ -54,14 +54,14 @@
       "id": "open-claude-ui-rich-composer",
       "cadence": "monthly",
       "name": "Open Claude UI 输入法合成保护",
-      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/501c05a587404048c6877b1358b70d4a17f20169/code-examples/RichComposerWithMentions.tsx",
+      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/beb521e940db340a5f36a8bf6f34d21528adc37a/code-examples/RichComposerWithMentions.tsx",
       "snapshot": "docs/reference-snapshots/upstream/open-claude-ui-rich-composer.tsx",
-      "checked_on": "2026-10-15",
-      "sha256": "68c412c65093950427aa379ddc21d4d427826dadc02d69ea56661caa5d28f52a",
+      "checked_on": "2026-11-25",
+      "sha256": "fe1bbb9e55587e2af63cc82eaa83b22876169e28b9903555121f1c750c40506f",
       "git": {
         "repository": "https://github.com/Caho1/open-claude-ui.git",
         "ref": "refs/heads/main",
-        "revision": "501c05a587404048c6877b1358b70d4a17f20169"
+        "revision": "beb521e940db340a5f36a8bf6f34d21528adc37a"
       },
       "role": "MIT 的输入法合成状态与键盘优先级参考；不采用指令、模拟建议源或 Token 估算。",
       "consumers": [
@@ -73,14 +73,14 @@
       "id": "open-claude-ui-scroll-fade",
       "cadence": "monthly",
       "name": "Open Claude UI 滚动边缘渐隐",
-      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/501c05a587404048c6877b1358b70d4a17f20169/code-examples/ScrollFadeContainer.tsx",
+      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/beb521e940db340a5f36a8bf6f34d21528adc37a/code-examples/ScrollFadeContainer.tsx",
       "snapshot": "docs/reference-snapshots/upstream/open-claude-ui-scroll-fade.tsx",
-      "checked_on": "2026-10-15",
-      "sha256": "63ba801c60c8ab2c26a9556bd1a4890a778e066e4fd07f9e2393c62b5983a906",
+      "checked_on": "2026-11-25",
+      "sha256": "97ac1134c0b1f95b29aa87e684e8af1e38c02ef7e1e29bd5b09b132674b596a1",
       "git": {
         "repository": "https://github.com/Caho1/open-claude-ui.git",
         "ref": "refs/heads/main",
-        "revision": "501c05a587404048c6877b1358b70d4a17f20169"
+        "revision": "beb521e940db340a5f36a8bf6f34d21528adc37a"
       },
       "role": "MIT 的纵向多段渐隐与边缘状态参考；Peach 保留现有滚动生命周期，曲线需视觉核验。",
       "consumers": [
@@ -92,14 +92,14 @@
       "id": "open-claude-ui-lightbox",
       "cadence": "monthly",
       "name": "Open Claude UI 媒体锚点缩放",
-      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/501c05a587404048c6877b1358b70d4a17f20169/code-examples/MediaLightboxViewer.tsx",
+      "url": "https://raw.githubusercontent.com/Caho1/open-claude-ui/beb521e940db340a5f36a8bf6f34d21528adc37a/code-examples/MediaLightboxViewer.tsx",
       "snapshot": "docs/reference-snapshots/upstream/open-claude-ui-lightbox.tsx",
-      "checked_on": "2026-10-15",
-      "sha256": "453c9ef03ae97981bdf69a966b43250ec0d7836fb0e0f44fbbbabbd1e78369c2",
+      "checked_on": "2026-11-25",
+      "sha256": "2df4633b9b553f2ca99e624514584028340d6e2ba38b90624e09c9a32a1db876",
       "git": {
         "repository": "https://github.com/Caho1/open-claude-ui.git",
         "ref": "refs/heads/main",
-        "revision": "501c05a587404048c6877b1358b70d4a17f20169"
+        "revision": "beb521e940db340a5f36a8bf6f34d21528adc37a"
       },
       "role": "MIT 的缩放锚点与受限预载原则；不采用其焦点、拖动或缩放完整实现，不替换 Swiper。",
       "consumers": [
@@ -165,14 +165,14 @@
       "id": "folia-wall-style",
       "cadence": "monthly",
       "name": "Folia 播放墙视觉样式",
-      "url": "https://raw.githubusercontent.com/chthollyphile/folia-major/9a01e788ed52d25ea01b1f0d37934e5e371ae82b/src/components/wall/wall.css",
+      "url": "https://raw.githubusercontent.com/chthollyphile/folia-major/3b91924f1e2da7b7f8f9cf1e0cd0b25d4a789e6d/src/components/wall/wall.css",
       "snapshot": "docs/reference-snapshots/upstream/folia-wall.css",
-      "checked_on": "2026-10-13",
-      "sha256": "2f42d1320fcbb7edb1b01d75b696b24b389f98f683922c16caf0f03523400f2f",
+      "checked_on": "2026-11-25",
+      "sha256": "c05a1ab6d4f14ae49ebb5ee1f30b99fae5c291cb89e7404725e3cb12052f841d",
       "git": {
         "repository": "https://github.com/chthollyphile/folia-major.git",
         "ref": "refs/heads/main",
-        "revision": "9a01e788ed52d25ea01b1f0d37934e5e371ae82b"
+        "revision": "3b91924f1e2da7b7f8f9cf1e0cd0b25d4a789e6d"
       },
       "role": "AGPL-3.0 的独立暗色封面墙样式；视频比例与播放器行为由 Peach 处理。",
       "consumers": [
@@ -217,8 +217,8 @@
       "name": "Fluid Functionalism 分段控件行为",
       "url": "https://www.fluidfunctionalism.com/r/tabs.json",
       "snapshot": "docs/reference-snapshots/upstream/fluid-tabs.json",
-      "checked_on": "2026-11-04",
-      "sha256": "fdb5ddc63a0ab6f59cea97fa2a93a0357bfd8d06715f58bb3db429f29831c723",
+      "checked_on": "2026-11-25",
+      "sha256": "3bbe483b6e9a0b59fa7942e382cda90a4f7876eaf37c1a2a036052642c3d9a3e",
       "role": "独立选中底板与即时状态更新参考；不复制组件源码、字重变化与悬停双底板。",
       "consumers": [
         "frontend/src/react/components/segmented.tsx"
@@ -353,14 +353,14 @@
       "cadence": "monthly",
       "volatile": true,
       "name": "FANBOX 浏览器传输证据",
-      "url": "https://github.com/Nandaka/PixivUtil2/blob/fc0f9adf44e590dde9242b3755b53528f159720a/common/PixivBrowserFactory.py",
+      "url": "https://github.com/Nandaka/PixivUtil2/blob/46bb910cd60c213c9199d939859670a044450239/common/PixivBrowserFactory.py",
       "snapshot": "docs/reference-snapshots/fanbox-browser-transport.md",
-      "checked_on": "2026-08-28",
+      "checked_on": "2026-11-25",
       "sha256": "0e56d115606a53b7136f6333d9d069fd3eb0b9131a3ecb36be07f2da894d6e0e",
       "git": {
         "repository": "https://github.com/Nandaka/PixivUtil2.git",
         "ref": "refs/heads/master",
-        "revision": "fc0f9adf44e590dde9242b3755b53528f159720a"
+        "revision": "46bb910cd60c213c9199d939859670a044450239"
       },
       "role": "FANBOX 公开 post.info 的 Firefox TLS/HTTP2 传输边界；不复用登录、下载器或质询处理。",
       "consumers": [
@@ -470,12 +470,12 @@
       "name": "OpenAver 相似探索算法证据",
       "url": "https://github.com/slive777/OpenAver",
       "snapshot": "docs/reference-snapshots/openaver-related-ranking.md",
-      "checked_on": "2026-10-01",
+      "checked_on": "2026-11-25",
       "sha256": "3495931929fc2d3e74984a1d79cdab558d916ca92cea4e1e5232aa072e6d42b9",
       "git": {
         "repository": "https://github.com/slive777/OpenAver.git",
         "ref": "refs/heads/main",
-        "revision": "8cc17e50453d9f69a81f5fee1a072df80f7aab73"
+        "revision": "6c13d9aca920769ce56890e329ccce39a04309b7"
       },
       "role": "相关推荐使用 Tag IDF 与结构化共同点的固定算法参考；Peach 独立增加 MMR、多样性和稳定破同分。",
       "consumers": [
@@ -539,8 +539,8 @@
       "name": "immich README",
       "url": "https://raw.githubusercontent.com/immich-app/immich/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-immich.md",
-      "checked_on": "2026-11-14",
-      "sha256": "84bbc7ef610df7295eb3866785a2c8d5c8a90fd687c05aecea82344d4b970d40",
+      "checked_on": "2026-11-25",
+      "sha256": "22d5f1f3a5009596e914487499e27b9d8f572771f82537c1181fe935730dd8b3",
       "role": "短定位、下载与文档入口、精简功能层级；Peach 仅借鉴信息结构。",
       "consumers": [
         "README.md",
@@ -553,8 +553,8 @@
       "name": "bruno README",
       "url": "https://raw.githubusercontent.com/usebruno/bruno/main/readme.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-bruno.md",
-      "checked_on": "2026-10-13",
-      "sha256": "fec8af393e65aae5f85c89a2e4cc787bc7ed014b94336ab8179762386c0930b2",
+      "checked_on": "2026-11-25",
+      "sha256": "e2ae6beb9252718ef1cfc06a8ccb7c7f6ba08f94afbeed2977d1568528c0d49d",
       "role": "小尺寸具象 Logo 配短介绍；Peach 使用自己的桃形 Logo，不复制上游品牌素材。",
       "consumers": [
         "README.md",
@@ -581,8 +581,8 @@
       "name": "BoardUI Input 组件源",
       "url": "https://www.boardui.com/r/input.json",
       "snapshot": "docs/reference-snapshots/upstream/boardui-input.json",
-      "checked_on": "2026-11-04",
-      "sha256": "6c5dcf85978dc319551d0efad8d8282d5269f765e01d49c85efef3b3b8d1678a",
+      "checked_on": "2026-11-25",
+      "sha256": "7d99eac9c1a33623257e410beaeb3af5a2bc261a1c7056742028bed6ecc12fd9",
       "role": "输入框焦点口径：field 基类是 ring-2 ring-inset ring-transparent，悬停 border-button-hover、聚焦 border-button-active 且聚焦压过悬停，无外发光，transition 明确列了 box-shadow；Peach 输入面板按用户的决定保留白底与静止那条边，环画在边的内侧。",
       "consumers": [
         "web/css/22-followmanage.css",
@@ -591,6 +591,20 @@
         "web/css/15-detail.css",
         "web/board.css",
         "tests/test_web_ui.py"
+      ]
+    },
+    {
+      "id": "boardui-modal",
+      "cadence": "weekly",
+      "name": "BoardUI Modal 组件源",
+      "url": "https://www.boardui.com/r/modal.json",
+      "snapshot": "docs/reference-snapshots/upstream/boardui-modal.json",
+      "checked_on": "2026-11-25",
+      "sha256": "bf2d1d7aeb04d244df4c95fb415949b7f205145e584b5a7b3420648ae3a95c47",
+      "role": "共用 ModalFrame 的遮罩与面板进出过渡、减少动态效果策略。",
+      "consumers": [
+        "frontend/src/react/components/modal-frame.tsx",
+        "frontend/src/react/components/surface-motion.css"
       ]
     },
     {
@@ -631,12 +645,12 @@
       "name": "amane 内容路由与站点特性",
       "url": "https://raw.githubusercontent.com/sqzw-x/amane/main/docs/dev/content-routes.md",
       "snapshot": "docs/reference-snapshots/upstream/amane-content-routes.md",
-      "checked_on": "2026-11-14",
-      "sha256": "5a082ab6dc4abc7a1ad6399c0c395583a33c8992f1bebb241e4ecb384b310606",
+      "checked_on": "2026-11-25",
+      "sha256": "1e218c567abf6eeb7a5cb6e72a7058848b522e7352e22a6c9665d57a86b1074d",
       "git": {
         "repository": "https://github.com/sqzw-x/amane.git",
         "ref": "refs/heads/main",
-        "revision": "028cdc6eb45ce1a47d85a38abb43fc059e965479"
+        "revision": "6f98c8b2bb3aab363cbad98477f762bd4d2c3151"
       },
       "role": "按内容类型给一条有序来源链的原则，以及逐站的领域判断：javdb 没有国产分区且不解析 plot、javbus 欧美目录不可用、kin8 从任意番号抽数字拼详情会误匹配、mgstage 不进有码默认表否则有码号也会去问它、单厂牌 API 对每个候选 SKU 都发请求、DMM 与厂牌官网的日期是 SKU 分层不必相等。Peach 只取可迁移的原则与站点判断，链上成员限于自己已接解析器的来源；候选与人工复核的契约、不落盘 NFO 是 Peach 自己的边界，上游没有这两条。",
       "consumers": [
@@ -789,12 +803,12 @@
       "name": "SakuraMedia 后端说明",
       "url": "https://raw.githubusercontent.com/tinypinglite/sakuramediabe/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-sakuramediabe.md",
-      "checked_on": "2026-11-04",
-      "sha256": "d1f8226e32032697cd55aeac0b4135b18acd000d5402f411485c04cd1fc08be0",
+      "checked_on": "2026-11-25",
+      "sha256": "fa4b1308666ebdab60028242ac87d1c9ef656289e7f8812fddc7551af8e1e0e6",
       "git": {
         "repository": "https://github.com/tinypinglite/sakuramediabe.git",
         "ref": "refs/heads/main",
-        "revision": "9fac51c272f4cdfb8086569fd7cb69708b29bc6a"
+        "revision": "e98cbd211b4f186d2a1dc01e4322bc22de42e3ba"
       },
       "role": "SakuraMedia 后端（GPL-3.0）只作行为与算法边界证据，不引入代码：字幕同目录纯番号配对、封套左右分割点的对称判据（Peach 不采用对称判据，见 jav_poster_crop）、「想要」与关注分开、记录比文件重要、被并实体留指针，以及推荐权重、Torznab 客户端、自动下载判据、时刻合集、遥测与图片打包。",
       "consumers": [
@@ -809,12 +823,12 @@
       "name": "SakuraMedia 客户端说明",
       "url": "https://raw.githubusercontent.com/tinypinglite/sakuramedia/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-sakuramedia.md",
-      "checked_on": "2026-11-14",
-      "sha256": "2b5dc56b9c5c59a7c502314703c1990d555a64cbeb723d43ceec01379088cdf7",
+      "checked_on": "2026-11-25",
+      "sha256": "6a1aa3ac008f08d919e58f6fdc8ceca35b1af325aa384e137f28181516290f89",
       "git": {
         "repository": "https://github.com/tinypinglite/sakuramedia.git",
         "ref": "refs/heads/main",
-        "revision": "945088aac9fd7c0ad6ed52092adfaf5b0b2250fc"
+        "revision": "448360a783ddbff8337333906c41357c0c663915"
       },
       "role": "README 的主图、折叠截图与安装导航；诊断提示、播放交互和多端客户端仅作产品行为证据，不复制源码、文案或功能承诺。",
       "consumers": [
@@ -849,12 +863,12 @@
       "name": "JavBoss 说明",
       "url": "https://raw.githubusercontent.com/Solr159/JavBoss/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-javboss.md",
-      "checked_on": "2026-11-09",
-      "sha256": "3ce8fd3fe1db04440c05deb8bf797abf627dec62be0d2b2e70a70a58071cb291",
+      "checked_on": "2026-11-25",
+      "sha256": "2782fb60f110be8d778a8050ac223ce1c9d54a1e69a0915c9a2a698edcba5d8f",
       "git": {
         "repository": "https://github.com/Solr159/JavBoss.git",
         "ref": "refs/heads/main",
-        "revision": "902368c642639a3190b4f99e6ff3473b19f77214"
+        "revision": "058723359c5a58a9d69646046e4d8be130cb28a9"
       },
       "role": "JavBoss（GPL-3.0）只作流程证据：CloudDrive2 gRPC 离线下载的提交、轮询与 infohash 对账（ADR-0089），NFO 里 `javboss` 类型的番号字段，以及待办第 58 条的来源缺陷台账。Peach 不复制代码，只提交到已挂载的网盘目录、不拉回本地。",
       "consumers": [
@@ -935,12 +949,12 @@
       "name": "AMMDS 文档仓说明",
       "url": "https://raw.githubusercontent.com/QYG2297248353/AMMDS-DOC/master/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-ammds-doc.md",
-      "checked_on": "2026-11-04",
-      "sha256": "1215ce137f7830b2f8512233f71c6fab1a59c6a1f9c04d09f6f4faba7aa09367",
+      "checked_on": "2026-11-25",
+      "sha256": "89c182ca6bbe39f8e2e4ee9f70cfd34a3905220540d6f500dbc7c4fce25e862a",
       "git": {
         "repository": "https://github.com/QYG2297248353/AMMDS-DOC.git",
         "ref": "refs/heads/master",
-        "revision": "cc43cd78495cc786c053f152e407eac29ba4618d"
+        "revision": "e81f61c0ba8d06b67831bbef8a0b50f7bae86cfe"
       },
       "role": "AMMDS 的 API 文档与版本说明只作行为证据：独立 API key 与统一信封（待办第 27 条）、番号规则覆盖（第 44 条）、r18.dev dump 导入（第 61 条）、站点互联（第 67 条）与漫画库（第 68 条）。",
       "consumers": []
@@ -951,12 +965,12 @@
       "name": "AMMDS 部署仓说明",
       "url": "https://raw.githubusercontent.com/QYG2297248353/AMMDS-Docker/master/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-ammds-docker.md",
-      "checked_on": "2026-10-01",
-      "sha256": "410f8402f50f7db6ca1323a1ff94f2c346e2ee1ebbb42e48ee1af1c31f5fadf0",
+      "checked_on": "2026-11-25",
+      "sha256": "54549aa60c381d17ab4a07d94d4716e220c29dd857ca4638790b01a555d9e3f0",
       "git": {
         "repository": "https://github.com/QYG2297248353/AMMDS-Docker.git",
         "ref": "refs/heads/master",
-        "revision": "a9a82ea4ebd8b87aa8c4aecf53acc1e5736bb595"
+        "revision": "a63303dc42119aa91a7cf0a9cacd04359b2af466"
       },
       "role": "AMMDS 的部署形态与版本号参照，配合文档仓核对待办第 27、44、61、67、68 条所引的版本。",
       "consumers": []
@@ -983,12 +997,12 @@
       "name": "Cuelume 说明",
       "url": "https://raw.githubusercontent.com/danielwh2/cuelume/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-cuelume.md",
-      "checked_on": "2026-10-13",
-      "sha256": "50e0ef00c58113238dccef231356ea480aeffea2e1bbec26f9282e409172beb8",
+      "checked_on": "2026-11-25",
+      "sha256": "43fa394c045ca107de4a01d2eb5c1170786728c29b73fc778b609c0f99c40cf2",
       "git": {
         "repository": "https://github.com/danielwh2/cuelume.git",
         "ref": "refs/heads/main",
-        "revision": "3ff42e3ea9e43c5b1ada736600875eea960d158f"
+        "revision": "e1efd89fdc2f38c321dd59fb979c4ae2629d32a3"
       },
       "role": "Cuelume（MIT，npm 0.2.4）的接口与音效清单，待办第 60 条的候选依赖；README 的迁移段写的是 0.3，引入时按 npm 实际版本精确钉住。",
       "consumers": []
@@ -1047,12 +1061,12 @@
       "name": "Atlas 说明",
       "url": "https://raw.githubusercontent.com/Zoroaaa/Atlas/main/README.md",
       "snapshot": "docs/reference-snapshots/upstream/readme-atlas.md",
-      "checked_on": "2026-11-14",
-      "sha256": "688dd7bae5bb19dbc79b4fc40962dccd2cb4ea1dcd3fe49fd25a6e864c12a3fe",
+      "checked_on": "2026-11-25",
+      "sha256": "2242fba37c68f4e857e8f2721880d70ff732e50f07a3b31249ebd03bb4fb6a1d",
       "git": {
         "repository": "https://github.com/Zoroaaa/Atlas.git",
         "ref": "refs/heads/main",
-        "revision": "4d02379d9a0bb0a57dd3965775a22131c9c6f19e"
+        "revision": "02d8e3468fff2fe29fec831fd983da6986b40069"
       },
       "role": "Atlas 的 `backend/src/services/jav-utils.ts` `parseMagnets` 只解析 JavBus 一家，作待办第 43 条磁力取法的第二份证据；其余「磁力搜索」只是跳转链接。",
       "consumers": []
@@ -1209,14 +1223,14 @@
       "id": "loading-dev-motion",
       "cadence": "monthly",
       "name": "loading.dev 动画周期与错相公式",
-      "url": "https://raw.githubusercontent.com/jakubkrehel/loading/755235bf7eea3dfb05ec4c3661088e3521ee2d75/src/motion.ts",
+      "url": "https://raw.githubusercontent.com/jakubkrehel/loading/cf32eafc5c8af8b48d12d3b68506239932379b04/src/motion.ts",
       "snapshot": "docs/reference-snapshots/upstream/loading-dev-motion.ts",
-      "checked_on": "2026-11-13",
-      "sha256": "8d0179ea3f0a651cb1604f71ddc19b3146735edfae9e7f663e7a3920a4ef2e44",
+      "checked_on": "2026-11-25",
+      "sha256": "eb385b6b7706711884e882ea9c04ca09329a6048b08c9ed4b87854f5173404c7",
       "git": {
         "repository": "https://github.com/jakubkrehel/loading.git",
         "ref": "refs/heads/main",
-        "revision": "755235bf7eea3dfb05ec4c3661088e3521ee2d75"
+        "revision": "cf32eafc5c8af8b48d12d3b68506239932379b04"
       },
       "role": "五种语义动画的周期（Clock 1200ms、Radar 1500ms、LinearDots 900ms、Gather 1600ms、Blocks 1300ms）与错相公式；Peach 把错相展开成 `:nth-child()` 的固定 `animation-delay`，不写内联样式。",
       "consumers": [

@@ -4,6 +4,7 @@
  * 片源与详情同一个判据（`playableStreamSource`），回退顺序也一样（`streamFallbackChain`）：原文件试播
  * 解不了改挂分片，码流复制的分片再退到视频重编码。每格一个流会话，由调用方建好传进来：拆这一格时按会话取消，
  * 离开页面时调用方也按它取消。 */
+import { realDuration } from '@peach/legacy/core';
 import { disposePlayer } from './dispose';
 import { watchDecoding } from './decode-support';
 import {
@@ -13,10 +14,11 @@ import { stopTelemetry, wireTelemetry } from './telemetry';
 import type { PlayerItem, PlayerSource, VjsPlayer } from './types';
 import { ensureVideojs } from './videojs';
 import { mountPlayerSubtitles } from './controls';
-import { playbackKey } from './progress';
+import { playbackKey, playbackPosition, stopPlaybackPosition, trackPlaybackPosition } from './progress';
+import { mountVolumeMemory } from './volume-memory';
 import { SubtitleSession } from './subtitle-memory';
 import { mountCaptionStyle } from './subtitle-style';
-import { mountPlaybackRate, playerMemory } from './memory';
+import { mountPlaybackRate, playerMemory, qualityPixels, setAdaptiveQuality } from './memory';
 import { mountPlayerRotation } from './rotation';
 
 export interface ImmersePlayerOptions {
@@ -24,6 +26,7 @@ export interface ImmersePlayerOptions {
   item: PlayerItem;
   /** 这一格的流会话（`newStreamSession()`）。 */
   session: string;
+  resumeRestartPercent?: number;
   /** 放完之后（沉浸模式接着放下一条）。 */
   onEnded?: () => void;
   /** 片源已经交给 video：调用方从这一刻起等它可以出画。拆得比片源解析快时不回调。 */
@@ -40,6 +43,13 @@ const BARE = {
 
 export function mountImmersePlayer(video: HTMLVideoElement, options: ImmersePlayerOptions): () => void {
   const { item, session } = options;
+  const playback = new AbortController();
+  const key = playbackKey('item', item);
+  const time = playbackPosition(key, item, options.resumeRestartPercent);
+  if (time > 0) video.addEventListener('loadedmetadata', () => {
+    video.currentTime = Math.min(time, realDuration(video.duration) || time);
+  }, { once: true, signal: playback.signal });
+  video.addEventListener('play', () => trackPlaybackPosition(key, video), { once: true, signal: playback.signal });
   let player: VjsPlayer | null = null, released = false;
   void Promise.all([playableStreamSource(item, session), ensureVideojs().catch(() => null)]).then(([source, vjs]) => {
     if (released) return;
@@ -48,14 +58,31 @@ export function mountImmersePlayer(video: HTMLVideoElement, options: ImmersePlay
     const first = { ...source, fallback: source.fallback ?? (segmented ? direct : undefined) };
     const takeFallback = streamFallbackChain(first, () => fallbackStreamSource(item, session));
     // 播放器脚本拉不到时退回原生 video；原生元素播不了分片，只能直读。
-    if (!vjs) video.src = (segmented ? direct : source).src;
+    if (!vjs) {
+      mountVolumeMemory(video, playback.signal);
+      video.src = (segmented ? direct : source).src;
+    }
     else {
       const mounted = vjs(video, BARE);
       player = mounted;
       mounted.peachItem = item;
-      mounted.peachPlaybackKey = playbackKey('item', item);
+      mounted.peachPlaybackKey = key;
       mountPlayerRotation(mounted, video);
       mountPlaybackRate(mounted, video);
+      const levels = mounted.qualityLevels?.();
+      if (levels) {
+        let preferred: number | undefined;
+        const apply = () => {
+          if (preferred === undefined || !levels.length) return;
+          if (preferred === 0) { setAdaptiveQuality(levels, -1); return }
+          for (let index = 0; index < levels.length; index++) {
+            const level = levels[index]!;
+            if (qualityPixels(level.width, level.height) === preferred) { setAdaptiveQuality(levels, index); break }
+          }
+        };
+        levels.on?.(['addqualitylevel', 'change'], apply);
+        playerMemory(mounted).restore(saved => { preferred = saved.quality_pixels; apply() });
+      }
       if (options.onPlayer) options.onPlayer(mounted);
       else {
         const captions = new AbortController();
@@ -93,6 +120,8 @@ export function mountImmersePlayer(video: HTMLVideoElement, options: ImmersePlay
   return () => {
     if (released) return;
     released = true;
+    playback.abort();
+    stopPlaybackPosition(video);
     cancelStreamSession(session);
     if (player) disposePlayer(player);
     else { video.pause(); stopTelemetry(video); video.removeAttribute('src'); video.load() }

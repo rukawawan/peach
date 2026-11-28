@@ -1,4 +1,5 @@
 """首次目录的只读分批预检与请求生命周期。"""
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -76,6 +77,20 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(result['workload']['video_files'], 6)
         self.assertEqual(result['workload']['jav_files'], 4)
         self.assertEqual(result['workload']['jav_titles'], 4)
+        self.assertEqual(self.db.read_bytes(), before)
+
+    def test_inventory_groups_files_by_the_configured_code_and_keeps_registered_codes(self):
+        for name in ('ABC-123 指定 ABW-001.mp4', 'ABW-001-CD2.mkv'):
+            (self.media / name).touch()
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            connection.execute("UPDATE profile SET settings_json=? WHERE id='local-default'",
+                               (json.dumps({'codePatterns': [r'指定 (?P<code>ABW-\d+)']}),))
+            connection.execute('INSERT INTO asset(location,path,name,medium,code) VALUES(?,?,?,?,?)',
+                               ('mounted', 'A:\\Cloud\\指定 ABW-001.mp4', '指定 ABW-001.mp4', 'video', 'ABP-002'))
+        before = self.db.read_bytes()
+        result = preview(self.config, self.db, 'all', None)
+        self.assertEqual(result['workload']['jav_files'], 3)
+        self.assertEqual(result['workload']['jav_titles'], 2)
         self.assertEqual(self.db.read_bytes(), before)
 
     def test_trailers_are_excluded_from_discovered_and_registered_workloads(self):

@@ -61,6 +61,7 @@ function shellActions(r: Loaded) {
   });
   const actions: ShellActions = {
     openItem: vi.fn(), openEntity: vi.fn(), openTag: vi.fn(), openTasteSignal: vi.fn(), navigate: vi.fn(),
+    playSavedFilter: vi.fn(),
     openManage: vi.fn(), managePath: vi.fn(() => ''), openFollow: vi.fn(), receipt: vi.fn(), toast: vi.fn(),
     failure: vi.fn(), revealSource: vi.fn(async () => ''), reopenTutorial: vi.fn(async () => {}),
     routeReview: vi.fn(),

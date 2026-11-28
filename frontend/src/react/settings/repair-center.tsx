@@ -94,11 +94,11 @@ function reading(item: RepairItem) {
   return item.changed ? t('settings:repairCenter.changedCount', { count: item.changed }) : '';
 }
 
-function Row({ title, description, progress, children }: {
-  title: string; description: string; progress?: ReactNode; children: ReactNode;
+function Row({ id, title, description, progress, children }: {
+  id?: string; title: string; description: string; progress?: ReactNode; children: ReactNode;
 }) {
   return (
-    <div className={`${RESULT_SECTION} flex flex-wrap items-center justify-between gap-x-4 gap-y-2`}>
+    <div id={id} className={`${RESULT_SECTION} flex flex-wrap items-center justify-between gap-x-4 gap-y-2`}>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-body-medium text-text-primary">{title}</span>
         <span className="text-body-2-regular text-text-secondary">{description}</span>
@@ -200,7 +200,7 @@ export function RepairCenterPage() {
               const [label, tone] = STATES[item.state] || STATES.none;
               const text = reading(item);
               return (
-                <Row key={item.id} title={item.title} description={item.summary}
+                <Row key={item.id} id={`repair-item-${item.id}`} title={item.title} description={item.summary}
                   progress={detail(item)}>
                   {text ? <span className="text-body-2-regular text-text-secondary">{text}</span> : null}
                   {item.mode === 'confirm' && item.state === 'waiting'

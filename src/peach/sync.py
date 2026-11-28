@@ -34,6 +34,7 @@ from pathlib import Path
 
 from . import interface_text
 from .fsutil import atomic_write_text
+from .migrations import readonly_uri
 from .platform import root_online
 
 
@@ -272,8 +273,7 @@ def copy_database(source: Path, target: Path, *, source_immutable: bool = False)
     snapshot = Path(snapshot_name)
     transfer = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
-        immutable = "&immutable=1" if source_immutable else ""
-        origin = sqlite3.connect(f"file:{source}?mode=ro{immutable}", uri=True)
+        origin = sqlite3.connect(readonly_uri(source, immutable=source_immutable), uri=True)
         try:
             destination = sqlite3.connect(snapshot)
             try:

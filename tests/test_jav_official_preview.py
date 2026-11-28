@@ -277,7 +277,7 @@ class OfficialPreviewTests(unittest.TestCase):
             self.assertEqual(payload['state'], 'ready')
             self.assertEqual(payload['preview_state'], 'unavailable')
             # 预告的原因单独给，页面写在预告本来的位置；资料那句只说资料。
-            self.assertIn('官方视频预览未取得', payload['preview_message'])
+            self.assertIn('官方视频预览查询失败', payload['preview_message'])
             self.assertEqual(payload['message'], '')
 
     def test_a_preview_kept_from_an_earlier_fetch_and_a_missing_cover_say_only_what_is_missing(self):

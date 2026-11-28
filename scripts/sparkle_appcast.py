@@ -1,7 +1,7 @@
-"""给官方 generate_appcast 生成的 appcast 补写迁移号，上传前核对本版本条目，再发布到 R2（ADR-0130）。
+"""给官方 generate_appcast 生成的 appcast 补写迁移号和更新日志，核对本版本条目后发布到 R2（ADR-0130）。
 
 签名由 generate_appcast 完成，签名是否有效由发布作业用官方 sign_update --verify 核对；这里只管
-Sparkle 工具不知道的 Peach 约束：本版本是最高版本，下载地址与大小对得上实际 DMG，迁移号齐全。
+Sparkle 工具不知道的 Peach 约束：本版本是最高版本，下载地址与大小对得上实际 DMG，迁移号和更新日志齐全。
 """
 from __future__ import annotations
 
@@ -16,15 +16,25 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+if not __package__:
+    sys.path.insert(0, str(ROOT))
+    __package__ = "scripts"
+sys.path.insert(0, str(ROOT / "src"))
 
 from peach.interface_text import dev as t  # noqa: E402
 from peach.sparkle_update import MIGRATION_HEAD, MIGRATION_NAMESPACE, migration_head
+
+from . import changelog
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE)
 ET.register_namespace("peach", MIGRATION_NAMESPACE)
 HEAD_TAG = f"{{{MIGRATION_NAMESPACE}}}{MIGRATION_HEAD.split(':', 1)[1]}"
+VERSION_TAG = f"{{{SPARKLE}}}version"
+NOTES_FORMAT = f"{{{SPARKLE}}}format"
+XML_LANGUAGE = "{http://www.w3.org/XML/1998/namespace}lang"
+NOTES_LANGUAGES = ("en", "zh-Hans")
 
 
 def _version(text: str | None) -> tuple[int, ...]:
@@ -41,19 +51,30 @@ def _items(tree: ET.ElementTree) -> list[ET.Element]:
 
 
 def _item(tree: ET.ElementTree, version: str) -> ET.Element:
-    matches = [item for item in _items(tree) if item.findtext(f"{{{SPARKLE}}}version") == version]
+    matches = [item for item in _items(tree) if item.findtext(VERSION_TAG) == version]
     if len(matches) != 1:
         raise ValueError(t("sparkle_appcast.entryCount", version=version, count=len(matches)))
     return matches[0]
 
 
-def annotate(path: Path, version: str, head: int) -> None:
+def annotate(path: Path, version: str, head: int, *, document: str) -> None:
     tree = ET.parse(path)
     item = _item(tree, version)
+    if not changelog.section_of(document, version):
+        raise ValueError(t("changelog.noSectionForNotes", file=changelog.CHANGELOG, version=version))
     element = item.find(HEAD_TAG)
     if element is None:
         element = ET.SubElement(item, HEAD_TAG)
     element.text = str(head)
+    # 一并补齐保留在更新源里的旧版本，它们的迁移号仍来自各自的发布。
+    for entry in _items(tree):
+        section = changelog.section_of(document, entry.findtext(VERSION_TAG, default=""))
+        if not section:
+            continue
+        for description in entry.findall("description"):
+            entry.remove(description)
+        for language, notes in zip(NOTES_LANGUAGES, changelog.bilingual(section), strict=True):
+            ET.SubElement(entry, "description", {XML_LANGUAGE: language, NOTES_FORMAT: "markdown"}).text = notes
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
@@ -62,7 +83,7 @@ def verify(path: Path, *, version: str, dmg: Path, url_prefix: str, head: int) -
     tree = ET.parse(path)
     item = _item(tree, version)
     for other in _items(tree):
-        if other is not item and _version(other.findtext(f"{{{SPARKLE}}}version")) >= _version(version):
+        if other is not item and _version(other.findtext(VERSION_TAG)) >= _version(version):
             raise ValueError(t("sparkle_appcast.newerEntry"))
     enclosure = item.find("enclosure")
     if enclosure is None:
@@ -78,6 +99,10 @@ def verify(path: Path, *, version: str, dmg: Path, url_prefix: str, head: int) -
         raise ValueError(t("sparkle_appcast.migrationMismatch"))
     if not item.findtext(f"{{{SPARKLE}}}minimumSystemVersion"):
         raise ValueError(t("sparkle_appcast.noMinimumSystem"))
+    languages = {description.get(XML_LANGUAGE) for description in item.findall("description")
+                 if description.get(NOTES_FORMAT) == "markdown" and (description.text or "").strip()}
+    if not languages.issuperset(NOTES_LANGUAGES):
+        raise ValueError(t("sparkle_appcast.missingReleaseNotes"))
     return {"version": version, "signature": signature}
 
 
@@ -117,10 +142,11 @@ def main(argv=None) -> int:
             command.add_argument("--url-prefix", required=True)
     commands.add_parser("publish").add_argument("feeds", type=Path, nargs="+")
     args = parser.parse_args(argv)
-    head = migration_head(Path(__file__).resolve().parents[1] / "migrations")
+    head = migration_head(ROOT / "migrations")
     try:
         if args.command == "annotate":
-            annotate(args.appcast, args.version, head)
+            document = (ROOT / changelog.CHANGELOG).read_text(encoding="utf-8")
+            annotate(args.appcast, args.version, head, document=document)
             result = {"version": args.version, "migration_head": head}
         elif args.command == "verify":
             result = verify(args.appcast, version=args.version, dmg=args.dmg, url_prefix=args.url_prefix, head=head)

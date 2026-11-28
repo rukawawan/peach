@@ -20,6 +20,7 @@ export interface LibraryItem {
 export interface LibraryGroup {
   label: string; label_code?: string; status: string; count: number | null; items: LibraryItem[];
   truncated: boolean;
+  ignored_count?: number;
   column_facets?: TableFacets;
 }
 export interface DiagnosticReport {

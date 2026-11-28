@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Label, Popover, Slider, SliderThumb, SliderTrack } from 'react-aria-components';
 import { MenuChevron } from '../components/menu-chevron';
+import { EffortFlow } from '../components/effort-flow';
 import { Button } from '@/components/base/buttons/button';
 import { MENU_POPOVER_SURFACE } from '@/components/base/dropdown/menu-styles';
 import { MenuDialog } from '../components/menu-dialog';
@@ -25,24 +26,6 @@ function DoubleLightning({ className }: { className?: string }) {
   </svg>;
 }
 const SPEED_ICONS = [Snail, Lightning, DoubleLightning];
-
-/** 流光只在最高档浮层可见时运行，暂停、后台页及系统减弱动效时静止。 */
-function EffortFlow({ animate }: { animate: boolean }) {
-  const [hidden, setHidden] = useState(document.hidden);
-  useEffect(() => {
-    const changed = () => setHidden(document.hidden);
-    document.addEventListener('visibilitychange', changed);
-    return () => document.removeEventListener('visibilitychange', changed);
-  }, []);
-  return <div aria-hidden="true" data-effort-flow="" data-motion={animate && !hidden ? 'running' : 'paused'}>
-    <svg viewBox="0 0 240 27" preserveAspectRatio="none">
-      <path className="processing-flow-outer" d="M35 13 Q85 8 130 10 Q180 11 240 2 L240 25 Q180 17 130 17 Q80 18 35 13Z" />
-      <path className="processing-flow-middle" d="M60 13 Q120 10 170 12 L240 6 L240 22 Q180 16 130 15 Q95 17 60 13Z" />
-      <path className="processing-flow-core" d="M100 13 Q160 12 240 10 L240 18 Q170 14 100 13Z" />
-    </svg>
-    {Array.from({ length: 12 }, (_, at) => <i key={at} style={{ '--particle-y': `${(at * 7 + 3) % 25}px`, '--particle-delay': `${-at * .13}s` } as CSSProperties} />)}
-  </div>;
-}
 
 export function ProcessingEffort({ value, busy, onChange, animate = true }: {
   value: ProcessingSpeed; busy: boolean; onChange(value: ProcessingSpeed): void; animate?: boolean;

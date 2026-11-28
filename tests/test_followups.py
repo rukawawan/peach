@@ -1534,7 +1534,7 @@ class OffsiteCoverFaceTests(FaceStubCase):
         self.blocked = True
         summary = self.run_followup()
         self.assertTrue(summary["source_unavailable"])
-        self.assertIn("avwikidb 单人作品未取得", told(summary)["outcome"])
+        self.assertIn("avwikidb 单人作品查询失败", told(summary)["outcome"])
         with self.database.read_connection() as connection:
             current = fingerprint(connection, self.person)
         key = followup_key("performer", self.person)
@@ -1815,7 +1815,7 @@ class ProcessLibraryTests(LedgerTestCase):
         done = self.store.get(queued[1])
         self.assertEqual(done.status, 'succeeded')
         self.assertEqual(told(done.result_summary)['outcome'], '图库里没有这个名字，封面上没有能截的脸')
-        self.assertEqual(told(self.store.get(queued[2]).result_summary)['outcome'], '未取得')
+        self.assertEqual(told(self.store.get(queued[2]).result_summary)['outcome'], '采集失败')
         self.assertEqual(self.store.get(queued[3]).status, 'succeeded')
         self.assertFalse((self.root / 'generated' / 'avatars'
                           / f'performer-{entity_id}.img').exists())

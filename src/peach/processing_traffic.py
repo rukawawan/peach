@@ -114,9 +114,12 @@ class ProcessingTraffic:
                 self.rows[old['key']].update(remaining_min=0, remaining_max=0)
         self.unknown_files = stage in ('all', 'scan') and asset_ids is None
         from .processing_traffic_plan import TrafficPlan
-        self.plan = TrafficPlan(config, stage, self._media_key, allow_metered=allow_metered)
-        from .library_processing import source_budget
-        self.plan.budget_bytes = source_budget(db_path).bytes
+        from .library_processing import _configured_code_patterns, _processing_settings, source_budget_settings
+        settings = _processing_settings(db_path)
+        self.plan = TrafficPlan(config, stage, self._media_key,
+                                code_patterns=_configured_code_patterns(settings.get('codePatterns')),
+                                allow_metered=allow_metered)
+        self.plan.budget_bytes = source_budget_settings(settings)['sourceBudgetGigabytes'] * 1024 ** 3
         from .processing_storage import ProcessingStorage
         self.storage = ProcessingStorage(config)
         self.plan.completed.update(previous.get('completed_work', []))

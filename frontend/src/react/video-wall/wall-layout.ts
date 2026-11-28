@@ -1,6 +1,6 @@
 /* 矩形块拼贴参考 Folia 的 blockTemplates/layout，AGPL-3.0，固定 revision
  * 9a01e788ed52d25ea01b1f0d37934e5e371ae82b。Peach 按浏览位置接续馆藏。 */
-import { getBlockTemplate, getBlockReflow } from './folia/blockTemplates';
+import { getBlockTemplate } from './folia/blockTemplates';
 import type { MediaItem } from '../catalog-grid/types';
 export interface WallRect { x: number; y: number; width: number; height: number }
 export interface WallCamera { x: number; y: number; scale: number }
@@ -10,7 +10,8 @@ export interface WallSize { width: number; height: number }
 const PITCH = 103.36;
 const GAP = 6.08;
 const BLOCK_W = 12 * PITCH;
-const BLOCK_H = 8 * PITCH;
+const ROW_PITCH = PITCH * .9;
+const BLOCK_H = 8 * ROW_PITCH;
 const SLOTS = 12;
 const mod = (value: number, count: number) => ((value % count) + count) % count;
 const intersects = (a: WallRect, b: WallRect) => a.x < b.x + b.width && a.x + a.width > b.x
@@ -24,8 +25,8 @@ export function wallShape(count: number, finite: boolean): WallSize & { columns:
 
 function blockSlot(column: number, row: number, slot: number): WallRect {
   const { x,y,cols:w,rows:h } = getBlockTemplate(column, row)[slot]!;
-  return { x: column * BLOCK_W + x * PITCH, y: row * BLOCK_H + y * PITCH,
-    width: w * PITCH - GAP, height: h * PITCH - GAP };
+  return { x: column * BLOCK_W + x * PITCH, y: row * BLOCK_H + y * ROW_PITCH,
+    width: w * PITCH - GAP, height: h * ROW_PITCH - GAP };
 }
 
 /** 只接受有实际封面引用的视频；缩略图设置不改变入墙资格。 */
@@ -38,7 +39,7 @@ export function wallTileAt(count: number, finite: boolean, key: string): WallTil
   if (!count) return null;
   const [column,row,slot] = key.split(':').map(Number);
   if (![column,row,slot].every(Number.isInteger) || slot! < 0 || slot! >= SLOTS) return null;
-  const shape = wallShape(count, finite), rows = shape.height / BLOCK_H;
+  const shape = wallShape(count, finite), rows = Math.round(shape.height / BLOCK_H);
   if (finite && (column! < 0 || column! >= shape.columns || row! < 0 || row! >= rows)) return null;
   const localCol = finite ? column! : mod(column!, shape.columns);
   const localRow = finite ? row! : mod(row!, rows);
@@ -53,16 +54,6 @@ export function finiteWallTile(count: number, index: number): WallTile | null {
   if (index < 0 || index >= count) return null;
   const block = Math.floor(index / SLOTS);
   return wallTileAt(count, true, `${block % 3}:${Math.floor(block / 3)}:${index % SLOTS}`);
-}
-
-/** Folia 原始让位表：展开成 6×6，所在块的另外十一格同步换位。 */
-export function expandedWallTiles(_count: number, _finite: boolean, active: WallTile): Map<string, WallRect> {
-  const [column,row,slot] = active.key.split(':').map(Number);
-  const reflow = getBlockReflow(column!, row!, slot!);
-  return new Map((reflow || []).map((rect, index) => [`${column}:${row}:${index}`, {
-    x:column! * BLOCK_W + rect.x * PITCH, y:row! * BLOCK_H + rect.y * PITCH,
-    width:rect.cols * PITCH - GAP, height:rect.rows * PITCH - GAP,
-  }]));
 }
 
 export function wallExtent(count: number): WallSize {
@@ -87,13 +78,23 @@ export function clampWall(camera: WallCamera, viewport: WallSize, extent: WallSi
 /** 视口每边多铺的磁贴范围（屏幕像素），镜头按它决定何时重新发布。 */
 export const WALL_CULL_PAD = 180;
 
-export function visibleWallTiles(count: number, finite: boolean, camera: WallCamera, viewport: WallSize): WallTile[] {
-  if (!count || !viewport.width || !viewport.height) return [];
+function wallViewRect(camera: WallCamera, viewport: WallSize): WallRect {
   const pad = WALL_CULL_PAD / camera.scale;
-  const view = { x: -camera.x / camera.scale - pad, y: -camera.y / camera.scale - pad,
+  return { x: -camera.x / camera.scale - pad, y: -camera.y / camera.scale - pad,
     width: viewport.width / camera.scale + pad * 2, height: viewport.height / camera.scale + pad * 2 };
+}
+
+export function wallTilesInView<T extends WallTile>(tiles: readonly T[], camera: WallCamera, viewport: WallSize,
+  keep?: (tile: T) => boolean): T[] {
+  const view = wallViewRect(camera, viewport);
+  return tiles.filter(tile => keep?.(tile) || intersects(tile, view));
+}
+
+export function visibleWallTiles(count: number, finite: boolean, camera: WallCamera, viewport: WallSize, wholeBlocks = false): WallTile[] {
+  if (!count || !viewport.width || !viewport.height) return [];
+  const view = wallViewRect(camera, viewport);
   const shape = wallShape(count, finite);
-  const rows = shape.height / BLOCK_H;
+  const rows = Math.round(shape.height / BLOCK_H);
   const result: WallTile[] = [];
   for (let row = Math.floor(view.y / BLOCK_H); row <= Math.floor((view.y + view.height) / BLOCK_H); row += 1) {
     for (let column = Math.floor(view.x / BLOCK_W); column <= Math.floor((view.x + view.width) / BLOCK_W); column += 1) {
@@ -104,7 +105,7 @@ export function visibleWallTiles(count: number, finite: boolean, camera: WallCam
         const rank = (localRow * shape.columns + localCol) * SLOTS + slot;
         if (finite && rank >= count) continue;
         const rect = blockSlot(column, row, slot);
-        if (intersects(rect, view)) result.push({ ...rect, index: rank % count, key: `${column}:${row}:${slot}` });
+        if (wholeBlocks || intersects(rect, view)) result.push({ ...rect, index: rank % count, key: `${column}:${row}:${slot}` });
       }
     }
   }

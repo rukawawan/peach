@@ -68,8 +68,7 @@ describe('视频预览设置', () => {
         assert.equal(state.previewAcceleration, 'software');
         assert.equal(state.playbackAcceleration, 'auto');
         assert.deepEqual(writes.slice(-1), [{ preview_acceleration: 'software' }]);
-        // 播放转码在「应用与维护 → 视频播放」，这一页签里只有抽帧解码方式。
-        assert.equal(await page.locator('.ui-board-group-active #playbackAccelerationSetting').count(), 0);
+        assert.ok(await page.getByRole('region', { name: '视频播放', exact: true }).isVisible());
         await page.reload();
         await preview.waitFor();
         await settle(page);
@@ -84,15 +83,12 @@ describe('视频预览设置', () => {
       } finally { await opened.close() }
     });
 
-    it(`${viewport.name}：「应用与维护 → 视频播放」里改转码方式，只写这一项，重新载入读回`, async () => {
+    it(`${viewport.name}：「媒体库与入库 → 视频播放」里改转码方式，只写这一项，重新载入读回`, async () => {
       const { state, writes, route } = mediaProcessing();
-      const opened = await visit(browser, '/settings/maintenance', viewport, route);
+      const opened = await visit(browser, '/settings/library', viewport, route);
       const { page } = opened;
       try {
         const section = page.getByRole('region', { name: '视频播放', exact: true });
-        const toc = page.getByRole('navigation', { name: '本页目录', exact: true });
-        await toc.getByRole('link', { name: '运行与存储', exact: true }).click();
-        assert.equal(new URL(page.url()).hash, '#maintenance-runtime');
         const trigger = section.locator('#playbackAccelerationSetting button');
         await trigger.waitFor({ state: 'visible' });
         await page.waitForFunction(() => document.querySelector('#playbackAccelerationSetting button')?.hasAttribute('disabled') === false);
@@ -108,11 +104,9 @@ describe('视频预览设置', () => {
         assert.equal(state.playbackAcceleration, 'software');
         assert.equal(state.previewAcceleration, 'auto');
         assert.deepEqual(writes, [{ playback_acceleration: 'software' }]);
-        // 「视频播放」排在「开机自启」之后、「存储空间」之前（没有这两张卡的环境只比相对次序）。
-        const order = await page.getByRole('region', { name: '运行与存储', exact: true }).evaluate((group) =>
+        const order = await page.locator('.ui-board-group-active').evaluate((group) =>
           [...group.querySelectorAll('section[aria-label], form[aria-label]')].map((node) => node.getAttribute('aria-label')));
-        const at = order.indexOf('视频播放');
-        assert.ok(at >= 0 && order.slice(0, at).every((name) => name === '开机自启'), JSON.stringify(order));
+        assert.ok(order.indexOf('视频预览') >= 0 && order.indexOf('视频播放') === order.indexOf('视频预览') + 1, JSON.stringify(order));
         await page.reload();
         await trigger.waitFor({ state: 'visible' });
         await page.waitForFunction(() => /软件编解码/.test(document.querySelector('#playbackAccelerationSetting button')?.textContent || ''));

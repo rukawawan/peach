@@ -138,6 +138,9 @@ if ($Standalone) {
     }
 }
 $ResourceArguments = @()
+& (Join-Path $PSScriptRoot 'build_windows_webview.ps1')
+$WebViewRuntime = Join-Path $ProjectRoot 'build/windows-webview'
+$ResourceArguments += @('--add-data', "${WebViewRuntime};tools/peach-webview")
 $AmaneRuntime = Join-Path $BuildPath 'amane-runtime'
 & $Python -X utf8 (Join-Path $PSScriptRoot 'build_amane_runtime.py') --destination $AmaneRuntime `
     --work (Join-Path $BuildPath 'amane-build')

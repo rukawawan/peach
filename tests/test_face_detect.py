@@ -12,6 +12,33 @@ from peach.face_detect import (
 )
 
 
+class ImageReadingTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve() / "中文图片"
+        self.root.mkdir()
+
+    def test_an_image_in_a_unicode_directory_is_decoded(self):
+        from PIL import Image
+
+        path = self.root / "头像.png"
+        Image.new("RGB", (20, 30), (10, 20, 30)).save(path)
+        image = face_detect.read_image(path)
+        self.assertEqual(image.shape, (30, 20, 3))
+        self.assertEqual(image[0, 0].tolist(), [30, 20, 10])
+
+    def test_a_missing_image_returns_none(self):
+        self.assertIsNone(face_detect.read_image(self.root / "不存在.png"))
+
+    def test_an_empty_or_broken_image_returns_none(self):
+        path = self.root / "损坏.png"
+        for payload in (b"", b"not an image"):
+            with self.subTest(payload=payload):
+                path.write_bytes(payload)
+                self.assertIsNone(face_detect.read_image(path))
+
+
 class EnsureModelTests(unittest.TestCase):
     """模型是二进制资产，不进 Git；取一次就得能复现同一份。"""
 

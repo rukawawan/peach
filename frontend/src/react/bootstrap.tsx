@@ -1,8 +1,10 @@
 import './styles.css';
 import { installErrorReporting } from '../error-reporting';
 import { mountApplication } from './application';
+import { mountFeedback } from './feedback/feedback';
 import { t } from '../i18n';
 installErrorReporting();
+mountFeedback();
 const host = document.getElementById('appRoot');
 if (!host) throw new Error(t('shell:errorReport.hostMissing'));
 mountApplication(host);

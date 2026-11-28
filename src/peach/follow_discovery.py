@@ -132,7 +132,7 @@ class Discovery:
 #: 2026-09-12 实测本机三份清单（kemono、pawchive、coomer 共 42 万个名字）：第一次
 #: 建表 0.84 秒、驻留 57 MB，之后每次前缀查询 4 毫秒。这笔常驻内存是拿来换手速的，
 #: 建表只发生在用户真的在添加框里敲字之后。
-_NAME_TABLES: dict[Path, tuple[float, tuple[tuple[str, str], ...]]] = {}
+_NAME_TABLES: dict[Path, tuple[float, tuple[tuple[str, str, str], ...]]] = {}
 
 
 class CreatorIndex:
@@ -163,8 +163,8 @@ class CreatorIndex:
             pass
         return self._refresh(provider, path)
 
-    def names(self, provider: str) -> tuple[tuple[str, str], ...]:
-        """已经下过的那份清单里的创作者名，`(casefold, 原样)` 按 casefold 排好序。
+    def names(self, provider: str) -> tuple[tuple[str, str, str], ...]:
+        """已经下过的创作者清单，按 casefold 排序，保留显示名与来源身份。
 
         **这一条不联网。** 建议是敲一个字就要出来的东西，为它现下一份几 MB 的整站
         清单会让输入框卡住十几秒；清单不在就没有这一组，等用户真的查一次名字，
@@ -193,7 +193,8 @@ class CreatorIndex:
             folded = name.casefold()
             # 名字本身就是小写时两个位置指同一个字符串对象：清单里这样的占大多数，
             # 省下的是整整半份表。
-            table.append((folded, name if name != folded else folded))
+            ref = f'{row["service"]}/{row["id"]}' if row.get("service") and row.get("id") else ""
+            table.append((folded, name if name != folded else folded, ref))
         table.sort()
         _NAME_TABLES[path] = (stamp, tuple(table))
         return _NAME_TABLES[path][1]
@@ -414,17 +415,17 @@ def forum_queries(term: str) -> tuple[str, ...]:
     return tuple(queries)
 
 
-def _f95_external_search(term: str) -> ExternalSearch:
+def _f95_external_search(term: str, *, failed: bool) -> ExternalSearch:
     """Google 由浏览器打开；Peach 不抓结果页，也不绕验证码。"""
     query = f"{term} f95zone"
     label = phrase("labels.followDiscovery.googleSearch")
-    reason = phrase("labels.followDiscovery.googleSearchReason")
+    reason = None if failed else phrase("labels.followDiscovery.googleSearchReason")
     return ExternalSearch(
         provider="f95zone",
         label=render(label),
         query=query,
         url="https://www.google.com/search?" + urllib.parse.urlencode({"q": query}),
-        evidence=render(reason),
+        evidence=render(reason) if reason else "",
         label_phrase=label,
         reason=reason,
     )
@@ -493,6 +494,23 @@ def _f95_candidates(term: str, transport,
             picked.append(_thread_candidate("f95zone", term, f"https://f95zone.to/threads/{term}/",
                                             "", phrase("labels.followDiscovery.threadExists")))
         return picked
+    can_search = credential is not None and bool(credential.values.get("cookie"))
+    try:
+        picked = _f95_index_candidates(term, connector)
+    except FollowSourceError as error:
+        # 站内搜索使用已配置的登录会话。遇到限速或其他故障时，沿用来源的故障处理。
+        if (can_search and error.code == "errors.followSources.accessDenied"
+                and (forum := _forum_candidates("f95zone", "f95zone.to", term, connector))):
+            return forum
+        raise
+    if picked or not can_search:
+        return picked
+    # 最新更新索引只覆盖五个分类，普通论坛版块用站内搜索。
+    return _forum_candidates("f95zone", "f95zone.to", term, connector)
+
+
+def _f95_index_candidates(term: str, connector: F95ZoneConnector) -> list[Candidate]:
+    picked: list[Candidate] = []
     seen: set[str] = set()
     for query in search_variants(term):
         for category in connector.CATEGORIES:
@@ -511,12 +529,7 @@ def _f95_candidates(term: str, transport,
                     return picked
         if picked:
             return picked
-    if credential is None or not credential.values.get("cookie"):
-        # 没有 cookie 就搜不了站内，别把「查不到」说成「站上没有」——外部搜索入口还在。
-        return picked
-    # `latest_data.php` 只索引 Latest Updates 五个分类，艺术家的 Collection 帖发在
-    # 普通版块里，怎么搜都不会出现；站内搜索能看到它们。
-    return _forum_candidates("f95zone", "f95zone.to", term, connector)
+    return picked
 
 
 #: 最多读几个 F95 命中线程的首楼名片。每读一个是一次登录态请求，排在后面的命中
@@ -665,7 +678,7 @@ def discover(term: str, *, secrets_root: Path, state_root: Path,
             on_progress(name, position, len(tasks))
         run(name, runners[name])
     if "f95zone" in tasks and not any(row.provider == "f95zone" for row in found):
-        external_searches.append(_f95_external_search(text))
+        external_searches.append(_f95_external_search(text, failed="f95zone" in failures))
     return Discovery(text, tuple(found), failures, tuple(external_searches), failure_phrases)
 
 
@@ -722,6 +735,7 @@ class Suggestion:
     #: 站上把它归成哪一类（`artist`、`character`…）。空串是「没问出来」，
     #: 和「问出来是普通标签」不是一回事：前者不能拿去分组。
     tag_type: str = ""
+    ref: str = ""
 
 
 def suggest_term(term: str) -> str:
@@ -757,12 +771,12 @@ def archive_suggestions(prefix: str, *, state_root: Path,
     for provider in providers:
         table = index.names(provider)
         start = bisect.bisect_left(table, (folded,))
-        for name_key, name in table[start:]:
+        for name_key, name, ref in table[start:]:
             if not name_key.startswith(folded):
                 break
             if name_key in picked:
                 continue
-            picked[name_key] = Suggestion(provider, name, 0, provider)
+            picked[name_key] = Suggestion(provider, name, matched=provider, ref=ref)
             # 一个站自己就能把名额占满时也要停下：整段区间可能有上千条。
             if len(picked) >= limit * len(providers):
                 break

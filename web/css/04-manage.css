@@ -1,5 +1,26 @@
 /* 统计页 */
 .stats{padding:0 0 42px}
+#stats:has([data-ai-search-workspace]){padding-bottom:0}
+html:has(#stats:not([hidden]) [data-ai-search-workspace]){overscroll-behavior:none}
+#main:has(#stats:not([hidden]) [data-ai-search-workspace]){padding-bottom:12px}
+[data-ai-search-layout]{display:flex;gap:16px;min-width:0;min-height:28rem;height:calc(100dvh - var(--ai-workspace-top, calc(var(--topH) + 14px)) - 12px);overflow:hidden}
+[data-ai-search-pane],[data-ai-search-rail]{background:var(--color-background-secondary-default)}
+[data-ai-search-pane]{display:flex;min-width:0;min-height:0;flex:1;flex-direction:column}
+[data-ai-search-pane] [data-empty-state] > span:first-child{border-color:transparent}
+[data-ai-search-scroll]{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+[data-ai-search-content]{width:100%;max-width:768px;box-sizing:border-box;margin-inline:auto;padding-inline:16px}
+[data-ai-search-compose]{flex:none;padding-bottom:12px}
+[data-ai-search-rail]{display:none;flex:none;width:220px;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px}
+@container (min-width:52rem){[data-ai-search-rail]:not([hidden]){display:block}}
+[data-ai-search-tags]>li{background:color-mix(in srgb,var(--color-text-primary) 15%,var(--color-background-primary-default))}
+[data-ai-search-suggest]{position:relative;min-width:0;width:100%}
+[data-ai-search-suggest-composer]{flex:1;width:auto}
+[data-ai-search-suggest-input]{display:block;width:100%;min-width:0;box-sizing:border-box;margin:0;padding:6px 4px;border:0!important;background:transparent!important;box-shadow:none!important;outline:none}
+[data-ai-search-suggest]:not([data-ai-search-suggest-composer]) > [role=group]{width:100%;min-height:36px}
+[data-ai-search-suggestions]{box-sizing:border-box;width:100%;max-height:220px;overflow:auto;overscroll-behavior:contain;margin:4px 0 0;padding:4px;list-style:none;border:1px solid var(--color-border-button-default);border-radius:var(--control-radius);background:var(--color-background-primary-default)}
+[data-ai-search-suggest-composer] [data-ai-search-suggestions]{position:absolute;z-index:5;inset: auto 0 calc(100% + 10px);box-shadow:var(--elevation-xs)}
+[data-ai-search-suggestions] li{border-radius:var(--control-radius)}
+[data-ai-search-suggestions] li:is(:hover,[aria-selected="true"]){background:var(--color-background-primary-hover)}
 /* 播放列表页骨架的新建框占位；页头与卡片栅格在 frontend/src/board-skeleton.css。 */
 /* 账本只读那一条是 Note：框、图标字形和整套色调都在 `.geist-note` 那一份里，这里只留
    它在页面里的位置。自己再描一圈暖色边、把字写成 --ink 的话，底色说的是「注意」、

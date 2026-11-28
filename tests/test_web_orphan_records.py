@@ -66,6 +66,18 @@ class OrphanRecordsTests(unittest.TestCase):
         self.assertEqual(second["records"], {"watch_queue": 1})
         self.assertEqual([item["id"] for item in second["candidates"]], [13], "无番号按文件名主干对")
 
+    def test_candidates_refresh_after_a_file_is_restored_or_renamed(self):
+        initial = q_orphan_records(self.contract)
+        self.assertEqual([item["id"] for item in initial["items"][0]["candidates"]], [9, 10])
+        with closing(sqlite3.connect(self.db)) as connection:
+            connection.execute("UPDATE asset SET disposal='trash' WHERE id=9")
+            connection.execute("UPDATE asset SET code='ABC_123', duration=3599 WHERE id=11")
+            connection.execute("UPDATE asset SET code=' ', name='海边.webm' WHERE id=13")
+            connection.commit()
+        latest = q_orphan_records(self.contract)
+        self.assertEqual([item["id"] for item in latest["items"][0]["candidates"]], [11, 10])
+        self.assertEqual([item["id"] for item in latest["items"][1]["candidates"]], [13])
+
     def test_attaching_moves_the_records_and_records_a_revertible_batch(self):
         result = w_orphan_attach(self.contract, {"id": 7, "target": 10})
         self.assertEqual(result["batch"], f"{record_rehome.MANUAL_SOURCE}@1")

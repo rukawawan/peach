@@ -1,14 +1,16 @@
 /* 每部视频的字幕会话；详情、小窗和沉浸播放共享服务端记忆。 */
 import type { VjsPlayer } from './types';
-import { playerMemory } from './memory';
+import { playerMemory, type PlayerMemoryPatch } from './memory';
 import { t } from '../i18n';
 
-interface SavedTrack { key: string; name: string; text: string }
+export const MAX_SUBTITLE_OFFSET_MS = 60_000;
 
 export class SubtitleSession {
   private cleanup = new AbortController();
   private imported = new Map<string, { node: HTMLTrackElement; url: string }>();
   private selected: string | null | undefined;
+  private offsets: Record<string, number> = {};
+  private cueTimes = new WeakMap<TextTrackCue, [number, number]>();
   private memory;
   readonly ready: Promise<void>;
   error = '';
@@ -18,6 +20,9 @@ export class SubtitleSession {
     const signal = this.cleanup.signal;
     video.textTracks.addEventListener('addtrack', () => { this.apply(); this.changed() }, { signal });
     video.addEventListener('loadedmetadata', () => this.apply(), { signal });
+    video.addEventListener('load', event => {
+      if (event.target instanceof HTMLTrackElement) this.applyOffset(event.target.track);
+    }, { capture: true, signal });
     player.on('dispose', () => {
       this.cleanup.abort();
       this.imported.forEach(({ url }) => URL.revokeObjectURL(url)); this.imported.clear();
@@ -29,6 +34,29 @@ export class SubtitleSession {
   private key(track: TextTrack) {
     return /^(sidecar|file|subtitlecat):/.test(track.id) ? track.id
       : `native:${track.kind}:${track.language}:${track.id || track.label}`;
+  }
+  offset(track: TextTrack) { return this.offsets[this.key(track)] ?? 0 }
+  previewOffset(track: TextTrack, offset: number) {
+    this.offsets[this.key(track)] = offset;
+    this.applyOffset(track);
+  }
+  setOffset(track: TextTrack, offset: number) {
+    this.previewOffset(track, offset);
+    return this.save({ subtitle_offsets: { [this.key(track)]: offset } });
+  }
+  private applyOffset(track: TextTrack) {
+    const shift = this.offset(track) / 1000;
+    for (const cue of Array.from(track.cues ?? [])) {
+      let times = this.cueTimes.get(cue);
+      if (!times) {
+        if (!shift) continue;
+        times = [cue.startTime, cue.endTime];
+        this.cueTimes.set(cue, times);
+      }
+      const start = Math.max(0, times[0] + shift), end = Math.max(0, times[1] + shift);
+      if (cue.startTime !== start) cue.startTime = start;
+      if (cue.endTime !== end) cue.endTime = end;
+    }
   }
   selectImported(key: string) { this.select(this.imported.get(key)!.node.track) }
   select(track: TextTrack | null) {
@@ -44,6 +72,7 @@ export class SubtitleSession {
     this.tracks().forEach(track => {
       const mode = track === selected ? 'showing' : 'disabled';
       if (track.mode !== mode) track.mode = mode;
+      if (track === selected) this.applyOffset(track);
     });
   }
   private failed(error: unknown) {
@@ -51,7 +80,7 @@ export class SubtitleSession {
     this.error = error instanceof Error ? error.message : t('catalog:subtitleMemory.saveFailed');
     this.changed();
   }
-  private save(value: { selected: string | null; track?: SavedTrack }) {
+  private save(value: PlayerMemoryPatch) {
     return this.memory.save(value).then(() => {
       const hadError = !!this.error;
       this.error = ''; if (hadError && !this.cleanup.signal.aborted) this.changed();
@@ -62,6 +91,7 @@ export class SubtitleSession {
     try {
       const saved = await this.memory.load();
       if (signal.aborted) return;
+      this.offsets = { ...saved.subtitle_offsets, ...this.offsets };
       if (this.selected === undefined) this.selected = saved.selected;
       this.apply();
       let failure: unknown;

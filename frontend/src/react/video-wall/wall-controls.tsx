@@ -10,11 +10,11 @@ import { t } from '../../i18n';
 
 /** 时间更新只重画控制条，海报和块内布局保持挂载。 */
 export function WallControls({ item, playing, frame, starting, pendingGroup, grouped, queueOpen, queueReady,
-  hasPrevious, hasNext, later, laterBusy, play, previous, next, queue, watchLater, details, ended, error }: {
+  later, laterBusy, play, queue, watchLater, details, ended, error }: {
   item: MediaItem; playing: number | null; frame: RefObject<HTMLDivElement | null>;
   starting: boolean; pendingGroup: boolean; grouped: boolean; queueOpen: boolean; queueReady: boolean;
-  hasPrevious: boolean; hasNext: boolean; later: boolean; laterBusy: boolean;
-  play(): Promise<void>; previous(): void; next(): void; queue(): void; watchLater(): void; details(): void;
+  later: boolean; laterBusy: boolean;
+  play(): Promise<void>; queue(): void; watchLater(): void; details(): void;
   ended(): void; error(message: string): void;
 }) {
   const reduce = useReducedMotion();
@@ -34,12 +34,10 @@ export function WallControls({ item, playing, frame, starting, pendingGroup, gro
         title={paused ? t('catalog:shared.play') : t('catalog:shared.pause')} onClick={() => void toggle()}>
         {busy ? <span dangerouslySetInnerHTML={{ __html:spinnerHtml() }} /> : <svg viewBox="0 0 24 24" aria-hidden="true"><use href={paused ? '#i-play' : '#i-player-pause'} /></svg>}
       </button>
-      <button type="button" aria-label={t('catalog:wallControls.previousVideo')} title={t('catalog:wallControls.previousVideo')} disabled={!hasPrevious} onClick={previous}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left" /></svg></button>
       <button type="button" aria-label={grouped ? t('catalog:wallControls.switchPartOrEdition') : t('catalog:wallControls.switchVideo')} title={grouped ? t('catalog:wallControls.partsAndEditions') : t('catalog:catalogList.listLabel')}
         aria-expanded={queueOpen} aria-controls="wall-queue" disabled={!queueReady} onClick={queue}>
         <svg viewBox="10.4 10.5 259.2 259.2" aria-hidden="true"><use href="#i-playlist" /></svg>
       </button>
-      <button type="button" aria-label={t('catalog:wallControls.nextVideo')} title={t('catalog:wallControls.nextVideo')} disabled={!hasNext} onClick={next}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-right" /></svg></button>
       <button type="button" {...busyProps(laterBusy)} aria-label={later ? t('catalog:wallControls.removeFromWatchLater') : t('catalog:shared.watchLater')} title={t('catalog:shared.watchLater')} aria-pressed={later} onClick={watchLater}>
         {laterBusy ? <span dangerouslySetInnerHTML={{ __html:spinnerHtml() }} /> : <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bookmark" /></svg>}
       </button>

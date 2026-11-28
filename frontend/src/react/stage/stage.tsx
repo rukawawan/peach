@@ -31,7 +31,7 @@ import { queryClient } from '../query';
 import { JavDetailPage } from '../jav-detail/jav-detail-page';
 import { Miniplayer } from './miniplayer';
 import * as player from './stage-player';
-import type { StageApi, StageHost, StagePatch, StageRequest } from './stage-api';
+import type { StageApi, StageHost, StagePatch, StageRequest, StageReturnPosition } from './stage-api';
 import { t } from '../../i18n';
 
 type Phase = 'skeleton' | 'reveal' | 'content';
@@ -52,7 +52,7 @@ interface View {
 
 let host: StageHost | null = null;
 let view: View | null = null;
-let pageReturn: { left:number; top:number; anchor:HTMLElement } | null = null;
+let pageReturn: StageReturnPosition | null = null;
 const listeners = new Set<() => void>();
 let generation = 0;
 let controller: AbortController | null = null;
@@ -256,7 +256,8 @@ function swappable(kind: StageRequest['kind']): HTMLDialogElement | null {
   return dialog;
 }
 
-async function open(request: StageRequest): Promise<void> {
+async function open(request: StageRequest, returnPosition?: StageReturnPosition | null): Promise<void> {
+  pageReturn ??= returnPosition ?? null;
   if (!pageReturn && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
     pageReturn = { left:window.scrollX, top:window.scrollY, anchor:document.activeElement };
   }

@@ -16,6 +16,7 @@ import type { SyncedSettings } from './settings-data';
 /** 面板读写的那几项；对象本身还有别的字段，面板不碰。 */
 export interface PanelSettings {
   theme: string;
+  localAppearance: boolean;
   uiSounds: boolean;
   homeGlow: HomeGlow;
   /** 预设格选一档时连强调色一起换（`@peach/appearance` 的 `chooseGlowPreset`）。 */
@@ -34,9 +35,11 @@ export interface PanelSettings {
   homeShortsLimit: number;
   homeTiers: boolean;
   homePreviewOnly: boolean;
+  containHomeScroll: boolean;
   completionPrompt: boolean;
   searchRecommendations: boolean;
   ingestNotices: boolean;
+  showFeedbackButton: boolean;
   feedLimit: number;
   feedHideGroupCompilations: boolean;
   feedHideSoloCompilations: boolean;
@@ -74,6 +77,7 @@ export type SettingsEffect =
   | 'searchHistoryLimit' | 'performerNameLanguage'
   /** 首页那几块的显隐：新作那一行、竖屏带（连同主网格排不排除竖屏）、两排头像。 */
   | 'feedNewRows' | 'homeShorts' | 'homeTiers' | 'homePreviewOnly'
+  | 'containHomeScroll'
   | 'searchRecommendations';
 
 /** `[值, 显示名, 字形]`，与壳里各张选项表同形。 */

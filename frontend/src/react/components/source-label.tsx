@@ -38,8 +38,9 @@ export function ScrapeSourceLabel({ source, label }: { source: string; label: st
 /** 网盘与本地来源共用已登记的标识。 */
 export function SourceLabel({ source, label }: { source: string; label: string }) {
   const location = sourceLocation(source);
+  const local = location === 'local' || location === 'qbittorrent';
   return <span className="inline-flex min-w-0 items-center gap-1.5">
-    <SourceMark mark={MEDIA_SOURCE_ICONS[location] || (location === 'local' ? 'hard-drive' : 'database')} />
+    <SourceMark mark={MEDIA_SOURCE_ICONS[location] || (local ? 'hard-drive' : 'database')} />
     <span className="min-w-0 truncate">{label}</span>
   </span>;
 }

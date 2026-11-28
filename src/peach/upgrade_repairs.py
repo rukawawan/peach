@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from filelock import FileLock, Timeout
 
 from . import (amane_cache_repair, artifact_rules, composite_alias_repair, metadata_text_repair,
-               r18_legacy_repair, upgrade_rules)
+               r18_legacy_repair, upgrade_rules, upgrade_stock_repair)
 from .field_owners import SCAN_FILENAME, is_protected, owner_of, write_owned_fields
 from .followups import FollowupType, Attempts, attempts_root, register
 from .fsutil import atomic_path, atomic_write_text
@@ -264,7 +264,7 @@ def _batched(planned) -> list:
     for rule, members in groups.items():
         for offset in range(0, len(members), BATCH_SIZE):
             chunk = members[offset:offset + BATCH_SIZE]
-            if len(chunk) == 1:
+            if len(chunk) == 1 and rule not in upgrade_stock_repair.STAGE:
                 rows.append(chunk[0][1])
                 continue
             ids = ','.join(str(asset_id) for asset_id, _ in chunk)
@@ -338,7 +338,7 @@ def _media_items(connection, *, rules=None, every=False) -> dict:
         sql += f' WHERE rule IN ({",".join("?" * len(rules))})'
         arguments = rules
     elif not every:
-        sql += " WHERE rule=? OR state<>'pending'"
+        sql += " WHERE rule=? OR rule GLOB 'media:stock-*' OR state<>'pending'"
         arguments = [ITEM_RULE]
     else:
         arguments = []
@@ -1144,12 +1144,34 @@ class UpgradeRepairs:
         from .jobs import DiskSpaceDenied
         try:
             with FileLock(str(self.receipt) + '.lock', timeout=0):
+                self._prepare_stock()
                 self._prepare_display_dimensions()
         except DiskSpaceDenied as error:
             # 退出准备阶段的锁，再复用整批暂停；容量不足不关闭其他账本后台服务。
             self.pause_media(error)
             if retry_media:
                 raise
+
+    def _prepare_stock(self) -> None:
+        """已完成旧升级的实例也会登记新发现的存量补修。"""
+        from .image_ocr import OcrUnavailable
+        from .settings_file import load_config
+        receipt = _read(self.receipt)
+        if receipt.get(upgrade_stock_repair.RECEIPT) is not None:
+            return
+        config = self.config or load_config()
+        try:
+            with self.contract.database.read_connection() as connection:
+                targets = upgrade_stock_repair.collect(connection, config, self.contract)
+        except (OSError, ValueError, OcrUnavailable):
+            LOGGER.exception('Could not read existing evidence for stock repair')
+            return
+        rows = [{'rule': f'media:{rule}', 'asset_id': asset_id}
+                for rule, ids in targets.items() for asset_id in ids]
+        receipt[upgrade_stock_repair.RECEIPT] = {rule: len(ids) for rule, ids in targets.items()}
+        if rows:
+            receipt['dispatch_complete'] = False
+        self._save_receipt(receipt, [('seed', rows)])
 
     def _repair_feed_overflow(self) -> None:
         """旧版每轮新作限额截掉、只记成「已见」的历史新作补建一次壳（`feed_overflow_repair`）。
@@ -1245,6 +1267,7 @@ class UpgradeRepairs:
                            'code_media_ids': list(previous.get('code_media_ids', [])),
                            'amane_media_ids': list(previous.get('amane_media_ids', [])),
                            amane_cache_repair.RULE: previous.get(amane_cache_repair.RULE),
+                           upgrade_stock_repair.RECEIPT: previous.get(upgrade_stock_repair.RECEIPT),
                            'media_paused': previous.get('media_paused', {}),
                            'dispatch_complete': bool(previous.get('dispatch_complete')) and not plan['text']['asset_ids'],
                            'text_only': prior is not None,
@@ -2222,6 +2245,7 @@ class UpgradeRepairs:
         from .display_dimensions_repair import ITEM_RULE, generation, task_key
         items = items or {}
         now = time.time()
+        stock = _stock_due(items, now)
         deferred = []
         media_count = 0
         for row in rows:
@@ -2242,20 +2266,16 @@ class UpgradeRepairs:
                 if len(planned) >= MAX_FOLLOWUPS:
                     break
                 continue
-            if row['id'] not in selected and not _stale_previews(self.contract, row):
-                continue
-            rule = upgrade_rules.PROCESSING
-            if row['id'] in receipt.get('text_media_ids', []):
-                rule += f':text-{upgrade_rules.PROVIDER_TEXT}'
-            if row['id'] in receipt.get('code_media_ids', []):
-                rule += f':{CODE_EVIDENCE_RULE}'
-            if row['id'] in receipt.get('amane_media_ids', []):
-                rule += f':{amane_cache_repair.RULE}'
+            rule = stock.get(row['id'])
+            if rule is None:
+                if row['id'] not in selected and not _stale_previews(self.contract, row):
+                    continue
+                rule = _processing_rule(receipt, row['id'])
             key = f'{MEDIA_TASK}:{rule}:{row["id"]}'
             # 结算过的键已移出回执队列，防重复派发靠状态表里那一行。
             if key in seen or settled(items.get((f'media:{rule}', row['id'])), None, now):
                 continue
-            if cost_for(row['location'], row['path'], config) != 'free':
+            if rule != upgrade_stock_repair.VISUAL and cost_for(row['location'], row['path'], config) != 'free':
                 deferred.append(row['id'])
                 continue
             planned.append(Followup.item(key, MEDIA_TASK, _title(row)))
@@ -2403,7 +2423,8 @@ class UpgradeRepairs:
         with self.contract.database.read_connection() as connection:
             return connection.execute(
                 "SELECT 1 FROM ledger_upgrade_item item JOIN asset ON asset.id=item.asset_id "
-                "WHERE item.state IN ('failed','deferred') AND item.retry_at IS NOT NULL AND item.retry_at<=? "
+                "WHERE ((item.state IN ('failed','deferred') AND item.retry_at IS NOT NULL AND item.retry_at<=?) "
+                "OR (item.state='pending' AND item.rule GLOB 'media:stock-*')) "
                 f'AND asset.disposal IS NULL AND {_NOT_HELD} LIMIT 1', (time.time(), ITEM_RULE)).fetchone() is not None
 
     def _display_due(self, receipt):
@@ -2682,6 +2703,26 @@ def _media_run(contract, key: str, handle) -> dict:
     return {**said('videoUpgraded'), 'name': title, 'asset_id': asset_id}
 
 
+def _stock_due(items, now):
+    due = {}
+    for (item_rule, asset_id), row in items.items():
+        rule = item_rule.removeprefix('media:')
+        if rule in upgrade_stock_repair.STAGE and not settled(row, None, now):
+            due.setdefault(asset_id, rule)
+    return due
+
+
+def _processing_rule(receipt, asset_id):
+    rule = upgrade_rules.PROCESSING
+    if asset_id in receipt.get('text_media_ids', []):
+        rule += f':text-{upgrade_rules.PROVIDER_TEXT}'
+    if asset_id in receipt.get('code_media_ids', []):
+        rule += f':{CODE_EVIDENCE_RULE}'
+    if asset_id in receipt.get('amane_media_ids', []):
+        rule += f':{amane_cache_repair.RULE}'
+    return rule
+
+
 def _batch_run(contract, key: str, handle) -> dict:
     """一批影片共用一次 `process_library`，每部片的结论各自写进状态表。
 
@@ -2692,25 +2733,16 @@ def _batch_run(contract, key: str, handle) -> dict:
     from .library_processing import process_library
     from .storage_budget import CapacityGuard
     rule, asset_ids = batch_members(key)
+    stock_stage = upgrade_stock_repair.STAGE.get(rule)
     config = getattr(contract, 'upgrade_config', None) or load_config()
     job_id, state_file, previous = _batch_checkpoint(contract, key)
     service = getattr(contract, 'upgrade_repairs', None)
-    with contract.database.read_connection() as connection:
-        found = {row['id']: row for row in connection.execute(
-            'SELECT id,path FROM asset WHERE id IN (SELECT value FROM json_each(?))', (json.dumps(asset_ids),))}
-    offline, broken = [], {}
-    for asset_id in asset_ids:
-        try:
-            if asset_id in found and mount_unreachable(found[asset_id]['path']):
-                offline.append(asset_id)
-        except MalformedPath as error:
-            broken[asset_id] = nested_message(error)
-    targets = [asset_id for asset_id in asset_ids if asset_id in found and asset_id not in offline
-               and asset_id not in broken]
+    targets, offline, broken = _batch_assets(contract, asset_ids, check_mount=stock_stage != 'visual')
 
     def active():
         return service is None or not service.stopping.is_set()
     result = {'status': 'complete'}
+    unresolved = []
     try:
         if service is not None:
             paused = _read(service.receipt).get('media_paused')
@@ -2719,12 +2751,19 @@ def _batch_run(contract, key: str, handle) -> dict:
         if targets:
             guard = CapacityGuard(config)
             guard.check(force=True)
-            result = process_library(config, contract.db_path, contract.candidate_root, contract.cover_root,
-                                     database=contract.database, asset_ids=targets, stage='collect',
-                                     recheck_existing=True, job_id=job_id, state_file=state_file,
-                                     resume_state=previous or None, active=active,
-                                     report=lambda state: handle.progress(
-                                         **_media_progress(state, 'videosStage', count=len(targets))))
+            if stock_stage == 'visual':
+                unresolved = upgrade_stock_repair.analyse_previews(
+                    contract, config, targets, checkpoint=lambda: _check_visual_repair(active, guard))
+            else:
+                result = process_library(config, contract.db_path, contract.candidate_root, contract.cover_root,
+                                         database=contract.database, asset_ids=targets, stage=stock_stage or 'collect',
+                                         recheck_existing=stock_stage != 'covers', job_id=job_id, state_file=state_file,
+                                         resume_state=previous or None, active=active,
+                                         **({'protected_ids': targets} if stock_stage else {}),
+                                         report=lambda state: handle.progress(
+                                             **_media_progress(state, 'videosStage', count=len(targets))))
+                if stock_stage:
+                    unresolved = result.get('retryable_asset_ids', ())
             guard.check(force=True)
     except DiskSpaceDenied as error:
         _pause_for_capacity(service, handle, error)
@@ -2737,9 +2776,33 @@ def _batch_run(contract, key: str, handle) -> dict:
             raise RuntimeError(result['error'])
         raise UserRuntimeError('errors.upgradeRepairs.mediaRepairIncomplete')
     cooling = [asset_id for asset_id in targets if asset_id in set(result.get('paused_asset_ids', ()))]
-    settled = _settle_batch(contract, handle, rule, asset_ids, offline, cooling, broken)
+    settled = _settle_batch(contract, handle, rule, asset_ids, offline, cooling, broken, unresolved=unresolved)
     discard_checkpoint(state_file)
     return settled
+
+
+def _batch_assets(contract, asset_ids, *, check_mount):
+    """按现有挂载条件分出能运行、要等和路径本身有错误的项目。"""
+    with contract.database.read_connection() as connection:
+        found = dict(connection.execute(
+            'SELECT id,path FROM asset WHERE disposal IS NULL AND id IN (SELECT value FROM json_each(?))',
+            (json.dumps(asset_ids),)))
+    targets, offline, broken = [], [], {}
+    for asset_id in asset_ids:
+        if asset_id not in found:
+            continue
+        try:
+            group = offline if check_mount and mount_unreachable(found[asset_id]) else targets
+            group.append(asset_id)
+        except MalformedPath as error:
+            broken[asset_id] = nested_message(error)
+    return targets, offline, broken
+
+
+def _check_visual_repair(active, guard):
+    if not active():
+        raise InterruptedError()
+    guard.check()
 
 
 def _batch_checkpoint(contract, key: str) -> tuple[str, Path, dict]:
@@ -2756,12 +2819,13 @@ def _batch_checkpoint(contract, key: str) -> tuple[str, Path, dict]:
     return job_id, state_file, previous
 
 
-def _settle_batch(contract, handle, rule: str, asset_ids, offline, cooling, broken=None) -> dict:
+def _settle_batch(contract, handle, rule: str, asset_ids, offline, cooling, broken=None, *, unresolved=()) -> dict:
     """一批里每部片的结论写进状态表：目录读不到、来源冷却的延后，路径写法不对的（`broken`，影片到原因）
     按失败结算、不自动重派，其余完成。"""
     broken = broken or {}
+    failures = set(unresolved) - set(cooling)
     done = [asset_id for asset_id in asset_ids
-            if asset_id not in offline and asset_id not in cooling and asset_id not in broken]
+            if asset_id not in offline and asset_id not in cooling and asset_id not in broken and asset_id not in failures]
     now = time.time()
     item_rule = f'media:{rule}'
     rows = [{'rule': item_rule, 'asset_id': asset_id, 'state': 'done', 'run_id': _run_id(handle),
@@ -2772,6 +2836,9 @@ def _settle_batch(contract, handle, rule: str, asset_ids, offline, cooling, brok
               'retry_at': now + COOLDOWN_RETRY_SECONDS, 'result': {'deferred': DEFER_COOLDOWN}} for asset_id in cooling]
     rows += [{'rule': item_rule, 'asset_id': asset_id, 'state': 'failed', 'run_id': _run_id(handle),
               'result': {'deferred': None, 'error': error}} for asset_id, error in broken.items()]
+    rows += [{'rule': item_rule, 'asset_id': asset_id, 'state': 'failed', 'run_id': _run_id(handle),
+             'result': {**_NOT_DEFERRED, 'error': nested_message(
+                 UserRuntimeError('errors.upgradeRepairs.mediaRepairIncomplete'))}} for asset_id in sorted(failures)]
     with contract.database.write_transaction(notify=False) as connection:
         upsert_items(connection, rows, mode='finish')
     _discard_settled(Path(contract.follow_state_root) / 'upgrade-repairs', item_rule, done)
@@ -2780,7 +2847,7 @@ def _settle_batch(contract, handle, rule: str, asset_ids, offline, cooling, brok
                       part('videosDeferred', count=deferred) if deferred else [],
                       part('videosMalformed', count=len(broken)) if broken else []])
     return {**said(outcome), 'asset_ids': asset_ids, 'done': len(done), 'deferred': deferred,
-            **({'failed': len(broken)} if broken else {})}
+            **({'failed': len(broken) + len(failures)} if broken or failures else {})}
 
 
 def _display_run(contract, key: str, handle) -> dict:

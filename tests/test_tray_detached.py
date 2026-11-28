@@ -67,6 +67,7 @@ class DetachedLaunchTests(unittest.TestCase):
                     mock.patch("peach.tray.needs_setup", return_value=waiting), \
                     mock.patch("peach.tray.normal_url", return_value="https://peach.invalid") as normal, \
                     mock.patch("peach.tray.setup_url", return_value="http://peach.invalid/setup") as setup, \
+                    mock.patch("peach.tray.open_window", return_value=False), \
                     mock.patch("peach.tray.webbrowser.open") as browser:
                 instance.return_value.is_running.return_value = True
                 self.assertEqual(main(["--silent"] if silent else ["--show"]), 0)

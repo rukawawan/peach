@@ -4,6 +4,10 @@
 # 开发时，这条必须显式声明，不能依赖各自的 core.autocrlf。
 * text=auto eol=lf
 
+# 变更日志的未发布节只增不改：几个分支各加一条时按并集合并，两边的行都留下，
+# rebase 与合并不再为它停下。重复的分组标题在定版时并成一组（`scripts/changelog.py`）。
+CHANGELOG.md merge=union
+
 # 第三方自托管产物按原样保存，不做任何换行改写。
 web/vendor/videojs/** -text
 

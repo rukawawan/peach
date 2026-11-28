@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import TestCase, mock, skipUnless
 from dataclasses import dataclass
@@ -241,7 +242,8 @@ def load_script(name: str):
 
 
 APPCAST = """<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:peach="https://peach.video/xml-namespaces/sparkle">
   <channel>
     <title>Peach</title>
     <item>
@@ -255,6 +257,7 @@ APPCAST = """<?xml version="1.0" encoding="utf-8"?>
       <title>0.52.0</title>
       <sparkle:version>0.52.0</sparkle:version>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <peach:migrationHead>49</peach:migrationHead>
       <enclosure url="https://example.test/v0.52.0/Peach-0.52.0-macos-arm64.dmg" length="7"
                  type="application/octet-stream" sparkle:edSignature="b2xk"/>
     </item>
@@ -262,6 +265,18 @@ APPCAST = """<?xml version="1.0" encoding="utf-8"?>
 </rss>
 """
 
+APPCAST_CHANGELOG = """## [0.53.0] - 2026-11-05
+
+### Fixed / 修复
+
+- **Desktop**: Show the update menu. / **桌面**：显示更新菜单。
+
+## [0.52.0] - 2026-11-01
+
+### Added / 新增
+
+- **Desktop**: Add in-app updates. / **桌面**：新增应用内更新。
+"""
 
 class SparkleUpdateTests(TestCase):
     """Sparkle 2 的打包、发布门槛与安装前保护（ADR-0130）。"""
@@ -435,8 +450,7 @@ class SparkleUpdateTests(TestCase):
     def test_appcast_gate_accepts_the_newest_signed_item_with_its_migration_head(self):
         tool = load_script("sparkle_appcast")
         feed, dmg = self.appcast()
-        tool.annotate(feed, "0.53.0", 50)
-        self.assertIn("peach:migrationHead", feed.read_text(encoding="utf-8"))
+        tool.annotate(feed, "0.53.0", 50, document=APPCAST_CHANGELOG)
         result = tool.verify(feed, version="0.53.0", dmg=dmg, url_prefix="https://example.test/v0.53.0/", head=50)
         self.assertEqual(result["signature"], "c2lnbmF0dXJl")
         with self.assertRaisesRegex(ValueError, "迁移号"):
@@ -445,13 +459,41 @@ class SparkleUpdateTests(TestCase):
     def test_appcast_gate_rejects_a_stale_item_or_a_mismatched_download(self):
         tool = load_script("sparkle_appcast")
         feed, dmg = self.appcast()
-        tool.annotate(feed, "0.53.0", 50)
+        tool.annotate(feed, "0.53.0", 50, document=APPCAST_CHANGELOG)
         with self.assertRaisesRegex(ValueError, "不低于本版本"):
             tool.verify(feed, version="0.52.0", dmg=dmg, url_prefix="https://example.test/v0.52.0/", head=50)
         with self.assertRaisesRegex(ValueError, "下载地址"):
             tool.verify(feed, version="0.53.0", dmg=dmg, url_prefix="https://mirror.example.test/", head=50)
         dmg.write_bytes(b"different size")
         with self.assertRaisesRegex(ValueError, "大小"):
+            tool.verify(feed, version="0.53.0", dmg=dmg, url_prefix="https://example.test/v0.53.0/", head=50)
+
+    def test_appcast_embeds_localized_markdown_for_current_and_retained_versions(self):
+        tool = load_script("sparkle_appcast")
+        feed, _ = self.appcast()
+        tool.annotate(feed, "0.53.0", 50, document=APPCAST_CHANGELOG)
+        first_result = feed.read_bytes()
+        tool.annotate(feed, "0.53.0", 50, document=APPCAST_CHANGELOG)
+        self.assertEqual(feed.read_bytes(), first_result)
+        current, previous = ET.parse(feed).findall("./channel/item")
+        notes = current.findall("description")
+        self.assertEqual([(node.get(tool.XML_LANGUAGE), node.get(tool.NOTES_FORMAT), node.text) for node in notes], [
+            ("en", "markdown", "### Fixed\n\n- **Desktop**: Show the update menu."),
+            ("zh-Hans", "markdown", "### 修复\n\n- **桌面**：显示更新菜单。"),
+        ])
+        self.assertIn("新增应用内更新", previous.findall("description")[1].text)
+        self.assertEqual(previous.findtext(tool.HEAD_TAG), "49")
+        self.assertEqual(previous.find("enclosure").get(f"{{{tool.SPARKLE}}}edSignature"), "b2xk")
+
+    def test_appcast_gate_rejects_missing_release_notes(self):
+        tool = load_script("sparkle_appcast")
+        feed, dmg = self.appcast()
+        tool.annotate(feed, "0.53.0", 50, document=APPCAST_CHANGELOG)
+        xml = ET.parse(feed)
+        item = xml.find("./channel/item")
+        item.remove(item.findall("description")[1])
+        xml.write(feed, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "更新日志"):
             tool.verify(feed, version="0.53.0", dmg=dmg, url_prefix="https://example.test/v0.53.0/", head=50)
 
     def test_publish_checks_the_uploaded_feed_past_the_public_cache(self):

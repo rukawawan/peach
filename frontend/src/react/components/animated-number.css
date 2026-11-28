@@ -1,0 +1,17 @@
+[data-live-number-previous] { display: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-live-number-digit] { position: relative; }
+  [data-live-number-previous] {
+    display: inline;
+    position: absolute;
+    inset-inline-start: 0;
+    pointer-events: none;
+    user-select: none;
+    animation: live-number-out 220ms ease-out both;
+  }
+  [data-live-number-previous]::before { content: attr(data-digit); }
+  [data-live-number-current] { animation: live-number-in 220ms ease-out both; }
+  @keyframes live-number-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes live-number-in { from { opacity: 0; } to { opacity: 1; } }
+}

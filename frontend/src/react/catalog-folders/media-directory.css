@@ -1,0 +1,58 @@
+/* 文件浏览固定外框，只滚动目录；不参与馆藏页面的宽度与导航。 */
+[data-media-directory-dialog] { display: flex; flex-direction: column; min-height: 0; height: min(640px, calc(100dvh - 32px)); overflow: hidden; }
+[data-media-directory-dialog][data-directory-fullscreen] { height: 100dvh; }
+[data-directory-actions] { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 0 24px 12px; }
+[data-directory-actions] > [data-toolbar-actions] { margin-inline-start: auto; }
+[data-directory-actions] > [data-input-size] { flex: 1 1 144px; width: auto; max-width: 320px; }
+[data-directory-feedback] { flex: none; max-height: 96px; overflow: auto; padding: 0 24px 8px; white-space: pre-line; }
+[data-media-directory-dialog] [data-inline-selection-dock] {
+  display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 0 24px 16px;
+}
+[data-directory-refresh][aria-busy='true'] svg { animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  [data-directory-refresh][aria-busy='true'] svg { animation: none; }
+}
+[data-media-directory-header] { display: flex; flex: none; align-items: center; justify-content: space-between; padding: 20px 24px 8px; }
+[data-media-directory-toolbar] { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; padding: 4px 24px 12px; }
+[data-media-directory-body] { --media-directory-row-height: 40px; display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 24px; }
+.peach-react [data-media-directory-body] [data-board-data-table] { display: flex; min-height: 0; max-height: 100%; border: 0; border-radius: 0; background: transparent; }
+[data-media-directory-body] [data-resizable-table] > :first-child { display: flex; width: 100%; min-height: 0; }
+[data-media-directory-body] [data-board-data-table] .overflow-x-auto { overflow: auto; }
+[data-media-directory-body] [data-board-data-table] [data-scroll-edges] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scroll-edge-bottom)), transparent);
+}
+[data-media-directory-body] [data-board-data-table] .ui-ov-edge-top {
+  /* 覆盖表头下沿的亚像素接缝。 */
+  top: calc(var(--media-directory-row-height) - 1px);
+  height: 21px;
+  backdrop-filter: blur(4px);
+}
+[data-media-directory-body] .bui-table { table-layout: fixed; }
+[data-directory-column] > [data-table-column-filter] { flex: 0 1 auto; }
+[data-directory-column] > [data-table-column-filter] > span > .truncate { display: block; }
+[data-directory-column] > [data-sort-indicator] { width: 20px; justify-content: center; }
+.peach-react [data-directory-column] > [data-sort-indicator] svg { width: 16px; height: 16px; }
+[data-media-directory-body] .bui-table :is(th, td) { height: var(--media-directory-row-height); }
+.peach-react [data-media-directory-body] [data-board-data-table] .bui-table th { position: sticky; top: 0; z-index: 1; border-bottom: 0; background: var(--color-background-tertiary-default); color: var(--color-text-secondary); }
+.peach-react [data-media-directory-body] [data-resizable-table] th:has(> [data-directory-column]) { padding-inline-end: 20px; }
+.peach-react [data-media-directory-body] [data-board-data-table] th .react-aria-ColumnResizer { right: 0; width: 16px; }
+.peach-react [data-media-directory-body] [data-board-data-table] th .react-aria-ColumnResizer::after { left: auto; right: 0; }
+.peach-react [data-media-directory-body] .bui-table tbody tr:not(:last-child) { border-bottom: 0; }
+[data-media-directory-entries] td:not([data-media-directory-name]), [data-media-directory-mount] { color: var(--color-text-secondary); font-weight: 400; }
+[data-media-directory-body] .bui-table tr[data-react-aria-pressable] { cursor: pointer; }
+[data-media-directory-entries] td:not([data-media-directory-name]) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+[data-media-directory-footer] { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 24px 16px; }
+@media (max-width: 600px) {
+  [data-media-directory-header], [data-media-directory-toolbar], [data-media-directory-body], [data-media-directory-footer],
+  [data-directory-actions], [data-directory-feedback], [data-media-directory-dialog] [data-inline-selection-dock] { padding-inline: 16px; }
+  [data-media-directory-toolbar] { flex-wrap: wrap; }
+  [data-media-directory-toolbar] > :first-child { flex-basis: 100%; }
+  [data-directory-actions] > [data-input-size] { max-width: none; flex-basis: 100%; }
+  [data-media-directory-footer] { flex-wrap: wrap; }
+  [data-media-directory-dialog][data-directory-fullscreen] [data-media-directory-header] {
+    padding-top: max(16px, env(safe-area-inset-top));
+  }
+}
+[data-directory-root-column="library"] { width: 45%; }
+[data-directory-root-column="mount"] { width: 55%; }

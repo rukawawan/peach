@@ -13,6 +13,7 @@ export const SCRAPING_URL = '/api/scraping';
 export const SCRAPING_SETTINGS_URL = '/api/scraping/settings';
 export const SCRAPING_CHECK_URL = '/api/scraping/check';
 export const SCRAPING_CHECK_ALL_URL = '/api/scraping/check-all';
+export const JAVDB_BROWSER_LOGIN_URL = '/api/scraping/javdb-browser-login';
 export const SCRAPING_COVER_URL = '/api/scraping/cover';
 export const AMANE_BRIDGE_URL = '/api/scraping/amane-bridge';
 export const AMANE_BRIDGE_CHECK_URL = '/api/scraping/amane-bridge/check';
@@ -36,6 +37,7 @@ export interface Source {
   login: string;
   accepts_cookie: boolean;
   accepts_api_key?: boolean;
+  browser_login?: boolean;
   network: string;
   cookie_saved: boolean;
   api_key_saved?: boolean;
@@ -52,10 +54,9 @@ export interface ScrapingData {
   browser_mode?: BrowserMode;
 }
 
-/** 一次连接检查的一项结果：来源页面，以及来源取图的那台图片主机。 */
+/** 来源页面、图片 CDN、作品样本或已保存的登录会话。 */
 export interface Check {
-  /** 查的是哪一跳：`page` 来源页面，`cdn` 图片主机。`label` 是它的 zh-CN 原文。 */
-  target?: 'page' | 'cdn';
+  target?: 'page' | 'cdn' | 'lookup' | 'session';
   label: string;
   label_code?: string;
   ok: boolean;
@@ -162,6 +163,7 @@ export async function prefetchScraping(signal: AbortSignal): Promise<void> {
  *
  * 结果里的 `label` 是这一跳查的是什么；只有一跳时它就是来源页面本身，句子里不必再说一遍。 */
 export function checkText(check: Check, sourceLabel: string): string {
+  if (check.target === 'lookup' || check.target === 'session') return codedText(check, 'message');
   const target = check.target === 'cdn' ? t('manage:connectionCheck.hdImages', { source: sourceLabel }) : sourceLabel;
   const verdict = check.kind === 'unchecked' ? 'manage:connectionCheck.uncheckedTarget'
     : check.ok ? 'manage:connectionCheck.reachableTarget' : 'manage:connectionCheck.unreachableTarget';

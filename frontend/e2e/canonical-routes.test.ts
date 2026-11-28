@@ -33,7 +33,7 @@ describe('规范路由与设置历史', () => {
         page.on('request', request => { if (request.isNavigationRequest()) documents.push(request.url()) });
         await page.evaluate(() => Object.assign(window, { followOverview: document.querySelector('[aria-label="关注概览"]') }));
         await add.click();
-        await page.getByRole('textbox', { name: '来源链接、名字或 id', exact: true }).waitFor();
+        await page.getByRole('combobox', { name: '来源链接、名字或 id', exact: true }).waitFor();
         assert.equal(new URL(page.url()).searchParams.get('tab'), 'add');
         assert.equal(await page.evaluate(() => (window as unknown as { followOverview: Element }).followOverview
           === document.querySelector('[aria-label="关注概览"]')), true, '页签切换保留页面宿主');
@@ -41,12 +41,12 @@ describe('规范路由与设置历史', () => {
         await add.waitFor();
         await page.getByRole('button', { name: '统计', exact: true }).click();
         await page.getByRole('link', { name: '添加关注', exact: true }).click();
-        await page.getByRole('textbox', { name: '来源链接、名字或 id', exact: true }).waitFor();
+        await page.getByRole('combobox', { name: '来源链接、名字或 id', exact: true }).waitFor();
         await page.goBack();
         await page.getByRole('link', { name: '添加关注', exact: true }).waitFor();
         assert.equal(new URL(page.url()).pathname, '/stats');
         await page.goForward();
-        await page.getByRole('textbox', { name: '来源链接、名字或 id', exact: true }).waitFor();
+        await page.getByRole('combobox', { name: '来源链接、名字或 id', exact: true }).waitFor();
         assert.equal(await page.evaluate(() => performance.timeOrigin), timeOrigin);
         assert.deepEqual(documents, [], '页签、站内链接与历史切换均不请求新文档');
         assert.deepEqual(opened.problems, []);

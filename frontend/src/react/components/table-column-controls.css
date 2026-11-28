@@ -8,10 +8,50 @@
 /* 拖宽手柄骑在两列分界线上、左右各 10px，压在相邻表头之上：贴在格内 12px 时稍偏一点就按到表格本身，
  * 起的是横向拖动。光标用左右箭头；拖动中整页锁成同一个光标且不选字，指针离开手柄也不变。 */
 .peach-react [data-board-data-table] .react-aria-ColumnResizer { position: absolute; top: 0; right: -10px; bottom: 0; z-index: 2; width: 20px; cursor: ew-resize; touch-action: none; }
-.peach-react [data-board-data-table] .react-aria-ColumnResizer::after { content: ''; position: absolute; top: 8px; bottom: 8px; left: 9px; width: 1px; background: var(--border-15); }
+.peach-react [data-board-data-table] .react-aria-ColumnResizer::after,
+.peach-react [data-board-data-table] [data-table-column-divider] { position: absolute; top: 8px; bottom: 8px; width: 1px; background: var(--border-15); }
+.peach-react [data-board-data-table] .react-aria-ColumnResizer::after { content: ''; left: 9px; }
+.peach-react [data-board-data-table] [data-table-column-divider] { right: 0; pointer-events: none; }
 /* 最后一列（后面只剩承接空白的那一格或没有格）往外伸会把表格撑出横向滚动，收回格内。 */
 .peach-react [data-board-data-table] th:is(:last-child, :has(+ th[data-table-space])) .react-aria-ColumnResizer { right: 0; width: 12px; }
 .peach-react [data-board-data-table] th:is(:last-child, :has(+ th[data-table-space])) .react-aria-ColumnResizer::after { left: 11px; }
 html[data-column-resizing], html[data-column-resizing] * { cursor: ew-resize !important; user-select: none !important; }
 .peach-react [data-board-data-table] .react-aria-ColumnResizer:is([data-hovered],[data-resizing],[data-focus-visible])::after { background: var(--ink); }
 .peach-react [data-board-data-table] .react-aria-ColumnResizer[data-focus-visible] { outline: 2px solid var(--tungsten); outline-offset: -2px; }
+
+/* 手机上拖动把手可重排列，列表其余区域可纵向滑动。 */
+[data-column-order-list] { max-height: min(50dvh, 24rem); }
+[data-column-order-list] [data-navigation-order] > [data-tab] { touch-action: pan-y; }
+[data-column-order-list] [data-navigation-order] > [data-tab] > svg:first-child { touch-action: none; }
+
+[data-reorderable-columns] { --sidebar-reorder-ms: 250; }
+[data-reorderable-columns] thead th[data-key]:not([data-key="select"], [data-table-space]) {
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-column-reordering] thead th[data-key]:not([data-column-dragging], [data-key="select"], [data-table-space]) {
+    translate: var(--navigation-nudge-x, 0px) 0;
+    transition: translate calc(var(--sidebar-reorder-ms) * 1ms) var(--spring-press);
+  }
+  [data-column-reordering] th[data-column-drop]::before { display: none; }
+}
+.peach-react [data-board-data-table][data-reorderable-columns] .bui-table th[data-column-dragging] {
+  z-index: 4;
+  translate: var(--sidebar-drag-x, 0px) 0;
+  background: var(--color-background-tertiary-default);
+  opacity: 0.9;
+  cursor: grabbing;
+}
+[data-reorderable-columns] th[data-column-drop]::before {
+  content: '';
+  position: absolute;
+  inset-block: 4px;
+  inset-inline-start: 0;
+  width: 2px;
+  background: var(--tungsten);
+  border-radius: 1px;
+  pointer-events: none;
+}
+[data-reorderable-columns] th[data-column-drop="after"]::before { inset-inline: auto 0; }

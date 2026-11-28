@@ -281,9 +281,10 @@ def snapshot(connection, receipt: dict, *, cloud_pending: int, backup_directorie
            for rule in legacy_repairs.CONFIRMS},
         'cover-artwork': _cover_artwork(cover_repair_status, rows),
     }
+    follow_estimated = (follow_evidence_status or {}).get('phase') == 'ready'
     items = [{'id': key, 'group': group, 'title': interface_text.text(f'server:repairCenter.items.{key}.title'),
               'summary': interface_text.text(f'server:repairCenter.items.{key}.summary'), 'mode': mode, **facts[key]}
-             for key, mode, group in ITEMS if _touched(facts[key])]
+             for key, mode, group in ITEMS if _touched(facts[key]) or (key == 'follow-evidence' and follow_estimated)]
     groups = [group for group, _ in GROUPS]
     items.sort(key=lambda item: (groups.index(item['group']), _STATE_ORDER.get(item['state'], len(_STATE_ORDER))))
     return {'items': items, 'history': _history(rows, backup_directories)}

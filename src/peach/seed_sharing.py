@@ -59,23 +59,29 @@ class Service:
             self._preview = token, time.monotonic() + 600
         return {'data': payload, 'bytes': len(raw), 'token': token, 'schema': SCHEMA}
 
-    def save(self, body):
+    def validate_choice(self, body):
         if type(body.get('enabled')) is not bool:
             raise UserValueError('errors.seedSharing.invalidChoice')
+        if body['enabled'] and (not self._preview or self._preview[0] != body.get('preview_token')
+                or time.monotonic() > self._preview[1] or body.get('consent') is not True
+                or body.get('schema') != SCHEMA):
+            raise UserValueError('errors.seedSharing.previewFirst')
+
+    def save(self, body):
         with self._mutex:
-            if body['enabled'] and (not self._preview or self._preview[0] != body.get('preview_token')
-                    or time.monotonic() > self._preview[1] or body.get('consent') is not True
-                    or body.get('schema') != SCHEMA):
-                raise UserValueError('errors.seedSharing.previewFirst')
-            with self.lock():
-                instance = remote_reporting._read(self.choice_path).get('instance')
-                atomic_write_text(self.choice_path, json.dumps({'enabled': body['enabled'], 'consent_schema': SCHEMA,
-                    'revision': uuid.uuid4().hex, 'instance': instance if valid_instance(instance) else uuid.uuid4().hex}))
-                attempt = remote_reporting._read(self.receipt_path)
-                if attempt.get('status') == 'queued':
-                    atomic_write_text(self.receipt_path, json.dumps({**attempt,
-                        'status': 'unknown' if attempt.get('attempted') else 'blocked', 'reason': 'consent'}))
-            self._preview = None
+            self.validate_choice(body)
+            return self._save_valid_choice(body['enabled'])
+
+    def _save_valid_choice(self, enabled):
+        with self.lock():
+            instance = remote_reporting._read(self.choice_path).get('instance')
+            atomic_write_text(self.choice_path, json.dumps({'enabled': enabled, 'consent_schema': SCHEMA,
+                'revision': uuid.uuid4().hex, 'instance': instance if valid_instance(instance) else uuid.uuid4().hex}))
+            attempt = remote_reporting._read(self.receipt_path)
+            if attempt.get('status') == 'queued':
+                atomic_write_text(self.receipt_path, json.dumps({**attempt,
+                    'status': 'unknown' if attempt.get('attempted') else 'blocked', 'reason': 'consent'}))
+        self._preview = None
         self._wake.set()
         return self.snapshot()
 

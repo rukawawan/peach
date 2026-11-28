@@ -12,11 +12,11 @@ import { mount, mountRoot, pending, settle } from './render';
 
 function props(patch: Partial<CatalogFilterProps> = {}): CatalogFilterProps {
   return {
-    tiers: { key: 'k', performers: [], studios: [] }, tiersPending: false, empty: false, tags: [], tagFirst: 0,
+    tiers: { key: 'k', performers: [], studios: [] }, tiersPending: false, empty: false, tags: [],
     views: [{ k: '', label: '全部', href: '/' }], state: '', count: { total: 0, shown: 0 }, trash: false, trashHost: null,
     sorts: [], layout: null, refreshing: false, offscreen: false, combo: [], comboHidden: true, comboHost: null,
     actions: {
-      openEntity: vi.fn(), setView: vi.fn(), toggleTag: vi.fn(), clearFilter: vi.fn(), clearAll: vi.fn(),
+      openEntity: vi.fn(), setView: vi.fn(), toggleTag: vi.fn(), chooseFacet: vi.fn(), clearFilter: vi.fn(), clearAll: vi.fn(),
       setSort: vi.fn(), reshuffle: vi.fn(async () => {}), setLayout: vi.fn(), moreTops: vi.fn(async () => []),
       emptyTrash: vi.fn(),
     },
@@ -28,12 +28,13 @@ function props(patch: Partial<CatalogFilterProps> = {}): CatalogFilterProps {
 const count = (host: HTMLElement, selector: string) => host.querySelectorAll(selector).length;
 
 describe('空馆藏', () => {
-  it('两排头像与标签条各铺一行静止占位，不挂忙态、不接指针也不进读屏', async () => {
+  it('两排头像使用静止占位，标签筛选保留入口，不挂忙态', async () => {
     const host = await mount(<CatalogFilterPage {...props({ empty: true })} />);
     for (const kind of ['performer', 'studio']) {
       expect(count(host, `[data-catalog-placeholder="${kind}"]`)).toBe(EMPTY_SLOTS);
     }
-    expect(count(host, '[data-catalog-placeholder="tag"] > span')).toBe(EMPTY_SLOTS);
+    expect(count(host, '[data-table-column-filter="home-tags"]')).toBe(1);
+    expect(count(host, '[data-filter-tag]')).toBe(0);
     expect([...host.querySelectorAll('[data-catalog-placeholder]')].every((node) => node.getAttribute('aria-hidden') === 'true'))
       .toBe(true);
     // 空馆藏说的是「这里将来会有东西」，不是「正在取」：没有微光。

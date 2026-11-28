@@ -8,6 +8,10 @@
 .vjs-peach-menu-option[data-subtitle-track] .vjs-peach-option-label{overflow-wrap:anywhere}
 [data-player-subtitles] b{max-width:90px;overflow:hidden;text-overflow:ellipsis}
 .vjs-peach-settings-menu .vjs-peach-caption-options{display:grid;place-items:center;flex:0 0 48px;width:48px;margin-left:auto;padding:0}
+/* 详情的关闭键位于右上角，长字幕列表在它下方滚动。 */
+#stage .video-js:not(.vjs-peach-xsmall) .vjs-peach-settings-menu:has([data-subtitle-options]){
+  max-height:min(420px,calc(var(--peach-player-h,480px) - 126px),calc(100vh - 130px))
+}
 .vjs-peach-settings-menu .vjs-peach-caption-action{padding:10px 16px;text-align:left;overflow-wrap:anywhere}
 .vjs-peach-settings-menu [data-subtitle-track]~.vjs-peach-caption-action{padding-left:48px}
 .vjs-peach-settings-menu .vjs-peach-caption-setting{display:grid;grid-template-columns:minmax(0,1fr) auto 18px;gap:12px;align-items:center;padding:0 12px;text-align:left}

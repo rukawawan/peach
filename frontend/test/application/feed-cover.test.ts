@@ -23,11 +23,11 @@ it('未入库新作的官方封面经 Peach 代理取图，页面不出现图床
   expect(host.innerHTML).not.toContain('dmm.co.jp');
 });
 
-it('代理取不到封面时换成「封面未取得」占位，不留裂图', () => {
+it('代理取不到封面时换成「封面无法显示」占位，不留裂图', () => {
   const host = render({ code: 'ABC-001', has_cover: false, cover_url: 'https://pics.dmm.co.jp/digital/video/abc00001/abc00001pl.jpg' });
   expect(advanceImageFallback(host.querySelector('img'))).toBe('drop');
   expect(host.querySelector('img')).toBeNull();
-  expect(host.querySelector('span.nopic')?.textContent).toBe('封面未取得');
+  expect(host.querySelector('span.nopic')?.textContent).toBe('封面无法显示');
 });
 
 it('还没有封面时写出状态与原因，排队的给「优先处理」，取过没取到的给「立即重试」', () => {

@@ -20,11 +20,12 @@ describe('标签管理的完整操作', () => {
         assert.equal((await page.request.post(`${origin}/api/item-tag`, { data: { id, operation: 'add', tag } })).status(), 200);
       }
       await page.reload();
-      await page.locator('[data-index-head] input[type="search"]').fill(suffix);
-      await page.locator('[data-index-head] input[type="search"]').press('Enter');
+      await page.locator('[data-filter-search] input').fill(suffix);
+      await page.locator('[data-filter-search] input').press('Enter');
       await page.getByRole('button', { name: '管理标签', exact: true }).click();
-      assert.equal(await page.locator('[data-index-head] input[type="search"]').count(), 1);
-      assert.equal(await page.locator('[data-tag-manager] input[type="search"]').count(), 0);
+      assert.equal(await page.locator('[data-index-head] input[type="search"]').count(), 0);
+      assert.equal(await page.locator('[data-tag-manager] [data-filter-search] input').count(), 1);
+      assert.equal(await page.locator('[data-tag-manager] [data-filter-search] input').inputValue(), suffix);
       assert.equal(await page.getByRole('heading', { name: '标签管理', exact: true }).count(), 0);
       await page.getByRole('button', { name: '返回标签浏览', exact: true }).click();
       assert.equal(await page.getByRole('button', { name: `编辑标签 ${first}`, exact: true }).count(), 0);

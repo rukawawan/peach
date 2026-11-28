@@ -24,7 +24,7 @@ export function EmptyFocusButton({ target, children }: { target: string; childre
 /** `framed` 为否时不画外框和底色：空态本身就是整个弹层或整页的内容时，再套一层框只是多一张空卡片。 */
 export function EmptyState(
   { icon: Icon, title, actions, children, size = 'standard', framed = true }:
-  { icon: Glyph; title: string; actions?: ReactNode; children: ReactNode;
+  { icon: Glyph; title: ReactNode; actions?: ReactNode; children: ReactNode;
     size?: keyof typeof SIZE; framed?: boolean },
 ) {
   return (

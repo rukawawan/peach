@@ -117,7 +117,7 @@ class SubtitleSearchTests(unittest.TestCase):
                 source.load(source._id('/subs/42/ABP-758.html'), 0)
 
     def test_provider_errors_and_changed_pages_are_actionable(self):
-        for response, message in ((httpx.Response(403), '无法连接'), (httpx.Response(200, text='captcha'), '页面未取得')):
+        for response, message in ((httpx.Response(403), '无法连接'), (httpx.Response(200, text='captcha'), 'SubtitleCat 搜索页加载失败')):
             with self.subTest(message=message), self.client(lambda request, response=response: response):
                 with self.assertRaisesRegex(source.SubtitleSearchError, message):
                     source.search('ABP-758')

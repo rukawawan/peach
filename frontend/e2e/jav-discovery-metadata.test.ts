@@ -48,7 +48,9 @@ describe('发现资料与排序', () => {
       await page.goto(new URL('/jav?tab=discover', page.url()).href);
       await page.getByRole('button', { name: '停止读取', exact: true }).waitFor({ state: 'visible' });
       assert.equal(await page.locator('[data-jav-filter]').getByRole('button', { name: '我的收藏', exact: true }).count(), 1);
-      await page.locator('[data-catalog-tag="恋足"]').waitFor({ state: 'visible' });
+      await page.locator('[data-table-column-filter="jav-discover-tags"]').click();
+      await page.locator('[data-filter-option="恋足"]').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape');
       assert.equal(details, 0);
       // 打开页面补读一次；读的过程中进度单独轮询，推荐列表只在打开时与读完后各取一次。
       assert.equal(requests.filter(kind => kind === 'control:start').length, 1);
@@ -70,13 +72,15 @@ describe('发现资料与排序', () => {
         ['source_score', '按来源评分排序', 'desc'], ['duration', '按时长排序', 'desc'],
         ['code', '按番号排序', 'asc'], ['release_date', '按发行日期排序', 'desc'], ['taste', '按口味匹配排序', 'desc'],
       ]) {
-        await Promise.all([page.getByRole('button', { name, exact: true }).click(),
+        const trigger = page.getByRole('button', { name, exact: true });
+        await trigger.click();
+        await Promise.all([page.locator(`[data-sort-direction-menu] [data-filter-option="${direction}"]`).click(),
           page.waitForResponse(response => { const params = new URL(response.url()).searchParams;
             return response.url().includes('/api/jav/discoveries?') && params.get('sort') === sort && params.get('direction') === direction })]);
-        assert.equal(await page.getByRole('button', { name, exact: true }).getAttribute('aria-pressed'), 'true');
+        assert.equal(await trigger.getAttribute('aria-pressed'), 'true');
+        await page.waitForFunction(expected => document.querySelector('[data-jav-card] h3')?.textContent?.startsWith(expected),
+          direction === 'asc' ? 'DEMO-778' : 'DEMO-777');
       }
-      await page.getByRole('button', { name: '按口味匹配排序', exact: true }).click();
-      await page.waitForFunction(() => document.querySelector('[data-jav-card] h3')?.textContent?.startsWith('DEMO-778'));
       completed = false; status = 'running';
       await page.getByRole('button', { name: '更新资料', exact: true }).click();
       await page.getByRole('button', { name: '停止读取', exact: true }).click();

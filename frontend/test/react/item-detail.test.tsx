@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { GridPage } from '../../src/react/catalog-grid/catalog-grid';
 import type { MediaItem } from '../../src/react/catalog-grid/types';
 import {
-  chooseItem, detailTags, identityGroups, itemKey, mediaGate, movedOrder, nextRating, pickerSections, prefetchItemDetail,
+  chooseItem, detailTags, identityGroups, itemKey, mediaGate, nextRating, pickerSections, prefetchItemDetail,
   nextPart, queueCopy, queueKey, queueNext, ratingText, withPartLabel,
   type DetailItem, type DetailQueue, type ItemDetailActions, type ItemDetailHelpers, type ItemDetailProps, type QueueItem,
 } from '../../src/react/item-detail/item-detail';
@@ -35,7 +35,7 @@ function helpers(patch: Partial<ItemDetailHelpers> = {}): ItemDetailHelpers {
     javImage: () => 'cover',
     tagLabel: (tag) => tag, isDurationTag: (tag) => tag.startsWith('长片'), tagCandidates: () => [], sourceOffline: () => false,
     offlineReason: () => '盘没挂上', relatedSkeletonHtml: () => '', mixRelated: async () => [], wireDrag: vi.fn(),
-    wireDragReorder: vi.fn(), ...patch,
+    ...patch,
   };
 }
 
@@ -44,7 +44,7 @@ function actions(): ActionMocks {
   return {
     close: vi.fn(), present: vi.fn(), redirect: vi.fn(), openQueueItem: vi.fn(), mountPlayer: vi.fn(() => vi.fn()), reopen: vi.fn(),
     checkSource: vi.fn(async () => false), openSavedFollow: vi.fn(), openEntity: vi.fn(), openUnowned: vi.fn(), openRegion: vi.fn(),
-    openTag: vi.fn(), addToPlaylist: vi.fn(), saveMix: vi.fn(), editPlaylist: vi.fn(), openPlaylists: vi.fn(),
+    openTag: vi.fn(), addToPlaylist: vi.fn(), saveMix: vi.fn(), openPlaylists: vi.fn(),
     reveal: vi.fn(async () => ''), sync: vi.fn(async () => ({ text: '', removed: [] })), trashChanged: vi.fn(async () => {}), deleted: vi.fn(async () => {}),
     toast: vi.fn(), failure: vi.fn(),
   };
@@ -118,7 +118,7 @@ describe('标签身份', () => {
 
   it('编辑资料：删一枚、加一枚、新建一位演员，保存时一次交给 /api/item-edit', async () => {
     const saved = item(1, { tags: [{ k: '高画质' }, { k: '新标签' }] });
-    const fetcher = serve(() => ({ ok: true, item: saved }));
+    const fetcher = serve(() => ({ ok: true, item: saved }), { '/api/suggest?': { groups: [] } });
     const { host, actions: given } = await show(item(1, { mutation_revision: 7 }));
     await click(host.querySelector('[data-item-edit-open]'));
     const dialog = document.querySelector<HTMLDialogElement>('dialog[data-item-edit-dialog]')!;
@@ -139,6 +139,49 @@ describe('标签身份', () => {
       performers: { add: [{ name: '自建艺人' }], remove: [] } });
     expect(given.toast).toHaveBeenCalledWith('资料已保存');
     expect([...host.querySelectorAll('#detailTags [data-tag]')].map((node) => node.textContent)).toEqual(['高画质', '新标签']);
+  });
+
+  it('用键盘选择厂牌档案，单选后焦点随控件切换，保存时保留档案 ID', async () => {
+    const fetcher = serve(() => ({ ok: true, item: item(1) }), { '/api/suggest?': {
+      groups: [{ kind: 'studio', items: [
+        { value: 'Peach Studio', entity_id: 10, n: 3 },
+        { value: 'Peach Works', entity_id: 11, n: 6 },
+      ] }],
+    } });
+    const { host } = await show(item(1));
+    await click(host.querySelector('[data-item-edit-open]'));
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[data-item-edit-dialog]')!;
+    const row = dialog.querySelector('[data-edit-row="studio"]')!;
+    const input = () => row.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+    const press = (key: string) => act(async () => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+    const search = async () => {
+      await type(input(), 'Peach');
+      await settle();
+    };
+    await act(async () => { input().focus() });
+    await search();
+    expect(input().getAttribute('aria-labelledby')).toBe('item-edit-studio');
+    const list = document.getElementById(input().getAttribute('aria-controls')!);
+    expect(list?.getAttribute('role')).toBe('listbox');
+    expect(list?.contains(document.getElementById(input().getAttribute('aria-activedescendant')!))).toBe(true);
+    await press('ArrowDown');
+    expect(document.getElementById(input().getAttribute('aria-activedescendant')!)?.textContent).toBe('Peach Works');
+    await press('Enter');
+    const remove = row.querySelector<HTMLButtonElement>('[data-entity-remove]')!;
+    expect(document.activeElement).toBe(remove);
+    expect(posts(fetcher)).toEqual([]);
+    await click(remove);
+    expect(document.activeElement).toBe(input());
+    await search();
+    await press('ArrowDown');
+    await press('Enter');
+    await click(dialog.querySelector('[data-modal-confirm]'));
+    await settle();
+    expect(posts(fetcher)).toEqual([['/api/item-edit', expect.objectContaining({
+      fields: { studio: { id: 11, name: 'Peach Works' } },
+    })]]);
   });
 
   it('重新采集资料：只给有番号的片，点名这一部交给处理任务，另一趟在跑时说清没排上', async () => {
@@ -301,10 +344,6 @@ describe('停在队列哪一条', () => {
     expect(queueCopy(queue('parts', many, { title: '分卷' })).summary).toBe('分卷 · 1,284 卷');
   });
 
-  it('拖动之后的新顺序：挪到目标前面或后面', () => {
-    expect(movedOrder([1, 2, 3, 4], 4, 2, false)).toEqual([1, 4, 2, 3]);
-    expect(movedOrder([1, 2, 3, 4], 1, 3, true)).toEqual([2, 3, 1, 4]);
-  });
 });
 
 describe('身份与标签', () => {

@@ -30,7 +30,8 @@ export function useRosterSelection(selectMode: boolean, items: readonly IndexPer
     }),
   } : undefined, [picked, selectMode]);
   const chosen = useMemo(() => items.filter((item) => picked.has(personId(item))), [items, picked]);
-  return { picks, chosen, clear: () => setPicked(new Set()), setAll: (on: boolean) => setPicked(new Set(on ? items.map(personId) : [])) };
+  const rectangle = (keys: string[], add: boolean) => setPicked(current => new Set([...(add ? current : []), ...keys.map(Number)]));
+  return { picks, chosen, rectangle, clear: () => setPicked(new Set()), setAll: (on: boolean) => setPicked(new Set(on ? items.map(personId) : [])) };
 }
 
 export function RosterDock({ kind, hiddenView, selection, total, visible, exit }: {

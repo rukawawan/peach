@@ -260,7 +260,9 @@ soundToggle.addEventListener("click", async () => {
 });
 ```
 
-`unlock()` cannot start audio the browser refuses; the [autoplay rules](https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay) still apply. Called before any interaction it resolves `false` and builds nothing.
+`unlock()` also builds the output and room, so the first cue doesn't pay for that setup. It cannot start audio the browser refuses; the [autoplay rules](https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay) still apply. Called before any interaction it resolves `false` and builds nothing.
+
+When the browser blocks a cue (before the first interaction, after a swipe on iOS, or after an `await`), that cue is dropped and Cuelume starts audio on the next tap, click or key press instead, so later cues sound.
 
 Cuelume does not follow `prefers-reduced-motion`. That setting is about motion. Someone who turns off animation may still want sound, and someone who wants silence may never touch it.
 
@@ -285,8 +287,8 @@ import { play, press, release, bind, unlock, setEnabled, setVolume, setTheme, so
   key.addEventListener("pointerup", () => release("tap"));
   ```
 - **`bind(root?: ParentNode): () => void`**: delegate all `data-cuelume-*` interactions under `root` (defaults to the whole document). Idempotent, and handles elements added later. Returns a function that unbinds; a root stays bound until every caller that bound it has called theirs.
-- **`unlock(): Promise<boolean>`**: start audio now, from a user gesture, instead of on the first cue. Resolves `true` once cues can sound, `false` while the browser blocks audio or has no Web Audio. Never rejects.
-- **`setEnabled(enabled: boolean)`**: turn sound on or off. Off is immediate: cues already ringing fade within a few milliseconds. Does not persist the preference.
+- **`unlock(): Promise<boolean>`**: start audio now, from a user gesture, instead of on the first cue, and build the output graph so the first cue plays without delay. Resolves `true` once cues can sound, `false` while the browser blocks audio or has no Web Audio. Never rejects.
+- **`setEnabled(enabled: boolean)`**: turn sound on or off. Off is immediate: cues already ringing fade within a few milliseconds, and the audio device is let go. Does not persist the preference.
 - **`setVolume(volume: number)`**: set the global volume for future playback, clamped to `0–1`. Non-finite values are ignored and preferences are not persisted.
 - **`setTheme(theme: ThemeName)`**: switch the material of future playback. Unknown names are ignored; the choice isn't persisted.
 - **`themes`**: the built-in theme names, `["default", "mech", "bubble", "press"]`.
@@ -315,7 +317,7 @@ The old bindings also keep working until 1.0:
 
 | 0.2 binding            | In 0.3                                                                                  |
 | ---------------------- | --------------------------------------------------------------------------------------- |
-| `data-cuelume-hover`   | Plays `select` on hover. Hover is no longer a built-in binding; call `play()` from your own handler if you want it. |
+| `data-cuelume-hover`   | Plays `select` on hover, once the mouse has moved since the last click, Enter, Space or scroll. Hover is no longer a built-in binding; call `play()` from your own handler if you want it. |
 | `data-cuelume-press`   | Plays `tap` on pointer down. Use `data-cuelume-tap`.                                    |
 | `data-cuelume-release` | Plays `tap` on pointer up, unless the element also has `data-cuelume-press`, so an old press/release pair plays one `tap`. |
 
@@ -326,7 +328,7 @@ The old bindings also keep working until 1.0:
 - **Audible without clipping.** One shared boosted output stage keeps sounds clear, with native compression protecting overlapping cues. Everything under 40 Hz is cut before it, so deep notes never spend its headroom on what nobody hears.
 - **Struck, not played back.** Tones are modelled on real bars: each overtone dies faster the higher it is, and a brief mallet contact starts the note. Every play of a frequent cue is one strike, a little harder or softer than the last, so a harder one is louder and brighter together and no two sound identical. Outcome cues play the same every time, so their meaning never blurs.
 - **One faint room.** Every cue rings very faintly into one shared, short stereo room (about 22 dB down), which places it in the space around the listener rather than inside their head. `success` and `ready` ring into it a little more.
-- **One lazy `AudioContext`.** Shared across all sounds, created on first use.
+- **One lazy `AudioContext`.** Shared across all sounds, created on first use, and suspended a second after the last cue rings out so the page doesn't hold the audio device open. The next cue resumes it. A context the browser has closed, or left reading `running` with its clock stopped (Safari after a screen lock), is replaced by a fresh one.
 - **Autoplay-friendly.** Attempts to resume suspended audio without surfacing errors when a browser blocks it. `unlock()` starts it from the gesture that turns sound on and says whether it worked.
 - **SSR-safe.** Importing on the server is a no-op.
 - **Safe fallback.** Invalid runtime names and unavailable or blocked Web Audio make `play()` a silent no-op. An invalid attribute value plays that binding's default cue.

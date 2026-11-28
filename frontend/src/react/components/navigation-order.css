@@ -8,8 +8,8 @@ button[data-navigation-menu] svg{width:16px;height:16px;flex:none}
 [data-navigation-frame][data-navigation-axis=y]>[data-navigation-menu]{align-self:flex-end}
 [data-navigation-order][data-settings-nav]>button[data-navigation-menu],[data-sidebar-nav]>button[data-navigation-menu]{width:32px;min-height:32px;height:32px;align-self:flex-end;justify-content:center;padding:0}
 [data-navigation-rows]{display:flex;flex-direction:column;gap:4px}
-[data-navigation-rows]>[data-tab]{display:flex;align-items:center;gap:8px;padding:4px 8px;min-height:40px;border-radius:var(--control-radius);background:var(--hover);cursor:grab}
-[data-navigation-rows]>[data-tab]:not([data-sidebar-row])>span{flex:1;min-width:0;overflow-wrap:anywhere}
+[data-navigation-rows]>:is([data-tab],[data-navigation-drag-preview]){display:flex;align-items:center;gap:8px;padding:4px 8px;min-height:40px;border-radius:var(--control-radius);background:var(--hover);cursor:grab}
+[data-navigation-rows]>:is([data-tab],[data-navigation-drag-preview]):not([data-sidebar-row])>span{flex:1;min-width:0;overflow-wrap:anywhere}
 [data-order-step]{display:flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;border:0;border-radius:var(--control-radius);background:transparent;color:var(--ink-2);cursor:pointer}
 [data-order-step]:hover{background:var(--hover);color:var(--ink)}
 [data-order-step]:disabled{opacity:.3;cursor:default}
@@ -20,6 +20,9 @@ button[data-navigation-menu] svg{width:16px;height:16px;flex:none}
 [data-navigation-order][data-navigation-axis=y]>[data-tab]{--navigation-nudge-x:0px;--navigation-nudge-y:var(--sidebar-nudge,0px)}
 [data-navigation-order][data-reordering]>[data-tab][data-dragging]{position:fixed;left:var(--navigation-picked-left);top:var(--navigation-picked-top);width:var(--navigation-picked-width)}
 [data-navigation-order][data-navigation-axis=y][data-reordering]>[data-tab][data-dragging]{position:absolute;left:0;top:var(--navigation-picked-offset);width:100%}
+[data-navigation-order][data-drop-on-row][data-reordering]>[data-tab][data-dragging]{position:relative;left:auto;top:auto;width:auto}
+/* 放手即呈现最终位置，接着拖动时命中位置与看到的行一致。 */
+[data-navigation-order][data-drop-on-row]:not([data-reordering])>[data-tab]{transition-property:scale}
 [data-navigation-order][data-reordering]>:is([data-pill-thumb],[data-view-glide],[data-settings-glide]){opacity:0}
 [data-navigation-drop-line]{left:0;top:6px;bottom:6px;width:2px;transform:translateX(var(--navigation-line))}
 [data-navigation-order][data-navigation-axis=y]>[data-navigation-drop-line]{left:10px;right:10px;top:0;bottom:auto;height:2px;width:auto;transform:translateY(var(--navigation-line))}

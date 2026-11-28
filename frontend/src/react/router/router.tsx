@@ -41,6 +41,7 @@ import { ClientUpdateBanner } from '../client-updates';
 import { ReleaseNotice } from '../release-notice';
 import { SettingsMatch } from './pages/settings';
 import { CatalogChrome } from './pages/catalog';
+import { MediaDirectoryBrowser } from '../catalog-folders/media-directory';
 import {
   BROWSE_ROUTES, CATALOG_PATHS, CATALOG_ROUTES, ENTITY_ROUTES, IMMERSE_ROUTES, INDEX_ROUTES, MANAGED_ROUTES, REDIRECT_ROUTES,
   isManagedPath, isRoutedPath, managedPage,
@@ -230,6 +231,7 @@ export function RouterRoot({ children, actions = null, background, processing = 
         <PeachRouter>
           <ManagedSurface />
           <CatalogChrome />
+          <MediaDirectoryBrowser />
           <QueueRequests />
           {processing && actions ? <LibraryProcessingDock toast={actions.toast} /> : null}
           {processing && actions ? <NetworkBanner /> : null}

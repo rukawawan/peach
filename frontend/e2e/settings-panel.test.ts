@@ -303,19 +303,48 @@ describe('设置面板', () => {
     const opened = await openHome(browser);
     const { page, server } = opened;
     try {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
       await openPanel(page);
       const list = page.locator('#sidebarOrderSetting');
       await list.evaluate((node) => node.scrollIntoView({ block: 'center' }));
-      const rows = list.locator('[data-sidebar-row]');
+      const rows = list.locator('[data-sidebar-row][data-tab]');
       const keys = () => rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-sidebar-row')));
       const initial = await keys();
       assert.deepEqual(initial, ORDER, '面板里的顺序不是数据库那一份');
-      const from = (await rows.nth(1).boundingBox())!, to = (await rows.nth(3).boundingBox())!;
-      await page.mouse.move(from.x + 30, from.y + from.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(from.x + 34, from.y + from.height / 2 + 6, { steps: 4 });
-      await page.mouse.move(to.x + 40, to.y + to.height * 0.75, { steps: 8 });
+      const drag = async () => {
+        const source = rows.nth(1);
+        const grip = source.locator('[data-sidebar-grip]');
+        await grip.hover();
+        const from = (await source.boundingBox())!;
+        const handle = (await grip.boundingBox())!;
+        await page.mouse.down();
+        await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2 + 10);
+        await source.and(page.locator('[data-dragging]')).waitFor();
+        const target = await rows.nth(3).evaluate((element: HTMLElement) => {
+          const list = element.parentElement!.getBoundingClientRect();
+          return { x: list.left + 40, y: list.top + element.offsetTop + element.offsetHeight * 0.75 };
+        });
+        await page.mouse.move(target.x, target.y, { steps: 8 });
+        return from;
+      };
+      await drag();
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await settle(page);
+      assert.equal(await list.isVisible(), true);
+      assert.deepEqual(await keys(), initial);
+      assert.equal(server.posts.some(post => post.path === '/api/settings' && 'sidebarOrder' in post.body), false);
+      const from = await drag();
       assert.equal(await rows.nth(1).getAttribute('data-dragging'), '', '拖动中的那一行没有标出来');
+      const preview = await list.locator('[data-navigation-drag-preview]:popover-open').boundingBox();
+      assert.ok(preview);
+      assert.ok(Math.abs(preview.width - from.width) < 1 && Math.abs(preview.height - from.height) < 1,
+        '拖起后仍使用原行宽高');
+      await list.locator('[data-navigation-drop-line]').waitFor();
+      await list.locator('[data-sidebar-row][data-tab]:not([data-dragging])').evaluateAll(nodes => {
+        if (!nodes.some(node => (node as HTMLElement).style.getPropertyValue('--sidebar-nudge') !== '0px'
+          && getComputedStyle(node).transitionProperty.includes('translate'))) throw new Error('落点旁的条目没有让位动效');
+      });
       await page.mouse.up();
       const moved = [initial[0], initial[2], initial[3], initial[1], ...initial.slice(4)];
       await page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll(

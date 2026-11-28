@@ -18,7 +18,7 @@ runs:
     - name: 安装 FFmpeg
       id: first
       continue-on-error: true
-      uses: FedericoCarboni/setup-ffmpeg@v3
+      uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6 # v3.1
       with:
         ffmpeg-version: ${{ inputs.ffmpeg-version }}
         github-token: ${{ github.token }}
@@ -28,7 +28,7 @@ runs:
       run: Start-Sleep -Seconds 30
     - name: 重试安装 FFmpeg
       if: steps.first.outcome == 'failure'
-      uses: FedericoCarboni/setup-ffmpeg@v3
+      uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6 # v3.1
       with:
         ffmpeg-version: ${{ inputs.ffmpeg-version }}
         github-token: ${{ github.token }}

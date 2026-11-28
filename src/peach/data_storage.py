@@ -45,6 +45,7 @@ from .user_messages import (UserFacingError, UserInterruptedError, UserOSError, 
                             UserValueError, message_fields, nested_message)
 
 USAGE_NAME = "storage-usage.json"
+USAGE_CATEGORY_VERSION = 2
 REQUEST_NAME = "data-relocation-request.json"
 RESULT_NAME = "data-relocation.json"
 RELOCATION_PROOF = ".peach-relocation-id"
@@ -113,7 +114,8 @@ class Category:
 #: 预览图从视频抽帧，重建要重新读取整部影片。
 CATEGORIES = tuple(Category(key, cleanable) for key, cleanable in (
     ("database", False), ("backups", True), ("playback", True), ("thumbnails", True), ("previews", False),
-    ("downloads", False), ("sources", False), ("records", False), ("tools", False), ("accounts", False),
+    ("downloads", False), ("follow_snapshots", False), ("source_snapshots", False), ("sources", False),
+    ("records", False), ("project_archives", False), ("tools", False), ("accounts", False),
     ("logs", True), ("other", False),
 ))
 CATEGORY_KEYS = tuple(category.key for category in CATEGORIES)
@@ -128,6 +130,8 @@ def _roots(config) -> dict[str, str]:
     """数据目录下各子目录归哪一类；没有列名的按上一级归类，最外层归「其他」。"""
     from .previews import cover_thumb_root, entity_thumb_root
     generated = config.directory("generated")
+    sources = config.directory("sources")
+    state = config.directory("state")
     pairs = [
         (config.directory("database"), "database"),
         (generated / ledger_backups.ORGANIZE_DIRNAME, "backups"),
@@ -145,8 +149,13 @@ def _roots(config) -> dict[str, str]:
         (generated / "follow-assets", "downloads"),
         (generated / "sample-cache", "downloads"),
         (generated / "provider-cache", "downloads"),
-        (config.directory("sources"), "sources"),
-        (config.directory("state"), "records"),
+        (sources, "sources"),
+        (sources / "follow", "follow_snapshots"),
+        (sources / "library-metadata", "source_snapshots"),
+        (sources / "metadata", "source_snapshots"),
+        (sources / "k-mib", "source_snapshots"),
+        (state, "records"),
+        (state / "project-context", "project_archives"),
         (config.directory("review"), "records"),
         (config.data_root / "archive", "records"),
         (config.directory("tools"), "tools"),
@@ -241,7 +250,7 @@ def measure(config, *, should_stop: Callable[[], bool] = lambda: False,
     storage_budget.record_history(config, data_bytes=allocated if not allocated_error else None,
                                   cache_bytes=capacity['managed_cache_bytes'])
     return {
-        "root": str(root.resolve()), "layout": binding,
+        "root": str(root.resolve()), "layout": binding, "category_version": USAGE_CATEGORY_VERSION,
         "measured_at": time.time(),
         "total_bytes": sum(item["bytes"] for item in totals.values()),
         "total_files": sum(item["files"] for item in totals.values()),
@@ -359,14 +368,15 @@ def clean(config, category: str) -> dict:
 
 
 def read_usage(config) -> dict | None:
-    """只显示当前目录及挂载身份的统计，迁移前或无身份的旧读数失效。"""
+    """只复用当前目录、挂载身份与分类规则下的统计。"""
     from . import storage_budget
     try:
         data = json.loads((config.directory("state") / USAGE_NAME).read_text(encoding="utf-8"))
         current = storage_budget.layout(config, storage_budget.load_policy(config))
     except (OSError, ValueError):
         return None
-    if (not isinstance(data, dict) or data.get("root") != str(config.data_root.resolve())
+    if (not isinstance(data, dict) or data.get("category_version") != USAGE_CATEGORY_VERSION
+            or data.get("root") != str(config.data_root.resolve())
             or data.get('layout') != current):
         return None
     return data

@@ -29,5 +29,5 @@ export const releaseColumns = ['name', 'people', 'studio', 'tags', 'release', 'd
   .map(id => ({ id, label: labels[id]!, ...sizes[id]!, flex: id === 'name', required: id === 'name', visible: id !== 'code' }));
 
 export function releaseTableSnapshot(): TableSnapshot {
-  return tableSnapshot(releaseColumns, RELEASE_COLUMN_WIDTHS_KEY, RELEASE_COLUMN_VISIBILITY_KEY);
+  return tableSnapshot(releaseColumns, RELEASE_COLUMN_WIDTHS_KEY, RELEASE_COLUMN_VISIBILITY_KEY, 'jav-releases');
 }

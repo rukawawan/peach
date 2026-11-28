@@ -16,6 +16,15 @@ const card = (root: ParentNode, name: string) => root.querySelector(`section[ari
 
 afterEach(() => localStorage.clear());
 
+it('AI 接入加载时三张服务卡各有一个文字标题和可访问名称', () => {
+  const root = draw('AI 接入');
+  const names = ['Claude', 'OpenAI', 'DeepSeek'];
+  expect(sections(root)).toEqual([...names, '任务与提示词', 'AI 用量']);
+  for (const name of names) {
+    expect(card(root, name).firstElementChild?.textContent).toBe(name);
+  }
+});
+
 describe('来源凭据骨架', () => {
   it('站点行取自静态登记，名字写真名；没有记录时按都没配，必填的展开', () => {
     const credentials = card(draw('来源与订阅'), '来源凭据');
@@ -58,14 +67,14 @@ describe('随配置变化的分区按上次记录的结构画', () => {
     rememberShape('media', { folders: [3, 1], cloud: true });
     const root = draw('媒体库与入库');
     expect([...card(root, '媒体库与目录').querySelectorAll('[data-library-block]')].map(block => block.querySelectorAll('[data-folder-row]').length)).toEqual([3, 1]);
-    expect(sections(root)).toEqual(['媒体库与目录', 'CloudDrive 代理', '自动发现新文件', '番号识别规则', '视频预览']);
+    expect(sections(root)).toEqual(['媒体库与目录', 'CloudDrive 代理', '自动发现新文件', '番号识别规则', '视频预览', '视频播放']);
   });
 
   it('下载渠道：没有记录时只有浏览器添加，有记录时按网盘画出云下载与 PikPak', () => {
     expect(sections(draw('下载渠道'))).toEqual(['浏览器添加 JAV']);
-    rememberShape('downloads', { cloud: true, has115: true, pikpak: true, pikpakRoots: false, pikpakLoggedIn: false, browserLogin: true });
+    rememberShape('downloads', { cloud: true, has115: true, pikpak: true, pikpakRoots: false, pikpakLoggedIn: false, browserLogin: true, localDownload: true });
     const root = draw('下载渠道');
-    expect(sections(root)).toEqual(['云下载', 'PikPak 账号', '浏览器添加 JAV']);
+    expect(sections(root)).toEqual(['云下载', 'PikPak 账号', '本地下载', '浏览器添加 JAV']);
     expect([...card(root, 'PikPak 账号').querySelectorAll('button')].map(key => key.textContent)).toEqual(['用浏览器登录', '登录']);
   });
 
@@ -106,7 +115,7 @@ describe('整页配置记下的结构', () => {
   } as unknown as ConfigurationData;
 
   it('从配置算出几块、哪种表单，不含任何值', () => {
-    expect(downloadsShape(data)).toEqual({ cloud: true, has115: false, pikpak: true, pikpakRoots: true, pikpakLoggedIn: true, browserLogin: false });
+    expect(downloadsShape(data)).toEqual({ cloud: true, has115: false, pikpak: true, pikpakRoots: true, pikpakLoggedIn: true, browserLogin: false, localDownload: true });
     expect(networkShape(data)).toEqual({ port: false, addresses: 0, networkEditable: false, lan: false,
       proxyAddress: true, access: 'password', tunnelNamed: true, tunnelNamedMode: true, tunnelNote: false });
     expect(maintenanceShape(data)).toMatchObject({ facts: ['版本', 'FFmpeg'], reporting: false, uninstall: false, storageRows: 0 });

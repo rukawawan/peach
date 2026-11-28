@@ -396,6 +396,7 @@ function EntityLoaded(props: EntityPageProps & { entity: EntityPageData }) {
     },
     setState: (value) => actions.route({ ...filters, state: value }, EMPTY_MEDIA),
     toggleTag: actions.toggleTag,
+    setQuery: (q) => actions.route({ ...filters, q }, EMPTY_MEDIA),
     clearFilter: actions.clearFilter,
     clearAll: actions.clearAll,
     setSort: actions.setSort,
@@ -452,11 +453,11 @@ function EntityLoaded(props: EntityPageProps & { entity: EntityPageData }) {
   } : null;
   /* 名下一部作品都没有（或筛完一部不剩）时正文是空态，下排那排排序键与换一批没有东西可排，不出。 */
   const combo = helpers.comboItems(filters);
-  const filtered = combo.length > 0 || !!filters.state;
+  const filtered = combo.length > 0 || !!filters.state || !!filters.q;
   const worksEmpty = view === 'videos' && !!items.data && !(items.data.items || []).length;
   const showAll = () => actions.route(
     // 键名与壳的 `clearAll` 同一组，外加观看状态。
-    { ...filters, state: '', tag: '', creator: '', studio: '', owner: '' }, EMPTY_MEDIA);
+    { ...filters, state: '', tag: '', creator: '', studio: '', owner: '', q: '' }, EMPTY_MEDIA);
   let readout = '';
   let busy = false;
   if (view === 'people') readout = `${kind === 'studio' ? t('catalog:shared.labels') : t('catalog:shared.performers')} · ${roster.length.toLocaleString()}`;
@@ -501,7 +502,7 @@ function EntityLoaded(props: EntityPageProps & { entity: EntityPageData }) {
         saved={() => helpers.receipt(t('catalog:seedName.saved'))} /> : null}
       {createPortal(
         <EntityFilterPage kind={kind} name={name} view={view} views={views} state={filters.state || ''}
-          states={props.states} tags={tags} combo={combo} readout={readout} busy={busy}
+          states={props.states} query={filters.q || ''} tags={tags} combo={combo} readout={readout} busy={busy}
           video={worksEmpty ? null : video} photo={photo} online={view === 'online' ? online.head : null} actions={filterActions}
           helpers={filterHelpers} />,
         hosts.filter)}

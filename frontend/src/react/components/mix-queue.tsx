@@ -3,12 +3,14 @@
  * 队列、行与条目各挂一枚 `data-mix-*`，样式在
  * `stage/stage.css`，作品详情与关注详情共用。一列十几条要能拖着横滚（窄屏下队列是横排），
  * 拖动借壳的 `wireDrag`，由调用方经 `listRef` 接上。 */
-import { useCallback, useLayoutEffect, useRef, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
+import { useCallback, useLayoutEffect, useRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode, type Ref } from 'react';
 import { icon } from '@peach/legacy/core';
 import { t } from '../../i18n';
 import { useWorkContextMenu, type WorkContextOperation } from './work-context-menu';
 
-export function MixQueue({ kind, title, summary, onClose, actions, listRef, children, ...data }: {
+type QueueDivProps = HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>;
+
+export function MixQueue({ kind, title, summary, onClose, actions, listRef, listProps, children, ...data }: {
   kind: string;
   title: string;
   summary: string;
@@ -16,6 +18,7 @@ export function MixQueue({ kind, title, summary, onClose, actions, listRef, chil
   /** 关闭键前面的动作键（保存为播放列表之类）。 */
   actions?: ReactNode;
   listRef?: Ref<HTMLDivElement>;
+  listProps?: QueueDivProps;
   children: ReactNode;
 } & Record<`data-${string}`, string>) {
   const list = useRef<HTMLDivElement | null>(null);
@@ -47,7 +50,7 @@ export function MixQueue({ kind, title, summary, onClose, actions, listRef, chil
             dangerouslySetInnerHTML={{ __html: icon('x') }} />
         </div>
       </div>
-      <div data-mix-list="" ref={attach}>{children}</div>
+      <div data-mix-list="" ref={attach} {...listProps}>{children}</div>
     </aside>
   );
 }
@@ -60,7 +63,7 @@ export function MixQueueRow({ current, pic, lead, after, row, children, contextO
   pic: ReactNode;
   lead?: ReactNode;
   after?: ReactNode;
-  row?: Record<`data-${string}`, string | number>;
+  row?: QueueDivProps;
   children: ReactNode;
   contextOperations?: WorkContextOperation[];
 } & ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | number>) {
@@ -70,7 +73,10 @@ export function MixQueueRow({ current, pic, lead, after, row, children, contextO
   return (
     <div data-mix-row="" {...row}
       onContextMenu={context ? event => menu.onContextMenu(event, context) : undefined}
-      onKeyDown={context ? event => menu.onKeyDown(event, context) : undefined}>
+      onKeyDown={event => {
+        row?.onKeyDown?.(event);
+        if (!event.defaultPrevented && context) menu.onKeyDown(event, context);
+      }}>
       {menu.menu}
       <button type="button" data-mix-item="" aria-current={current ? 'true' : 'false'} {...button}>
         <span data-mix-item-pic="">{pic}</span>

@@ -10,7 +10,7 @@ import { tagLabel } from '@peach/legacy/tags';
 import type { EntityFilterActions, EntityOnlineHead, SegmentOption } from '../entity-filter/entity-filter';
 import {
   FOLLOW_CREDENTIALS_KEY, FOLLOW_FEED_SORTS, FOLLOW_FILTERS, FOLLOW_RANDOM_SORT, FOLLOW_TAGS_FIRST,
-  entityFollowView, fetchFollowCredentials, followFeedQuery, groupMediaKinds, groupTagType, mergedPage, nextSort,
+  entityFollowView, fetchFollowCredentials, followFeedQuery, groupMediaKinds, groupTagType, mergedPage,
   sortAriaLabel, type FollowContext, type FollowMedia, type FollowView,
 } from '../follow-feed/follow-feed';
 
@@ -84,10 +84,7 @@ export function useEntityOnline(author: string, active: boolean, wall: {
     onlineStatus: (status) => patch({ status: status as FollowView['status'] }),
     onlineProvider: (key) => patch({ provider: view.provider === key ? '' : key }),
     onlineTag: (tag) => patch({ tags: view.tags.includes(tag) ? view.tags.filter((key) => key !== tag) : [...view.tags, tag] }),
-    onlineSort: (key) => {
-      const next = nextSort(key, view.sort, view.dir);
-      if (next) patch(next);
-    },
+    onlineSort: (sort, dir) => patch({ sort: sort as FollowView['sort'], dir }),
   };
   return {
     view, media, result, data, visible, context, head, actions, busy: active && pending,

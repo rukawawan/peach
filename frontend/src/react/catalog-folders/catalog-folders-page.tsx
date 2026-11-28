@@ -113,11 +113,11 @@ export function CatalogFolders({ treeTarget, headerTarget, enabled = true }: {
       {query.isPending ? <div data-skeleton="" aria-busy="true" aria-label={t('catalog:catalogFolders.loading')} className="folder-children">{Array.from({ length: 6 }, (_, i) => <span key={i} className="skeleton-sheen h-8 w-28 rounded-lg" />)}</div> : null}
       {data?.children.length ? <FolderChildren key={key} nodes={data.children} go={go} /> : null}
     </div>, headerHost)}
-    <ModalFrame isOpen={drawer} onOpenChange={setDrawer} width="form" label={t('catalog:catalogFolders.tree')}>
-      <div className="flex items-center justify-between border-b border-separator-border p-4">
+    <ModalFrame isOpen={drawer} onOpenChange={setDrawer} width="form" label={t('catalog:catalogFolders.tree')} fitVisualViewport>
+      <div className="flex shrink-0 items-center justify-between border-b border-separator-border p-4">
         <h2 className="text-title-2-medium">{t('catalog:catalogFolders.treeTitle')}</h2><SettingsDialogClose label={t('catalog:catalogFolders.closeTree')} onPress={() => setDrawer(false)} />
       </div>
-      <div className="peach-react relative p-4">{drawer ? navigation : null}</div>
+      <div className="peach-react relative flex min-h-0 flex-col p-4">{drawer ? navigation : null}</div>
     </ModalFrame>
     {editing && data?.selected ? <FolderRuleDialog key={data.selected.id} folder={data.selected} rule={data.rule}
       revision={data.rules_revision} close={() => setEditing(false)} /> : null}

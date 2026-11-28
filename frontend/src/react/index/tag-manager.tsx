@@ -5,7 +5,6 @@ import { Button } from '@/components/base/buttons/button';
 import { apiGet } from '../../api';
 import { tagSkeletonHtml, TAG_PAGE_SIZES } from '../../tag-skeleton';
 import { DataTableFooter } from '../components/table-controls';
-import { IndexSearch } from './index-search';
 import { useTagPageBounds, useTagPagination } from './tag-pagination';
 import { FilterActionButton } from '../components/filter-glass';
 import { Note } from '../components/note';
@@ -21,8 +20,8 @@ import { t } from '../../i18n';
 export type { ManagedTag } from './tag-operations';
 interface TagInventory { items: ManagedTag[]; duplicate_groups: number[][]; total: number; categories: Record<string, number> }
 
-export function TagManager({ search, category = 'all', view = 'cloud', onCategory, onView, onJump, scope = 'local', state = 'active' }:
-  { search?: string; category?: string; view?: TagView; scope?: TagScope; onCategory?(category: string): void; onView?(view: TagView): void; onJump?(at: number): void;
+export function TagManager({ search, onSearch, category = 'all', view = 'cloud', onCategory, onView, onJump, scope = 'local', state = 'active' }:
+  { search?: string; onSearch?(q: string): void; category?: string; view?: TagView; scope?: TagScope; onCategory?(category: string): void; onView?(view: TagView): void; onJump?(at: number): void;
     /** 从标签页平时那排状态药丸点进来时，直接落在「已隐藏」或「已屏蔽内容」。 */
     state?: 'active' | 'hidden' | 'blocked' }) {
   const online = scope === 'online';
@@ -46,7 +45,7 @@ export function TagManager({ search, category = 'all', view = 'cloud', onCategor
   const [selection, setPicked] = useState<ReadonlyMap<string, ManagedTag>>(new Map());
   useEffect(() => { setPicked(new Map()) }, [filter]);
   /* 管理模式的勾选接右上角多选开关：勾了就进入多选，点开关退出时清空。 */
-  usePageSelection(() => setPicked(new Map()), { topbar: true });
+  const selecting = usePageSelection(() => setPicked(new Map()), { topbar: true });
   useEffect(() => { if (selection.size) enterPageSelection() }, [selection]);
   const picked = new Set(selection.keys());
   const [editing, setEditing] = useState<EditorOperation | null>(null);
@@ -63,19 +62,23 @@ export function TagManager({ search, category = 'all', view = 'cloud', onCategor
     return confirmTagOperation(scoped, plan, signal);
   }, changed => { if (changed) setPicked(new Map()) }) };
   const ids = selected.map(managedTagId);
-  const actions = { online, favorites: online, picked,
+  const actions = { online, favorites: online, picked, selecting,
     edit: (key: string) => { const row = rows.find(row => row.k === key); if (row) { setPicked(new Map([[key, row]])); setEditing('rename') } },
+    rectangle: (keys: string[], add: boolean) => setPicked(current => {
+      const hits = new Set(keys);
+      return new Map([...(add ? current : []), ...visible.filter(row => hits.has(row.k)).map(row => [row.k, row] as const)]);
+    }),
     press: (key: string) => setPicked(current => {
       const next = new Map(current); const row = rows.find(row => row.k === key); if (!next.delete(key) && row) next.set(key, row); return next;
     }) };
 
   return <section ref={root} aria-label={t('catalog:tagManager.label')} data-tag-manager="" className="flex min-w-0 flex-col">
-    {search === undefined ? <div className="mb-4 flex"><IndexSearch label={t('catalog:tagManager.filterTags')} value={localSearch} onQuery={setLocalSearch} /></div> : null}
     <TagFilters categories={categories} category={activeCategory} online={online} readout={inventory.data ? t('catalog:peopleIndex.tagCount', { count: inventory.data.total }) : inventory.isError ? '' : undefined}
       letters={groups.map(([letter]) => letter)} view={activeView} onCategory={next => { setLocalCategory(next); onCategory?.(next) }}
       onView={next => { setLocalView(next); onView?.(next) }} onJump={at => onJump ? onJump(at) : root.current?.querySelector(`[data-alpha-group="${at}"]`)?.scrollIntoView({ block:'start', behavior:'smooth' })} status={{ hidden, blocked, ...counts,
         onChange: value => { setHidden(value); setBlocked(false) },
         ...(online ? { onBlocked: () => { setBlocked(true); setHidden(false) } } : {}) }}
+      search={{ value: query, onQuery: onSearch ?? setLocalSearch }}
       actions={<>
         {/* 「添加屏蔽标签」在线范围三档都在：还没抓到过的标签不在任何一档里，得有个地方直接填名字。 */}
         {online ? <FilterActionButton onPress={() => setEditing('block')}>{t('catalog:tagManager.blockByName')}</FilterActionButton> : null}

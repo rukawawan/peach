@@ -30,7 +30,7 @@ import { createPortal, flushSync } from 'react-dom';
 import { growCollapse, popBadges, setCollapseOpen } from '@peach/legacy/ui';
 
 import { useViewGlide } from '../components/use-view-glide';
-import { Icon } from '../settings-panel/icon';
+import { Icon, RemixIcon } from '../settings-panel/icon';
 import type {
   SidebarApi, SidebarChip, SidebarContent, SidebarDot, SidebarFacets, SidebarHost, SidebarProps,
 } from './sidebar-api';
@@ -41,6 +41,7 @@ import { NavigationOrderMenu } from '../components/navigation-order';
 import { t } from '../../i18n';
 import { SidebarWidth } from './sidebar-width';
 import { Duration } from './duration-filter';
+import { openMediaDirectory } from '../catalog-folders/media-directory-navigation';
 
 /* 首页那一项的键是空串；空串写进 dataTransfer 等于没写，给它一个占位。 */
 const HOME = '__home__';
@@ -144,7 +145,7 @@ function Navigation({ host: at, epoch, version }: { host: SidebarHost; epoch: nu
             {key === '' ? <img data-sidebar-home-logo="" src="/peach-logo-64.png"
               srcSet="/peach-logo-64.png 64w, /peach-logo-128.png 128w" sizes="24px" width={24} height={24} alt=""
               decoding="async" draggable={false} /> : <Icon name={glyph} />}
-            <span>{label}</span>
+            <span data-copy-key={key === 'ai' ? 'catalog.libraryAssistant.title' : undefined}>{label}</span>
           </button>
         )})}
         {reorder.hint ? <span data-sidebar-drop-line="" aria-hidden="true"
@@ -164,6 +165,7 @@ interface GroupSpec {
   kind: string;
   body: ReactNode;
   active: boolean;
+  action?: ReactNode;
 }
 
 const selectedValues = (filters: SidebarProps['filters'], key: string) =>
@@ -185,15 +187,14 @@ function Groups({ host: at, content, filters, latest }: {
     : `follow:${content.selected.join(',')}:${content.tags.map((row) => row.value).join(',')}`
       + `:${(content.providers || []).map((row) => row.value).join(',')}:${filters.provider ?? ''}`
       + `:${content.duration ? 1 : 0}:${filters.dur_min ?? ''}:${filters.dur_max ?? ''}`;
-  /* 计数徽标弹不弹由 `popBadges` 按上一次见到的值判断，不按节点是不是新建的判断：每来一份新聚合
-     问一次，换一条筛选时整列计数才不会一起弹。 */
+  /* 每份聚合只淡入比上一次变了的徽标。 */
   useLayoutEffect(() => { if (content.kind === 'catalog') popBadges(at.scroll, 'drawer') }, [at, key, content.kind]);
   const groups = content.kind === 'catalog'
     ? catalogGroups(at, content.facets, filters, latest, key)
     : followGroups(at, content, filters);
   let index = 0;
   return groups.map((group) => group && (
-    <Group key={group.title} title={group.title} kind={group.kind} active={group.active} index={index++} epoch={key}>
+    <Group key={group.title} title={group.title} kind={group.kind} active={group.active} index={index++} epoch={key} action={group.action}>
       {group.body}
     </Group>
   ));
@@ -221,7 +222,11 @@ function catalogGroups(
     };
   };
   return [
-    spec(t('navigation:sidebarFilters.storage'), 'src', facets.locations, 'loc', true),
+    { title: t('navigation:sidebarFilters.storage'), kind: 'src',
+      active: facets.locations.some(row => selectedValues(filters, 'loc').includes(row.value)),
+      action: <button type="button" data-sidebar-directory="" aria-label={t('shell:mediaDirectory.title')}
+        title={t('shell:mediaDirectory.title')} onClick={() => openMediaDirectory()}><RemixIcon name="ri-folder-3-line" /></button>,
+      body: chips(facets.locations, 'loc', true) },
     facets.duration
       ? { title: t('navigation:sidebarFilters.duration'), kind: 'meta', active: false, body: <Duration host={at} filters={filters} /> }
       : null,
@@ -271,8 +276,8 @@ function wantOpen(title: string, active: boolean): boolean {
   return saved !== null ? saved === 'open' : active;
 }
 
-function Group({ title, kind, active, index, epoch, children }: {
-  title: string; kind: string; active: boolean; index: number; epoch: string; children: ReactNode;
+function Group({ title, kind, active, index, epoch, children, action }: {
+  title: string; kind: string; active: boolean; index: number; epoch: string; children: ReactNode; action?: ReactNode;
 }) {
   const details = useRef<HTMLDetailsElement | null>(null);
   const body = useRef<HTMLDivElement | null>(null);
@@ -300,7 +305,7 @@ function Group({ title, kind, active, index, epoch, children }: {
     try { sessionStorage.setItem(`peach.sidebar.group.${title}`, next ? 'open' : 'closed') } catch { /* 只是不记住 */ }
   };
   const collapseId = `sidebar-collapse-${index}`;
-  return (
+  const group = (
     <details ref={details} data-sidebar-group={title} data-sidebar-kind={kind}>
       <summary role="button" data-sidebar-toggle="" aria-expanded={open} aria-controls={collapseId} onClick={toggle}>
         <Icon name="chevron-right" /><span>{title}</span>
@@ -314,6 +319,7 @@ function Group({ title, kind, active, index, epoch, children }: {
       </div>
     </details>
   );
+  return action ? <div data-sidebar-tool-group="">{group}{action}</div> : group;
 }
 
 /* 名单末尾那枚「收起」收的是整组：组的开合在 `Group` 手里，经这一层递下去。 */

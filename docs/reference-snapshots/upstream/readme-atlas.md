@@ -7,7 +7,7 @@
 **An open-source search engine that aggregates content across categories — JAV, anime, movies, comics, and novels, all in one place.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](https://github.com/Zoroaaa/Atlas)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue.svg)](https://github.com/Zoroaaa/Atlas)
 [![Cloudflare](https://img.shields.io/badge/Powered%20by-Cloudflare-orange.svg)](https://www.cloudflare.com/)
 [![Frontend](https://img.shields.io/badge/Frontend-React%2019%20%2B%20TypeScript-green.svg)](/)
 [![Backend](https://img.shields.io/badge/Backend-Hono%20%2B%20TypeScript-blue.svg)](/)
@@ -22,7 +22,7 @@
 ## Table of Contents
 
 - [Quick Access](#-quick-access)
-- [v1.7.0 Highlights](#v170-highlights)
+- [v1.9.0 Highlights](#v190-highlights)
 - [Project Documentation](#-project-documentation)
 - [Project Features](#-project-features)
 - [Technology Stack Overview](#️-technology-stack-overview)
@@ -43,14 +43,14 @@
 
 </div>
 
-## v1.7.0 Highlights
+## v1.9.0 Highlights
 
-- **JAV library-first search**: Code searches return the local collection immediately when magnets exist; the detail card’s “External source” button re-fetches JavBus and writes the result back to the local collection.
-- **JAV tag recommendations**: Personalized tags based on favorites and search history, tag-based work browsing, and a weekly JavBus tag dictionary sync.
-- **Data storage & detail completion**: Async deduplicated persistence, an admin data console, and resumable batch detail jobs with missing-field filters.
-- **PWA & mobile navigation**: Installable app with update prompts, plus a mobile bottom tab bar and a dedicated “Me” page.
-- **Single Worker deployment**: Frontend assets and API are served from the same Worker `atlas` on one origin; Workers Builds deploys on every push to `main`.
-- **Help center & docs**: New “Usage limits and quotas” section, unified button labels across breakpoints, and expanded rate-limit documentation.
+- **Streamlined mobile home**: search, account entries and discover entries only; full lists move to dedicated pages, cutting the home from about 7 screens to 1.5.
+- **Global desktop sidebar**: search, discover, dashboard, community and admin share one accordion sidebar with a single expanded group; the avatar menu keeps only account and preference actions.
+- **Discover pages**: recommended, recently hot, TOP250, tags and actresses each get a dedicated page with a shared header, white card and labelled actions.
+- **Library-first media clicks**: clicking a work on discover or the follow feed checks the local library first; magnets open the detail, otherwise users get search or JavBus refresh actions.
+- **History aligned with favorites**: covers, local detail cards and no redundant per-row search button.
+- **Rankings and retry governance**: TOP250 and ranking archives retain daily snapshots; 30-day retries spread across Asia/Shanghai calendar days.
 
 ## Project Documentation
 
@@ -62,8 +62,9 @@ The project uses a modular documentation system, where each specialized document
 |----------|------|------|
 | **Configuration Documentation** | Frontend configuration, backend configuration, environment variables, proxy services, database configuration, role permission configuration | [docs/config.md](docs/config.md) |
 | **Deployment Guide** | Environment requirements, local development, backend deployment, frontend deployment, database configuration, FAQ | [docs/deploy.md](docs/deploy.md) |
-| **Version Changelog** | Complete version change records: v1.0.0 (first public release), v1.1.0 (anime & movie search + architecture upgrade), v1.2.0 (comic search + architecture optimization), v1.3.0 (novel search + aggregation view + observability), v1.4.0 (JAV actress search + data storage management + community improvements), v1.5.0 (unified workbench + trilingual i18n + rankings & recommendations), v1.6.0 (help center + unified notification inbox + email delivery), **v1.7.0 (library-first JAV search + tag recommendations + PWA/mobile + single-Worker deployment)** | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
+| **Version Changelog** | Complete version change records: v1.0.0 (first public release), v1.1.0 (anime & movie search + architecture upgrade), v1.2.0 (comic search + architecture optimization), v1.3.0 (novel search + aggregation view + observability), v1.4.0 (JAV actress search + data storage management + community improvements), v1.5.0 (unified workbench + trilingual i18n + rankings & recommendations), v1.6.0 (help center + unified notification inbox + email delivery), v1.7.0 (library-first JAV search + tag recommendations + PWA/mobile + single-Worker deployment), v1.8.0 (multilingual query aliases + entity follows + local library detail cards + D1 read reduction), **v1.9.0 (streamlined mobile home + global desktop sidebar + discover pages + library-first clicks)** | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
 | **GitHub Push Guide** | Git operation process, submission specifications, branch management, GitHub Actions automatic deployment configuration | [docs/github_push.md](docs/github_push.md) |
+| **Client Packaging & Signing** | Windows/Android client shells, version numbering rules, Android/Windows signing keys, release flow | [docs/app-packaging.md](docs/app-packaging.md) |
 
 ### Frontend Specialized Documentation
 
@@ -76,11 +77,11 @@ The project uses a modular documentation system, where each specialized document
 ### Core Advantages
 
 #### 1. Open-Source Search Engine with Aggregated Content
-- **JAV Search**: Aggregates metadata from DMM/FANZA and searches magnets from JavBus/JavDB, with a new actress search submode (v1.4.0 new, data source JavBus). Code searches hit the local collection first when magnets exist, and the detail card offers a one-click JavBus refresh that writes back to the local collection.
-- **Anime Search**: Aggregates data from Bangumi, Mikan, and ShowRSS, including subtitles (nyaa source disabled due to deployment environment restrictions, v1.4.0 adjusted)
+- **JAV Search**: Aggregates metadata from DMM/FANZA and searches magnets from JavBus/JavDB, with a new actress search submode (v1.4.0 new, data source JavBus). Code searches hit the local collection first when magnets exist, and the detail card offers a one-click JavBus refresh that writes back to the local collection. Directors, studios, publishers, series and tags open browsable work lists that are written back to the local library (v1.8.0).
+- **Anime Search**: Aggregates data from Bangumi, Mikan, and DMHY, including subtitles (nyaa source disabled due to deployment environment restrictions, v1.4.0 adjusted)
 - **Movie Search**: Aggregates metadata from TMDB, YTS, EZTV, and TPB, including seeds and magnets
-- **Comic Search**: Aggregates metadata from MangaDex and 13 other search sources
-- **Novel Search**: Aggregates book metadata from Anna's Archive and TXT direct links from Qishu (v1.3.0 new)
+- **Comic Search**: Aggregates metadata from MangaDex and MangaUpdates plus 13 search sources
+- **Novel Search**: Aggregates book metadata from Anna's Archive and TXT direct links from Qishu (v1.3.0 new; Qishu now served from qishuxia.com)
 - **Unified Experience**: All five categories are accessible from a single entry, with search results aggregated from multiple sources
 
 #### 2. Modern Technology Architecture
@@ -127,7 +128,7 @@ TypeScript → Type safety, interface definition, generic constraints
 Cloudflare Workers → Edge computing, V8 isolation environment, zero cold start
 Cloudflare D1 → SQLite-compatible, globally distributed, with automatic backup
 JWT (jose) → Standardized authentication, support for multiple algorithms
-Resend → Modern email service with high deliverability and real-time tracking
+Cloudflare Email Sending / Mailtrap / Resend / Brevo → Transactional email with provider priority and daily quotas
 ```
 
 ### User Experience
@@ -238,7 +239,7 @@ Category (large category)        Classification (subcategory)         Source (so
 - **Favorites & History Pagination**: Server-side pagination with totals; console statistics are aggregated server-side (v1.6.0)
 
 #### Notification Center (v1.6.0)
-- **One Inbox**: Actress follow updates (`follow.new_work` / `follow.release_soon`), community likes / comments / favorites / report results, and site announcements are merged into `/dashboard/notifications`
+- **One Inbox**: Follow updates for any followed entity — actress, director, studio, publisher, series or tag (`follow.new_work` / `follow.release_soon`) — plus community likes / comments / favorites / report results, and site announcements, merged into `/dashboard/notifications`
 - **Read-Time Announcement Merge**: Announcements stay in `site_announcements`; the inbox merges them on read and only stores each user's read/dismissed state in `user_announcement_reads`
 - **Per-Type Preferences**: Independent in-app and email switches for every notification type; email cannot be enabled before the address is verified
 - **Email Verification Entry**: The notification preferences page can send and verify an email code without leaving the page
@@ -257,7 +258,7 @@ Category (large category)        Classification (subcategory)         Source (so
 - **Comment Rating**: Publish reviews on search sources to help others choose
 - **Like/Favorite**: Like quality search sources and collect them in personal list
 - **Report Mechanism**: Report inappropriate content, with admin processing
-- **View De-duplication (v1.6.0)**: The same user viewing the same post only increments `view_count` once per 24 hours (author self-views never count); requires `database/19_schema_community_post_views.sql`
+- **View De-duplication (v1.6.0)**: The same user viewing the same post only increments `view_count` once per 24 hours (author self-views never count); schema in `database/migrations/0003_community.sql`
 - **Unified Notifications (v1.6.0)**: Likes, comments, favorites, and report results are delivered to the unified notification inbox; the separate community notification tab and its legacy endpoints were removed
 
 #### Contribution Statistics
@@ -294,7 +295,7 @@ Category (large category)        Classification (subcategory)         Source (so
 #### Email Operations (v1.6.0)
 - **Email Send Logs**: Admin page lists every message with type, status, user, IP, and error details (`GET /api/config/email/logs`)
 - **Email Queue**: Inspect pending / sent / skipped / failed digest tasks, including the last failure reason (`GET /api/config/email/queue`)
-- **Unified Sender**: All transactional and notification mail goes through one sender with Resend, logging, and rate-limit metadata
+- **Unified Sender**: All transactional and notification mail goes through one sender with Cloudflare Email Sending, Mailtrap, Resend, or Brevo; provider priority, per-provider daily quotas, logging, and rate-limit metadata are configurable from the admin console
 
 #### System Monitoring
 - **Dashboard**: One-view system operation status and user activity
@@ -302,7 +303,7 @@ Category (large category)        Classification (subcategory)         Source (so
 - **Behavior Logs**: User operation behavior record and analysis
 - **Configuration Management**: Dynamic modification of system configuration without redeployment
 
-### 6. JAV Ranking Function
+### 6. Recently Hot / TOP250
 
 #### Weekly / Monthly Rankings
 - **JavDB Weekly / Monthly**: censored and uncensored rankings, 20 entries per tab
@@ -315,12 +316,12 @@ Category (large category)        Classification (subcategory)         Source (so
 - **Multi-Source Data**: Support multi-source data aggregation display
 - **Login Required**: Need user login authentication to access
 
-### 7. Help Center (v1.6.0)
+### 7. Help Center (added in v1.6.0, kept in sync with features)
 
 - **Route**: `/help`, linked from the main navigation
-- **Categories**: Getting started, discovery (for-you / JAV rankings / trending actresses), search basics & tab differences, category guides, detail page, community, actress follows, notifications & email, account security, general notices, FAQ
-- **Structure**: Every section follows “feature overview + step-by-step guide + caveats”, plus a standalone general notices chapter
-- **Consistency**: Content is kept in sync with shipped behavior; JAV search is named “JAV search” everywhere instead of “JAV code search”
+- **Categories**: Getting started (overview / interface & navigation / first steps / clients), Discover (Discover pages / For You / Recently Hot / TOP250 / tags / actresses), search & browse, content categories (including the Sources Catalog), item details (local library card / online playback), community, follows, notifications & email, Account Center (overview / statistics / settings), account security, general notices, FAQ & troubleshooting
+- **Structure**: Every section follows “feature overview + step-by-step guide + caveats”; FAQ sections focus on troubleshooting steps
+- **Consistency**: User-facing changes must update all three languages in the same change, guarded by `frontend/src/pages/help/__tests__/helpContent.test.ts`; see `AGENTS.md` section 7
 
 ## Technology Stack Overview
 
@@ -349,7 +350,7 @@ Category (large category)        Classification (subcategory)         Source (so
 **Backend Service Layer (v1.6.0)**
 - Hono Framework / TypeScript
 - Cloudflare Workers / D1
-- JWT authentication (jose) / Resend
+- JWT authentication (jose) / Cloudflare Email Sending / Mailtrap / Resend / Brevo
 - D1 persisted rate limiting (v1.3.0)
 - Google OAuth (v1.3.0)
 - Data storage management (v1.4.0)
@@ -380,17 +381,12 @@ npm install
 # Create the D1 database and keep the returned database_id for backend/wrangler.toml
 npx wrangler d1 create codeseek
 
-# Initialize a fresh database in this exact order (01 → 19).
-# All scripts are idempotent, so partial reruns are safe.
-for f in 01_schema_core 02_schema_search 03_schema_community 04_schema_security \
-         05_schema_feedback_announcements 06_data_system 07_data_search_sources \
-         08_data_tags 09_indexes_triggers 10_schema_system_errors \
-         11_schema_data_storage 12_schema_search_tier 13_backfill_search_tier \
-         14_schema_notifications_follows 15_migrate_actress_favorites_to_follows \
-         16_email_notifications 17_schema_announcement_reads \
-         18_backfill_community_notifications 19_schema_community_post_views; do
-  npx wrangler d1 execute codeseek --remote --file=database/$f.sql
-done
+# Apply schema migrations (tracked in d1_migrations; reruns are no-ops)
+npm run db:migrate --workspace=backend
+
+# Only for a brand-new environment: import default business data.
+# Never run this against production that has already been tuned.
+npm run db:seed --workspace=backend
 
 # Local development (two terminals; frontend runs on :3000 and proxies /api to :8787)
 npm run dev --workspace=backend
@@ -403,7 +399,7 @@ npm run deploy --workspace=backend
 
 [See Detailed Deployment Guide](docs/deploy.md)
 [See Configuration Instructions](docs/config.md)
-[See v1.7.0 Changelog](docs/CHANGELOG.md)
+[See v1.9.0 Changelog](docs/CHANGELOG.md)
 
 ## Performance Optimization
 
@@ -455,6 +451,10 @@ But you must:
 ### Technical Platforms
 - **[Cloudflare](https://www.cloudflare.com/)** - providing an excellent edge computing platform
 - **[GitHub](https://github.com/)** - code hosting and collaboration platform
+- **[Cloudflare Email Service](https://developers.cloudflare.com/email-service/)** - email sending
+- **[Mailtrap](https://mailtrap.io/)** - email sending service
+- **[Brevo](https://www.brevo.com/)** - email sending service
+
 - **[Resend](https://resend.com/)** - email sending service
 
 ### Open Source Community

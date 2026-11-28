@@ -43,6 +43,7 @@ from .process_job import assign_to_job, create_kill_on_close_job
 from .tray_diagnostics import show_report as show_diagnostic_report
 from .tray_lifecycle import Lifecycle
 from .tray_detached import handoff_tray
+from .windows_webview import open_window
 from .sync import COPY_ACTIONS, SyncPlan, device_id, resolve
 from .versioning import VersionManager, VersionSnapshot
 from .windows_update import (
@@ -89,7 +90,7 @@ def ledger_menu_items(make_item, sync_ledger, take_ownership) -> list:
     然后回一句「盘不可达」——那不是状态，是这台机器根本不做复制（ADR-0023 第 3 阶段）。
     标签在两个平台上共用这一处定义，`make_item` 负责套上各自的菜单项类型。
     """
-    if not REPLICATION_ENABLED or standalone():
+    if not REPLICATION_ENABLED:
         return []
     return [
         make_item(tray_text("tray.menu.syncLedger"), sync_ledger),
@@ -172,6 +173,20 @@ def enable_hidpi() -> str:
     except (AttributeError, OSError):
         pass
     return "unavailable"
+
+
+def enable_windows_menu_theme() -> None:
+    """Let Windows draw native popup menus in the user's app color mode."""
+    if sys.platform != "win32" or sys.getwindowsversion().build < 18362:
+        return
+    try:
+        # Windows 10 1903 changed uxtheme ordinal 135 to SetPreferredAppMode.
+        set_preferred_app_mode = ctypes.WinDLL("uxtheme.dll")[135]
+    except (AttributeError, OSError):
+        return
+    set_preferred_app_mode.argtypes = [ctypes.c_int]
+    set_preferred_app_mode.restype = ctypes.c_int
+    set_preferred_app_mode(1)  # AllowDark
 
 
 @dataclass(frozen=True)
@@ -988,6 +1003,12 @@ def normal_url(config) -> str:
     return f"https://{normal_hostname(config)}/"
 
 
+def open_application(config, *, waiting: bool, open_browser: Callable[[str], object] | None = None) -> None:
+    url = setup_url(config) if waiting else normal_url(config)
+    if waiting or not open_window(url, config.data_root):
+        (open_browser or webbrowser.open)(url)
+
+
 def configured_service_specs(config) -> tuple[ServiceSpec, ...]:
     """独立测试包按设置文件启动服务；源码入口沿用其生命周期。
 
@@ -1054,7 +1075,7 @@ class SetupGate:
         return self.manager.status_summary()
 
     def open(self) -> None:
-        self._open_browser(self.open_url())
+        open_application(self.config, waiting=self.waiting, open_browser=self._open_browser)
 
     def poll(self) -> bool:
         """设置完成了就切到正常服务。返回这一轮有没有切。
@@ -1196,6 +1217,7 @@ class PeachTray:
         self._build_checked_at = time.monotonic()
         self._build_attempted_head: str | None = None
         self._pending_startup: tuple[list, bool, str | None] | None = None
+        enable_windows_menu_theme()
         version_menu = pystray.Menu(
             pystray.MenuItem(lambda _item: f"Peach {self.version.package_version}", None, enabled=False),
             pystray.MenuItem(lambda _item: self.version.build_label, None, enabled=False),
@@ -1757,6 +1779,28 @@ class MacUpdateEntry:
             self.sparkle.follow(state_dir)
 
 
+def _macos_open_callback(gate: SetupGate) -> Callable[[], None]:
+    """各菜单入口共享一个按需创建的原生窗口。"""
+    native_window = None
+
+    def open_peach() -> None:
+        nonlocal native_window
+        if gate.waiting:
+            gate.open()
+            return
+        try:
+            from .macos_webview import MacWindow
+
+            if native_window is None:
+                native_window = MacWindow(webbrowser.open)
+            native_window.open(gate.open_url())
+        except Exception:
+            LOGGER.exception("Could not open the Peach WebKit window")
+            gate.open()
+
+    return open_peach
+
+
 def run_macos_menu_bar(manager: "ServiceManager", gate: "SetupGate | None" = None, *, silent: bool = False, show_browser: bool = False) -> None:
     """macOS 走原生菜单栏项。
 
@@ -1766,6 +1810,7 @@ def run_macos_menu_bar(manager: "ServiceManager", gate: "SetupGate | None" = Non
     from .menubar import MenuBarApp, Submenu
 
     gate = gate or SetupGate(manager, settings_file.active(), waiting=False)
+    open_peach = _macos_open_callback(gate)
     versions = VersionManager()
     # 「同步开发进度」会把版本行写旧，所以标题读这个可变快照而不是闭包里那一份。
     # 不在标题里直接调 `inspect()`：它要开四次 git，而标题每 5 秒刷新一次。
@@ -1862,10 +1907,10 @@ def run_macos_menu_bar(manager: "ServiceManager", gate: "SetupGate | None" = Non
         create_icon(template=True),
         tray_text("tray.menu.tooltip"),
         [
-            (gate.open_label, gate.open),
+            (gate.open_label, open_peach),
             (lambda: tray_text("tray.menu.status", status=gate.status_line()), Submenu(lambda: [
                 *((line, None) for line in manager.status_details()),
-                (menu_text(tray_text("tray.menu.address", url=gate.open_url())), gate.open),
+                (menu_text(tray_text("tray.menu.address", url=gate.open_url())), open_peach),
                 (tray_text("tray.menu.fullConfiguration"), open_configuration),
             ])),
             (None, None),
@@ -1885,15 +1930,15 @@ def run_macos_menu_bar(manager: "ServiceManager", gate: "SetupGate | None" = Non
             (None, None),
             (tray_text("tray.menu.quit"), quit_now),
         ],
-        # 已在运行时再点开应用：和菜单第一项一样打开网页，图标被系统折叠时也有入口。
-        reopen=gate.open,
+        # Finder 重新打开应用时复用菜单第一项，保留窗口里的浏览状态。
+        reopen=open_peach,
     )
     app["app"] = menu
     updates.sparkle = sparkle_update.start(config=lambda: gate.config, stop_services=manager.stop_owned,
                                            notify=notify)
     gate.notify = lambda message, title: notify(message, title)
     if (gate.waiting and not silent) or show_browser:
-        gate.open()
+        open_peach()
 
     # `manager.status()` 读的是 `healthy()` 写下的缓存。pystray 那条路径有 `_monitor`
     # 线程定时重采样，这条路径漏了，于是缓存永远停在启动那一刻——服务还没起来时测的
@@ -2038,7 +2083,7 @@ def _main(argv: list[str] | None = None) -> int:
     instance = SingleInstance(config.directory("state") / "peach-tray.lock")
     if instance.is_running():
         if not args.silent:
-            webbrowser.open(setup_url(config) if waiting else normal_url(config))
+            open_application(config, waiting=waiting)
         return 0
     try:
         if handoff_tray(sys.argv[1:] if argv is None else argv, PROJECT_ROOT):
@@ -2058,7 +2103,7 @@ def _main(argv: list[str] | None = None) -> int:
         instance.acquire()
     except AlreadyRunning:
         if not args.silent:
-            webbrowser.open(setup_url(config) if waiting else normal_url(config))
+            open_application(config, waiting=waiting)
         return 0
     try:
         # 日志按设置的天数保留、按月切段，必须排在任何子进程打开日志之前：Windows 上被占着的

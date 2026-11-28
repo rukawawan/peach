@@ -551,7 +551,7 @@ class AvwikidbTests(Case):
         self.avwikidb.pages[WORK_URL] = (403, "")
         summary = self.run_followup(self.hikaru)
         self.assertTrue(paused_until(self.cooldown, followup.AVWIKIDB))
-        self.assertTrue(summary["sites"][followup.AVWIKIDB].startswith(followup.UNFETCHED))
+        self.assertRegex(summary["sites"][followup.AVWIKIDB], r"^查询失败：.+")
         self.assertEqual(self.refs(self.hikaru), {})
 
     def test_a_failed_refresh_keeps_the_metadata_of_a_bound_number(self):
@@ -566,7 +566,7 @@ class AvwikidbTests(Case):
         summary = self.run_followup(self.hikaru, run_id=6)
         _number, metadata = self.refs(self.hikaru)[followup.AVWIKIDB]
         self.assertEqual((metadata["height"], metadata["batch"]), (148, f"{followup.SOURCE}@5"))
-        self.assertTrue(summary["sites"][followup.AVWIKIDB].startswith(followup.UNFETCHED))
+        self.assertRegex(summary["sites"][followup.AVWIKIDB], r"^查询失败：.+")
 
     def test_fc2_codes_are_not_used_as_an_entry(self):
         fc2 = self.entity("FC2の人")
@@ -664,7 +664,7 @@ class AvbaseTests(Case):
         self.work(1, nano)
         self.avbase.pages[self.NANO_URL] = (403, "")
         summary = self.run_followup(nano)
-        self.assertTrue(summary["sites"][followup.AVBASE].startswith(followup.UNFETCHED))
+        self.assertRegex(summary["sites"][followup.AVBASE], r"^查询失败：.+")
         self.assertTrue(paused_until(self.cooldown, followup.AVBASE))
         self.assertIsNone(self.profile(nano))
 
@@ -762,7 +762,7 @@ class JavdbTests(Case):
         url = javdb.SEARCH.format(quote("美ノ嶋めぐり"))
         self.javdb.pages[url] = (200, "<html><head><title>登入 | JavDB</title></head></html>")
         summary = self.run_followup(self.meguri)
-        self.assertTrue(summary["sites"][followup.JAVDB].startswith(followup.UNFETCHED))
+        self.assertRegex(summary["sites"][followup.JAVDB], r"^查询失败：.+")
         self.search("美ノ嶋めぐり", ("Ab12", "美ノ嶋めぐり", ""))
         self.run_followup(self.meguri)
         self.assertEqual([number for number, _metadata in self.javdb_ids(self.meguri)], ["Ab12"])
@@ -770,13 +770,13 @@ class JavdbTests(Case):
     def test_searches_that_all_fail_are_unfetched_not_a_miss(self):
         self.search("美ノ嶋めぐり", status=500)
         summary = self.run_followup(self.meguri)
-        self.assertTrue(summary["sites"][followup.JAVDB].startswith(followup.UNFETCHED))
+        self.assertRegex(summary["sites"][followup.JAVDB], r"^查询失败：.+")
         self.assertNotIn(followup.JAVDB, {row["site"] for row in self.review()})
 
     def test_a_refusal_pauses_javdb_and_binds_nothing(self):
         self.search("美ノ嶋めぐり", status=403)
         summary = self.run_followup(self.meguri)
-        self.assertTrue(summary["sites"][followup.JAVDB].startswith(followup.UNFETCHED))
+        self.assertRegex(summary["sites"][followup.JAVDB], r"^查询失败：.+")
         self.assertTrue(paused_until(self.cooldown, followup.JAVDB))
         self.assertEqual(self.javdb_ids(self.meguri), [])
 

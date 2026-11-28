@@ -57,7 +57,7 @@ from peach.interface_text import dev as t   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
 from peach.page_cache import HttpStatusError, Site   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
-from peach.scripting import SharedSlot, shared_slot_path   # noqa: E402
+from peach.scripting import SharedSlot, readonly_uri, shared_slot_path   # noqa: E402
 from peach.social_links import (   # noqa: E402
     canonical_url, classify, handle, load_performers, name_key, platform, under,
     x_profile_state,
@@ -167,7 +167,6 @@ JAVDB_AVATAR = re.compile(r'class="avatar" style="background-image: url\(([^)]+)
 #: 社媒按钮只在这一块里。页面别处的站外链接是广告、姊妹站和 RTA 标签，每页都有一份。
 JAVDB_ADDITION = re.compile(r'class="column section-addition">(.*?)<div class="toolbar"', re.S)
 #: 资料页要登录才给时不注册账号，记一行未取得。判据在 `peach.javdb`。
-JAVDB_LOGIN = javdb.LOGIN
 
 
 X_PROFILE = "https://x.com/{}"
@@ -584,7 +583,7 @@ def collect_javdb(site: Site, limit: int, performers: list[dict]) -> tuple[list[
                 if stop:
                     break
                 continue
-            if JAVDB_LOGIN.search(html):
+            if javdb.login_page(html):
                 pages.append(page_record("javdb", detail, record["chain"], [],
                                          note=t("harvest_directory_links.javdbLoginWall")))
                 continue
@@ -873,7 +872,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args) -> int:
-    connection = sqlite3.connect(f"file:{args.database}?mode=ro", uri=True)
+    connection = sqlite3.connect(readonly_uri(args.database), uri=True)
     try:
         performers = load_performers(connection, args.min_assets)
         existing_handles, existing_urls = load_existing(connection)

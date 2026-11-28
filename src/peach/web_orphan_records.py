@@ -26,22 +26,38 @@ def _stem(name: str | None) -> str:
     return PureWindowsPath(name or "").stem.casefold()
 
 
-def _candidates(connection, orphans: list[dict]) -> dict[int, list[dict]]:
+def _candidate_pools(contract, wanted_codes: frozenset[str], wanted_stems: frozenset[str]):
+    """只保留能匹配当前孤儿的候选，账本编目变更后才重新检查在库视频。"""
+    by_key: dict[str, list[dict]] = defaultdict(list)
+    by_stem: dict[str, list[dict]] = defaultdict(list)
+    with contract.read_connection() as connection:
+        for row in connection.execute(
+                "SELECT id,location,name,code,duration,size FROM asset "
+                "WHERE disposal IS NULL AND medium='video'"):
+            code = row["code"]
+            stem = _stem(row["name"]) if wanted_stems and (not code or not code.strip()) else ""
+            if not wanted_codes and stem not in wanted_stems:
+                continue
+            item = dict(row)
+            key = code_key(item)
+            if key in wanted_codes:
+                by_key[key].append(item)
+            elif not key and stem in wanted_stems:
+                by_stem[stem].append(item)
+    return by_key, by_stem
+
+
+def _candidates(contract, orphans: list[dict]) -> dict[int, list[dict]]:
     """在库视频里番号对得上、或无番号时文件名主干相同的那几个，按时长与旧行接近排。"""
     if not orphans:
         return {}
-    keys ={row["id"]: code_key(row) for row in orphans}
+    keys = {row["id"]: code_key(row) for row in orphans}
     stems = {row["id"]: _stem(row["name"]) for row in orphans if not keys[row["id"]]}
-    by_key: dict[str, list[dict]] = defaultdict(list)
-    by_stem: dict[str, list[dict]] = defaultdict(list)
-    for row in connection.execute(
-            "SELECT id,location,name,code,duration,size FROM asset "
-            "WHERE disposal IS NULL AND medium='video'"):
-        item = dict(row)
-        if key := code_key(item):
-            by_key[key].append(item)
-        else:
-            by_stem[_stem(item["name"])].append(item)
+    wanted_codes = frozenset(filter(None, keys.values()))
+    wanted_stems = frozenset(stems.values())
+    by_key, by_stem = contract.cached_until_changed(
+        "orphan-records:candidates", lambda: _candidate_pools(contract, wanted_codes, wanted_stems),
+        wanted_codes, wanted_stems, tables=("asset_catalog",), allow_stale=False)
     found = {}
     for orphan in orphans:
         pool = by_key.get(keys[orphan["id"]], []) if keys[orphan["id"]] else by_stem.get(stems[orphan["id"]], [])
@@ -58,7 +74,7 @@ def q_orphan_records(contract: WebContract, args=None):
         orphans = [dict(row) for row in connection.execute(
             f"SELECT {_COLUMNS} FROM asset WHERE disposal=? ORDER BY feedback_at DESC,id DESC", (VANISHED,))]
         counts = record_counts(connection, [row["id"] for row in orphans])
-        candidates = _candidates(connection, orphans)
+    candidates = _candidates(contract, orphans)
     return {"total": len(orphans), "items": [
         {"id": row["id"], "name": row["name"], "code": row["code"] or "", "location": row["location"],
          "duration": row["duration"], "size": row["size"], "vanished_at": row["feedback_at"],

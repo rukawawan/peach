@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@/components/base/buttons/button';
-import { JAV_SELECTION_EVENT } from '../../jav-controls';
+import { JAV_SELECTION_EVENT, takeJavSelection } from '../../jav-controls';
 import { selectRange, selectionSummary } from '../../selection';
 import { errorMessage } from '../../api';
 import { SelectionDock } from '../components/selection-dock';
@@ -10,18 +10,25 @@ import type { BulkAction, Receipt } from '../components/bulk-action';
 import { JavBatchResources } from './jav-batch-resources';
 import type { Discovery } from './jav';
 import { t } from '../../i18n';
+import { useRectangleSelection } from '../components/rectangle-selection';
 
 interface Selection {
   dense: boolean; mode: boolean; selected: Set<string>;
   toggle(item: Discovery, range?: boolean): void;
   visible(items: Discovery[]): void;
   selectPage(): void;
+  selectRectangle(keys: string[], add: boolean): void;
   /** 退出多选：Esc、浮条上的「退出」与右上角开关都走它。 */
   close(): void;
   all: boolean; mixed: boolean;
 }
 const Context = createContext<Selection | null>(null);
 export const useJavSelection = () => useContext(Context);
+
+export function useJavRectangle(enabled: boolean) {
+  const selection = useJavSelection();
+  return useRectangleSelection(enabled ? selection?.selectRectangle : undefined, { selecting: Boolean(selection?.mode) });
+}
 
 /** 当前页提供展示顺序；跨页选择保留作品本身，不能把来源 ID 当馆藏 ID。 */
 export function useVisibleJavWorks(items: Discovery[]) {
@@ -41,6 +48,7 @@ export function JavSelectionProvider({ children, readOnly, receipt, dock = true 
   const [page, setPage] = useState<Discovery[]>([]);
   const [resources, setResources] = useState<Discovery[] | null>(null);
   const anchor = useRef<string | null>(null);
+  const owner = useRef(new URLSearchParams(location.search).get('tab') || '');
   const selected = new Set(picked.keys());
   const summary = selectionSummary(selected, page.map(item => item.code));
   const visible = useCallback((items: Discovery[]) => {
@@ -57,11 +65,27 @@ export function JavSelectionProvider({ children, readOnly, receipt, dock = true 
     page.forEach(item => summary.all ? next.delete(item.code) : next.set(item.code, item));
     return next;
   });
+  const selectRectangle = (keys: string[], add: boolean) => {
+    if (!mode && !keys.length) return;
+    if (!mode) setMode(true);
+    const codes = new Set(keys);
+    anchor.current = keys.at(-1) ?? null;
+    setPicked(current => new Map([...(add ? current : []), ...page
+      .filter(item => codes.has(item.code)).map(item => [item.code, item] as const)]));
+  };
   useEffect(() => {
-    const toggle = () => { if (mode) close(); else setMode(true) };
+    const toggle = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail : undefined;
+      if (detail && detail.tab !== owner.current) return;
+      event.preventDefault();
+      if (mode && !detail?.enter) close(); else setMode(true);
+    };
     window.addEventListener(JAV_SELECTION_EVENT, toggle);
     return () => window.removeEventListener(JAV_SELECTION_EVENT, toggle);
   }, [mode, close]);
+  useEffect(() => {
+    if (takeJavSelection(location.search)) setMode(true);
+  }, []);
   useEffect(() => {
     if (!mode) { setPicked(new Map()); anchor.current = null }
     document.getElementById('selectMode')?.setAttribute('aria-pressed', String(mode));
@@ -70,7 +94,7 @@ export function JavSelectionProvider({ children, readOnly, receipt, dock = true 
   useEffect(() => {
     if (!mode) return;
     const keydown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement).closest('input,textarea,[contenteditable]:not([contenteditable="false"]),[role="dialog"]')) return;
+      if ((event.target as HTMLElement).closest('input:not([type="checkbox"],[type="radio"]),textarea,[contenteditable]:not([contenteditable="false"]),dialog,[role="dialog"]')) return;
       if (event.key === 'Escape') { event.preventDefault(); close() }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
         event.preventDefault();
@@ -121,7 +145,7 @@ export function JavSelectionProvider({ children, readOnly, receipt, dock = true 
   };
   const want = wantAction();
   const host = { receipt };
-  return <Context.Provider value={{ dense, mode, selected, toggle, visible, selectPage, close, all: summary.all, mixed: summary.mixed }}>
+  return <Context.Provider value={{ dense, mode, selected, toggle, visible, selectPage, selectRectangle, close, all: summary.all, mixed: summary.mixed }}>
     <div data-jav-selection="" data-select-mode={mode ? '' : undefined} className="flex min-w-0 flex-col gap-4">
       {children}
     </div>

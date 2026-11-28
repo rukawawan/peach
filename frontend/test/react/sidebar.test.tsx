@@ -70,6 +70,7 @@ afterEach(async () => {
 function shellActions(): ShellActions {
   return {
     openItem: vi.fn(), openEntity: vi.fn(), openTag: vi.fn(), openTasteSignal: vi.fn(), navigate: vi.fn(),
+    playSavedFilter: vi.fn(),
     openManage: vi.fn(), managePath: vi.fn(() => ''), openFollow: vi.fn(), receipt: vi.fn(), toast: vi.fn(),
     failure: vi.fn(), revealSource: vi.fn(async () => ''), reopenTutorial: vi.fn(async () => {}),
     routeReview: vi.fn(),
@@ -372,21 +373,20 @@ describe('筛选分组', async () => {
     expect(body.querySelectorAll('[data-sidebar-chip]')).toHaveLength(30);
   });
 
-  it('换一份聚合时只有数字变了的徽标弹一下', async () => {
+  it('换一份聚合时只有数字变了的徽标淡入', async () => {
     const { scroll, render } = await setup();
     render({ content: { kind: 'catalog', key: '1', facets: facets({ tags: [chip('pa', 5), chip('pb', 4)] }) } });
-    /* `popped` 加上又当场摘掉，回调到来时类名早已不在；摘掉那一笔的旧值里还留着它。 */
-    const popped: string[] = [];
+    const faded: string[] = [];
     const observer = new MutationObserver((records) => {
       for (const record of records) {
-        if (/\bpopped\b/.test(record.oldValue ?? '')) popped.push((record.target as HTMLElement).dataset.countBadge!);
+        if (/\bfading\b/.test(record.oldValue ?? '')) faded.push((record.target as HTMLElement).dataset.countBadge!);
       }
     });
     observer.observe(scroll, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
     render({ content: { kind: 'catalog', key: '2', facets: facets({ tags: [chip('pa', 5), chip('pb', 7)] }) } });
     await settle();
     observer.disconnect();
-    expect(popped).toEqual(['tag:pb']);
+    expect(faded).toEqual(['tag:pb']);
   });
 
   it('目录页的关注标签去关注页，关注页的内容标签换成只按这一枚筛', async () => {

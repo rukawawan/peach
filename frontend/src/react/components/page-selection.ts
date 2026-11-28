@@ -61,16 +61,17 @@ const subscribe = (listener: () => void) => {
 
 /** 登记这一页的清空办法，读多选模式。返回 `true` 时页上处于多选模式。`topbar` 让本组件在
  *  不在处理队列表上的地址也接管右上角开关（挂载期间）。 */
-export function usePageSelection(clear: () => void, { topbar = false }: { topbar?: boolean } = {}): boolean {
+export function usePageSelection(clear: () => void, { topbar = false, enabled = true }: { topbar?: boolean; enabled?: boolean } = {}): boolean {
   const latest = useRef(clear);
   latest.current = clear;
   useEffect(() => {
+    if (!enabled) return;
     const entry: Entry = { current: () => latest.current(), topbar };
     entries.add(entry);
     return () => {
       entries.delete(entry);
       if ((!entries.size || topbar) && on) { on = false; publish() }
     };
-  }, [topbar]);
+  }, [enabled, topbar]);
   return useSyncExternalStore(subscribe, () => on, () => false);
 }

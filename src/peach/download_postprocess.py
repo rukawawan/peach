@@ -192,6 +192,8 @@ def _collection_retry_delay(state: dict, main: int) -> float | None:
 
 
 def _organize(contract, task, main: int) -> dict:
+    if task.provider == 'qbittorrent':
+        return {"moved": 0, "skipped": Said("labels.downloadPostprocess.keepTorrentFiles")}
     templates = contract.download_organize_templates().get(task.location, {})
     if not templates:
         return {"moved": 0, "skipped": Said("labels.downloadPostprocess.noTemplate")}

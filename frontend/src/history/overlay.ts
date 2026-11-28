@@ -27,9 +27,10 @@ export type OverlayKind = 'item' | 'follow' | 'jav';
 export type OverlayTarget =
   | { kind: 'jav'; code: string }
   | { kind: 'item' | 'follow'; id: number }
-  | { kind: 'queue'; queue: 'mix' | 'parts' | 'editions' | 'playlist'; key: number; item: number };
+  | { kind: 'queue'; queue: 'mix' | 'parts' | 'editions' | 'playlist'; key: number; item: number }
+  | { kind: 'queue'; queue: 'filter'; key: string; item: number };
 
-const QUEUES = ['mix', 'parts', 'editions', 'playlist'] as const;
+const QUEUES = ['mix', 'parts', 'editions', 'playlist', 'filter'] as const;
 
 /** 地址匹配哪一条覆盖路径；本地条目使用数字，库外作品使用有效番号。 */
 export function overlayMatch(pathname: string, search = ''): { path: OverlayPath; target: OverlayTarget } | null {
@@ -52,8 +53,11 @@ export function overlayMatch(pathname: string, search = ''): { path: OverlayPath
       const contexts = QUEUES.filter(queue => params.has(queue));
       if (contexts.length === 1) {
         const queue = contexts[0]!, value = params.get(queue)!;
+        if (queue === 'filter' && /^[0-9a-f]{32}$/.test(value)) {
+          return { path, target: { kind: 'queue', queue, key: value, item: first } };
+        }
         const key = Number(value);
-        if (/^[1-9]\d*$/.test(value) && Number.isSafeInteger(key)) {
+        if (queue !== 'filter' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(key)) {
           return { path, target: { kind: 'queue', queue, key, item: first } };
         }
       }

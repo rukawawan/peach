@@ -8,6 +8,7 @@ import { ModalFrame } from './modal-frame';
 import { Help, ErrorText } from '../settings/section';
 import { busyProps } from '../settings/busy-props';
 import { t } from '../../i18n';
+import { openMediaDirectory } from '../catalog-folders/media-directory-navigation';
 
 export interface FolderReply {
   path: string | null;
@@ -129,7 +130,7 @@ function FolderDialog({ initial, initialPath, request, close }: {
   </PathModalFrame>;
 }
 
-export interface ServerPathReply { path: string; container?: boolean; media_root?: string; relative_path?: string }
+export interface ServerPathReply { path: string; container?: boolean; media_root?: string; relative_path?: string; id?: number }
 
 export function showServerPath(reply: ServerPathReply): Promise<void> {
   return mountDialog<void>(close => <PathModalFrame isOpen onOpenChange={open => { if (!open) close() }} width="form" surfaceClassName="peach-react">
@@ -144,9 +145,10 @@ export function showServerPath(reply: ServerPathReply): Promise<void> {
   </PathModalFrame>);
 }
 
-/** 定位回执收尾：服务端部署弹出路径，桌面部署照常 `success()`。 */
+/** 媒体定位打开网页目录；应用目录显示路径，桌面部署照常 `success()`。 */
 export async function completeReveal(result: unknown, success: () => void): Promise<void> {
   const reply = result as (ServerPathReply & { mode?: string }) | undefined;
-  if (reply?.mode === 'server' && reply.path) await showServerPath(reply);
+  if (reply?.mode === 'server' && reply.id != null) openMediaDirectory(reply.id);
+  else if (reply?.mode === 'server' && reply.path) await showServerPath(reply);
   else success();
 }

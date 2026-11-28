@@ -23,7 +23,7 @@ export interface LocationCount { k: string; n: number; bytes: number; videos: nu
 /** 按媒体库分的库存。`name` 是用户给这个库起的名字。 */
 export interface LibraryCount { k: string; name: string; icon: string; videos: number; bytes: number }
 
-/** 一个计数。服务端某一项取不到时回 null，页面读成「未取得」。 */
+/** 一个计数。服务端以 null 标记未知的计数。 */
 export type Count = number | null;
 
 /** 视频的资料归属：分母是 `videos`，其余几项是已经有那一项的条数。 */
@@ -101,7 +101,7 @@ export async function prefetchStats(signal: AbortSignal): Promise<void> {
 export const known = (value: Count | undefined): value is number =>
   value != null && Number.isFinite(value);
 
-/** 一个计数的读法：千分位；取不到时读「未取得」。 */
+/** 按千分位显示计数，保留未知状态。 */
 export const fmtCount = (value: Count | undefined): string =>
   (known(value) ? value.toLocaleString() : t('manage:shared.notFound'));
 

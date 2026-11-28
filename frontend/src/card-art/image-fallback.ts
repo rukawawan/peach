@@ -77,6 +77,13 @@ export function advanceImageFallback(image: HTMLImageElement | null | undefined)
     image.replaceWith(span);
     return 'drop';
   }
+  /* React 自己画的 `<img>`（JSX，不是 innerHTML）不能从它手里摘走：卸载时它按自己的记录 removeChild，
+     节点已经不在就抛错，错误出在提交阶段，整棵路由树跟着卸掉。这种只藏起来，节点留给 React 收。 */
+  if (Object.keys(image).some(key => key.startsWith('__reactFiber$'))) {
+    image.hidden = true;
+    image.style.display = 'none';
+    return 'drop';
+  }
   image.remove();
   return 'drop';
 }

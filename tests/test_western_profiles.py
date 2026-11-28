@@ -91,7 +91,7 @@ class WesternProfileTests(unittest.TestCase):
             self.assertEqual(len(waits), 2)
 
     def test_babepedia_alias_identity_is_required_for_all_profile_fields(self):
-        with self.assertRaisesRegex(ValueError,'身份不一致'):
+        with self.assertRaisesRegex(ValueError,'Babepedia 返回的档案身份不匹配'):
             profile(lambda *a:HttpResponse(200,{},self.page()),'Someone Else')
 
     def test_creator_profile_and_aliases_share_the_person_header(self):

@@ -120,8 +120,9 @@ export const pollInterval = (data: ActivityData | undefined): number =>
 export const RESULT_BUSY_POLL_MS = 5000;
 export const RESULT_IDLE_POLL_MS = SETTLED_POLL_MS;
 
-export const fetchTasks = (signal?: AbortSignal, page = 1, limit = 20) =>
-  apiGet<ActivityData>(page === 1 && limit === 20 ? TASKS_URL : `${TASKS_URL}?page=${page}&limit=${limit}`, signal);
+export const fetchTasks = (signal?: AbortSignal, page = 1, limit = 20, q = '') =>
+  apiGet<ActivityData>(page === 1 && limit === 20 && !q ? TASKS_URL
+    : `${TASKS_URL}?page=${page}&limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`, signal);
 
 /** 每个页面常驻轮询的那一小份：结果版本、入库通知与在排在跑的任务（`running_tasks`）。完整任务列表只给任务中心。 */
 export { fetchResultUpdates, RESULT_UPDATES_KEY, type ResultUpdatesPayload as ResultUpdatesData } from '../../running-tasks';
@@ -153,7 +154,7 @@ export const statusLabel = (status: string): string => STATUS_LABELS[status] || 
 const SUMMARY_LABELS: Record<string, string> = {
   checked: t('manage:taskSummary.checked'), total: t('manage:taskSummary.total'), scanned: t('manage:taskSummary.scanned'), identified: t('manage:taskSummary.recognized'),
   candidates: t('manage:taskSummary.metadata'), covers: t('manage:taskSummary.covers'), changed: t('manage:taskSummary.changed'), operation: t('manage:taskSummary.operation'),
-  ok: t('manage:taskSummary.found'), miss: t('manage:shared.notFound'), kept: t('manage:taskSummary.kept'), planned: t('manage:taskSummary.planned'), done: t('manage:taskSummary.processed'), added: t('manage:taskSummary.added'),
+  ok: t('manage:taskSummary.found'), miss: t('manage:taskSummary.noMatch'), kept: t('manage:taskSummary.kept'), planned: t('manage:taskSummary.planned'), done: t('manage:taskSummary.processed'), added: t('manage:taskSummary.added'),
   written: t('manage:taskSummary.saved'), removed: t('manage:taskSummary.removed'), issue_count: t('manage:backgroundIssues.title'),
   followups_duplicate: t('manage:taskSummary.followupsDuplicate'), followups_truncated: t('manage:taskSummary.followupsTruncated'),
   followups_depth_exceeded: t('manage:taskSummary.followupsTooDeep'), name: t('manage:shared.name'),

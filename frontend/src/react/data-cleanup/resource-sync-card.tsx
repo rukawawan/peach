@@ -19,6 +19,7 @@ import { Note } from '../components/note';
 import { ConnectionStatus } from '../components/connection-status';
 import { StatusLabel } from '../components/status-label';
 import { TaskProgress } from '../components/task-progress';
+import { AnimatedNumber } from '../components/animated-number';
 import { activityKind } from '../../activity-kinds';
 import { spriteGlyph } from '../components/sprite-glyph';
 import { PlainStat, plainStatClass } from '../components/stat-card';
@@ -108,7 +109,7 @@ export function ResourceSyncCard(
     onStarted: () => apply.dismiss(),
   });
 
-  const state = scan.job;
+  const state = scan.start.isPending ? undefined : scan.job;
   const scanning = scan.running || scan.start.isPending;
   const cleaning = apply.running || apply.start.isPending;
   const actionsReady = !!scan.job && !!apply.job;
@@ -125,7 +126,7 @@ export function ResourceSyncCard(
     onConfirm: () => apply.start.mutateAsync(payload.scan_id || ''),
   });
 
-  const done = apply.outcome;
+  const done = scan.start.isPending || scan.start.isError ? null : apply.outcome;
   const receipt = (out: ResourceApplyState) => {
     const partial = applyLeftovers(out).left > 0;
     return (
@@ -149,7 +150,9 @@ export function ResourceSyncCard(
   } else if (state?.status === 'running') {
     const line = scanLine(state);
     progress = (
-      <TaskProgress embedded kind={activityKind('resource-scan')} label={line} value={state.completed_sources} total={state.total_sources} />
+      <TaskProgress embedded kind={activityKind('resource-scan')} label={line}
+        labelContent={state.total_sources ? <AnimatedNumber value={line} /> : line}
+        value={state.completed_sources} total={state.total_sources} />
     );
     if (state.sources?.length) result = <ScanResult scan={state} partial />;
   } else if (state?.status === 'failed') {

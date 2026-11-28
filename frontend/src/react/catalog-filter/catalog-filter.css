@@ -38,9 +38,9 @@
 
 /* 往右翻的时候这几排从侧栏底下穿过去，不在侧栏那条边上被切平：侧栏是一块玻璃，底下有东西在走
  * 才看得出它是透的。左边界仍停在原处，让出去多少宽度就原样加回内边距。窄屏那一档的抽屉是盖上来的，
- * 没有这条常驻的边，所以只在留了轨道宽度的档位上开。 */
+ * 没有这条常驻的边。桌面开启「限制首页横滑范围」时，两排头像在侧栏右侧裁切。 */
 @media (min-width: 761px) {
-  .peach-react [data-catalog-tier] {
+  :where(:root:not([data-contain-home-scroll])) .peach-react [data-catalog-tier] {
     margin-left: calc(-1 * var(--railW));
     padding-left: calc(var(--railW) + 16px);
   }
@@ -114,8 +114,8 @@
   height: 48px;
   font: 600 18px/24px var(--board-font);
 }
-/* 圆框里那两层由遗留层 `entityFaceImg` 拼：首字母垫在底下居中，头像图铺满盖在上面。 */
-.peach-react [data-tier-ring] > [data-tier-initial] {
+/* 首字母居中垫在头像下。 */
+.peach-react [data-tier-ring] > span {
   position: absolute;
   inset: 0;
   display: flex;
@@ -171,7 +171,7 @@
 }
 
 /* 自己不铺底：选中那一枚的填充由那块滑动玻璃给。字压在玻璃上面，滑过去时才不被一路盖暗。 */
-.peach-react [data-catalog-view] {
+.peach-react [data-catalog-view]:not([data-filter-field]) {
   position: relative;
   z-index: 1;
   display: inline-flex;
@@ -188,24 +188,11 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.peach-react [data-catalog-view]:is(:hover, [aria-pressed="true"]) { color: var(--glass-text); }
+.peach-react [data-catalog-view]:not([data-filter-field]):is(:hover, [aria-pressed="true"]) { color: var(--glass-text); }
 .peach-react [data-catalog-view]:focus-visible {
   outline: 2px solid var(--tungsten);
   outline-offset: 2px;
 }
-
-.peach-react [data-catalog-tags] {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-inline: contain;
-  scrollbar-width: none;
-}
-.peach-react [data-catalog-tags]::-webkit-scrollbar { display: none; }
 
 @media (max-width: 760px) {
   .peach-react [data-catalog-scroll] {
@@ -215,51 +202,7 @@
     scrollbar-width: none;
   }
   .peach-react [data-catalog-scroll]::-webkit-scrollbar { display: none; }
-  .peach-react [data-catalog-scroll] > [data-catalog-tags] {
-    flex: 0 0 auto;
-    min-width: auto;
-    overflow: visible;
-  }
 }
-
-/* 标签的圆角同详情里那一颗（`--tag-radius`）。虚线只画在「此刻还没加上去」的那几枚上，悬停只把虚线
- * 拉成实线、字提到 `--ink`；加上去之后是 `--picked` 的面，同交集条那一颗。
- *
- * 虚线与实线两档取自 2026-09-05 实测的 vercel.com/<team>/~/deployments 筛选令牌：未生效
- * `background:rgba(0,0,0,0)` 配 `1px dashed rgba(0,0,0,.21)`，已生效 `background:#FFFFFF` 配
- * `1px solid rgba(0,0,0,.08)`，两个数就是 `--field-ring-hover` 与 `--field-ring`，暗色一档换成同位置的白
- * 透明度。未生效那道虚线照它取 `--field-ring-hover`；加上去之后那圈实线落在 `--picked` 的面上，取玻璃上
- * 那一档 `--glass-low`，说的是「这是一颗标签」。虚线说的是「这条筛选可加、此刻没加」，四枚视图四选一、
- * 恒有一枚生效，这句话对它们从来不成立，所以不画。悬停只拉成实线、不填：同排还有恒常生效的视图，悬停也
- * 填就会同屏读出两种「已生效」。
- *
- * 计数是标签的附注，不是标签名的一部分：同字号同色贴在一起时「巨乳63」读成一个词。所以 13px 的标签
- * 配 11px 等宽的数，退到五成五的字色，悬停或按下时回到八成；再小就难以辨认了。间隔只能由外边距给，
- * 药丸是 flex 容器，标签与计数之间的空格文本节点不参与布局。字色按这块玻璃自己的文字色降档：玻璃上
- * `--muted` 与 `--ink-2` 是同一个值，照搬 flat 层那一档，计数和标签仍然一样亮。 */
-.peach-react [data-catalog-tag] {
-  gap: 0;
-  border-radius: var(--tag-radius);
-  border-color: var(--field-ring-hover);
-  color: var(--glass-text);
-}
-.peach-react [data-catalog-tag]:hover { color: var(--ink); }
-.peach-react [data-catalog-tag][aria-pressed="true"] {
-  border-style: solid;
-  border-color: var(--glass-low);
-  background: var(--picked);
-}
-.peach-react [data-catalog-tag] [data-count-badge] {
-  margin-left: 6px;
-  color: color-mix(in srgb, var(--glass-text) 55%, transparent);
-  font-family: "Cascadia Mono", Consolas, ui-monospace, "Microsoft YaHei UI", "PingFang SC", monospace;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.peach-react [data-catalog-tag]:is(:hover, [aria-pressed="true"]) [data-count-badge] {
-  color: color-mix(in srgb, var(--glass-text) 80%, transparent);
-}
-
 
 /* ── 下排 ──
  * 读数照 `10,471 个符合` 写：12px 等宽、常规字重，颜色比标签低一档。其余控件同资料页那一排。 */

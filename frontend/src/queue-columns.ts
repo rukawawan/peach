@@ -40,5 +40,5 @@ export function queueTableSnapshot(page: QueueTablePage): TableSnapshot {
     flex: index === 0, required: index === 0, visible: !column.hidden,
   }));
   const keys = queueTableKeys(page);
-  return tableSnapshot(columns, keys.widths, keys.visibility);
+  return tableSnapshot(columns, keys.widths, keys.visibility, `queue-${page}`);
 }

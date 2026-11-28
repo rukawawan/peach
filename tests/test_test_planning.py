@@ -189,6 +189,17 @@ class TestPlanningTests(unittest.TestCase):
                 self.assertNotIn('full', scopes)
         self.assertNotIn('delivery', runner.scopes_for_changes(['docs/TESTING.md', 'scripts/render_star_history.py'])[0])
 
+    def test_rule_versions_and_the_document_linter_rules_select_their_readers_without_full(self):
+        for path in ('src/peach/upgrade_rules.py', 'src/peach/artifact_rules.py'):
+            with self.subTest(path=path):
+                scopes, why = runner.scopes_for_changes([path])
+                self.assertNotIn('full', scopes, why)
+                selected = {file.name for scope in scopes for file in runner.selected_files(scope)}
+                self.assertLessEqual({'test_upgrade_repairs.py', 'test_jav_covers.py', 'test_local_poster.py',
+                                      'test_metadata_library.py', 'test_processing_traffic.py'}, selected)
+        self.assertEqual(runner.scopes_for_changes(['seiso.toml'])[0], ('checks',))
+        self.assertIn('test_copy_final_state.py', {file.name for file in runner.selected_files('checks')})
+
     def test_changed_language_entries_select_their_readers(self):
         path = 'resources/locales/zh-CN/server.json'
         before = (runner.ROOT / path).read_text(encoding='utf-8')
@@ -207,6 +218,8 @@ class TestPlanningTests(unittest.TestCase):
         self.assertIn('test_metadata_seesaa.py', fallback)
         self.assertIn('test_tray.py', fallback)
         self.assertEqual(runner.selected_files('test_tray.py'), (runner.TESTS / 'test_tray.py',))
+        self.assertEqual(runner.scopes_for_changes([path], contents={path: (before, before)},
+                                                   kinds={path: 'unsafe'})[0], ('full',))
 
     def test_checks_ci_omits_runtime_tool_installation_and_keeps_platforms(self):
         for path in ("README.md", "CONTRIBUTING.md", ".github/PULL_REQUEST_TEMPLATE.md", "docs/TESTING.md"):
@@ -505,6 +518,49 @@ class TestPlanningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ci_plan.validate_results(passed, [])
 
+    def test_returned_translations_skip_browser_jobs_while_bundled_languages_keep_them(self):
+        returned = ['resources/locales/ko/navigation.json', 'resources/locales/glossary/ko.tbx',
+                    'scripts/locales/ko/dev.json']
+        planned = ci_plan.plan('pull_request', returned)
+        self.assertFalse(planned['browser'])
+        self.assertNotIn('web-e2e', planned['required_jobs'])
+        for language in sorted(ci_plan.BUNDLED_LOCALES):
+            with self.subTest(language=language):
+                self.assertTrue(ci_plan.plan('pull_request', [f'resources/locales/{language}/navigation.json'])['browser'])
+        self.assertTrue(ci_plan.plan('pull_request', [*returned, 'frontend/src/i18n/index.ts'])['browser'])
+        # 前端静态导入哪些语言，哪些语言的改动就要过浏览器回归。
+        index = (runner.ROOT / 'frontend/src/i18n/index.ts').read_text(encoding='utf-8')
+        imported = {line.split('resources/locales/', 1)[1].split('/', 1)[0]
+                    for line in index.splitlines() if line.startswith('import ') and 'resources/locales/' in line}
+        self.assertEqual(imported, set(ci_plan.BUNDLED_LOCALES))
+
+    def test_a_reused_mainline_run_needs_no_test_jobs_but_still_rejects_failures(self):
+        results = {name: {'result': 'success'} for name in ci_plan.REUSED_JOBS}
+        results |= {name: {'result': 'skipped'} for name in ('python', 'web-e2e', 'web-bundle')}
+        ci_plan.validate_results(results, ci_plan.REUSED_JOBS, reused=True)
+        with self.assertRaises(ValueError):
+            ci_plan.validate_results(results, ci_plan.REUSED_JOBS)
+        with self.assertRaises(ValueError):
+            ci_plan.validate_results(results | {'python': {'result': 'failure'}}, ci_plan.REUSED_JOBS, reused=True)
+
+    def test_a_mainline_plan_records_the_reused_run_and_only_then_drops_the_test_jobs(self):
+        url = 'https://github.com/example/peach/actions/runs/123'
+        for reused in (url, ''):
+            with self.subTest(reused=bool(reused)), tempfile.TemporaryDirectory() as folder:
+                output = Path(folder) / 'output'
+                with patch.object(sys, 'argv', ['ci_plan.py', '--event', 'push', '--base', 'unused']), \
+                        patch.dict(ci_plan.os.environ, {'GITHUB_OUTPUT': str(output)}), \
+                        patch.object(ci_plan, 'github_verified_base', return_value='master'), \
+                        patch.object(runner, 'changed_files', return_value=['docs/TESTING.md']), \
+                        patch.object(runner, 'changed_contents', return_value={}), \
+                        patch.object(ci_plan, 'reused_run', return_value=reused) as lookup, \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    ci_plan.main()
+                written = dict(line.split('=', 1) for line in output.read_text(encoding='utf-8').splitlines())
+                self.assertEqual(lookup.call_args.args[3], ('checks',))
+                self.assertEqual(written['reused'], reused)
+                self.assertEqual('python' in json.loads(written['required_jobs']), not reused)
+
     def test_result_gate_names_the_failed_upstream_when_no_plan_was_produced(self):
         results = {'workflow-lint': {'result': 'failure'}, 'plan': {'result': 'skipped'}}
         with patch.object(sys, 'argv', ['ci_plan.py', '--verify-results']), \
@@ -638,8 +694,10 @@ class TestPlanningTests(unittest.TestCase):
             self.assertEqual(values['base'], base)
             self.assertEqual(git('diff', '--name-only', values['base'] + '...HEAD'), 'README.md')
             result = json.loads(output.getvalue())
-            for key in result.keys() - {'base'}:
+            for key in result.keys() - {'base', 'reused'}:
                 self.assertEqual(json.loads(values[key]), result[key])
+            # 直接提交没有可沿用的 PR 运行；空值让各测试任务照常执行。
+            self.assertEqual((values['reused'], result['reused']), ('', ''))
 
     def test_venv_interpreter_path_keeps_environment_identity(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1078,6 +1136,52 @@ class GateAndFlakyRerunTests(unittest.TestCase):
                 patch.object(test_focus, 'run', return_value=0) as focused:
             self.assertEqual(runner.main(['--focus', 'frontend/e2e/design-people.test.ts']), 0)
         self.assertEqual(focused.call_count, 1)
+
+    def test_the_gate_run_takes_the_quick_checks_and_frontend_container_of_the_selected_scope(self):
+        from scripts import test_focus
+        captured = {}
+
+        def focused(_runner, args):
+            captured['focus'] = list(args.focus)
+            return 0
+        with patch.object(runner.test_evidence, 'held', side_effect=AssertionError('推送前自查不取得共享锁')), \
+                patch.object(runner, 'environment_preflight'), \
+                patch.object(test_focus, 'run', side_effect=focused), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runner.main(['--scope', 'web', '--gate']), 0)
+        selected = {path.stem for path in runner.selected_files('web')}
+        self.assertEqual(set(captured['focus']), selected & (runner.GATE_TESTS | {'test_frontend_build'}))
+        self.assertLessEqual({'test_frontend_build', 'test_user_messages', 'test_complexity_ratchet'},
+                             set(captured['focus']))
+        self.assertNotIn('test_web_e2e', captured['focus'])
+        for extra in (['--focus', 'test_media'], ['--fresh'], ['--resume']):
+            with self.subTest(extra=extra), self.assertRaises(SystemExit), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                runner.main(['--scope', 'web', '--gate', *extra])
+
+    def test_git_configuration_injected_by_the_outer_session_is_dropped_before_tests_use_git(self):
+        """外层会话留下的半套 `GIT_CONFIG_*` 会让每条 git 命令失败；运行器开跑前去掉它们。"""
+        environ = {**os.environ, 'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'credential.helper'}
+        environ.pop('GIT_CONFIG_VALUE_0', None)
+        command = ['git', '-C', str(runner.ROOT), 'rev-parse', '--git-dir']
+        broken = subprocess.run(command, env=environ, capture_output=True, text=True, encoding='utf-8', check=False)
+        self.assertNotEqual(broken.returncode, 0)
+        self.assertIn('GIT_CONFIG_VALUE_0', broken.stderr)
+        environ['GIT_CONFIG_GLOBAL'] = os.devnull
+        self.assertEqual(runner.drop_injected_git_config(environ), ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0'])
+        self.assertEqual(environ['GIT_CONFIG_GLOBAL'], os.devnull)
+        subprocess.run(command, env=environ, capture_output=True, check=True)
+
+    def test_focus_accepts_dotted_and_path_spellings_of_the_same_module(self):
+        from scripts import test_focus, test_slots
+        def ids(selector):
+            return sorted(CIFrontendOwnershipTests.ids(test_focus.selection(runner.ROOT, [selector])[0]))
+        expected = ids('test_dev_text')
+        for spelling in ('tests.test_dev_text', 'tests/test_dev_text.py'):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(ids(spelling), expected)
+        self.assertTrue(expected)
+        spellings = [f'tests.test_{index}' for index in range(test_slots.FOCUS_FREE_FILES)]
+        self.assertFalse(test_slots.focus_needs_slot([*spellings, 'tests/test_0.py', 'test_0']))
 
     def test_named_modules_include_their_direct_behavior_consumers(self):
         for module, consumers in (

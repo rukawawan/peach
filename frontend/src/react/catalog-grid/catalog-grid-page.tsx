@@ -39,6 +39,7 @@ import { CatalogListPage } from './catalog-list-page';
 import { useCatalogListPosition } from './catalog-list-position';
 import { catalogColumns } from './catalog-table-columns';
 import { t } from '../../i18n';
+import { useRectangleSelection } from '../components/rectangle-selection';
 
 export function CatalogGridPage(props: CatalogGridProps) {
   const view = useCatalogView();
@@ -226,6 +227,9 @@ function GridBody(props: CatalogGridProps & { filterBar?: ReactNode }) {
         helpers={helpers} actions={actions} onOpen={trash ? openResource : open} />
     );
 
+  const rectangle = useRectangleSelection(!result.isPlaceholderData && actions.selectCardRectangle
+    ? (keys, add) => actions.selectCardRectangle?.(keys.map(Number), add) : undefined,
+    { selecting: props.selectMode, items: ':scope > [data-media-grid] > [data-media-card][data-id]', start: '[data-media-grid]' });
   const content = () => {
     if (wallAvailable && props.wall) return <VideoWall
       key={finiteWall ? 'finite' : 'explore'}
@@ -249,7 +253,7 @@ function GridBody(props: CatalogGridProps & { filterBar?: ReactNode }) {
     }
     return (
       <>
-        <div data-media-sections="" data-select-mode={props.selectMode ? '' : undefined}>
+        <div data-media-sections="" data-select-mode={props.selectMode ? '' : undefined} {...rectangle}>
           {splitSections(tiles, cuts).map((section) => (
             <Fragment key={section.start}>
               <MediaGrid>{section.tiles.map(card)}</MediaGrid>

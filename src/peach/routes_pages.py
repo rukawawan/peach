@@ -18,6 +18,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -39,7 +40,7 @@ from fastapi.responses import (
     Response,
 )
 
-from . import distribution, interface_text, listening, onboarding, settings_file
+from . import ai_openai_oauth, distribution, interface_text, listening, onboarding, settings_file
 from .config import PROJECT_ROOT
 from .diagnostic_browser import BUNDLE_CHUNK_NAME
 from .entities import resolve_entity, resolve_entity_id
@@ -57,10 +58,6 @@ router = APIRouter()
 #: 馆藏，任何一次公网暴露都不该在搜索引擎里留下痕迹：不收录、不跟随、不留快照。
 ROBOTS_TAG = "noindex, nofollow, noarchive"
 ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
-
-#: 首启页共用的文件夹与媒体库图标。
-_SETUP_SYMBOLS = re.compile(r'<symbol id="i-(?:' + '|'.join(sorted({"folder-search", *LIBRARY_ICONS}))
-                           + r')"[^>]*>.*?</symbol>')
 
 #: 键 -> 页面上的题目与一句说明的 code（`pages.setup.question.<名字>.label`／`.help`）。顺序、默认值与校验仍然
 #: 来自 `onboarding.questions()`，这里只决定同一道题在浏览器里怎么称呼：命令行那份题面要把可选值写进去，页面用控件表达。
@@ -81,9 +78,8 @@ def setup_shell(language: str = interface_text.SOURCE_LANGUAGE) -> str:
 
     字形从 `web/index.html` 的雪碧图里按名字摘。标题与 `<html lang>` 按请求的语言。
     """
-    index = (PROJECT_ROOT / "web/index.html").read_text(encoding="utf-8")
     return page_shell(interface_text.text("server:pages.setup.title", None, language), "setup",
-                      symbols="".join(_SETUP_SYMBOLS.findall(index)), language=language)
+                      icons=("folder-search", *LIBRARY_ICONS), language=language)
 
 
 def error_page(status: int, message: str, *, language: str = interface_text.SOURCE_LANGUAGE) -> str:
@@ -135,7 +131,7 @@ def _media_dir_values(values: Mapping[str, object], default: str) -> list[str]:
     return [str(raw) if raw else default]
 
 
-def _question_view(question) -> dict[str, object]:
+def _question_view(question, *, windows: bool) -> dict[str, object]:
     """一道题在页面上的题面、说明的 code、控件种类和输入框前后缀，由 `/api/setup/questions` 交给首启页。"""
     name, has_help = _SETUP_COPY[question.key]
     view: dict[str, object] = {"label": f"pages.setup.question.{name}.label",
@@ -152,7 +148,8 @@ def _question_view(question) -> dict[str, object]:
     elif question.key == "mdns_name":
         view.update(prefix="http://" if distribution.standalone() else "https://", suffix=".local")
         if distribution.standalone():
-            view["help"] = "pages.setup.question.mdnsName.standaloneHelp"
+            suffix = "standaloneWindowsHelp" if windows else "standaloneHelp"
+            view["help"] = f"pages.setup.question.mdnsName.{suffix}"
     return view
 
 
@@ -486,7 +483,7 @@ def setup_questions(request: Request):
     只是不看 Origin：配置完成后这里 404，运行事实不再对外。
     """
     _setup_guard(request, submit=False)
-    from . import access, peach_proxy, remote_reporting
+    from . import access, library_sharing, peach_proxy, remote_reporting
     windows = os.name == "nt"
     docker = distribution.docker()
     asked = _asked(onboarding.questions(settings_file.active(), windows=windows), docker=docker)
@@ -494,7 +491,7 @@ def setup_questions(request: Request):
     from .media_configuration import SOURCE_OPTIONS
     items = []
     for question in asked:
-        view = _question_view(question)
+        view = _question_view(question, windows=windows)
         note = _POSIX_MEDIA_NOTE if question.key == "media_dir" and not windows else ""
         label = _setup_text(str(view["label"]))
         help_lines = [_setup_text(code) for code in (view["help"], note) if code]
@@ -537,6 +534,8 @@ def setup_questions(request: Request):
         # 容器启动时已按 `PEACH_ACCESS_PASSWORD` 写下访问密码，页面不再出这一题。
         "access_preset": access.load(settings_file.active().directory("secrets") / "access.json")["mode"] == "password",
         "remote_reporting": remote_reporting.snapshot(),
+        "library_sharing": {"consent_schema": library_sharing.CONSENT_SCHEMA,
+                            "available": bool(library_sharing.target()), **library_sharing.sharing_scope()},
     })
 
 
@@ -613,6 +612,7 @@ async def setup_submit_json(request: Request):
     except ValueError as exc:
         errors["access_password"] = exc
     languages = _setup_languages(body, errors)
+    sharing = _setup_library_sharing_choice(body, errors)
     standalone = distribution.standalone()
     from . import peach_proxy
     proxy_values = None
@@ -644,6 +644,7 @@ async def setup_submit_json(request: Request):
             errors = {"data_root": exc}
     if errors:
         raise HTTPException(status_code=400, detail={**message_fields("api.pages.needsChanges"), **field_errors(errors)})
+    sharing_save_failed = _setup_library_sharing_save_failed(applied.config, sharing)
     remote_reporting.save(reporting, applied.config)
     # 已有账本里的界面语言是那套馆藏自己的选择，首启页不改它。
     if languages and not applied.tree.ledger_existed:
@@ -653,7 +654,36 @@ async def setup_submit_json(request: Request):
     if scan_now:
         onboarding.request_first_scan(applied.config, "configured" if answers.media_sources is not None else "local")
     return _setup_done(applied.config, scan_now=scan_now, history_guide=history_guide,
-                       skip_media=submitted["skip_media"])
+                       skip_media=submitted["skip_media"], sharing_save_failed=sharing_save_failed)
+
+
+def _setup_library_sharing_choice(body: dict, errors: dict) -> bool:
+    if "library_sharing" not in body:
+        return False
+    from . import library_sharing
+
+    sharing = body["library_sharing"]
+    if (isinstance(sharing, dict) and sharing.get("consent") is True
+            and type(sharing.get("consent_schema")) is int
+            and sharing["consent_schema"] == library_sharing.CONSENT_SCHEMA):
+        return True
+    errors["library_sharing"] = UserValueError("api.pages.librarySharingReview")
+    return False
+
+
+def _setup_library_sharing_save_failed(config, accepted: bool) -> bool:
+    if not accepted:
+        return False
+    from . import library_sharing
+
+    if library_sharing.consent(config):
+        return False
+    try:
+        library_sharing.save_choice(config, True)
+    except OSError:
+        logging.getLogger(__name__).exception("Could not save library sharing consent during setup")
+        return not library_sharing.consent(config)
+    return False
 
 
 def _setup_languages(body: dict, errors: dict) -> dict[str, str]:
@@ -670,12 +700,13 @@ def _setup_languages(body: dict, errors: dict) -> dict[str, str]:
 
 
 def _setup_done(config, *, scan_now: bool = False, history_guide: bool = False, restored: bool = False,
-                skip_media: bool = False):
+                skip_media: bool = False, sharing_save_failed: bool = False):
     destination = _normal_url(config) if restored else _setup_destination(config, history_guide=history_guide)
     return JSONResponse({
         "url": destination,
         "scan_requested": scan_now,
         "skip_media": skip_media,
+        **({"sharing_save_failed": True} if sharing_save_failed else {}),
         "history_guide": history_guide,
         "restored": restored,
         "standalone": distribution.standalone(),
@@ -999,11 +1030,26 @@ def management_route_redirect(request: Request, args: dict[str, str] = Depends(r
     return _page_redirect(request, paths[request.url.path])
 
 
+@router.api_route(ai_openai_oauth.RESULT_PATH, methods=["GET", "HEAD"])
+def ai_authorization_result(request: Request, _args=Depends(require_page_auth)):
+    if not loopback_client(request):
+        raise HTTPException(404, "not found")
+    status = ai_openai_oauth.status(request.app.state)
+    outcome = "permission_required" if status.get("error") == "permission_required" else status["status"]
+    editor = "edit" in request.query_params and _copy_editor_available()
+    language = interface_text.request_language(request.headers.get("accept-language"))
+    html = page_shell("Peach", "ai-authorization", {"status": outcome, "editing": str(editor).lower()},
+                      language=language)
+    if editor:
+        html = _with_copy_editor(html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
 @router.api_route("/settings/{section}", methods=["GET", "HEAD"])
 def settings_section_route(request: Request, section: str,
                            args: dict[str, str] = Depends(require_page_auth)):
     if section not in {"appearance", "playback", "jav", "search", "content", "library",
-                       "subscriptions", "downloads", "network", "maintenance", "diagnostics"}:
+                       "subscriptions", "ai", "downloads", "network", "maintenance", "diagnostics"}:
         raise HTTPException(404, "not found")
     return index(request, args)
 
@@ -1058,6 +1104,7 @@ def entity_route(request: Request, name: str,
 @router.api_route("/series", methods=["GET", "HEAD"])
 @router.api_route("/tags", methods=["GET", "HEAD"])
 @router.api_route("/jav", methods=["GET", "HEAD"])
+@router.api_route("/ai", methods=["GET", "HEAD"])
 @router.api_route("/unseen", methods=["GET", "HEAD"])
 @router.api_route("/watch-later", methods=["GET", "HEAD"])
 @router.api_route("/flagged", methods=["GET", "HEAD"])

@@ -107,6 +107,27 @@ describe('统一播放文件记忆', () => {
 });
 
 describe('每部视频的字幕选择', () => {
+  it('shifts from the original cue times on repeated adjustment and resets the selected track', async () => {
+    const writes: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') { writes.push(JSON.parse(String(init.body))); return new Response('{}') }
+      return new Response('{"selected":"sidecar:1","tracks":[],"subtitle_offsets":{"sidecar:1":500}}');
+    }));
+    const view = mounted();
+    const track = view.add('sidecar:1');
+    const cue = { startTime: 0.2, endTime: 2 };
+    Object.defineProperty(track, 'cues', { value: [cue] });
+    const session = new SubtitleSession(view.player, view.video);
+    await session.ready;
+    expect(cue).toEqual({ startTime: 0.7, endTime: 2.5 });
+    await session.setOffset(track, -500);
+    expect(cue).toEqual({ startTime: 0, endTime: 1.5 });
+    await session.setOffset(track, 0);
+    expect(cue).toEqual({ startTime: 0.2, endTime: 2 });
+    expect(writes).toEqual([{ subtitle_offsets: { 'sidecar:1': -500 } }, { subtitle_offsets: { 'sidecar:1': 0 } }]);
+    view.dispose();
+  });
+
   it('登记轨道的选择可通过字幕别名恢复', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ selected: 'sidecar:2', tracks: [] }))));
     const view = mounted(), session = new SubtitleSession(view.player, view.video);

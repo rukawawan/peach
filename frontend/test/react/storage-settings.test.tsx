@@ -20,6 +20,8 @@ const measured: StorageState = {
       category('backups', '数据库备份', 2 ** 30, 2 ** 29, true, '每处保留最近一份，更早的无法再恢复'),
       category('playback', '播放缓存', 2 ** 30, 2 ** 30, true, '再次播放时重新转码'),
       category('previews', '预览图', 2 ** 30, 0, false, '重建要重新读取整部影片'),
+      category('follow_snapshots', '关注抓取快照', 2 ** 20, 0, false, '保留每个来源最近 3 份及条目仍引用的快照'),
+      { ...category('project_archives', '本机项目归档', 0, 0, false, '逐项确认'), files: 0 },
       category('logs', '日志', 2 ** 20, 0, true, '只清理已归档的日志'),
     ],
   },
@@ -75,13 +77,18 @@ it('只读教程经过维护页不启动占用统计，正常访问仍可统计'
   expect(fetcher.mock.calls[0]?.[0]).toBe('/api/configuration/storage/measure');
 });
 
-it('不能清理的勾选框禁用并写明原因，勾几类一起清，全部清理只发可清理的那几类', async () => {
+it('只对可清理类别显示勾选框，关注快照链接到专项清理，全部清理只提交可清理类别', async () => {
   const seen = confirmWith(true);
   const fetcher = fetchMock(200, { ...measured, job: { state: 'cleaning', category: 'playback', message: '' } });
   vi.stubGlobal('fetch', fetcher);
   const host = await mount(<StorageSettings initial={measured} receipt={vi.fn()} />);
 
-  expect(box(host, 'database').disabled).toBe(true);
+  expect(box(host, 'database')).toBeNull();
+  expect(box(host, 'follow_snapshots')).toBeNull();
+  const snapshots = host.querySelector('[data-category="follow_snapshots"]')!;
+  expect(snapshots.querySelector('a')?.getAttribute('href')).toBe('/settings/maintenance/repairs#repair-item-follow-evidence');
+  expect(snapshots.textContent).toContain('最近 3 份');
+  expect(host.querySelector('[data-category="project_archives"]')).toBeNull();
   expect(host.querySelector('[data-category="previews"]')!.textContent).toContain('不能清理：重建要重新读取整部影片');
   expect(box(host, 'logs').disabled).toBe(true);
   expect(host.querySelector('[data-category="logs"]')!.textContent).toContain('没有可以清理的文件');

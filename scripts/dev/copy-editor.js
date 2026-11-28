@@ -6,6 +6,10 @@
   try { edits = JSON.parse(localStorage.getItem(key) || '{}'); } catch {}
   const originals = new WeakMap();
   const tools = core.createTools({
+    reactModalHost(nativeHost) {
+      return [...nativeHost.querySelectorAll('.peach-feedback-surface [role="dialog"], [data-modal-surface] [role="dialog"]')].reverse()
+        .find(dialog => dialog.getClientRects().length && !dialog.closest('[inert], [aria-hidden="true"]'));
+    },
     onToggle(value) { editor.commit(); active = value; editor.hideHighlight(); },
     onExport() {
       const url = URL.createObjectURL(new Blob([JSON.stringify(edits, null, 2)], { type: 'application/json' }));
@@ -85,7 +89,8 @@
       const candidates = await core.readJson(response);
       if (!Array.isArray(candidates) || !candidates.length) throw Error('这段文字尚无可编辑的文案来源');
       const range = document.createRange(); range.selectNodeContents(ed.node);
-      const candidate = candidates.length === 1 ? candidates[0] : await choose(candidates, range.getBoundingClientRect());
+      const scope = ed.node.parentElement?.closest('[data-copy-choice-host]');
+      const candidate = candidates.length === 1 ? candidates[0] : await choose(candidates, range.getBoundingClientRect(), scope);
       return candidate ? { candidate, core: candidate.template || ed.originalText } : null;
     },
     async save(ed, replacement) {
@@ -105,8 +110,8 @@
       if (result.apply) await watchApply(result.apply);
     },
   });
-  async function choose(candidates, rect) {
+  async function choose(candidates, rect, scope) {
     return tools.choose(candidates.map(candidate => ({ label: `${candidate.file}:${candidate.line}`, value: candidate })), rect,
-      { label: '文案来源', message: '这段文案有多个来源，请选择要修改的位置' });
+      { label: '文案来源', message: '这段文案有多个来源，请选择要修改的位置', scope });
   }
 })();

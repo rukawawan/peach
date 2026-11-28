@@ -87,6 +87,7 @@ afterEach(async () => {
 function shellActions(): ShellActions {
   return {
     openItem: vi.fn(), openEntity: vi.fn(), openTag: vi.fn(), openTasteSignal: vi.fn(), navigate: vi.fn(),
+    playSavedFilter: vi.fn(),
     openManage: vi.fn(), managePath: vi.fn(() => ''), openFollow: vi.fn(), receipt: vi.fn(), toast: vi.fn(),
     failure: vi.fn(), revealSource: vi.fn(async () => ''), reopenTutorial: vi.fn(async () => {}),
     routeReview: vi.fn(),
@@ -111,12 +112,13 @@ async function connect(r: Loaded) {
 }
 
 const settings = (): PanelSettings => ({
-  theme: 'system', uiSounds: true, homeGlow: { ...normalizeHomeGlow(null), on: true, preset: 'ash' }, accent: 'blue',
+  theme: 'system', localAppearance: false, uiSounds: true, homeGlow: { ...normalizeHomeGlow(null), on: true, preset: 'ash' }, accent: 'blue',
   sidebarOrder: [''], batchSize: 60, defaultSort: 'seed', defaultSortDirection: '', groupCollapse: true,
   javImage: 'cover', performerNameLanguage: 'zh-CN', interfaceLanguage: 'zh-CN', systemLanguage: null, feedAutoScroll: true, feedLimit: 12, feedHideGroupCompilations: true, feedHideSoloCompilations: false,
   feedHideExcerpts: true, hoverDelaySeconds: 5, hoverPreview: true, touchGestures: true, holdRate: 2, swipeMinutes: 20, doubleTapPercent: 35, autoFullscreen: false, detailAutoplay: false, autoChineseSubtitles: false, afterPlayback: 'next', resumeRestartPercent: 5, miniplayer: true, seekSeconds: 10, longSeekSeconds: 30,
   relatedLimit: 24, searchHistoryLimit: 10, followInitialDays: 30, avatarRefreshDays: 90, faviconRefreshDays: 365,
-  feedNewRows: true, homeShortsLimit: 18, homeTiers: true, homePreviewOnly: false, completionPrompt: true, searchRecommendations: true, ingestNotices: true,
+  feedNewRows: true, homeShortsLimit: 18, homeTiers: true, homePreviewOnly: false, containHomeScroll: false,
+  completionPrompt: true, searchRecommendations: true, ingestNotices: true, showFeedbackButton: true,
 });
 
 /** 壳 `settingsHost()` 交进来的那一份。 */
@@ -254,7 +256,7 @@ describe('设置面板与壳的接缝', () => {
       .toEqual(['settings-group-1', 'settings-group-1', 'settings-group-2']);
     const headings = (index: number) => [...panel.querySelectorAll(`#settings-group-${index} [data-settings-subheading]`)]
       .map((node) => node.textContent);
-    expect([headings(1), headings(2)]).toEqual([['作品列表', '播放'], ['作品显示', '新作显示']]);
+    expect([headings(1), headings(2)]).toEqual([['作品列表', '首页', '播放'], ['作品显示', '新作显示']]);
     /* 转码方式是运行 Peach 那台电脑的服务配置，在 Peach 配置里，弹窗里没有这一行（ADR-0103）。 */
     expect(panel.querySelector('#playbackAccelerationSetting')).toBeNull();
     const entry = panel.querySelector<HTMLButtonElement>('[data-settings-service] button')!;
@@ -439,8 +441,9 @@ describe('设置面板与壳的接缝', () => {
     const current = await setup();
     const panel = await open(current);
     const contrast = panel.querySelector<HTMLInputElement>('#glassContrastSetting')!;
-    expect([contrast.getAttribute('role'), panel.querySelector('label[for="glassContrastSetting"] b')?.textContent])
-      .toEqual(['switch', '增加对比度']);
+    expect([contrast.getAttribute('role'), contrast.getAttribute('aria-label')]).toEqual(['switch', '增加对比度']);
+    expect(contrast.labels?.[0]?.querySelector('b')?.textContent).toBe('增加对比度');
+    expect(panel.querySelector(`#${contrast.getAttribute('aria-describedby')}`)?.textContent).toBeTruthy();
     await click(contrast);
     expect(current.setHighContrast.mock.calls).toEqual([[true]]);
     await close(current);

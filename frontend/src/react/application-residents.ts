@@ -23,8 +23,14 @@ export function loadRouter(actions: ShellActions): Promise<void> {
   if (!publish) return Promise.resolve();
   publishedActions = actions;
   publish(actions);
-  connectManagedRoutes(Promise.resolve(prefetchManagedRoute));
-  warmRouteChunks();
+  let warmed = false;
+  connectManagedRoutes(Promise.resolve(async (path, props, signal) => {
+    await prefetchManagedRoute(path, props, signal);
+    if (!warmed && path.startsWith('/') && !signal.aborted) {
+      warmed = true;
+      warmRouteChunks();
+    }
+  }));
   return Promise.resolve();
 }
 

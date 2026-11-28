@@ -132,6 +132,7 @@ async function openPage(path: ManagedPath, actions: ShellActions, run: Run): Pro
   actions.surfaceChanged('management', path);
   paintManagementPlaceholder(stats, managementSkeletonHtml(path, {
     followLayout: followLayout(), followSort: search().get('sort') || '', followDir: search().get('dir') || '',
+    followTab: search().get('tab') || '',
   }));
   void pageNavigationReady(isCurrent, stats, { pending: true });
   if (path === '/taste') {

@@ -1,0 +1,49 @@
+name: Docker Hub 概览同步
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/dockerhub/README.md'
+      - '.github/workflows/dockerhub-readme.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-readme
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'peach-mitao/peach' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DOCKERHUB_REPOSITORY: longmeidao/peach
+      DOCKERHUB_README: docs/dockerhub/README.md
+      DOCKERHUB_DESCRIPTION: Local-first video metadata scraper and media manager. Self-hosted web UI for VPS and NAS.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/heads/master
+          persist-credentials: false
+      - name: 同步概览与简介
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN || secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_REPOSITORY }}
+          readme-filepath: ${{ env.DOCKERHUB_README }}
+          short-description: ${{ env.DOCKERHUB_DESCRIPTION }}
+      - name: 回读 Docker Hub 的公开概览
+        run: |
+          set -o pipefail
+          curl --fail --silent --show-error --max-time 20 \
+            "https://hub.docker.com/v2/repositories/$DOCKERHUB_REPOSITORY/?run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" |
+            jq -e --arg description "$DOCKERHUB_DESCRIPTION" --rawfile readme "$DOCKERHUB_README" \
+              '.description == $description and
+               ((.full_description | rtrimstr("\n")) == ($readme | rtrimstr("\n")))' >/dev/null
+          printf '已回读 [Docker Hub 概览](https://hub.docker.com/r/%s)并核对正文和简介。\n' \
+            "$DOCKERHUB_REPOSITORY" >> "$GITHUB_STEP_SUMMARY"

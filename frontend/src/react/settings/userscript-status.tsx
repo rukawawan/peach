@@ -1,4 +1,5 @@
 /* 用户脚本通过同源桥接页回报版本与当前地址的配对状态。 */
+import { useEffect, useRef } from 'react';
 import { Button } from '@/components/base/buttons/button';
 import { cardClass } from '../components/card';
 import { ConnectionStatus } from '../components/connection-status';
@@ -6,6 +7,7 @@ import { StatusLabel } from '../components/status-label';
 import { ExternalLink } from './section';
 import { busyProps } from './busy-props';
 import { useUserscriptProbe } from './userscript-probe';
+import { useCheckReceipt } from './use-check-receipt';
 import { t } from '../../i18n';
 
 export function userscriptVersionSupported(version: string, minimumVersion: string) {
@@ -21,6 +23,8 @@ export function UserscriptStatus({ enabled, release }: {
   enabled: boolean; release: { version: string; minimum_version: string; install_url: string };
 }) {
   const { frame, attempt, status, retry } = useUserscriptProbe();
+  const { checked } = useCheckReceipt();
+  const announced = useRef(0);
   const installed = typeof status === 'object';
   const required = installed && !userscriptVersionSupported(status.version, release.minimum_version);
   const update = installed && !userscriptVersionSupported(status.version, release.version);
@@ -28,6 +32,11 @@ export function UserscriptStatus({ enabled, release }: {
     : required || update || !status.paired ? 'warning' : 'success';
   const label = status === 'checking' ? t('settings:userscriptStatus.checking') : status === 'missing' ? t('settings:mediaLibraries.dependencyMissing')
     : required ? t('settings:userscriptStatus.updateRequired') : update ? t('settings:userscriptStatus.updateAvailable') : status.paired ? t('settings:userscriptStatus.connected') : t('settings:userscriptStatus.unpaired');
+  useEffect(() => {
+    if (status === 'checking' || announced.current === attempt) return;
+    announced.current = attempt;
+    checked(t('settings:userscriptStatus.checkResult', { result: label }));
+  }, [attempt, checked, label, status]);
   const copyState = status === 'checking' ? 'checking' : status === 'missing' ? 'missing'
     : required ? 'required' : update ? 'available' : status.paired ? enabled ? 'enabled' : 'disabled' : 'unpaired';
   return <>

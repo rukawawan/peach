@@ -159,7 +159,7 @@ export function OrphanRecordsCard({ toast }: { toast(message: string): void }) {
               <FieldsetTitle id="orphan-records-title">{t('cleanup:tools.orphanRecords')}</FieldsetTitle>
               <Note tone="error" title={t('cleanup:orphans.loadFailed')}>{errorMessage(query.error)}</Note>
             </Fieldset>
-          : <DataTable label={t('cleanup:orphans.tableLabel')} items={items} columns={columns}
+          : <DataTable preferenceId="orphan-records" label={t('cleanup:orphans.tableLabel')} items={items} columns={columns}
               contextOperations={contextOperations}
               title={t('cleanup:tools.orphanRecords')} titleId="orphan-records-title" unit={t('cleanup:orphans.unit')}
               description={ORPHAN_RECORDS_TEXT}

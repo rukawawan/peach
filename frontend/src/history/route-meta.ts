@@ -33,6 +33,7 @@ const ROUTE_ENTRIES = {
   ...Object.fromEntries(Object.entries(CONFIGURATION_SECTIONS).map(([key, title]) => [`/settings/${key}`, { title, section: 'configuration', refresh: 'reopen' }])),
   [REPAIR_CENTER_PATH]: { title: t('shell:routeTitle.repair'), section: 'configuration', refresh: 'reopen' },
   '/jav': { nav: 'jav', title: 'JAV', refresh: 'reopen' },
+  '/ai': { nav: 'ai', title: t('catalog:libraryAssistant.title'), refresh: 'reopen' },
   '/stats': { section: 'stats', title: t('shell:routeTitle.stats') },
   '/taste': { section: 'taste', title: t('shell:routeTitle.taste'), refresh: 'reopen' },
   '/review': { section: 'review', title: t('shell:routeTitle.review'), refresh: 'reopen' },

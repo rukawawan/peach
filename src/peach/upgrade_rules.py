@@ -13,9 +13,11 @@ PROVIDER_TEXT = 5
 OFFICIAL_COVER_CATALOG_MISSES = 1
 #: 欧美接口的坏响应曾被记成无结果；只释放该来源的旧缺失记录。
 WESTERN_SCENE_MISSES = 1
+#: Prestige 新增带前缀 SKU 的检索，重新询问这一站的旧缺失记录。
+PRESTIGE_SKU_MISSES = 1
 #: 文件名番号判据放宽后（如 TMA 的 `T28-612`），账本里还没番号、按现行规则认得出的影片撤掉处理检查点重新处理。
-#: 判据又放宽时加一。2：S Model、キャットウォーク的数字厂牌段（#124）。
-FILENAME_CODES = 2
+#: 3：CDRP 的两位序号和 S2MBD 的数字厂牌段（#788、#789）。
+FILENAME_CODES = 3
 #: 核查差异按确定判据结算（ADR-0139）。判据改了就加一，升级时对存量候选再结算一遍。
 VERIFICATION_SETTLEMENT = 1
 # 旧队列保持撤下状态；新规则单独记录已取得的 SAR 测量。

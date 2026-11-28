@@ -61,10 +61,19 @@ def pinned_address(url: str, *, deadline: float | None = None) -> tuple[str, str
 def pinned_session(url: str, *, client_options=None, deadline: float | None = None):
     """连到 `pinned_address` 核验过的 IP 的会话；`client_options` 是 `peach_proxy.client_options` 的形状。"""
     host, address = pinned_address(url, deadline=deadline)
+    with address_session(host, address, 443, client_options=client_options) as client:
+        yield client
+
+
+@contextmanager
+def address_session(host: str, address: str, port: int, *, client_options=None):
+    """使用调用方核验过的地址，保留原主机的 TLS 验证。"""
+    if ":" in host:
+        host = f"[{host}]"
     if ":" in address:
         address = f"[{address}]"
     # curl_cffi 的 CONNECT_TO 收原生 slist；会话关闭后才释放。
-    target = ffi.gc(lib.curl_slist_append(ffi.NULL, f"{host}:443:{address}:443".encode()),
+    target = ffi.gc(lib.curl_slist_append(ffi.NULL, f"{host}:{port}:{address}:{port}".encode()),
                     lib.curl_slist_free_all)
     options = dict(client_options or {"trust_env": False})
     curl_options = {CurlOpt.CONNECT_TO: target}

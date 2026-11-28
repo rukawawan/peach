@@ -16,10 +16,13 @@
  * 行之间也只用分隔线，不各自套框；字号只取 BoardUI 排好的那几档 token。 */
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { RiRssLine } from '@remixicon/react';
 
 import { resolveFollowSort } from '../../follow-sort';
+import { errorMessage } from '../../api';
 import type { FollowManageProps } from '../bundle';
 import { Note } from '../components/note';
+import { EmptyState } from '../components/empty-state';
 import { Page } from '../components/page';
 import { SortableBoardTabs } from '../components/navigation-order';
 import { STAT_STRIP_SIX } from '../components/stat-card';
@@ -27,8 +30,9 @@ import { ExternalLink } from '../settings/section';
 import { AddSource } from './add-source';
 import { AddFeed } from './add-feed';
 import { AliasManager } from './alias-manager';
-import { ButtonLink } from '@/components/base/buttons/button';
+import { Button, ButtonLink } from '@/components/base/buttons/button';
 import { FeedSources } from './feed-sources';
+import { followListSurfaceSkeleton } from '../../board-skeleton';
 import {
   credentialDone, DEFAULT_SORT, FEEDS_KEY, fetchCredentials, fetchFeeds, fetchFollow, FOLLOW_CREDENTIALS_KEY,
   FOLLOW_MANAGE_KEY, groupByAuthor, isBroken, isLayout, keepSelected, pageSizeOf,
@@ -59,7 +63,7 @@ export function FollowManagePage(props: FollowManageProps) {
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set<number>());
   const [feedSelected, setFeedSelected] = useState<ReadonlySet<number>>(new Set<number>());
   /* 关注列表与订阅源的勾选接右上角多选开关：勾了就进入多选，点开关退出时两份都清空。 */
-  usePageSelection(() => { setSelected(new Set<number>()); setFeedSelected(new Set<number>()) });
+  const selecting = usePageSelection(() => { setSelected(new Set<number>()); setFeedSelected(new Set<number>()) });
   useEffect(() => { if (selected.size || feedSelected.size) enterPageSelection() }, [selected, feedSelected]);
 
   const follow = useQuery({ queryKey: FOLLOW_MANAGE_KEY, queryFn: ({ signal }) => fetchFollow(signal) });
@@ -101,6 +105,7 @@ export function FollowManagePage(props: FollowManageProps) {
   /* 按人数：一位女优常有本名页和旧艺名页两条源，订的是她这个人。没挂人物的源各算一位。 */
   const subscribed = new Set((feeds.data?.sources || []).map(
     (source) => source.entity_id ?? `source-${source.id}`)).size;
+  const empty = Boolean(follow.data && feeds.data && !sources.length && !subscribed);
 
   return (
     <Page>
@@ -135,13 +140,18 @@ export function FollowManagePage(props: FollowManageProps) {
         </div>
 
         {tab === 'list' ? <div role="tabpanel" id="follow-panel-list" aria-labelledby="follow-tab-list" className="flex flex-col gap-4">
-          <FeedSources readOnly={readOnly} toast={toast}
-            onAdd={() => { setTab('add'); go({ tab: 'add' }) }}
-            selection={{ ids: feedSelected, onChange: setFeedSelected, onActivate: () => setSelected(new Set()) }} />
-          {follow.data ? <SourceList data={data} sort={sort} dir={dir} page={page} layout={layout}
-            pageSize={pageSize} selected={selected} readOnly={readOnly} toast={toast}
+          {empty ? <EmptyState icon={RiRssLine} title={t('follow:sourceList.empty')}
+            actions={!readOnly ? <Button variant="primary" size="small" onClick={() => {
+              setTab('add'); go({ tab: 'add' });
+            }}>{t('follow:followFeed.addFollow')}</Button> : undefined}>
+            {t('follow:followManagePage.emptyBody')}
+          </EmptyState> : null}
+          {/* 列表还没到时只画与整页骨架同一张的列表占位，订阅源那张卡等列表到了再出：同一次进入只有一段等待。 */}
+          {!empty && follow.data && (!feeds.data || subscribed > 0) ? <FeedSources readOnly={readOnly} toast={toast}
+            selection={{ ids: feedSelected, onChange: setFeedSelected, onActivate: () => setSelected(new Set()) }} /> : null}
+          {follow.data ? sources.length > 0 && <SourceList data={data} sort={sort} dir={dir} page={page} layout={layout}
+            pageSize={pageSize} selected={selected} selecting={selecting} readOnly={readOnly} toast={toast}
             openFollow={openFollow}
-            onAdd={() => { setTab('add'); go({ tab: 'add' }) }}
             onSort={(nextSort, nextDir) => {
               setSort(nextSort);
               setDir(nextDir);
@@ -161,15 +171,26 @@ export function FollowManagePage(props: FollowManageProps) {
               setPage(1);
               savePreference({ pageSize: next });
               go({ page: 1 });
-            }} /> : follow.isError ? <Note tone="error">{t('follow:followManagePage.listFailed')}</Note>
-            : <div role="status" aria-label={t('follow:followManagePage.listLoading')} data-skeleton="" className="skeleton-sheen h-32 rounded-lg" />}
+            }} /> : follow.isError ? <Note tone="error" title={t('follow:followManagePage.listFailed')}
+              action={<Button variant="secondary" size="small" onClick={() => void follow.refetch()}>{t('catalog:shared.retryNow')}</Button>}>
+              {errorMessage(follow.error)}</Note>
+            : <div role="status" aria-label={t('follow:followManagePage.listLoading')} data-skeleton="">
+              <div aria-hidden="true" inert dangerouslySetInnerHTML={{ __html: followListSurfaceSkeleton({ followLayout: layout, followSort: sort, followDir: dir, followPageSize: pageSize }) }} />
+            </div>}
         </div> : null}
 
         {tab === 'add' ? <div role="tabpanel" id="follow-panel-add" aria-labelledby="follow-tab-add" className="flex flex-col gap-8">
           {credentials.data && follow.data ? <AddSource data={data} credentials={creds} readOnly={readOnly} toast={toast} />
-            : credentials.isError || follow.isError ? <Note tone="error">{t('follow:followManagePage.credentialsFailed')}</Note>
+            : credentials.isError || follow.isError ? <>
+              {credentials.isError ? <Note tone="error" title={t('follow:followManagePage.credentialsFailed')}
+                action={<Button variant="secondary" size="small" onClick={() => void credentials.refetch()}>{t('catalog:shared.retryNow')}</Button>}>
+                {errorMessage(credentials.error)}</Note> : null}
+              {follow.isError ? <Note tone="error" title={t('follow:followManagePage.listFailed')}
+                action={<Button variant="secondary" size="small" onClick={() => void follow.refetch()}>{t('catalog:shared.retryNow')}</Button>}>
+                {errorMessage(follow.error)}</Note> : null}
+            </>
             : <div role="status" aria-label={t('follow:followManagePage.credentialsLoading')} data-skeleton="" className="skeleton-sheen h-32 rounded-lg" />}
-          <AddFeed readOnly={readOnly} toast={toast}
+          <AddFeed readOnly={readOnly} toast={toast} initialName={new URLSearchParams(location.search).get('performer') || ''}
             onAdded={() => { void feeds.refetch(); setTab('list'); go({ tab: 'list' }) }} />
           {follow.data ? <AliasManager groups={data.author_aliases || []} readOnly={readOnly} toast={toast}
             suggestions={data.alias_suggestions || []} sources={data.sources} /> : null}

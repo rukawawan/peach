@@ -32,6 +32,7 @@ from peach.catalog_rules import is_jav_code   # noqa: E402
 from peach.config import STATE_DIR   # noqa: E402
 from peach.interface_text import dev as t   # noqa: E402
 from peach.jobs import job_main   # noqa: E402
+from peach.migrations import readonly_uri   # noqa: E402
 from peach.page_cache import HttpStatusError, Site   # noqa: E402
 from peach.review_csv import write_rows   # noqa: E402
 from peach.social_links import load_performers, name_key   # noqa: E402
@@ -245,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, site: Site | None = None) -> int:
-    connection = sqlite3.connect(f"file:{args.database}?mode=ro", uri=True)
+    connection = sqlite3.connect(readonly_uri(args.database), uri=True)
     owned = site is None
     if owned:
         site = Site(args.cache_dir, args.interval, args.timeout,

@@ -3254,7 +3254,7 @@ class ReviewQueueTests(unittest.TestCase):
             'field':'title','field_label':'标题','current_value':'','candidates_json':json.dumps([candidate]),
             'source_count':'1','status':'candidate','size_gb':'1','videos':'1','fetched_at':'now'}])
         self.assertEqual(self._auto()['applied'], 0)
-        with self.assertRaisesRegex(ValueError, '原文证据未取得'):
+        with self.assertRaisesRegex(ValueError, '缺少 r18 标题原文证据'):
             rm_review.w_review_decision(self.contract, {'category':'metadata_fields','item_key':'PCH-890:title',
                 'candidate_key':candidate['candidate_key'],'status':'approved'})
         with contextlib.closing(sqlite3.connect(self.db_path)) as connection:

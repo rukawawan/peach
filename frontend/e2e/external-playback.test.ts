@@ -41,15 +41,15 @@ describe('外部播放器', () => {
         await waitForChevron(true);
         await page.keyboard.press('Escape');
         await waitForChevron(false);
-        assert.equal(await chooser.evaluate(button => button === document.activeElement), true);
+        await page.waitForFunction(selector => document.activeElement?.matches(selector), PLAYER_SELECT);
         assert.match(await chooser.ariaSnapshot(), /外部播放器/);
 
         await page.keyboard.press('Enter');
         await waitForChevron(true);
         await page.keyboard.press('Tab');
         await waitForChevron(false);
-        assert.equal(await page.getByRole('button', { name: '使用外部播放器打开', exact: true })
-          .evaluate(button => button === document.activeElement), true);
+        // 弹层卸下后焦点才由 FocusScope 交还触发键、再按 Tab 移到下一个控件，和 Escape 一样是异步的。
+        await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '使用外部播放器打开');
 
         await chooser.click();
         await page.getByRole('option', { name: 'PotPlayer', exact: true }).click();

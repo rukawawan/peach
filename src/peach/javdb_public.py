@@ -24,7 +24,7 @@ from .http import HttpRequest, HttpxTransport, response_text
 from .scripting import HostLimiter
 from .user_agent import JAVDB_APP_USER_AGENT
 from .jav_cache import DAY, PublicSnapshots, cache_lifetime
-from .javdb_identity import RULE, cache_key as identity_cache_key, current_evidence
+from .javdb_identity import RULE, cache_key as identity_cache_key, current_evidence, fanza_regular_id
 from .metadata import RelayableError, relay_args
 from .user_messages import UserValueError, nested_message
 
@@ -258,6 +258,23 @@ def actor_gender(actor: dict) -> str:
     if type(value) is int:
         return {0: "female", 1: "male"}.get(value, "unknown")
     return value if value in ("female", "male") else "unknown"
+
+
+def verified_fanza_regular(movies: list[dict], regular: str, *, series_field: str = 'series_id') -> dict | None:
+    """用详情原题、女优 ID、时长和已知系列核对通常版。"""
+    if fanza_regular_id(movies) != regular:
+        return None
+    performers = [{actor['id'] for actor in movie.get('actors') or []
+                   if isinstance(actor, dict) and isinstance(actor.get('id'), str)
+                   and actor_gender(actor) == 'female'} for movie in movies]
+    duration = movies[0].get('duration')
+    if (not performers[0] or performers[0] != performers[1]
+            or type(duration) is not int or duration <= 0 or movies[1].get('duration') != duration):
+        return None
+    series = [movie.get(series_field) for movie in movies]
+    if all(series) and series[0] != series[1]:
+        return None
+    return next(movie for movie in movies if movie['id'] == regular)
 
 
 class PublicAPI:
@@ -575,10 +592,15 @@ class PublicAPI:
                 self.failures.pop(removed, None)
         return snapshot
 
+    def search_movies(self, query: str) -> list[dict]:
+        from .sources.javdb import page_search_rows
+        return self._login_walled(
+            lambda: self._rows("/v2/search", "movies", {"q": query, "type": "movie", "page": 1}),
+            "/search?" + urlencode({"q": query, "f": "all"}), page_search_rows)
+
     def movie(self, code: str, *, refresh=False, source_id=None) -> dict:
         """番号对应的来源作品。来源去掉 MGS 的数字前缀（`259LUXU-891` 记作 `LUXU-891`），
         搜索词与身份核对都按 `release_identity` 认同一部作品。"""
-        from .sources.javdb import page_search_rows
         canonical = normalise_code_key(code)
         matches = []
 
@@ -586,9 +608,7 @@ class PublicAPI:
             nonlocal matches
             product = re.fullmatch(r'FC2-PPV-(\d+)', canonical)
             query = product[1] if product else release_identity(canonical) or canonical
-            rows = self._login_walled(
-                lambda: self._rows("/v2/search", "movies", {"q": query, "type": "movie", "page": 1}),
-                "/search?" + urlencode({"q": query, "f": "all"}), page_search_rows)
+            rows = self.search_movies(query)
             matches = [row for row in rows if isinstance(row, dict)
                        and same_release_code(canonical, row.get("number"))]
             if not matches:
@@ -621,25 +641,12 @@ class PublicAPI:
         return self._movie(canonical, movie_id, refresh=refresh)
 
     def _regular_edition(self, canonical, identities, matches, *, refresh):
-        from .javdb_identity import fanza_regular_id
         rows = list({row['id']: row for row in matches}.values())
         regular = fanza_regular_id(rows)
         if regular is None or set(identities) != {row['id'] for row in rows}:
             return None
         movies = [self._movie(canonical, identity, refresh=refresh) for identity in identities]
-        if fanza_regular_id(movies) != regular:
-            return None
-        performers = [{actor['id'] for actor in movie.get('actors') or []
-                       if isinstance(actor, dict) and isinstance(actor.get('id'), str)
-                       and actor_gender(actor) == 'female'} for movie in movies]
-        duration = movies[0].get('duration')
-        if (not performers[0] or performers[0] != performers[1]
-                or type(duration) is not int or duration <= 0 or movies[1].get('duration') != duration):
-            return None
-        series = [movie.get('series_id') for movie in movies]
-        if all(series) and series[0] != series[1]:
-            return None
-        return next(movie for movie in movies if movie['id'] == regular)
+        return verified_fanza_regular(movies, regular)
 
     def _movie(self, canonical, movie_id, *, refresh):
 

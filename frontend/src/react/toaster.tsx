@@ -22,9 +22,9 @@ const glyph = (html: string, draw: boolean) => (
 let mounted: { host: Element; root: Root } | null = null;
 /* Agent Progress 的 rounded-2xl 外框，沿用现有半径 token 并限定在通知栈内。 */
 const FRAME = { '--floating-radius': 'var(--radius-2xl)' } as CSSProperties;
-/* 通知栈的底边：贴底的多选操作条、停在下角的小窗各自写下占的高度（含间距），栈落在最高的那个
-   之上；都没有时就是默认边距。 */
-const floor = (edge: number) => `max(${edge}px, var(--selection-dock-space, 0px), var(--miniplayer-space, 0px))`;
+/* 通知栈落在反馈入口、多选操作条和下角小窗留出的空间之上。 */
+const floor = (edge: number) => `max(${edge}px, var(--feedback-toast-floor, 0px),
+  var(--selection-dock-space, 0px), var(--miniplayer-space, 0px))`;
 
 /** 应用卸载时撤下 Sonner 的订阅与计时；同一宿主之后可重新挂载。 */
 export function unmountToaster(): void {

@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 from peach.interface_text import dev as t  # noqa: E402
+from peach.migrations import readonly_uri  # noqa: E402
 
 CODE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{2,7})-?(\d{2,6})(?![0-9])")
 CJK = re.compile(r"[぀-ヿ㐀-鿿ｦ-ﾟ]{2,}")
@@ -87,7 +88,7 @@ class Library:
     @classmethod
     def load(cls, ledger: Path) -> "Library":
         library = cls()
-        connection = sqlite3.connect(f"file:{ledger.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(readonly_uri(ledger), uri=True)
         try:
             rows = connection.execute("SELECT code FROM asset WHERE code<>'' UNION SELECT code FROM feed_item WHERE code<>''")
             library.codes = {code_key(*match.groups()) for (code,) in rows

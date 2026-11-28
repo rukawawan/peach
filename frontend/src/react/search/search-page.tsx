@@ -9,6 +9,8 @@
  * 小封面键和最上面那排页签都放不进去。所以这里按遗留层那一套逐条照做：上下环绕着选、回车提交、
  * Escape 先关下拉再清字、空输入回车用占位里那个推荐词。 */
 import { useLayoutEffect, useReducer, useRef, type MouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { ButtonLink } from '@/components/base/buttons/button';
 import { avatarInner } from '@peach/card-art';
 
 import { apiGet, apiSend } from '../../api';
@@ -17,12 +19,15 @@ import { useEntityNames } from '../use-entity-names';
 import { TabCount } from '../components/board-tabs';
 import { PillTabList } from '../components/pill-tabs';
 import { composingKey } from '../components/ime';
+import { spriteGlyph } from '../components/sprite-glyph';
 import {
   menuModel, nextPage, shufflePicks, SUGGEST_DEBOUNCE, SUGGEST_EACH, SUGGEST_ONE_KIND, SUGGEST_PROFILE_KINDS, SUGGEST_RIGHT_KINDS, fold,
   type MenuModel, type MenuSection, type SearchApi, type SearchOption, type SearchProps, type SuggestCard,
   type Recommendations, type SuggestGroup, type SuggestItem, type SuggestResponse, type SuggestTab,
 } from './search';
 import { t as tr } from '../../i18n';
+
+const AssistantIcon = spriteGlyph('bot-orb');
 
 interface Store {
   dismissed: boolean;
@@ -195,8 +200,18 @@ export function SearchPage(props: SearchProps) {
       {right.length ? <div data-search-col="">{right.map(section)}</div> : null}
     </div>
   ) : null);
+  const aiPath = (text: string) => '/ai' + (text.trim() ? '?' + new URLSearchParams({ ask: text.trim() }) : '');
+  const aiMount = document.getElementById('aiSearchAction');
   return (
     <div ref={root} data-search-root="" data-search-recommendations={!s.query && s.recommendations.length ? '' : undefined} data-history-limit={limit}>
+      {aiMount ? createPortal(
+        <ButtonLink variant="secondary" size="small" leadingIcon={AssistantIcon} data-ai-button="entry"
+          href={aiPath(s.query)} onMouseDown={keep} onClick={event => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); op.openPath(aiPath(props.input.value));
+          }}><span data-copy-key="catalog.libraryAssistant.title">{tr('catalog:libraryAssistant.title')}</span></ButtonLink>,
+        aiMount,
+      ) : null}
       {model.tabs ? <Tabs tabs={model.tabs} kind={s.kind} onPick={op.pickKind} wire={props.helpers.wireScroller} /> : null}
       {model.recent ? section(model.recent) : null}
       {columns(model.left, model.right)}

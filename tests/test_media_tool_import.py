@@ -39,6 +39,38 @@ class MediaToolImportTests(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_bytes(), b"MZold")
 
+    def test_a_locked_companion_leaves_the_installed_pair_intact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "new"
+            source.mkdir()
+            data = root / "data"
+            target = data / "tools/ffmpeg/bin"
+            target.mkdir(parents=True)
+            for name in ("ffmpeg.exe", "ffprobe.exe"):
+                (source / name).write_bytes(b"MZnew")
+                (target / name).write_bytes(b"MZold")
+            harness = root / "locked-companion.ps1"
+            harness.write_text(
+                "param($Probe, $Importer, $Data, $Source)\n"
+                "$ErrorActionPreference = 'Stop'\n"
+                "$Lock = [IO.File]::Open($Probe, 'Open', 'Read', 'Read')\n"
+                "try { & $Importer -DataRoot $Data -SearchRoots $Source }\n"
+                "finally { $Lock.Dispose() }\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [PWSH, "-NoProfile", "-File", str(harness), str(target / "ffprobe.exe"),
+                 str(ROOT / "scripts/import_windows_media_tools.ps1"), str(data), str(source)],
+                # 文件被占用的系统报错按本机语言的 ANSI 代码页输出，中文系统上不是 UTF-8；
+                # 断言只看退出码与 stdout 里的标记，解不出的字节换成占位符。
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn("READY:", result.stdout)
+            self.assertEqual((target / "ffmpeg.exe").read_bytes(), b"MZold")
+            self.assertEqual((target / "ffprobe.exe").read_bytes(), b"MZold")
+
     def test_missing_download_does_not_claim_ready_or_touch_other_data(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

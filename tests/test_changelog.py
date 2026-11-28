@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import re
 import subprocess
 import tempfile
@@ -138,6 +139,22 @@ class PromoteTests(unittest.TestCase):
                           fallback="### Added / 新增\n\n- 起草出来的那条")
         self.assertIn("- 起草出来的那条", updated)
 
+    def test_repeated_groups_are_merged_and_uncited_entries_without_a_source_are_refused(self):
+        """并集合并留下的重复分组在定版时并成一组；补不出编号的条目拒收，交人写。"""
+        cited = "**Interface**: Fixed a page (#9). / **界面**：修好一处界面（#9）。"
+        bare = "**Playback**: Fixed playback. / **播放**：修好播放。"
+        added = "**Library**: Added a view (#8). / **馆藏**：新增一个视图（#8）。"
+        body = (f"### Fixed / 修复\n\n- {cited}\n\n### Added / 新增\n\n- {added}\n\n"
+                f"### Fixed / 修复\n\n- {bare}\n\n")
+        document = BARE.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n" + body, 1)
+        updated = self.promoted(document, version="0.59.0", reference=lambda line: "12")
+        section = changelog.section_of(updated, "0.59.0")
+        self.assertEqual(section.count("### Fixed / 修复"), 1)
+        self.assertLess(section.index("### Added"), section.index("### Fixed"))
+        self.assertIn(f"- {cited}\n- **Playback**: Fixed playback (#12). / **播放**：修好播放（#12）。", section)
+        with self.assertRaisesRegex(VersionError, "来源编号"):
+            self.promoted(document, version="0.59.0", reference=lambda line: None)
+
     def test_a_release_with_nothing_to_say_is_refused(self):
         with self.assertRaisesRegex(VersionError, "没有可记录的变化"):
             promote(BARE, "0.28.0", date="2026-09-07", repo=REPO, previous="v0.27.1")
@@ -216,11 +233,17 @@ class SectionTests(unittest.TestCase):
                   "字" * (changelog.ENTRY_LIMIT - 2) + "[说明](docs/DOCKER.md#一键更新可选-watchtower)"), "0.8.0")
 
     def test_entries_after_0_58_0_must_cite_an_issue_or_pull_request(self):
-        """0.58.0 之后与 Unreleased 段的条目两半句末都带同样的 issue 或 PR 编号；跨仓库写 owner/repo#编号；更早的不追补。"""
+        """0.58.0 之后的条目两半句末都带同样的 issue 或 PR 编号；跨仓库写 owner/repo#编号；更早的不追补。
+        Unreleased 段可以先不写，定版时补；写了就要两半一致。"""
         bare = "**Interface**: Fixed a page. / **界面**：修好一处界面。"
-        for version in ("0.58.1", "0.59.0", changelog.UNRELEASED):
+        for version in ("0.58.1", "0.59.0"):
             with self.subTest(version=version), self.assertRaisesRegex(VersionError, "来源编号"):
                 changelog.require_labeled_entries(section(version, bare), version)
+        changelog.require_labeled_entries(section(changelog.UNRELEASED, bare), changelog.UNRELEASED)
+        with self.assertRaisesRegex(VersionError, "来源编号"):
+            changelog.require_labeled_entries(
+                section(changelog.UNRELEASED, "**Interface**: Fixed a page (#650). / **界面**：修好一处界面。"),
+                changelog.UNRELEASED)
         for english, chinese in (("(#651).", "（#651）。"), ("(#650, #651).", "（#650、#651）。"),
                                  ("(peach-mitao/peach-userscript#28).", "（peach-mitao/peach-userscript#28）。")):
             with self.subTest(cited=english):
@@ -242,6 +265,62 @@ class SectionTests(unittest.TestCase):
         with self.assertRaisesRegex(VersionError, "0.7.0："):
             changelog.require_labeled_entries(current + older, "0.8.0")
         changelog.require_labeled_entries(current + older.replace("字", "", 1), "0.8.0")
+
+
+class ReviewTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.document = promote(DOCUMENT, "0.28.0", date="2026-09-07", repo=REPO, previous="v0.27.1")
+
+    def test_same_pr_can_describe_two_distinct_changes(self):
+        first = f"- {ADDED}"
+        second = f"- {FIXED}"
+        document = self.document.replace(first, changelog.with_reference(first, "8"))
+        document = document.replace(second, changelog.with_reference(second, "8"))
+        self.assertEqual(len(changelog.review_entries(document, "0.28.0")), 2)
+
+    def test_repeating_the_same_claim_with_different_sources_is_refused(self):
+        line = f"- {ADDED}"
+        document = self.document.replace(line, "\n".join(changelog.with_reference(line, ref) for ref in ("8", "9")))
+        with self.assertRaisesRegex(VersionError, "重复条目"):
+            changelog.review_entries(document, "0.28.0")
+
+    def test_baseline_and_reviewed_text_must_match_before_publication(self):
+        old = DOCUMENT.replace("> Fourth pre-release. / 第四个预发布。", f"- {ADDED}")
+        with mock.patch.object(changelog.version_bump, "git", return_value=old) as read:
+            review = changelog.review_checklist(self.root, self.document, "0.28.0", REPO, candidate="first")
+        read.assert_called_once_with(self.root, "show", "v0.27.1:CHANGELOG.md")
+        self.assertEqual(review["entries"][0]["related"], [{"version": "0.27.1", "text": f"- {ADDED}"}])
+        path = self.root / changelog.CHANGELOG_REVIEW
+        path.parent.mkdir()
+        path.write_text(json.dumps(review), encoding="utf-8")
+        with mock.patch.object(changelog, "review_candidate", return_value="first") as candidate:
+            with self.assertRaisesRegex(VersionError, "还有条目"):
+                changelog.require_review(self.root, self.document, "0.28.0")
+            for item in review["entries"]:
+                item["change"] = "Compared final behavior with the tagged release."
+            path.write_text(json.dumps(review), encoding="utf-8")
+            changelog.require_review(self.root, self.document, "0.28.0")
+            changed = self.document.replace("desktop shortcut switch", "shortcut menu")
+            with self.assertRaisesRegex(VersionError, "已变化"):
+                changelog.require_review(self.root, changed, "0.28.0")
+            candidate.return_value = "second"
+            with self.assertRaisesRegex(VersionError, "候选提交.*已变化"):
+                changelog.require_review(self.root, self.document, "0.28.0")
+
+    def test_finalizing_the_release_keeps_the_review_candidate(self):
+        responses = ['__version__ = "0.28.0"', "CHANGELOG.md\nsrc/peach/__init__.py", "first"]
+        with mock.patch.object(changelog.version_bump, "git", side_effect=responses) as git:
+            self.assertEqual(changelog.review_candidate(self.root, "0.28.0", "release"), "first")
+        self.assertEqual(git.call_args.args, (self.root, "rev-parse", "release^^{commit}"))
+
+    def test_fix_after_finalizing_becomes_the_review_candidate(self):
+        responses = ['__version__ = "0.28.0"', ".github/workflows/release.yml", "fixed"]
+        with mock.patch.object(changelog.version_bump, "git", side_effect=responses) as git:
+            self.assertEqual(changelog.review_candidate(self.root, "0.28.0", "fixed"), "fixed")
+        self.assertEqual(git.call_args.args, (self.root, "rev-parse", "fixed^{commit}"))
 
 
 class NotesTests(unittest.TestCase):
@@ -339,6 +418,49 @@ class RecordedMergeTests(unittest.TestCase):
         (self.root / name).write_text(subject, encoding="utf-8")
         self.git("add", "--", name)
         self.git("commit", "-q", "-m", subject)
+
+    def changelog_branch(self, name, entry, number):
+        """从当前主线开一个分支，在未发布节的修复组里加一条，再按集成的写法合回主线。"""
+        self.git("checkout", "-q", "-b", name, "master")
+        path = self.root / "CHANGELOG.md"
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            "### Fixed / 修复\n\n", f"### Fixed / 修复\n\n- {entry}\n", 1), encoding="utf-8", newline="\n")
+        self.git("add", "--", "CHANGELOG.md")
+        self.git("commit", "-q", "-m", f"fix(web): {name}")
+        return number
+
+    def test_parallel_branches_add_entries_without_conflict_and_get_their_pull_request_numbers_at_release(self):
+        """两个分支各加一条：按并集合并不冲突；定版时没写编号的条目按引入它的合并提交补上。"""
+        first = "**Interface**: Fixed the first page. / **界面**：修好第一处界面。"
+        second = "**Playback**: Fixed the second page (#7). / **播放**：修好第二处界面（#7）。"
+        (self.root / ".gitattributes").write_text("CHANGELOG.md merge=union\n", encoding="utf-8", newline="\n")
+        (self.root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [Unreleased]\n\n### Fixed / 修复\n\n"
+            "## [0.58.0] - 2026-11-14\n\n> Earlier. / 更早。\n\n"
+            "[Unreleased]: https://github.com/owner/repo/compare/v0.58.0...HEAD\n"
+            "[0.58.0]: https://github.com/owner/repo/releases/tag/v0.58.0\n", encoding="utf-8", newline="\n")
+        self.git("add", "--", ".gitattributes", "CHANGELOG.md")
+        self.git("commit", "-q", "-m", "docs: 变更日志")
+        self.changelog_branch("one", first, 41)
+        self.changelog_branch("two", second, 42)
+        self.git("checkout", "-q", "master")
+        for name, number in (("one", 41), ("two", 42)):
+            self.git("merge", "-q", "--no-ff", "-m", f"Merge branch '{name}' (#{number})", name)
+        document = (self.root / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn(f"- {first}\n", document)
+        self.assertIn(f"- {second}\n", document)
+        self.assertNotIn("<<<<<<<", document)
+        self.assertEqual(changelog.merged_reference(self.root, f"- {first}"), "41")
+        changelog.release(self.root, "0.59.0", repo=REPO, spec="v0.1.0..HEAD", today="2026-11-26")
+        released = changelog.section_of((self.root / "CHANGELOG.md").read_text(encoding="utf-8"), "0.59.0")
+        self.assertIn("- **Interface**: Fixed the first page (#41). / **界面**：修好第一处界面（#41）。", released)
+        self.assertIn(f"- {second}", released)
+        changelog.require_labeled_entries((self.root / "CHANGELOG.md").read_text(encoding="utf-8"), "0.59.0")
+
+    def test_this_repository_merges_its_changelog_by_union(self):
+        merged = subprocess.run(["git", "check-attr", "merge", "--", "CHANGELOG.md"], cwd=changelog.ROOT,
+                                check=True, capture_output=True, text=True, encoding="utf-8").stdout
+        self.assertEqual(merged.strip(), "CHANGELOG.md: merge: union")
 
     def test_only_commits_whose_changes_reached_master_are_drafted(self):
         self.git("checkout", "-q", "-b", "community")

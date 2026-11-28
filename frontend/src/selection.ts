@@ -1,3 +1,13 @@
+import { isApplePlatform } from './keyboard-shortcut';
+
+export const ENTER_SELECTION_EVENT = 'peach:enter-selection';
+
+/** Mac 的 Control 点按仍交给系统的右键菜单。 */
+export function hasSelectionModifier(event: Pick<MouseEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>): boolean {
+  if (event.altKey) return false;
+  return isApplePlatform() ? !event.ctrlKey && (event.shiftKey || event.metaKey) : event.shiftKey || event.ctrlKey;
+}
+
 /** 选择仅使用当前展示顺序，业务身份与默认选择归调用方。 */
 export function selectRange<T>(selected: Set<T>, order: T[], anchor: T | null, key: T, range: boolean, checked = range || !selected.has(key)): T {
   const first = anchor === null ? -1 : order.indexOf(anchor), last = order.indexOf(key);

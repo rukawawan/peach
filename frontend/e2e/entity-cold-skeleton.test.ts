@@ -32,6 +32,9 @@ describe('实体页冷启动等待态', () => {
           }).observe(document, { childList: true, subtree: true });
         }, { theme, view });
         const page = await context.newPage();
+        await page.route('**/api/settings', route => route.fulfill({
+          json: { browsePreferences: { theme, catalogView: view }, tableLayouts: {} },
+        }));
         await page.route('**/performers/90001', async route => {
           const response = await route.fetch({ url: requiredEnv('PEACH_E2E_ORIGIN') + '/' });
           await route.fulfill({ response, body: (await response.text()).replace('</head>',

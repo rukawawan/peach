@@ -574,6 +574,11 @@ def merge_entity(
     connection.execute(
         "UPDATE feed_source SET entity_id=? WHERE entity_id=?", (target_id, source_id))
     moved["feeds"] = connection.execute("SELECT changes()").fetchone()[0]
+    if target_kind == "performer" and connection.execute(
+            "SELECT id FROM entity WHERE id=? AND json_extract(metadata_json,'$.user_feed_page_selection')=1",
+            (source_id,)).fetchone():
+        from .feeds import set_manual_pages
+        set_manual_pages(connection, target_id, True)
     connection.execute(
         "INSERT OR IGNORE INTO feed_discovery_entity(discovery_id,entity_id)"
         " SELECT discovery_id,? FROM feed_discovery_entity WHERE entity_id=?",

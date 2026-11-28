@@ -7,7 +7,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   RiArrowLeftRightLine, RiAspectRatioLine, RiCheckboxMultipleLine, RiDatabase2Line, RiDownloadCloud2Line, RiDraggable,
-  RiEditLine, RiFilter3Line, RiFolderLine, RiHardDrive3Line, RiRefreshLine, RiServerLine, RiShieldCheckLine, RiSparklingLine, RiSpeedUpLine,
+  RiEditLine, RiFeedbackLine, RiFilter3Line, RiFolderLine, RiHardDrive3Line, RiRefreshLine, RiRobot2Line, RiServerLine,
+  RiShieldCheckLine, RiSparklingLine, RiSpeedUpLine,
   RiStackLine, RiTranslate2, RiUserLine, type RemixiconComponentType,
 } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
@@ -59,6 +60,7 @@ const ICONS: Record<string, RemixiconComponentType> = {
   stack: RiStackLine, switch: RiArrowLeftRightLine, speed: RiSpeedUpLine, refresh: RiRefreshLine,
   database: RiDatabase2Line, sparkle: RiSparklingLine, translate: RiTranslate2, download: RiDownloadCloud2Line,
   filter: RiFilter3Line, edit: RiEditLine,
+  assistant: RiRobot2Line, feedback: RiFeedbackLine,
 };
 
 function progressLabel(progress: NoticeItem['progress']) {
@@ -71,15 +73,19 @@ function progressLabel(progress: NoticeItem['progress']) {
   return progress.count ? <StatusLabel tone="success">{t('shell:releaseNotice.itemCount', { count: progress.count })}</StatusLabel> : null;
 }
 
-function Rows({ items, trailing }: { items: NoticeItem[]; trailing(item: NoticeItem): ReactNode }) {
+function Rows({ version, items, trailing }: { version: string; items: NoticeItem[]; trailing(item: NoticeItem): ReactNode }) {
   return (
     <ol className="peach-guide-routes">
       {items.map(item => {
         const Icon = ICONS[item.icon || ''] || RiSparklingLine;
+        const copyKey = item.id ? `server.${releaseNoteKey(version)}.items.${item.id}` : undefined;
         return (
           <li key={item.title}>
             <span className="peach-guide-topic-icon"><Icon aria-hidden className="size-5" /></span>
-            <div className="min-w-0 flex-1"><strong>{item.title}</strong><p>{item.body}</p></div>
+            <div className="min-w-0 flex-1">
+              <strong data-copy-key={copyKey && `${copyKey}.title`}>{item.title}</strong>
+              <p data-copy-key={copyKey && `${copyKey}.body`}>{item.body}</p>
+            </div>
             {trailing(item)}
           </li>
         );
@@ -129,7 +135,7 @@ export function ReleaseNotice({ navigate }: { navigate(path: string): void }) {
       <header className="flex shrink-0 items-start justify-between gap-4 border-b border-separator-border px-6 py-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <h2 className="text-title-2-medium text-text-primary">Peach {data.current}</h2>
-          <p className="text-body-2-regular text-text-secondary">{notice.headline}</p>
+          <p className="text-body-2-regular text-text-secondary" data-copy-key={`server.${releaseNoteKey(data.current)}.headline`}>{notice.headline}</p>
         </div>
         <SettingsDialogClose label={t('shell:releaseNotice.close')} onPress={() => setOpen(false)} />
       </header>
@@ -140,10 +146,10 @@ export function ReleaseNotice({ navigate }: { navigate(path: string): void }) {
             {item.body}
           </Note>
         ))}
-        {notice.features.length ? <Rows items={notice.features} trailing={view} /> : null}
+        {notice.features.length ? <Rows version={data.current} items={notice.features} trailing={view} /> : null}
         {notice.automatic.length ? (
           <Disclosure summary={t('shell:releaseNotice.automatic')} defaultOpen>
-            <div className="pt-3"><Rows items={notice.automatic} trailing={item => progressLabel(item.progress)} /></div>
+            <div className="pt-3"><Rows version={data.current} items={notice.automatic} trailing={item => progressLabel(item.progress)} /></div>
           </Disclosure>
         ) : null}
         {data.missed.length ? (
@@ -152,7 +158,7 @@ export function ReleaseNotice({ navigate }: { navigate(path: string): void }) {
               {data.missed.map(row => (
                 <section key={row.version} className="flex flex-col gap-2">
                   <h3 className="text-body-2-medium text-text-secondary">{row.version} · {row.headline}</h3>
-                  <Rows items={row.features} trailing={() => null} />
+                  <Rows version={row.version} items={row.features} trailing={() => null} />
                 </section>
               ))}
             </div>

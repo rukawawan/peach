@@ -67,8 +67,9 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
       /* 展开时的高度按上次展开时量到的实高算：收起后折叠区是 0，量不到。 */
       if (openRef.current) fullHeight.current = height;
       const full = Math.max(height, fullHeight.current);
-      // 与 `../toaster.tsx` 的底边同一算法：默认边距、多选条、下角小窗取最高的那个。
-      const floor = Math.max(innerWidth <= 600 ? 16 : 24, px('--selection-dock-space'), px('--miniplayer-space'));
+      // 读取 Sonner 实际使用的底边，统一计入反馈入口、多选条、小窗和安全区。
+      const stack = node.closest('[data-sonner-toaster]');
+      const floor = stack ? parseFloat(getComputedStyle(stack).bottom) || 0 : 0;
       const receipts = Math.max(0, ...[...document.querySelectorAll('#toasts [data-sonner-toast]:not(.processing-task-toast)')]
         .map(toast => toast.getBoundingClientRect().height));
       const tight = floor + full + 12 + (receipts ? receipts + 8 : 0) > innerHeight - (px('--topH') || 56);

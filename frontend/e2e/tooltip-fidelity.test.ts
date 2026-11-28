@@ -10,6 +10,27 @@ describe('共享提示的文字与锚点', () => {
   before(async () => { browser = await launch() });
   after(async () => { await browser.close() });
   for (const viewport of VIEWPORTS) {
+    it(`${viewport.name} 鼠标从触发器进入提示时保留说明，Escape 可关闭`, async () => {
+      const opened = await openItemPage(browser, '/', viewport, { ready: '[data-catalog-frame]' });
+      try {
+        await opened.page.evaluate(() => {
+          const trigger = document.createElement('button');
+          trigger.id = 'tip-hoverable';
+          trigger.textContent = '帮助';
+          trigger.title = '可以移到这里阅读的说明';
+          trigger.style.cssText = 'position:fixed;left:80px;top:220px;z-index:9999';
+          document.body.append(trigger);
+        });
+        await opened.page.locator('#tip-hoverable').hover();
+        const tooltip = opened.page.locator('#board-control-tooltip');
+        await tooltip.waitFor({ state: 'visible' });
+        await tooltip.hover();
+        await opened.page.waitForTimeout(300);
+        assert.equal(await tooltip.isVisible(), true);
+        await opened.page.keyboard.press('Escape');
+        await tooltip.waitFor({ state: 'hidden' });
+      } finally { await opened.close() }
+    });
     it(`${viewport.name} 保存的筛选名称悬停时直接可读`, async () => {
       const opened = await openItemPage(browser, '/', viewport, { ready: '[data-catalog-frame]' });
       try {

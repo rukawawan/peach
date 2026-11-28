@@ -102,16 +102,17 @@ export interface ItemStub {
 
 const body = (request: Request) => JSON.parse(request.postData() || '{}') as Record<string, unknown>;
 
-async function stub(page: Page, catalogIds: readonly number[] = CATALOG): Promise<ItemStub> {
+async function stub(page: Page, catalogIds: readonly number[] = CATALOG, playlistItems = PLAYLIST.items.map(card)): Promise<ItemStub> {
   await mockSubtitleMemory(page);
   const state: ItemStub = { writes: [], reads: new Map(), mediaErrors: [] };
   const read = (path: string) => state.reads.set(path, (state.reads.get(path) || 0) + 1);
+  const playlistCards = new Map(playlistItems.map(row => [row.id, row]));
   const playlists = new Map<number, { id: number; name: string; ids: number[]; current: number | null }>([
-    [PLAYLIST.id, { id: PLAYLIST.id, name: PLAYLIST.name, ids: [...PLAYLIST.items], current: 11 }],
+    [PLAYLIST.id, { id: PLAYLIST.id, name: PLAYLIST.name, ids: [...playlistCards.keys()], current: 11 }],
   ]);
   const playlistPayload = (id: number) => {
     const row = playlists.get(id)!;
-    return { id: row.id, name: row.name, items: row.ids.map(card), current_asset_id: row.current };
+    return { id: row.id, name: row.name, items: row.ids.map(id => playlistCards.get(id) ?? card(id)), current_asset_id: row.current };
   };
   const json = (path: string, respond: (url: URL, request: Request) => unknown) =>
     page.route((url) => url.pathname === path, (route) => {
@@ -172,9 +173,13 @@ async function stub(page: Page, catalogIds: readonly number[] = CATALOG): Promis
     (route) => route.fulfill({ json: { subtitles: [] } }));
   await page.route((url) => ['/api/play', '/api/activity', '/api/stream-cancel'].includes(url.pathname),
     (route) => route.fulfill({ json: { ok: true } }));
-  // 设置读真服务，写就地接住：`settings` 里的本地值会被推上去，改掉并发文件读到的同一份设置。
-  await page.route((url) => url.pathname === '/api/settings',
-    (route) => route.request().method() === 'GET' ? route.fallback() : route.fulfill({ json: { ok: true } }));
+  // 详情夹具有独立的界面设置，浏览和表格偏好由上下文内的设置桩处理。
+  await page.route((url) => url.pathname === '/api/settings', (route) => {
+    const request = route.request();
+    const sent = request.postDataJSON();
+    return request.method() === 'GET' || sent?.browsePreferences || sent?.tableLayouts
+      ? route.fallback() : route.fulfill({ json: { ok: true } });
+  });
   await page.route((url) => url.pathname === '/api/stream-plan',(route) => route.fulfill({ json: { protocol: 'direct' } }));
   await page.route((url) => url.pathname === '/stream', (route) => route.fulfill({ status: 204, body: '' }));
   await page.route((url) => url.pathname === '/api/diagnostics/client-error', (route) => {
@@ -198,8 +203,8 @@ export interface ItemVisit extends Visit {
 
 /** 打开一页：导航前装好桩与设置，等到 `ready` 出现、等待态结束。 */
 export async function openItemPage(browser: Browser, path: string, viewport: Viewport,
-  { settings = {}, ready = '#stage[open] [data-item-side]', catalogIds }: {
-    settings?: Record<string, unknown>; ready?: string; catalogIds?: readonly number[];
+  { settings = {}, ready = '#stage[open] [data-item-side]', catalogIds, playlistItems }: {
+    settings?: Record<string, unknown>; ready?: string; catalogIds?: readonly number[]; playlistItems?: ReturnType<typeof card>[];
   } = {},
 ): Promise<ItemVisit> {
   let stubbed!: ItemStub;
@@ -207,7 +212,7 @@ export async function openItemPage(browser: Browser, path: string, viewport: Vie
     await page.context().addInitScript((value) => {
       localStorage.setItem('peach.settings.v1', JSON.stringify(value));
     }, { detailAutoplay: false, relatedLimit: 12, ...settings });
-    stubbed = await stub(page, catalogIds);
+    stubbed = await stub(page, catalogIds, playlistItems);
   });
   const page = opened.page;
   await page.locator(ready).first().waitFor({ timeout: 15_000 });

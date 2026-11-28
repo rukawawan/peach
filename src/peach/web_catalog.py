@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import re
 import sqlite3
@@ -384,6 +385,15 @@ def _catalog_entity_filters(contract, args):
     return where, parameters
 
 
+def _translation_filter(language, trash):
+    if trash or language not in ("zh-TW", "zh-CN", "en"):
+        return [], []
+    return [
+        "a.medium='video'",
+        "NOT EXISTS (SELECT 1 FROM asset_content_translation tr WHERE tr.asset_id=a.id AND tr.language=?)",
+    ], [language]
+
+
 def catalog_filter(contract: WebContract, args):
     """视频列表与侧栏使用同一组筛选条件。"""
     trash = args.get("state") == "trash"
@@ -456,6 +466,9 @@ def catalog_filter(contract: WebContract, args):
     if not trash and args.get("jav") == "1":
         # 只有番号形态还不够：JI-103 这类 creator clip 没有任何发行证据。
         where.append(JAV_ASSET_PREDICATE)
+    translation_where, translation_par = _translation_filter(args.get("translation_missing"), trash)
+    where += translation_where
+    par += translation_par
     if args.get("q"):
         query = args["q"].strip()
         if len(query) >= 3 and contract.has_fts():
@@ -572,8 +585,10 @@ def _catalog_order(args):
     return order
 
 
-def q_items(contract: WebContract, args):
+def q_items(contract: WebContract, args, *, playback_queue=False):
     where, par = catalog_filter(contract, args)
+    if playback_queue:
+        where.append("a.medium='video' AND a.disposal IS NULL AND a.location<>'online'")
     if args.get('summary_only') == '1':
         count, size, works = _catalog_totals(contract, where, par, args)
         return {'total': count, 'bytes': size, 'work_total': works}
@@ -1872,7 +1887,7 @@ def w_item_tag(contract: WebContract, body):
             "tags": [item["k"] for item in q_item(contract, aid)["tags"]]}
 
 
-def write_item_tag(c, aid: int, operation: str, raw: str) -> str:
+def write_item_tag(c, aid: int, operation: str, raw: str, *, ai_review: dict | None = None) -> str:
     """在调用方的事务里给一部片加一个标签或隐藏一个标签，返回落下的规范名。
 
     编辑框一次保存里的标签增删也走这里，与单条接口是同一套判据。
@@ -1912,9 +1927,13 @@ def write_item_tag(c, aid: int, operation: str, raw: str) -> str:
             "INSERT OR IGNORE INTO asset_tag(asset_id,tag,confidence,source) "
             "VALUES(?,?,1.0,'web-user')", (aid, tag),
         )
-        upsert_asset_entity(
+        entity_id = upsert_asset_entity(
             c, kind="tag", name=tag, asset_id=aid, role="tag",
             source="web-user", confidence=1.0,
             metadata={"profile_id": DEFAULT_PROFILE_ID}, now=stamp,
         )
+        if ai_review is not None:
+            c.execute("UPDATE asset_entity SET metadata_json=json_set(metadata_json,'$.ai_review',json(?)) "
+                      "WHERE asset_id=? AND entity_id=? AND role='tag' AND source='web-user'",
+                      (json.dumps(ai_review, ensure_ascii=False), aid, entity_id))
     return tag

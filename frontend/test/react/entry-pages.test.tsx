@@ -146,7 +146,7 @@ describe('错误页', () => {
     { status: '403', title: '这里不能打开', lede: '请在运行 Peach 的电脑上打开配置' },
     { status: '404', title: '四〇四', lede: null },
     { status: '409', title: '现在不能这样做', lede: '请先完成首次设置' },
-    { status: '500', title: '出了点问题', lede: '服务出错' },
+    { status: '500', title: '页面无法打开', lede: '服务出错' },
   ];
   for (const { status, title, lede } of cases) {
     it(`${status} 的标题与说明`, async () => {

@@ -145,7 +145,7 @@ class DependencyTests(unittest.TestCase):
         step = self.dependencies(run, which=lambda _name: None,
                                  environ={"LOCALAPPDATA": str(self.temp)}).sync()
         self.assertEqual(step.state, "skipped")
-        self.assertIn("未取得 uv", step.message)
+        self.assertIn("找不到 uv", step.message)
         self.assertEqual(run.calls, [])
 
     def test_uv_is_found_in_the_winget_package_directory_when_path_lacks_it(self):

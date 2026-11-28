@@ -7,8 +7,9 @@
  *
  * 写操作（评分、标签、反馈、稍后看、高清目标、偏好、播放列表排序与移出）都在岛里发，成功后
  * 把服务端回的那几个字段换进 `['item', id]`，目录网格缓存里的同一张卡一起换，不重读列表。 */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { VisuallyHidden } from 'react-aria-components';
 import { fmtDur, fmtSize, icon, requestErrorMessage } from '@peach/legacy/core';
 import { appSettingsStore } from '@peach/appearance';
 import {
@@ -20,6 +21,7 @@ import { apiGet, apiSend } from '../../api';
 import { codedText } from '../../core/server-text';
 import { EDITION_TONE } from '../../core/jav-title';
 import { Button } from '@/components/base/buttons/button';
+import { Note } from '../components/note';
 import { RiArrowDownSLine, RiPlayLine, RiSubtractLine } from '@remixicon/react';
 import type { WorkContextOperation } from '../components/work-context-menu';
 import { CatalogGridPage } from '../catalog-grid/catalog-grid-page';
@@ -28,15 +30,18 @@ import type { MediaItem } from '../catalog-grid/types';
 import { DetailFailure } from '../components/detail-failure';
 import { PendingWork, pendingRefetch, usePendingWorkRefetch } from '../components/pending-work';
 import { MixQueue, MixQueueRow } from '../components/mix-queue';
+import { NavigationDropLine } from '../components/navigation-order';
+import { ObjectOrderDialog } from '../components/object-order-dialog';
+import { useSidebarReorder } from '../sidebar/use-sidebar-reorder';
 import { RelatedSection } from '../components/related-section';
 import { DetailContinuation } from '../components/detail-continuation';
 import { DetailTags } from '../components/detail-tags';
 import { RatingStars } from '../components/rating-stars';
-import { CollapseChevron } from '../components/collapse-region';
+import { DetailTitle } from '../components/detail-title';
 import { IdentityCell, IdentitySeries } from '../components/identity-cell';
-import { useFoldedTitle } from '../components/folded-title';
 import { MediaCarousel } from '../components/media-carousel';
 import { CatalogPicture } from './catalog-picture';
+import { LibraryAIPanel } from './library-ai-panel';
 import { fetchJavDetail, javDetailKey } from '../jav-detail/jav-detail';
 import { busyProps } from '../settings/use-action';
 import { LIBRARY_PROCESSING_URL } from '../library-processing/library-processing';
@@ -49,7 +54,7 @@ import { LibraryCompletionPrompt, missingPreviewIds } from '../library-processin
 import {
   CAST_SHOWN, FEEDBACK_URL, PLAYLIST_URL, PREFERENCE_URL, QUALITY_GOAL_URL,
   RELATED_URL, WATCH_LATER_URL, chooseItem, clampRating, detailTags, feedbackReceipt, fetchItem, fetchQueue,
-  identityGroups, isVanished, itemKey, mediaGate, movedOrder, nextRating, editionLabel, partLabel, partLabelHtml, playlistQueue,
+  identityGroups, isVanished, itemKey, mediaGate, nextRating, editionLabel, partLabel, partLabelHtml, playlistQueue,
   queueCopy, queueKey, queueNext, ratingStars, ratingText, realWatched, relatedKey, sameOrder,
   withPartLabel,
   type DetailEntityRef, type DetailItem, type DetailQueue, type ItemDetailActions,
@@ -135,7 +140,7 @@ function Detail(props: ItemDetailProps & { item: DetailItem; queue: DetailQueue 
       if (video) { video.currentTime = 0; void video.play()?.catch(() => {}) }
       return;
     }
-    actions.openQueueItem({ kind: queue.kind, seedId: queue.seedId, playlistId: queue.playlistId, autoplay: true }, next.id);
+    actions.openQueueItem({ kind: queue.kind, seedId: queue.seedId, playlistId: queue.playlistId, filterId: queue.filterId, autoplay: true }, next.id);
   };
   return (
     <>
@@ -221,8 +226,12 @@ function MediaFrame({ item, gate, helpers, actions, autoplay, onEnded }: {
       </> : null}
       {image !== -2 && item.is_jav && item.code && !item.sample_images?.length && (source.isPending || source.error || source.data?.state === 'partial') ?
         <div data-item-samples-state="">{source.isPending ? <span data-skeleton="samples" role="status" aria-label={t('catalog:detailMedia.loadingSamples')} className="relative block h-12 w-20 skeleton-sheen" />
-          : <Button variant="secondary" {...busyProps(source.isFetching)} title={source.data?.message || requestErrorMessage(source.error)}
-            aria-label={t('catalog:detailMedia.retrySamples')} onClick={() => { refreshSamples.current = true; void source.refetch() }}>{t('catalog:shared.retryNow')}</Button>}</div> : null}
+          : <Note tone="warning" action={
+            <Button variant="secondary" size="small" {...busyProps(source.isFetching)}
+              aria-label={t('catalog:detailMedia.retrySamples')} onClick={() => { refreshSamples.current = true; void source.refetch() }}>
+              {t('catalog:shared.retryNow')}
+            </Button>
+          }>{source.error ? requestErrorMessage(source.error) : source.data?.message || t('shell:artworkGap.previewNotFound')}</Note>}</div> : null}
       {gate === 'offline' ? <OfflineGate item={item} badge={badge} helpers={helpers} actions={actions} />
         : gate === 'disc' ? (
           <div role="status" data-item-gate="disc">
@@ -278,34 +287,37 @@ function Queue({ queue, itemId, helpers, actions }: {
   queue: DetailQueue; itemId: number; helpers: ItemDetailHelpers; actions: ItemDetailActions;
 }) {
   const copy = queueCopy(queue);
+  const [sorting, setSorting] = useState(false);
+  const sortButton = useRef<HTMLButtonElement>(null);
+  const closeSorting = () => {
+    setSorting(false);
+    requestAnimationFrame(() => sortButton.current?.focus({ preventScroll: true }));
+  };
   const list = useRef<HTMLDivElement | null>(null);
   const reorder = usePlaylistReorder(queue, itemId, actions);
-  const reorderRef = useRef(reorder);
-  reorderRef.current = reorder;
+  const playlist = queue.kind === 'playlist';
+  const drag = useSidebarReorder(list, queue.items.map(row => String(row.id)),
+    keys => { void reorder.save(keys.map(Number)).catch(() => {}) }, () => {}, 'x', 'tab', [], 'row');
   const listRef = useCallback((node: HTMLDivElement | null) => {
     list.current = node;
-    if (!node) return;
-    helpers.wireDrag(node);
-    /* 顺序直接拖：一列十几条，靠上移下移把最后一条挪到第二位要按十几次，而每一次都是一趟写库
-       加一次重绘。拖动中的行态由 `wireDragReorder` 挂在行上，行是按 id 复用的，重排之后监听还在。 */
-    if (queue.kind === 'playlist') {
-      helpers.wireDragReorder(node, {
-        selector: '[data-queue-row]', attribute: 'data-queue-row',
-        onMove: (from, target, after) => reorderRef.current.move(+from, +target, after),
-      });
-    }
-  }, [helpers, queue.kind]);
+    if (node) helpers.wireDrag(node);
+  }, [helpers]);
   const saveMix = useSaveMix(queue, actions);
   const head = queue.kind === 'mix'
     ? <button type="button" data-save-mix="" title={t('catalog:detailQueue.saveAsPlaylist')} aria-label={t('catalog:detailQueue.saveAsPlaylist')} onClick={saveMix}
       dangerouslySetInnerHTML={{ __html: icon('playlist') }} />
     : queue.kind === 'playlist'
-      ? <button type="button" data-edit-playlist="" title={t('catalog:detailQueue.editPlaylist')} aria-label={t('catalog:detailQueue.editPlaylist')} onClick={actions.editPlaylist}
+      ? <button ref={sortButton} type="button" data-edit-playlist="" title={t('catalog:detailQueue.editPlaylist')} aria-label={t('catalog:detailQueue.editPlaylist')}
+        onClick={() => setSorting(true)}
         dangerouslySetInnerHTML={{ __html: icon('playlist') }} />
       : null;
-  const ref = { kind: queue.kind, seedId: queue.seedId, playlistId: queue.playlistId };
+  const ref = { kind: queue.kind, seedId: queue.seedId, playlistId: queue.playlistId, filterId: queue.filterId };
   return (
-    <MixQueue kind={queue.kind} title={copy.title} summary={copy.summary} onClose={actions.close} actions={head} listRef={listRef}>
+    <MixQueue kind={queue.kind} title={copy.title} summary={copy.summary} onClose={actions.close} actions={head} listRef={listRef}
+      listProps={playlist ? {
+        'data-navigation-order': 'playlist-queue', 'data-navigation-axis': 'x', 'data-drop-on-row': '',
+        'data-reordering': drag.picked ? '' : undefined, onClickCapture: drag.clickCapture,
+      } : undefined}>
       {queue.items.map((row) => {
         const edition = queue.kind === 'editions' && row.edition_label
           ? <i className={`javedition ${EDITION_TONE[row.edition ?? ''] || 'censored'}`} data-queue-edition="">{editionLabel(row)}</i> : null;
@@ -317,8 +329,21 @@ function Queue({ queue, itemId, helpers, actions }: {
         if (!gone) operations.push({ id: 'open', label: t('catalog:mediaActions.open'), icon: RiPlayLine, run: open });
         if (queue.kind === 'playlist') operations.push({ id: 'remove', label: t('catalog:detailQueue.removeFromPlaylist'),
           icon: RiSubtractLine, run: remove });
+        const key = String(row.id);
+        const bindings = drag.bindings(key, '[data-mix-item]');
+        const nudge = drag.nudge(key);
         return (
-          <MixQueueRow key={row.id} current={row.id === itemId} data-queue-item={row.id} row={{ 'data-queue-row': row.id }}
+          <MixQueueRow key={row.id} current={row.id === itemId} data-queue-item={row.id}
+            aria-keyshortcuts={playlist ? 'Alt+ArrowLeft Alt+ArrowRight' : undefined}
+            row={playlist ? {
+              'data-queue-row': row.id, 'data-tab': key, 'aria-label': helpers.displayName(row),
+              'data-dragging': drag.picked?.key === key ? '' : undefined,
+              style: { '--sidebar-nudge': `${nudge.distance}px`, '--sidebar-delay': `${nudge.delay}ms` } as CSSProperties,
+              ...bindings,
+              onPointerDown: event => {
+                if (event.pointerType === 'mouse' || (event.target as Element).closest('[data-queue-grip]')) bindings.onPointerDown(event);
+              },
+            } : { 'data-queue-row': row.id }}
             disabled={gone} title={gone ? t('catalog:detailQueue.fileGone') : undefined}
             {...(gone ? { 'data-queue-vanished': '' } : {})}
             onClick={gone ? undefined : open} contextOperations={operations}
@@ -338,6 +363,11 @@ function Queue({ queue, itemId, helpers, actions }: {
           </MixQueueRow>
         );
       })}
+      {playlist ? <><NavigationDropLine reorder={drag} /><VisuallyHidden role="status" aria-live="polite">{drag.announcement}</VisuallyHidden></> : null}
+      {sorting && queue.kind === 'playlist' ? <ObjectOrderDialog dropOnRow
+        title={t('catalog:playlistOrder.dialogTitle', { name: queue.title })}
+        items={queue.items.map(row => ({ id: String(row.id), name: helpers.displayName(row) }))}
+        save={keys => reorder.save(keys.map(Number))} close={closeSorting} /> : null}
     </MixQueue>
   );
 }
@@ -369,15 +399,13 @@ function usePlaylistReorder(queue: DetailQueue, itemId: number, actions: ItemDet
     onError: (error) => actions.failure(t('catalog:playlistOrder.reorder'), error),
   });
   const ids = queue.items.map((row) => row.id);
+  const save = async (next: number[]) => {
+    if (sameOrder(next, ids)) return;
+    await reorder.mutateAsync(next);
+    actions.toast(t('catalog:playlistOrder.reordered'), { undo: async () => { apply(await write({ action: 'reorder', asset_ids: ids })) } });
+  };
   return {
-    move: async (from: number, target: number, after: boolean) => {
-      if (queue.kind !== 'playlist') return;
-      const next = movedOrder(ids, from, target, after);
-      if (sameOrder(next, ids)) return;
-      const before = ids;
-      await reorder.mutateAsync(next);
-      actions.toast(t('catalog:playlistOrder.reordered'), { undo: async () => { apply(await write({ action: 'reorder', asset_ids: before })) } });
-    },
+    save,
     remove: (assetId: number) => {
       const before = ids;
       void confirmModal({
@@ -417,7 +445,7 @@ function Side({ item, queue, write, helpers, actions }: {
   return (
     <div data-stage-side="" data-item-side="">
       <div data-stage-side-content="">
-        <DetailTitle item={item} queue={queue} helpers={helpers} actions={actions} onStatus={write.setSourceState}
+        <ItemTitle item={item} queue={queue} helpers={helpers} actions={actions} onStatus={write.setSourceState}
           deleteAction={<button type="button" data-item-delete="" data-kind="dispose" data-fb="dispose"
             aria-label={t(item.disposal === 'trash' ? 'catalog:mediaActions.restore' : 'catalog:shared.moveToTrash')}
             title={t(item.disposal === 'trash' ? 'catalog:mediaActions.restore' : 'catalog:shared.moveToTrash')}
@@ -475,29 +503,15 @@ function Side({ item, queue, write, helpers, actions }: {
   );
 }
 
-/* 标题默认折成两行，真溢出才给展开键：折叠态下 scrollHeight 比 clientHeight 高，就是有行被裁掉了。
-   展开与收起换字形——往下多看一截是 chevron-down，收回去是 chevron-up。展开键排在那排键最前面，
-   紧挨着它管的标题。标题文字本身也接这一下：人想看全文时手本来就落在字上。选中文字那一下不算，
-   那是在复制标题。溢出不只在打开那一刻判：影院模式和普通视图之间切换时标题栏宽度差一大截。 */
-function DetailTitle({ item, queue, helpers, actions, onStatus, deleteAction }: {
+function ItemTitle({ item, queue, helpers, actions, onStatus, deleteAction }: {
   item: DetailItem; queue: DetailQueue | null; helpers: ItemDetailHelpers; actions: ItemDetailActions;
   onStatus(text: string): void;
   deleteAction: ReactNode;
 }) {
-  const { text, expanded, foldable, toggle } = useFoldedTitle(String(item.title || item.name || ''));
   const html = helpers.badgeHtml(item.location || '', item.cost || '', 'srcbig') + helpers.titleHtml(item) + partLabelHtml(item, queue);
   return (
-    <div data-item-title="">
-      <div data-stage-title="" data-title-line="" data-reveal-line="">
-        <span ref={text} data-detail-title="" data-expanded={expanded ? '' : undefined}
-          data-foldable={foldable ? '' : undefined}
-          onClick={() => { if (foldable && !String(getSelection() || '')) toggle() }}
-          dangerouslySetInnerHTML={{ __html: html }} />
-        <span data-title-tools="">
-          <button type="button" data-title-fold="" hidden={!foldable} aria-expanded={expanded}
-            aria-label={expanded ? t('catalog:titleFold.collapse') : t('catalog:titleFold.expand')} title={expanded ? t('catalog:titleFold.collapse') : t('catalog:titleFold.expandFull')} onClick={toggle}>
-            <CollapseChevron />
-          </button>
+    <DetailTitle textKey={String(item.title || item.name || '')} html={html} tools={
+        <>
           {/* 取景框存的是坐标不是图片：存完重取这一条，封面地址没变，变的是接口给的 `poster_box`。
               背后网格里同一番号的卡不重取，就地换上新框，关掉详情看到的就是框过的样子。 */}
           {item.has_cover && (item.cover_key || item.code) ? (
@@ -514,10 +528,11 @@ function DetailTitle({ item, queue, helpers, actions, onStatus, deleteAction }: 
             applySavedItem(saved);
             actions.toast(t('catalog:itemEdit.saved'));
           }} />
+          {!item.disposal && (item.medium || 'video') === 'video' ? <LibraryAIPanel key={item.id} id={item.id} code={item.code}
+            cover={coverUrl(item, 2)} onSaved={() => { void queryClient.invalidateQueries({ queryKey: itemKey(item.id) }); }} /> : null}
           {deleteAction}
-        </span>
-      </div>
-    </div>
+        </>
+    } />
   );
 }
 

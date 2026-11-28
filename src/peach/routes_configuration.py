@@ -37,12 +37,13 @@ from .routes_auth import (FIRST_ACCESS_DENIED_CODE, login_mode, origin_allowed, 
                           set_auth_cookie, sessions as access_sessions)
 from .web_entry import field_errors, runtime_fact_entries
 from .user_messages import UserFacingError, UserOSError, UserTimeoutError, UserValueError, error_detail, message_fields
-from .web_local_access import local_client, managed_configuration
+from .web_local_access import local_client, loopback_client, managed_configuration
 from . import (interface_text, release_updates, standalone_update, peach_proxy, desktop_startup, desktop_uninstall,
                docker_update, media_tools, listening)
 
 router = APIRouter()
 _SAVE_LOCK = threading.Lock()
+_BROWSER_LOGIN_LOCK = threading.Lock()
 RELOAD_NAME = onboarding.RELOAD_NAME
 #: 直接由 CLI 管理的服务使用设置文件：配置页不能编辑时给的那句话。
 FILE_MANAGED_NOTICE = "labels.configuration.fileManagedNotice"
@@ -91,8 +92,18 @@ def library_diagnostic_rows(request: Request, args: dict[str, str] = Depends(req
     if key not in library_diagnostics.GROUP_CODES:
         raise UserValueError("api.catalog.invalidColumnFilters")
     data = library_diagnostics.library(request.app.state.settings, settings_file.active(),
-                                       {key: args.get("column_filters")})
+                                       {key: args.get("column_filters")}, show_ignored=args.get("view") == "ignored")
     return data["groups"][key]
+
+
+@router.post("/api/diagnostics/library/ignored")
+def library_diagnostic_ignored(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    from . import library_diagnostics
+    local_only(request)
+    same_origin(request)
+    library_diagnostics.change_ignored(settings_file.active(), body.get("group", ""),
+                                       body.get("ids"), body.get("ignore"))
+    return {"ok": True}
 
 
 @router.get("/api/diagnostics/bundle")
@@ -270,7 +281,7 @@ def _read_section(result: dict, key: str, reader) -> None:
                               message=f"configuration section {key} could not be read", section=key, error_id=error_id)
 
 
-def snapshot(config, reachability=None) -> dict[str, Any]:
+def snapshot(config, reachability=None, *, include_startup: bool = True) -> dict[str, Any]:
     """配置页首屏要的一切：当前值、修订号、可写与否，以及这台机器的运行信息。
 
     所有设置页都等这一份。媒体目录的在线状态读 `reachability`（`MountReachability`）的快照，
@@ -312,6 +323,8 @@ def snapshot(config, reachability=None) -> dict[str, Any]:
         ("facts", lambda: runtime_fact_entries(config)),
     )
     for key, reader in readers:
+        if key == "startup" and not include_startup:
+            continue
         _read_section(result, key, reader)
     return result
 
@@ -391,12 +404,13 @@ def network_payload(request: Request, config) -> dict[str, Any]:
 
 
 @router.get("/api/configuration")
-def read_configuration(request: Request, _args=Depends(require_auth)):
+def read_configuration(request: Request, include_startup: bool = True, _args=Depends(require_auth)):
     local_only(request)
     config = settings_file.load_config()
     if not config.present:
         raise HTTPException(409, message_fields("api.configuration.setupRequired"))
-    result = snapshot(config, getattr(request.app.state, "mount_reachability", None))
+    result = snapshot(config, getattr(request.app.state, "mount_reachability", None),
+                      include_startup=include_startup)
     _read_section(result, 'network', lambda: network_payload(request, config))
     sync = getattr(request.app.state, "sync", None)
     result["ledger_read_only"] = bool(sync is not None and sync.read_only)
@@ -468,6 +482,27 @@ def save_seed_sharing(request: Request, body: dict = Body(...), _args=Depends(re
     local_only(request)
     same_origin(request)
     return request.app.state.seed_sharing.save(body)
+
+
+@router.get('/api/configuration/community-sharing')
+def read_community_sharing(request: Request, _args=Depends(require_auth)):
+    local_only(request)
+    from . import community_sharing
+    state = request.app.state
+    return JSONResponse(community_sharing.snapshot(state.library_sharing, state.seed_sharing),
+                        headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/api/configuration/community-sharing')
+def save_community_sharing(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    local_only(request)
+    same_origin(request)
+    from . import community_sharing
+    state = request.app.state
+    try:
+        return community_sharing.save(state.library_sharing, state.seed_sharing, body)
+    except ValueError as error:
+        raise HTTPException(400, error_detail(error)) from error
 
 
 @router.get('/api/configuration/seed-sharing/name')
@@ -672,6 +707,29 @@ def check_downloads(request: Request, body: dict = Body(default={}), _args=Depen
         raise HTTPException(400, error_detail(exc)) from exc
 
 
+@router.get("/api/configuration/downloads/qbittorrent/check")
+def check_saved_qbittorrent(request: Request, _args=Depends(require_auth)):
+    """按已保存的地址、账号与目录检查 qBittorrent；只登录读版本，不提交任务。"""
+    local_only(request)
+    service, roots = _downloads(request)
+    try:
+        return web_downloads.check_qbittorrent(service, {}, roots)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/configuration/downloads/qbittorrent/check")
+def check_qbittorrent(request: Request, body: dict = Body(default={}), _args=Depends(require_auth)):
+    """按页面上此刻填的 qBittorrent 值检查；没带的字段取已保存的值。"""
+    local_only(request)
+    same_origin(request)
+    service, roots = _downloads(request)
+    try:
+        return web_downloads.check_qbittorrent(service, body, roots)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/api/configuration/downloads/folder")
 def create_download_folder(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
     """调 CloudDrive2 的 `CreateFolder` 建 115 目标目录。只在用户点「新建这个目录」时发。"""
@@ -728,6 +786,100 @@ def logout_pikpak(request: Request, _args=Depends(require_auth)):
     same_origin(request)
     service, roots = _downloads(request)
     return web_downloads.pikpak_logout(service, roots)
+
+
+def _javdb_browser_login(request: Request):
+    from .javdb_browser_login import JavDBBrowserLogin
+
+    contract = request.app.state.web_contract
+    with _BROWSER_LOGIN_LOCK:
+        if not hasattr(contract, "javdb_browser_login"):
+            contract.javdb_browser_login = JavDBBrowserLogin(contract.follow_secrets_root)
+        return contract.javdb_browser_login
+
+
+@router.get("/api/scraping/javdb-browser-login")
+def javdb_browser_login_status(request: Request, _args=Depends(require_auth)):
+    if not loopback_client(request):
+        return {"available": False, "state": "idle", "message": ""}
+    login = _javdb_browser_login(request)
+    return {"available": login.available(), **login.status()}
+
+
+@router.post("/api/scraping/javdb-browser-login")
+def start_javdb_browser_login(request: Request, _args=Depends(require_auth)):
+    if not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    same_origin(request)
+    login = _javdb_browser_login(request)
+    return {"available": login.available(), **login.start()}
+
+
+@router.post("/api/scraping/javdb-browser-login/cancel")
+def cancel_javdb_browser_login(request: Request, _args=Depends(require_auth)):
+    if not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    same_origin(request)
+    login = _javdb_browser_login(request)
+    return {"available": login.available(), **login.cancel()}
+
+
+def _check_browser_login_source(source: str) -> None:
+    from .source_browser_login import SOURCE_BROWSER_LOGIN_SOURCES
+
+    if source not in SOURCE_BROWSER_LOGIN_SOURCES:
+        raise HTTPException(404)
+
+
+def _source_browser_login(request: Request, source: str):
+    from .source_browser_login import SourceBrowserLogin
+
+    contract = request.app.state.web_contract
+    with _BROWSER_LOGIN_LOCK:
+        if not hasattr(contract, "source_browser_logins"):
+            contract.source_browser_logins = {}
+        logins = contract.source_browser_logins
+        if source not in logins:
+            logins[source] = SourceBrowserLogin(contract.follow_secrets_root, source)
+        return logins[source]
+
+
+@router.get("/api/source-browser-login/{source}")
+def source_browser_login_status(request: Request, source: str, _args=Depends(require_auth)):
+    _check_browser_login_source(source)
+    if not loopback_client(request):
+        return {"available": False, "state": "idle", "message": ""}
+    login = _source_browser_login(request, source)
+    return {"available": login.available(), **login.status()}
+
+
+@router.post("/api/source-browser-login/{source}")
+def start_source_browser_login(request: Request, source: str, _args=Depends(require_auth)):
+    _check_browser_login_source(source)
+    if not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    same_origin(request)
+    login = _source_browser_login(request, source)
+    return {"available": login.available(), **login.start()}
+
+
+@router.post("/api/source-browser-login/{source}/cancel")
+def cancel_source_browser_login(request: Request, source: str, _args=Depends(require_auth)):
+    _check_browser_login_source(source)
+    if not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    same_origin(request)
+    login = _source_browser_login(request, source)
+    return {"available": login.available(), **login.cancel()}
+
+
+@router.get("/api/configuration/startup")
+def read_startup(request: Request, _args=Depends(require_auth)):
+    local_only(request)
+    config = settings_file.load_config()
+    if not config.present:
+        raise HTTPException(409, message_fields("api.configuration.setupRequired"))
+    return desktop_startup.snapshot(config)
 
 
 @router.post("/api/configuration/startup")

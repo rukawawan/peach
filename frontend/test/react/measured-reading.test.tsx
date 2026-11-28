@@ -24,12 +24,12 @@ it('未取得的读数保持不可交互骨架，已取得的相邻读数先显�
   expect(host.querySelector('[data-measured-reading="subscriptions"] [data-follow-reading]')?.textContent).toBe('0 位');
 });
 
-it('首次读取失败显示未取得，后台重读失败保留已有数值', async () => {
+it('首次读取失败显示读数不可用，后台重读失败保留已有数值', async () => {
   const { host, rerender } = await mountRoot(<MeasuredReading field="updates" figure={undefined} failed />);
-  expect(host.textContent).toContain('未取得');
+  expect(host.textContent).toContain('读数不可用');
   expect(host.querySelector('[aria-busy="true"]')).toBeNull();
   await rerender(<MeasuredReading field="updates" figure={1250} failed />);
   expect(host.textContent).toContain((1250).toLocaleString());
-  expect(host.textContent).not.toContain('未取得');
+  expect(host.textContent).not.toContain('读数不可用');
   expect(host.querySelector('[aria-busy="true"]')).toBeNull();
 });

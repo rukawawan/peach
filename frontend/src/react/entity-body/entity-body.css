@@ -63,14 +63,7 @@
 /* 多选：勾的形状与作品卡同一副（`media-card.css` 的 `[data-media-check]`），选中的那格填满并描一圈。 */
 .peach-react [data-photo-cell] { position: relative; }
 .peach-react [data-photo-wall][data-select-mode] [data-photo-cell] { cursor: pointer; }
-.peach-react [data-photo-cell][data-selected] { outline: 2px solid var(--on-media); outline-offset: -2px; }
-.peach-react [data-photo-cell][data-selected] [data-media-check] {
-  display: grid;
-  border-color: var(--on-media);
-  background: var(--on-media);
-  color: var(--on-media-ink);
-  box-shadow: 0 3px 12px #0008;
-}
+.peach-react [data-photo-cell][data-selected] [data-media-check] { display: grid; }
 /* 全站焦点环（`01-base.css`）把 React 子树排除在外，这里自己画同一副。 */
 .peach-react [data-photo-cell]:focus-visible {
   outline: 2px solid var(--tungsten);
@@ -84,7 +77,7 @@
 .peach-react [data-photo-wall][data-layout="masonry"] > [data-photo-cell] img { height: auto; aspect-ratio: auto 1; }
 /* 样张取不到时摘掉的只是 <img>，格子留着。瀑布流里格高来自图，空格会塌成 0，所以按官方样张
  * 最常见的横幅比例撑住那块占位底。 */
-.peach-react [data-photo-wall][data-layout="masonry"] > [data-photo-cell]:not(:has(img)) { aspect-ratio: 3 / 2; }
+.peach-react [data-photo-wall][data-layout="masonry"] > [data-photo-cell]:not(:has(img:not([hidden]))) { aspect-ratio: 3 / 2; }
 
 /* ── 段头 ──
  * 番号、标题、右端「来源 样张 · 发行日 · 张数」一行排开，标题过长省略，右端不让。每段上方留出

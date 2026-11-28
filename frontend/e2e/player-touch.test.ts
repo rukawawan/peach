@@ -32,25 +32,28 @@ it(`${viewport.width}×${viewport.height} 触摸：控制条、横滑预览、�
     const middle = viewport.width / 2, right = viewport.width * .85;
     const touch = (type: string, x = middle, y = 300) => session.send('Input.dispatchTouchEvent',
       { type, touchPoints: type === 'touchEnd' || type === 'touchCancel' ? [] : [{ x, y, id: 1 }] });
-    const tap = async (x: number) => { await touch('touchStart', x); await touch('touchEnd') };
-    // 单击经过 300ms 双击窗口，等待状态切换，并在三秒自动隐藏之前失败。
+    // 一个手势的几次触摸一并发出，不逐条等回执：测试进程或页面卡顿时，按下后 500ms 没等到抬起或移动
+    // 就成了长按倍速，两下单击间隔过 300ms 就不算双击。
+    const tap = (x: number) => Promise.all([touch('touchStart', x), touch('touchEnd')]);
+    // 单击经过 300ms 双击窗口后收起控制条；自动隐藏从按下起要满三秒，等待在那之前截止，收起只能来自单击。
+    const tapped = performance.now();
     await tap(middle);
     await page.waitForFunction(() => document.querySelector('.video-js')?.classList.contains('vjs-user-inactive'),
-      null, { timeout: 1_000 });
+      null, { timeout: Math.max(1, tapped + 2_900 - performance.now()) });
     await tap(middle);
     await page.waitForFunction(() => document.querySelector('.video-js')?.classList.contains('vjs-user-active'),
       null, { timeout: 1_000 });
     assert.equal(await page.evaluate('fixture.pauses()'), 0);
-    await touch('touchStart', viewport.width * .1); await touch('touchMove', viewport.width * .6);
+    await Promise.all([touch('touchStart', viewport.width * .1), touch('touchMove', viewport.width * .6)]);
     assert.equal(await page.evaluate('fixture.video.currentTime'), 1200);
     assert.match(await page.locator('.vjs-peach-gesture').innerText(), /30:00/);
     await touch('touchEnd'); assert.ok(Math.abs(Number(await page.evaluate('fixture.video.currentTime')) - 1800) < .01);
-    await tap(right); await tap(right); assert.ok(Math.abs(Number(await page.evaluate('fixture.video.currentTime')) - 1810) < .01);
+    await Promise.all([tap(right), tap(right)]); assert.ok(Math.abs(Number(await page.evaluate('fixture.video.currentTime')) - 1810) < .01);
     // 长按 500ms 才起倍速；慢的 CI 机器上固定等 550ms 余量不够，等到倍速真的变了为止。
     await touch('touchStart');
     await page.waitForFunction('fixture.video.playbackRate === 2', null, { timeout: 2_000 });
     await touch('touchEnd'); assert.equal(await page.evaluate('fixture.video.playbackRate'), 1);
-    await touch('touchStart', right); await touch('touchMove', right, 300 - viewport.height * .2);
+    await Promise.all([touch('touchStart', right), touch('touchMove', right, 300 - viewport.height * .2)]);
     assert.ok(Math.abs(Number(await page.evaluate('fixture.video.volume')) - .7) < .01);
     await touch('touchCancel'); assert.equal(await page.evaluate('fixture.video.volume'), .5);
     await page.mouse.click(middle, 300); assert.equal(await page.evaluate('fixture.pauses()'), 1);

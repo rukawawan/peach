@@ -68,6 +68,17 @@ describe('舞台岛', () => {
       await page.locator(card(ITEM.plain)).first().click();
       await page.locator(ITEM_READY).waitFor();
       assert.deepEqual(await stageShape(page), { host: true, modal: true, stages: 1, hosts: 1 });
+      const feedback = page.locator('#stage [data-feedback-launcher] button');
+      await feedback.waitFor();
+      await page.waitForFunction(() => {
+        const trigger = document.querySelector('#stage [data-feedback-launcher] button');
+        if (!trigger) return false;
+        const box = trigger.getBoundingClientRect();
+        const middle = box.left + box.width / 2;
+        return box.top > innerHeight / 2 && box.bottom <= innerHeight &&
+          trigger.contains(document.elementFromPoint(middle, box.top + 2)) &&
+          trigger.contains(document.elementFromPoint(middle, box.bottom - 2));
+      });
       await page.evaluate(() => { (window as unknown as { stageHost: Element }).stageHost = document.querySelector('[data-stage-host]')! });
       await page.locator('#closeStage').click();
       await pathIs(page, '/');
@@ -347,11 +358,20 @@ describe('舞台岛', () => {
 
       const info = await page.locator('#miniplayerInfo').boundingBox();
       assert.ok(info);
+      await page.evaluate(() => {
+        const notice = document.createElement('div');
+        notice.id = 'miniplayer-layer-probe';
+        Object.assign(notice.style, { position: 'fixed', left: '100px', top: '140px', width: '40px', height: '40px',
+          zIndex: 'var(--layer-popover)', background: 'var(--surface)' });
+        document.body.append(notice);
+      });
       await page.mouse.move(info.x + info.width / 2, info.y + info.height / 2);
       await page.mouse.down();
       await page.mouse.move(info.x - 200, info.y - 200, { steps: 6 });
       await page.mouse.move(120, 160, { steps: 6 });
+      assert.equal(await page.evaluate(() => document.elementFromPoint(120, 160)?.closest('#miniplayer')?.id), 'miniplayer');
       await page.mouse.up();
+      await page.locator('#miniplayer-layer-probe').evaluate(node => node.remove());
       await page.waitForFunction(() => document.getElementById('miniplayer')?.dataset.corner === 'tl', null, { timeout: 5_000 });
       assert.equal(await page.locator('#miniplayer').evaluate((node) => (node as HTMLElement).style.transform), '');
       await pathIs(page, '/');

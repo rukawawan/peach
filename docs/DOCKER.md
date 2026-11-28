@@ -268,11 +268,11 @@ NAS 部署的文件位于服务器上。首启设置、媒体目录设置和整�
 
 ## 镜像发布
 
-构建使用官方 Python `3.14.8-slim-trixie` 与 uv `0.13.1`，应用依赖与 amane 独立依赖分别由各自的 `uv.lock` 锁定。应用以非 editable 包安装，包含 Web 与迁移资源。镜像默认以 UID/GID 1000 运行，可通过 `PEACH_UID`/`PEACH_GID` 覆盖；内置 FFmpeg、FFprobe、OpenSSL 和 amane 独立环境。uv 与 Git 只用于构建阶段。构建上下文只允许代码与资源，不包含工作树、媒体、真实 Peach 数据库或凭据。
+Python 基础镜像和 uv 版本由 [Dockerfile](../Dockerfile) 固定。应用与 amane 独立环境分别使用各自的 `uv.lock`。应用以非 editable 包安装，包含 Web 与迁移资源。镜像默认以 UID/GID 1000 运行，可通过 `PEACH_UID`/`PEACH_GID` 覆盖；内置 FFmpeg、FFprobe、OpenSSL 和 amane 独立环境。uv 与 Git 只用于构建阶段。构建上下文只允许代码与资源，不包含工作树、媒体、真实 Peach 数据库或凭据。
 
 GitHub Actions 的 `Docker` 工作流在拉取请求和主线上分别于 amd64 与 arm64 原生 runner 构建并运行临时卷验收，只验收不发布。版本提交的 `Release` 演练用同样方式构建两个架构的候选镜像并保存；标签流水线在 GitHub Release 成功后核对两个候选的 image ID，推送 `<版本>-amd64`、`<版本>-arm64`，再合成一个多架构 index，版本号、`edge` 与 `latest` 都指向它（[ADR-0121](adr/0121-release-rehearsal-and-atomic-publication.md)）。仓库变量 `DOCKERHUB_USERNAME` 和机密 `DOCKERHUB_TOKEN` 用于 Docker Hub 发布；机密只保存在 GitHub，不进入项目文件。未配置发布身份时仍执行构建验收。
 
-Docker Hub 页面以英文为主，概览正文取自 [docs/dockerhub/README.md](dockerhub/README.md)，链接回 GitHub 的源码、本文和中文 README。简介填写 `Local-first video metadata scraper and media manager. Self-hosted web UI for VPS and NAS.`。发布流水线只推送镜像，概览与简介需要在 Docker Hub 仓库设置中手动更新；镜像、端口、目录或 Compose 示例变化时同批修改该文件。
+Docker Hub 概览正文取自 [docs/dockerhub/README.md](dockerhub/README.md)。镜像、端口、目录或 Compose 示例变化时，同批修改该文件。合入主线后，[Docker Hub 概览同步](../.github/workflows/dockerhub-readme.yml)更新正文和简介，并从公开接口回读核对。需要补同步时，可在主线手动运行该工作流。工作流使用 `DOCKERHUB_USERNAME`，优先读取概览专用机密 `DOCKERHUB_DESCRIPTION_TOKEN`，未配置时使用现有 `DOCKERHUB_TOKEN`。若 Docker Hub 拒绝更新，核对专用令牌是否有描述编辑权限。
 
 ## 安装后检查资料源与封面连接
 

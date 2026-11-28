@@ -10,7 +10,11 @@ import { MEDIA_PROCESSING_KEY } from '../../src/react/settings-panel/settings-da
 import { queryClient } from '../../src/react/query';
 import { buttonNamed, choose, click, fetchMock, mount, section, sentBody, settle, submit, type } from './render';
 
-vi.mock('../../src/react/settings/service-preferences', () => ({ VideoThumbnailRow: () => null }));
+vi.mock('../../src/react/settings/service-preferences', () => ({ TaskSpeedSettings: () => null }));
+vi.mock('../../src/react/settings/code-pattern-settings', () => ({ CodePatternSettings: () => null }));
+vi.mock('../../src/react/settings/media-processing-settings', () => ({
+  MediaProcessingSettings: () => null, PlaybackTranscodeSettings: () => null,
+}));
 vi.mock('../../src/react/settings/cloud-proxy-settings', () => ({ CloudProxySettings: () => null }));
 vi.mock('@peach/legacy/ui', async (original) => ({
   ...await original<Record<string, unknown>>(),

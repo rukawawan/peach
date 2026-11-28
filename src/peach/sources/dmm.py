@@ -37,6 +37,7 @@ from urllib.parse import quote
 
 from ..metadata import identifies_code
 from ..catalog_rules import normalise_code_key
+from ..social_links import name_key
 from .base import FailureReason, Page, Session, SiteConfig, SiteRecord, SiteSource, SourceFailure
 
 #: 不带 Cookie，主机间隔用默认的 2 秒。一次响应实测几 KB，1 MiB 是余量。
@@ -74,8 +75,17 @@ ACTRESS_WORKS_QUERY = (
     " sort: $sort, filter: $filter) { result { pageInfo { totalCount hasNext } contents { id title"
     " deliveryStartAt releaseStatus actresses { id name } maker { id name } } } } }"
 )
+CATALOG_QUERY = (
+    "query PeachCatalog($limit: Int!, $offset: Int!, $filter: ContentSearchPPVFilterInput)"
+    " { legacySearchPPV(limit: $limit, offset: $offset, sort: DELIVERY_START_DATE, floor: AV, filter: $filter)"
+    " { result { pageInfo { totalCount hasNext } contents { id title deliveryStartAt releaseStatus"
+    " packageImage { largeUrl mediumUrl } actresses { id name } maker { id name } } } } }"
+)
+#: 配信搜索接受的最大起始位置（包含）。
+CATALOG_MAX_OFFSET = 10_000
 #: 一页多少条：接口单页上限 100，官方番号的别名批量也按这个数一次问完。
 ACTRESS_PAGE = 100
+ACTRESS_SEARCH_TERMS = 5
 #: 女优编号的写法。只认纯数字，拼进查询变量之前就挡住别的东西。
 ACTRESS_ID = re.compile(r"^\d{1,10}$")
 PRE_ORDER = "PRE_ORDER"
@@ -255,21 +265,66 @@ class DmmSource(SiteSource):
         contents = result.get("contents") or []
         return matching_cids(code, (row.get("id") for row in contents if isinstance(row, dict)))
 
+    def search_actresses(self, names: list[str], *, session: Session, prefix: bool = False) -> dict[str, str]:
+        """从关键词命中的商品取同名出演者，排除其余同片演员。"""
+        terms = list(dict.fromkeys(name for name in names if name))[:ACTRESS_SEARCH_TERMS]
+        keys = {name_key(name) for name in terms} - {""}
+        if not keys:
+            return {}
+        variables = {f"q{index}": name for index, name in enumerate(terms)}
+        declarations = ", ".join(f"${name}: String" for name in variables)
+        fields = " ".join(
+            f"{name}: legacySearchPPV(limit: {ACTRESS_PAGE}, sort: RELEASE_DATE, floor: AV, queryWord: ${name})"
+            " { result { contents { id actresses { id name } } } }"
+            for name in variables)
+        data = self.graphql(f"query PeachSearchActresses({declarations}) {{ {fields} }}", variables, session=session)
+        found: dict[str, str] = {}
+        for name in variables:
+            rows, _, _ = listed_page({"legacySearchPPV": data.get(name)})
+            for row in rows:
+                for person in _cast(row):
+                    number, written = person.get("id"), person.get("name")
+                    if not isinstance(number, str) or not ACTRESS_ID.fullmatch(number) or not isinstance(written, str):
+                        continue
+                    parts = {name_key(part) for part in re.split(r"[（）()]", written)}
+                    matches = any(part.startswith(key) for part in parts for key in keys) if prefix else bool(parts & keys)
+                    if matches:
+                        found.setdefault(number, written)
+        return found
+
     def maker_codes(self, cids, *, session: Session) -> dict[str, str]:
         """一批 cid 的官方番号，一次请求问完（GraphQL 别名）。接口答 null 的 cid 不在结果里。"""
+        rows = self._batch_content(cids, "PeachMakerCodes", "makerContentId", session=session)
+        return {cid: str(item["makerContentId"]).strip() for cid, item in rows.items()
+                if str(item.get("makerContentId") or "").strip()}
+
+    def catalog_details(self, cids, *, session: Session) -> dict[str, dict]:
+        return self._batch_content(cids, "PeachCatalogDetails", "makerContentId genres { id name } duration", session=session)
+
+    def _batch_content(self, cids, operation: str, fields: str, *, session: Session) -> dict[str, dict]:
         cids = list(cids)
         if not cids:
             return {}
-        query = "query PeachMakerCodes { " + " ".join(
-            f"a{index}: ppvContent(id: {json.dumps(cid)}) {{ id makerContentId }}"
+        query = f"query {operation} {{ " + " ".join(
+            f"a{index}: ppvContent(id: {json.dumps(cid)}) {{ id {fields} }}"
             for index, cid in enumerate(cids)) + " }"
         data = self.graphql(query, {}, session=session)
-        found: dict[str, str] = {}
-        for index, cid in enumerate(cids):
-            item = data.get(f"a{index}")
-            if isinstance(item, dict) and str(item.get("makerContentId") or "").strip():
-                found[cid] = str(item["makerContentId"]).strip()
-        return found
+        return {cid: item for index, cid in enumerate(cids) if isinstance(item := data.get(f"a{index}"), dict)}
+
+    def catalog_page(self, *, session: Session, limit: int, offset: int,
+                     actress_id: str, delivery_date: str, maker_id: str = "",
+                     genre_ids: tuple[str, ...] = ()) -> tuple[list[dict], int, bool]:
+        """DMM 在线配信目录单页，筛选由来源执行。"""
+        filters: dict = {}
+        for key, value in (("actressIds", actress_id), ("makerIds", maker_id)):
+            if value:
+                filters[key] = {"ids": [{"id": value}]}
+        if genre_ids:
+            filters["genreIds"] = {"ids": [{"id": value} for value in genre_ids]}
+        if delivery_date:
+            filters["deliveryStartDate"] = delivery_date
+        return listed_page(self.graphql(CATALOG_QUERY, {"limit": limit, "offset": offset, "filter": filters},
+                                        session=session))
 
     def actress_works(self, actress_id: str, *, session: Session, known=frozenset(),
                       limit: int = 2 * ACTRESS_PAGE) -> ActressWorks:

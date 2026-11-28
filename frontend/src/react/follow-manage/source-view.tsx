@@ -23,6 +23,11 @@ export function SourceIcon({ provider }: { provider: string }) {
   return <MarkImage src={sourceIconUrl(provider)} />;
 }
 
+export function FeedPageAlias({ name }: { name: string }) {
+  return <span className="text-body-2-regular wrap-anywhere text-text-secondary"
+    title={t('follow:feedSources.aliasTitle', { alias: name })}>{name}</span>;
+}
+
 /** 创作者圆标共用实体图、作品头像、来源缓存与首字母的取图顺序。
  *
  * 首字母取自创作者名而不是某条来源的标签——那会切出「初」「一」这类和创作者无关的字。 */

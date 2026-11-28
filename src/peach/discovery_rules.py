@@ -2,6 +2,8 @@
 from pathlib import PureWindowsPath
 import re
 
+FILE_BROWSER_TRASH = '.peach-file-trash'
+
 
 # 厂商保留名称的来源与边界见 docs/REUSE.md「系统元数据发现过滤」。
 _DIRECTORIES = frozenset({
@@ -10,7 +12,7 @@ _DIRECTORIES = frozenset({
     '.zfs', '.snapshot', '.snapshots', '~snapshot', '.recycle', '.trash', '.@#local',
     '.appledouble', '.appledesktop', '.appledb', 'network trash folder',
     '.spotlight-v100', '.trashes', '.temporaryitems', '.fseventsd', '__macosx',
-    '$recycle.bin', 'system volume information',
+    '$recycle.bin', 'system volume information', FILE_BROWSER_TRASH,
 })
 _FILES = frozenset({
     'desktop.ini', 'thumbs.db', '.ds_store', '.localized', 'icon\r', '.volumeicon.icns',
@@ -33,3 +35,7 @@ def system_path(path: str) -> bool:
     parts = PureWindowsPath(path).parts
     return any(system_directory(part) for part in parts) or (
         bool(parts) and system_file(parts[-1]))
+
+
+def file_browser_trash_path(path: str | None) -> bool:
+    return bool(path) and any(part.casefold() == FILE_BROWSER_TRASH for part in PureWindowsPath(path).parts)

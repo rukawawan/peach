@@ -22,12 +22,17 @@ from __future__ import annotations
 
 import html as html_lib
 import re
+from urllib.parse import urljoin, urlsplit
+
+from bs4 import BeautifulSoup
 
 from .social_links import name_key
 from .source_page_words import JAVDB_COUNT, JAVDB_LOGIN, JAVDB_RECORD_KIND, JAVDB_UNCENSORED
 
 BASE = "https://javdb.com/"
 SEARCH = BASE + "search?f=actor&q={}"
+PROFILE_URL = BASE + "users/profile"
+PROFILE_PATH = urlsplit(PROFILE_URL).path
 
 #: 从资料页取来的名字写进 `entity_alias` 时记的来源。两个脚本都往这里写
 #: （`localize_performer_names.py` 写降级下来的旧规范名，`apply_alias_candidates.py`
@@ -42,13 +47,14 @@ CARD = re.compile(r'class="box actor-box">\s*<a href="/actors/([A-Za-z0-9]+)" ti
                   re.S)
 
 INFO = re.compile(r'class="info">([^<]*)<')
+AVATAR_HOST = re.compile(r"(?:c[0-9]+\.)?(?:jdbstatic\.com|jdbimgs\.com)")
 NAME = re.compile(r'class="actor-section-name">([^<]*)<')
 META = re.compile(r'class="section-meta">([^<]*)<')
 #: 「323 部影片」也在 `section-meta` 里，它不是名字。
 COUNT = re.compile(JAVDB_COUNT)
 #: 一部分资料页要登录才给，回的是登入页而不是 401/403。同一位女优在站上常有两条
 #: 记录（有碼那条公开、無碼那条要登录），搜索结果把两条都给出来，所以这不是抓失败。
-LOGIN = re.compile(JAVDB_LOGIN)
+_LOGIN_TITLE = re.compile(JAVDB_LOGIN, re.I)
 ACTOR_ID = re.compile(r'href="/actors/([A-Za-z0-9]+)/collect"')
 
 #: 同一位女优的无码那条记录，现名后面挂着 `(無碼)`。它是记录类型不是名字的一部分，
@@ -56,6 +62,26 @@ ACTOR_ID = re.compile(r'href="/actors/([A-Za-z0-9]+)/collect"')
 RECORD_KIND = re.compile(JAVDB_RECORD_KIND)
 
 _TAG = re.compile(r"<[^>]+>")
+
+
+def login_page(text: str) -> bool:
+    """导航里的登录弹窗与独立登录页使用同一种表单。"""
+    if _LOGIN_TITLE.search(text):
+        return True
+    if "auth-view" not in text:
+        return False
+    for form in BeautifulSoup(text, "html.parser").select('form.auth-view:has(input[type="password"])'):
+        if not form.find_parent(class_="modal"):
+            return True
+    return False
+
+
+SIGNED_IN_SELECTOR = 'a[href="/logout"], form[action="/logout"]'
+
+
+def profile_signed_in(text: str) -> bool:
+    """JavDB 登录后才提供退出入口；只有页面可读不足以确认会话。"""
+    return BeautifulSoup(text, "html.parser").select_one(SIGNED_IN_SELECTOR) is not None
 
 
 def clean(text: str) -> str:
@@ -130,12 +156,29 @@ def search_cards(html: str) -> list[dict]:
     卡片上的 id 就是资料页的 id，登记入口不必再点进资料页；無碼那条资料页常要登录，
     点进去也只拿到登入页。
     """
+    from .javdb_public import public_image_url
+
     cards = []
     for actor, title, body in CARD.findall(html):
         record = INFO.search(body)
-        cards.append({"id": actor, "names": split_names(clean(title)),
-                      "record": clean(record.group(1)) if record else ""})
+        card = {"id": actor, "names": split_names(clean(title)),
+                "record": clean(record.group(1)) if record else ""}
+        image = BeautifulSoup(body, "html.parser").select_one("img.avatar, figure.image img")
+        if image:
+            url = urljoin(BASE, str(image.get("data-src") or image.get("src") or ""))
+            if public_image_url(url) or _search_avatar_url(url):
+                card["avatar_url"] = url
+        cards.append(card)
     return cards
+
+
+def _search_avatar_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme == "https" and bool(AVATAR_HOST.fullmatch(parts.netloc))
+                and parts.path.startswith("/avatars/"))
+    except ValueError:
+        return False
 
 
 def one_person(cards: list[dict]) -> bool:

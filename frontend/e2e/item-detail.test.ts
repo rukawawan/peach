@@ -21,8 +21,7 @@ const PART_CARD = `#grid [data-media-card][data-variant="grid"][data-id="${ITEM.
 const withoutPlayer = (problems: string[]) => problems.filter((line) => !line.includes('VIDEOJS'));
 const pathIs = (page: Page, path: string) => page.waitForFunction(
   (wanted) => (wanted.includes('?') ? location.pathname + location.search : location.pathname) === wanted, path, { timeout: 10_000 });
-/** 回执栈在 body 下，舞台是模态 dialog，外面整页惰性，鼠标点不到撤销键；这里量的是撤销本身。 */
-const undo = (page: Page) => page.locator('#toasts').getByRole('button', { name: '撤销' }).last().dispatchEvent('click');
+const undo = (page: Page) => page.locator('#toasts').getByRole('button', { name: '撤销' }).last().click();
 const current = (page: Page) => page.locator('#stage [data-queue-item][aria-current="true"]').getAttribute('data-queue-item');
 const ids = (page: Page, selector: string, attribute: string) => page.locator(selector).evaluateAll(
   (nodes, name) => nodes.map((node) => Number(node.getAttribute(name))), attribute);
@@ -59,20 +58,25 @@ describe('作品详情岛', () => {
     await browser.close();
   });
 
-  it('删除与编辑属于同一排工具按钮，桌面和手机保持相同尺寸与间距', { timeout: 60_000 }, async () => {
+  it('编辑、AI 助手与删除在桌面和手机使用同一排工具按钮', { timeout: 60_000 }, async () => {
     for (const viewport of [DESKTOP, MOBILE]) {
       const opened = await openItemPage(browser, `/assets/${ITEM.plain}`, viewport);
       try {
         const geometry = await opened.page.locator('[data-title-tools]').evaluate(node => {
-          const edit = node.querySelector('[aria-label="编辑资料"]')!.getBoundingClientRect();
-          const remove = node.querySelector('[data-item-delete]')!.getBoundingClientRect();
-          return { edit: { y: edit.y, width: edit.width, height: edit.height },
-            remove: { y: remove.y, width: remove.width, height: remove.height }, gap: remove.left - edit.right };
+          const buttons = ['[aria-label="编辑资料"]', '[aria-label="AI 助手"]', '[data-item-delete]']
+            .map(selector => {
+              const { x, y, width, height } = node.querySelector(selector)!.getBoundingClientRect();
+              return { x, y, width, height };
+            });
+          return { buttons, gaps: buttons.slice(1).map((button, i) => button.x - buttons[i].x - buttons[i].width) };
         });
-        assert.ok(Math.abs(geometry.edit.y - geometry.remove.y) <= 1, JSON.stringify(geometry));
-        assert.equal(geometry.edit.width, geometry.remove.width);
-        assert.equal(geometry.edit.height, geometry.remove.height);
-        assert.ok(geometry.gap >= 0 && geometry.gap <= 12, JSON.stringify(geometry));
+        const [edit, ...neighbors] = geometry.buttons;
+        for (const button of neighbors) {
+          assert.ok(Math.abs(edit.y - button.y) <= 1, JSON.stringify(geometry));
+          assert.equal(edit.width, button.width);
+          assert.equal(edit.height, button.height);
+        }
+        assert.ok(geometry.gaps.every(gap => gap >= 0 && gap <= 12), JSON.stringify(geometry));
       } finally { await opened.close() }
     }
   });
@@ -145,6 +149,27 @@ describe('作品详情岛', () => {
         positioned:getComputedStyle(node.parentElement!).position,
       }));
       assert.deepEqual(scrollbar, { hidden:'none', track:true, positioned:'relative' });
+    } finally { await opened.close(); }
+  });
+
+  it('手机标签选择器随可见视口缩小并保留输入焦点', async () => {
+    const opened = await openItemPage(browser, `/assets/${ITEM.plain}`, MOBILE);
+    try {
+      const { page } = opened;
+      await page.locator('#stage [data-item-edit-open]').click();
+      const editor = page.locator('dialog[data-item-edit-dialog]');
+      await editor.locator('[data-tag-plus]').click();
+      const menu = editor.locator('[data-tag-picker]');
+      const input = menu.locator('input');
+      await input.fill('标签');
+      await page.evaluate(() => {
+        const viewport = window.visualViewport!;
+        Object.defineProperty(viewport, 'height', { configurable: true, value: 280 });
+        viewport.dispatchEvent(new Event('resize'));
+      });
+      const bounds = await menu.boundingBox();
+      assert.ok(bounds && bounds.height > 54 && bounds.y + bounds.height <= 273, JSON.stringify(bounds));
+      assert.equal(await input.evaluate(node => node === document.activeElement), true);
     } finally { await opened.close(); }
   });
 
@@ -741,18 +766,34 @@ describe('作品详情岛', () => {
     });
   }
 
-  it('播放列表：拖动换顺序、移出一条，两者都能撤销', { timeout: 60_000 }, async () => {
+  it('详情队列可向左或向右拖动换位，排序和移出均可撤销', { timeout: 60_000 }, async () => {
     const opened = await openItemPage(browser, `/assets/11?playlist=${PLAYLIST.id}`, DESKTOP);
     try {
       const page = opened.page;
+      await page.emulateMedia({ reducedMotion: 'reduce' });
       const order = () => ids(page, '#stage [data-queue-row]', 'data-queue-row');
       const wait = (wanted: number[]) => page.waitForFunction((want) => JSON.stringify([...document
         .querySelectorAll('#stage [data-queue-row]')].map((row) => Number(row.getAttribute('data-queue-row')))) === want,
       JSON.stringify(wanted), { timeout: 10_000 });
+      const drop = async (from: number, to: number, fraction: number) => {
+        const button = (id: number) => page.locator(`#stage [data-queue-row="${id}"] [data-mix-item]`);
+        await button(from).scrollIntoViewIfNeeded();
+        const source = await button(from).boundingBox();
+        const target = await button(to).boundingBox();
+        assert.ok(source && target);
+        await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(target.x + target.width * fraction, target.y + target.height / 2, { steps: 8 });
+        await page.locator('#stage [data-navigation-order="playlist-queue"] [data-navigation-drop-line]').waitFor();
+        await page.mouse.up();
+      };
       assert.deepEqual(await order(), PLAYLIST.items);
-      await page.locator('#stage [data-queue-row="16"]').dragTo(page.locator('#stage [data-queue-row="14"]'),
-        { targetPosition: { x: 4, y: 2 } });
-      await wait([11, 16, 14, 15]);
+      await drop(11, 14, 0.25);
+      await wait([14, 11, 15, 16]);
+      await undo(page);
+      await wait(PLAYLIST.items);
+      await drop(14, 11, 0.75);
+      await wait([14, 11, 15, 16]);
       await undo(page);
       await wait(PLAYLIST.items);
       await page.locator('#stage [data-queue-remove="15"]').click();
@@ -762,10 +803,117 @@ describe('作品详情岛', () => {
       await wait(PLAYLIST.items);
       assert.deepEqual(opened.stub.writes.filter((write) => write.body.action !== 'progress')
         .map((write) => [write.body.action, write.body.asset_ids ?? write.body.asset_id]), [
-        ['reorder', [11, 16, 14, 15]], ['reorder', PLAYLIST.items],
+        ['reorder', [14, 11, 15, 16]], ['reorder', PLAYLIST.items],
+        ['reorder', [14, 11, 15, 16]], ['reorder', PLAYLIST.items],
         ['remove', 15], ['add', [15]], ['reorder', PLAYLIST.items],
       ]);
       assert.deepEqual(withoutPlayer(opened.problems), []);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('拖动长队列时滚动位置稳定，失效条目旁的落点和撤销正确', { timeout: 60_000 }, async () => {
+    const playlistItems = [itemCard(11), { ...itemCard(17), disposal: 'vanished' },
+      ...Array.from({ length: 198 }, (_, index) => ({ ...itemCard(14), id: 1000 + index }))];
+    const opened = await openItemPage(browser, `/assets/11?playlist=${PLAYLIST.id}`, DESKTOP, { playlistItems });
+    try {
+      const { page } = opened;
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const queue = page.locator('#stage [data-navigation-order="playlist-queue"]');
+      const item = (id: number) => queue.locator(`[data-queue-row="${id}"] [data-mix-item]`);
+      const original = playlistItems.map(row => row.id);
+      const wanted = [original[1], original[2], original[0], ...original.slice(3)];
+      const order = () => ids(page, '#stage [data-queue-row]', 'data-queue-row');
+      const scroll = () => queue.evaluate(node => node.scrollLeft);
+      await item(11).scrollIntoViewIfNeeded();
+      const source = await item(11).boundingBox();
+      const target = await item(1000).boundingBox();
+      assert.ok(source && target);
+      assert.equal(await item(17).isDisabled(), true);
+      const start = await scroll();
+      await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+      await page.mouse.down();
+      const bounds = await queue.boundingBox();
+      assert.ok(bounds);
+      await page.mouse.move(target.x + target.width / 2, bounds.y - 30, { steps: 8 });
+      const floating = queue.locator('[data-navigation-drag-preview]:popover-open');
+      const lifted = await floating.boundingBox();
+      assert.ok(lifted && lifted.y < bounds.y);
+      assert.equal(await floating.evaluate(node => getComputedStyle(node).pointerEvents), 'none');
+      await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 8 });
+      await queue.locator('[data-navigation-drop-line]').waitFor();
+      assert.equal(await scroll(), start);
+      await page.mouse.up();
+      await floating.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.querySelector('#stage [data-queue-row]')?.getAttribute('data-queue-row') === '17');
+      assert.deepEqual(await order(), wanted);
+      await undo(page);
+      await page.waitForFunction(() => document.querySelector('#stage [data-queue-row]')?.getAttribute('data-queue-row') === '11');
+      assert.deepEqual(await order(), original);
+    } finally { await opened.close(); }
+  });
+
+  it('键盘在当前详情打开排序弹窗，取消不写入，保存后队列在同一舞台更新', { timeout: 60_000 }, async () => {
+    const path = `/assets/11?playlist=${PLAYLIST.id}`;
+    const opened = await openItemPage(browser, path, DESKTOP);
+    try {
+      const { page } = opened;
+      const trigger = page.getByRole('button', { name: '编辑播放列表' });
+      const dialog = page.getByRole('dialog', { name: `调整播放顺序 · ${PLAYLIST.name}` });
+      const firstMove = dialog.locator('[data-tab="14"]').getByRole('button', { name: /上移/ });
+      const writes = () => opened.stub.writes.filter(({ body }) => body.action === 'reorder');
+      await watchStage(page);
+      await trigger.focus();
+      await trigger.press('Enter');
+      await dialog.waitFor();
+      await firstMove.focus();
+      await firstMove.press('Enter');
+      await dialog.getByRole('button', { name: '取消', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement?.matches('[data-edit-playlist]'));
+      assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
+      assert.equal(writes().length, 0);
+      assert.deepEqual(await ids(page, '#stage [data-queue-row]', 'data-queue-row'), PLAYLIST.items);
+
+      await trigger.press('Enter');
+      await firstMove.click();
+      await dialog.getByRole('button', { name: '保存顺序', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+      await pathIs(page, path);
+      assert.deepEqual(await ids(page, '#stage [data-queue-row]', 'data-queue-row'), [14, 11, 15, 16]);
+      assert.deepEqual(writes().map(({ body }) => body.asset_ids), [[14, 11, 15, 16]]);
+      assert.deepEqual(await stageKept(page), { same: true, skeleton: false, focused: true });
+      assert.equal(await current(page), '11');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('排序弹窗可立即反向拖动，两个方向都能在目标行换位', { timeout: 60_000 }, async () => {
+    const opened = await openItemPage(browser, `/assets/11?playlist=${PLAYLIST.id}`, DESKTOP);
+    try {
+      const { page } = opened;
+      await page.locator('#stage [data-edit-playlist]').click();
+      const dialog = page.getByRole('dialog', { name: `调整播放顺序 · ${PLAYLIST.name}` });
+      const rows = dialog.locator('[data-tab]');
+      const order = () => rows.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('data-tab'))));
+      const drop = async (from: number, to: number, fraction: number) => {
+        const source = await dialog.locator(`[data-tab="${from}"]`).boundingBox();
+        const target = await dialog.locator(`[data-tab="${to}"]`).boundingBox();
+        assert.ok(source && target);
+        await page.mouse.move(source.x + 20, source.y + source.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(target.x + 24, target.y + target.height * fraction, { steps: 8 });
+        await dialog.locator('[data-navigation-drop-line]').waitFor();
+        await page.mouse.up();
+      };
+      await drop(11, 14, 0.25);
+      assert.deepEqual(await order(), [14, 11, 15, 16]);
+      assert.equal(await rows.first().evaluate(node => node.getAnimations().some(animation => animation.id === 'sidebar-reorder')), false);
+      await drop(11, 14, 0.75);
+      assert.deepEqual(await order(), PLAYLIST.items);
+      assert.equal(opened.stub.writes.some(({ body }) => body.action === 'reorder'), false);
     } finally {
       await opened.close();
     }

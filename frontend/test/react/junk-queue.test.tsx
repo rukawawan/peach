@@ -126,7 +126,7 @@ describe('计数行', () => {
     expect(p.actions.selectAll).toHaveBeenCalledWith([1, 2], true);
     const badge = (key: string) => row.querySelector(`[data-count-badge="junk:${key}"]`)?.textContent ?? null;
     expect([badge(''), badge('video'), badge('image'), badge('archive'), badge('dismissed')]).toEqual(['5', '2', '3', null, '3']);
-    // 徽标交给遗留层 `popBadges` 记数：变了的那几枚弹，没动的原地不动。
+    // 徽标由共用动效按上一次的计数判断是否淡入。
     expect(row.querySelector('[data-count-badge="junk:video"]')?.classList.contains('countbadge')).toBe(true);
   });
 

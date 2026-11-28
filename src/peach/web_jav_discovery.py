@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+import unicodedata
 
 from . import entities, feed_followup, web_catalog, web_feeds, wants
 from .related import rank_related
@@ -312,7 +313,7 @@ RELEASE_PAGE_SIZE = 24
 #: 新作的三个筛选维度：每部的女优（解析后的规范名）、厂牌（规范名）与标签。
 RELEASE_FACETS = ("performer", "studio", "tag")
 RELEASE_RANGE_COLUMNS = {"release": ("date", "release_date"), "dur": ("number", "duration"),
-                         "score": ("number", "source_score")}
+                         "score": ("number", "source_score"), "taste": ("taste", "taste_score")}
 
 
 #: 新作的排序：发行时间（默认）、来源评分、时长、番号、口味，`random` 是「换一批」。
@@ -345,7 +346,7 @@ def _release_order(rows, sort, descending, seed):
 
 def q_jav_releases(contract, args):
     """订阅发现的全部未入库新作：默认按发行日期倒序分页，可按女优、厂牌、标签与文字筛选，
-    排序见 `RELEASE_SORTS`（口味分只在按口味排时现算）。
+    可按口味范围筛选或排序，番号可单独查询。
 
     候选与「发现」同一批（`_external`），只换成时间顺序、不按口味截断。筛选项只取这批新作里
     出现过的女优、厂牌与标签；每个维度的计数按「文字与其他维度已生效、本维度不计」的行集算，
@@ -394,11 +395,12 @@ def _release_listing(contract, connection, args):
     """新作全集（已排序）与按筛选条件留下的那些；列表与「读取资料」共用，读的是同一批。"""
     sort = args.get("sort") if args.get("sort") in RELEASE_SORTS else "release_date"
     descending = args.get("direction") != "asc"
+    filters = column_filters(args.get('column_filters'), {'people', 'studio', 'tags'},
+                             {key: kind for key, (kind, _) in RELEASE_RANGE_COLUMNS.items()})
     matches = _release_matcher({facet: str(args.get(facet) or "").strip() for facet in RELEASE_FACETS},
-                               str(args.get("q") or "").strip().casefold(),
-                               column_filters(args.get('column_filters'), {'people', 'studio', 'tags'},
-                                              {key: kind for key, (kind, _) in RELEASE_RANGE_COLUMNS.items()}))
-    rows = _release_rows(contract, connection, taste=sort == "taste" and not args.get('column'))
+                               str(args.get("q") or "").strip().casefold(), filters,
+                               _code_filter_key(str(args.get("code") or "")[:80]))
+    rows = _release_rows(contract, connection, taste="taste" in filters or (sort == "taste" and not args.get('column')))
     if not args.get('column'):
         rows = _release_order(rows, sort, descending, str(args.get("seed") or ""))
     return rows, [row for row in rows if matches(row)], matches, sort, descending
@@ -435,7 +437,7 @@ def w_jav_release_metadata(contract, body):
 
 
 def _release_rows(contract, connection, *, taste):
-    """新作候选：「发现」那批去重，出演换成解析后的规范名、厂牌换成规范名；按口味排时现算口味分。"""
+    """新作候选：「发现」那批去重，出演换成解析后的规范名、厂牌换成规范名；按口味筛选或排序时计算口味分。"""
     unique = {}
     for row in _external(connection, contract):
         unique.setdefault(web_catalog.normalise_code_key(row["code"]) or row["id"], row)
@@ -455,9 +457,15 @@ def _release_rows(contract, connection, *, taste):
     return rows
 
 
-def _release_matcher(chosen, query, columns=None):
+def _code_filter_key(value):
+    return re.sub(r"[\s_\-‐‑‒–—―]+", "", unicodedata.normalize("NFKC", value).casefold())
+
+
+def _release_matcher(chosen, query, columns=None, code=""):
     """筛选判据：文字匹配番号、标题、出演、厂牌与标签，三个维度各按所选值；`skip` 的那一维不看。"""
     def matches(row, skip=None):
+        if code and code not in _code_filter_key(row["code"] or ""):
+            return False
         if query and query not in " ".join([row["code"] or "", row["title"] or "", row["performers"], row["studio"] or "",
                                             *row["tags"]]).casefold():
             return False

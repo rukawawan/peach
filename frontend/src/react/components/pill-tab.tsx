@@ -81,7 +81,7 @@ export function PillTabList({ children, className, ref, container, ...props }: P
     const el = container === undefined ? innerRef.current : container;
     if (!el) return;
     const measure = () => {
-      const selected = el.querySelector<HTMLElement>("[data-pill-selected]");
+      const selected = el.querySelector<HTMLElement>("[data-pill-selected]:not([data-navigation-drag-preview])");
       if (!selected) return;
       setThumb({
         left: selected.offsetLeft,
@@ -94,7 +94,8 @@ export function PillTabList({ children, className, ref, container, ...props }: P
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    const observeTabs = () => el.querySelectorAll("button,[role=tab]").forEach(tab => ro.observe(tab));
+    const observeTabs = () => el.querySelectorAll(":is(button,[role=tab]):not([data-navigation-drag-preview])")
+      .forEach(tab => ro.observe(tab));
     observeTabs();
     const mo = new MutationObserver(() => { observeTabs(); measure(); });
     mo.observe(el, {

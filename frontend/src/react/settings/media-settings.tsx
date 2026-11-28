@@ -25,7 +25,11 @@ import { CloudDriveGuide } from './clouddrive-guide';
 import { CloudProxySettings } from './cloud-proxy-settings';
 import { CONFIGURATION_KEY, fetchConfiguration } from './configuration';
 import { MEDIA_PROCESSING_KEY, fetchMediaProcessing } from '../settings-panel/settings-data';
-import { groupRoot } from './configuration-panel';
+import { ConfigurationContents } from './configuration-contents';
+import { useCheckReceipt } from './use-check-receipt';
+import { CodePatternSettings } from './code-pattern-settings';
+import { MediaProcessingSettings, PlaybackTranscodeSettings } from './media-processing-settings';
+import { TaskSpeedSettings } from './service-preferences';
 import {
   FolderField, FolderFieldLine, FolderRow, isCloudSource, MEDIA_SOURCES, MediaReadPolicy, MediaReadPolicyHelp, SourceSelect, sourceMark,
   useFolderRows,
@@ -112,34 +116,39 @@ const fieldErrorsOf = (cause: unknown): FieldErrors | null => {
 };
 
 /* 能编辑时挂载状态标在每个文件夹行上；只读时没有那张表，单列一块。 */
-export function MediaSettings({ data, receipt, panel }: ConfigurationGroupProps) {
+export function MediaSettings({ data, receipt }: ConfigurationGroupProps) {
+  const available = !data.section_errors?.media_sources && !data.section_errors?.library_count;
   const cloud = !!data.media_sources?.some(row => isCloudSource(row.location));
   // 首屏骨架照这一屏的结构排：每个媒体库几个文件夹、有没有 CloudDrive 代理，自动发现开了哪几项、几条前缀。
   useEffect(() => {
-    if (data.editable) {
+    if (available && data.editable) {
       const counts = new Map<string, number>();
       for (const row of initialRows(data)) counts.set(row.library_id, (counts.get(row.library_id) ?? 0) + 1);
       rememberShape('media', { folders: [...counts.values()], cloud });
     }
     const discovery = data.push_discovery;
-    if (discovery) {
+    if (available && discovery) {
       rememberShape('discovery', { enabled: discovery.enabled, watchLocal: discovery.watch_local, cloud: discovery.cloud,
         webhook: discovery.enabled && discovery.cloud && Boolean(discovery.config_toml), prefixes: discovery.prefixes.length });
     }
-  }, [data, cloud]);
-  return (
-    <div {...groupRoot(panel)}>
-      {data.editable ? <MediaForm data={data} receipt={receipt} /> : <Note tone="neutral" title={t('settings:mediaLibraries.readOnly')}>{data.notice}</Note>}
-      {data.editable ? null : <MountStatus data={data} />}
-      {cloud ? <CloudProxySettings receipt={receipt} /> : null}
-      {data.push_discovery
-        ? <PushDiscoveryForm initial={data.push_discovery} receipt={receipt} />
-        : null}
-    </div>
-  );
+  }, [data, cloud, available]);
+  return <ConfigurationContents entries={[
+    available && { id: 'library-folders', label: t('settings:libraryFolders.title'),
+      content: data.editable ? <MediaForm data={data} receipt={receipt} /> : <Note tone="neutral" title={t('settings:mediaLibraries.readOnly')}>{data.notice}</Note> },
+    available && !data.editable && Boolean(data.media_sources) && { id: 'library-mounts', label: t('settings:mountStatus.title'),
+      content: <MountStatus data={data} /> },
+    available && cloud && { id: 'library-cloud-proxy', label: t('settings:cloudProxy.title'), content: <CloudProxySettings receipt={receipt} /> },
+    available && data.push_discovery && { id: 'library-discovery', label: t('settings:fileDiscovery.title'),
+      content: <PushDiscoveryForm initial={data.push_discovery} receipt={receipt} /> },
+    { id: 'library-code-patterns', label: t('settings:codePatterns.title'), content: <CodePatternSettings receipt={receipt} /> },
+    { id: 'library-video-previews', label: t('settings:videoPreviews.title'), content: <MediaProcessingSettings receipt={receipt} /> },
+    { id: 'library-transcoding', label: t('settings:transcoding.title'), content: <PlaybackTranscodeSettings receipt={receipt} /> },
+    { id: 'library-task-speed', label: t('settings:taskSpeed.title'), content: <TaskSpeedSettings receipt={receipt} /> },
+  ]} />;
 }
 
 function MediaForm({ data, receipt }: ConfigurationGroupProps) {
+  const { checked, checkFailed } = useCheckReceipt();
   const { rows, edit, add, remove, errors: rowErrors, setErrors: setRowErrors, picking, pick, inputRef } = useFolderRows({
     initial: () => initialRows(data), blank: () => blankRow(), pickFolder, describe: errorMessage,
   });
@@ -337,11 +346,15 @@ function MediaForm({ data, receipt }: ConfigurationGroupProps) {
                       <Checkbox isSelected={row.smb_clear || false} onChange={value => edit(index, { smb_clear: value })}>{t('settings:smbShare.removeAccount')}</Checkbox>
                       <Button className="self-start" variant="secondary" {...busyProps(action.busy === `smb-${index}`)}
                         onClick={() => void action.run(`smb-${index}`, signal => apiSend<{ readable: boolean; directories: string[] }>(
-                          '/api/configuration/smb/test', row, 'POST', signal), result => setSmbResults(current => ({
-                            ...current, [index]: { message: t('settings:smbShare.readable'), directories: result.directories },
-                          })), cause => setSmbResults(current => ({ ...current,
-                            [index]: { message: errorMessage(cause), directories: [] },
-                          })))}>{t('settings:smbShare.testConnection')}</Button>
+                          '/api/configuration/smb/test', row, 'POST', signal), result => {
+                          const message = t('settings:smbShare.readable');
+                          setSmbResults(current => ({ ...current, [index]: { message, directories: result.directories } }));
+                          checked(message);
+                        }, cause => {
+                          const message = errorMessage(cause);
+                          setSmbResults(current => ({ ...current, [index]: { message, directories: [] } }));
+                          checkFailed(t('settings:connectionCheck.action', { service: 'SMB' }), message);
+                        })}>{t('settings:smbShare.testConnection')}</Button>
                       {smbResults[index] ? <Help>{smbResults[index].message}</Help> : null}
                       {smbResults[index]?.directories.length ? <Select aria-label={t('settings:smbShare.subdirectoryLabel', { index: index + 1 })} placeholder={t('settings:smbShare.openSubdirectory')}
                         selectedKey={null} onSelectionChange={key => { if (key) {
@@ -395,9 +408,17 @@ function MountBadge({ online }: { online: boolean | null | undefined }) {
 function MountStatus({ data }: { data: ConfigurationData }) {
   const sources = data.media_sources;
   const action = useAction();
+  const { checked, checkFailed } = useCheckReceipt();
   if (!sources) return null;
-  const refresh = () => void action.run('refresh', (signal) => fetchConfiguration(signal),
-    (result) => queryClient.setQueryData(CONFIGURATION_KEY, result));
+  const refresh = () => void action.run('refresh', (signal) => fetchConfiguration(signal), (result) => {
+    queryClient.setQueryData(CONFIGURATION_KEY, result);
+    if (!result.section_errors?.media_sources && result.media_sources) checked(t('settings:mountStatus.refreshed'));
+    else checkFailed(t('settings:mountStatus.refresh'), result.section_errors?.media_sources?.message || t('settings:shared.notFound'));
+  }, cause => {
+    const message = errorMessage(cause);
+    action.setError(message);
+    checkFailed(t('settings:mountStatus.refresh'), message);
+  });
   return (
     <Section guide="mounts" title={t('settings:mountStatus.title')}>
       <FactList>

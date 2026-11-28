@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from peach import seed_catalog, seed_contribution_archive as archive, seed_sharing
+from peach import community_sharing, library_sharing, seed_catalog, seed_contribution_archive as archive, seed_sharing
 from peach.repository import LedgerDatabase
 from peach.seed_contributions import Claim, Snapshot, claim_key, collect, public_url
 from peach.settings_file import PeachConfig
@@ -98,6 +98,29 @@ class ContributionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             service.save({'enabled': True, 'consent': True, 'schema': 1, 'preview_token': 'stale'})
         self.assertFalse((config.directory('state') / 'library-sharing.json').exists())
+
+    def test_community_choice_validates_both_previews_before_extending_existing_consent(self):
+        config = PeachConfig(self.root, self.root / 'config.toml')
+        library = library_sharing.Service(config, object())
+        seed = seed_sharing.Service(config, object())
+        library_sharing.save_choice(config, True)
+        previous = library_sharing.consent(config)
+        with (mock.patch.object(library_sharing, 'collect', return_value=({}, b'{}')),
+              mock.patch.object(seed_sharing, 'collect', return_value=Snapshot(period='2026-W47', claims=[]))):
+            library_preview = library.preview()
+            metadata_preview = seed.preview()
+            draft = {'enabled': True, 'consent': True, 'library': library_preview}
+            with self.assertRaises(ValueError):
+                community_sharing.save(library, seed, draft)
+            self.assertEqual(library_sharing.consent(config), previous)
+            self.assertFalse(seed.choice())
+            result = community_sharing.save(library, seed, {**draft, 'metadata': metadata_preview})
+        self.assertTrue(result['metadata']['enabled'])
+        self.assertEqual(library_sharing.consent(config), previous)
+        disabled = community_sharing.save(library, seed, {'enabled': False})
+        self.assertFalse(disabled['library']['enabled'])
+        self.assertFalse(disabled['metadata']['enabled'])
+        self.assertEqual(disabled['failed'], [])
 
     def test_a_reenabled_choice_does_not_reset_the_weekly_attempt(self):
         config = PeachConfig(self.root, self.root / 'config.toml')

@@ -212,6 +212,7 @@ body{background:var(--page);color:var(--ink);
    溢出由抽屉的 overflow:hidden 连圆角一起裁掉，这一层不必自己再写一遍圆角。
    首屏 ambient-in 那一下淡入留着：这一层一直在动，开页时从 0 亮起来读成「灯亮了」，
    直接带着满强度出现反而像一张贴图突然贴上去。 */
+html[data-home-glow-idle]{--glow-idle-play:paused}
 .glowlayer{--ambient-opacity:calc(var(--glow-strength) * var(--glow-theme-scale));
   position:absolute;inset:0;z-index:-2;pointer-events:none}
 .glowlayer::before{content:"";position:absolute;z-index:0;pointer-events:none;inset:0;
@@ -222,7 +223,7 @@ body{background:var(--page);color:var(--ink);
   background-size:200% 200%;background-repeat:no-repeat;
   background-position:50% 20%,80% 70%,20% 80%;
   animation:glowdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glowdrifty calc(67s * var(--glow-drift-scale)) linear infinite,ambient-in .8s ease .5s both;
-  animation-play-state:var(--glow-drift-play),var(--glow-drift-play),running}
+  animation-play-state:var(--glow-idle-play,var(--glow-drift-play)),var(--glow-idle-play,var(--glow-drift-play)),running}
 /* 三条轨迹是同一条李萨如曲线的三个相位：第一枚与 board.css 的 --glass-drift-a 同相，
    第二枚是它的镜像，第三枚横向错四分之一周期、纵向错八分之一，三枚因此从不在同一处会合。 */
 @keyframes glowdriftx{
@@ -260,7 +261,7 @@ body{background:var(--page);color:var(--ink);
    的人要的正是「别再动了」。停在当前那一帧，光还在，只是不动——整层关掉等于换了个配色。 */
 @media (prefers-reduced-motion:reduce){.glowlayer::before{animation:ambient-in .8s ease .5s both}}
 .disp{font-family:Bahnschrift,"Segoe UI Variable Display","Microsoft YaHei UI",sans-serif;
-  font-weight:600;letter-spacing:.02em}
+  font-weight:600}
 .mono{font-family:"Cascadia Mono",Consolas,ui-monospace,"Microsoft YaHei UI","PingFang SC",monospace;
   font-variant-numeric:tabular-nums;font-size:var(--fs-xs)}
 button,input,textarea{font:inherit;color:inherit}

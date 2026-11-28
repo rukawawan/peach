@@ -164,6 +164,13 @@ class QueueTests(unittest.TestCase):
         self.assertEqual([row[0] for row in timeline_sheets.pending(self.db, 10, limit=1)],
                          [6])
 
+    def test_the_queue_reads_the_ledger_under_a_path_with_uri_characters(self):
+        directory = self.root / "时间轴#%23"
+        directory.mkdir()
+        database = directory / "ledger.db"
+        shutil.copy2(self.db, database)
+        self.assertEqual([row[0] for row in timeline_sheets.pending(database, 10)], [6, 1, 3])
+
 
 class GenerateLibraryTests(unittest.TestCase):
     def test_capacity_denial_during_frames_pauses_without_completing_the_asset(self):

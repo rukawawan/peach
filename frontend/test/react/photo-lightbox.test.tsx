@@ -53,6 +53,10 @@ beforeEach(() => {
   vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, selector: string) {
     return selector === ':popover-open' ? this.hasAttribute('data-test-popover-open') : matches.call(this, selector);
   });
+  const closest = Element.prototype.closest;
+  vi.spyOn(Element.prototype, 'closest').mockImplementation(function (this: Element, selector: string) {
+    return closest.call(this, selector === 'dialog:modal' ? 'dialog[open]' : selector);
+  });
   proto.showPopover = function (this: HTMLElement) { this.setAttribute('data-test-popover-open', '') };
   proto.hidePopover = function (this: HTMLElement) { this.removeAttribute('data-test-popover-open') };
 });
@@ -92,8 +96,8 @@ const WALL = [sample(1), sample(2), local(100), local(101), local(102)];
 
 const q = <T extends Element = HTMLElement>(box: Element, selector: string) => box.querySelector<T>(selector)!;
 const labelled = (box: Element, label: string) => q<HTMLButtonElement>(box, `[aria-label="${label}"]`);
-const escape = () => act(async () => {
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+const escape = (target: EventTarget = document) => act(async () => {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
 });
 
 describe('打开', () => {
@@ -250,11 +254,13 @@ describe('缩放条', () => {
     expect(readout.textContent).toBe('100%');
   });
 
-  it('两端步进键画的是放大镜加减号，不是文本字形', async () => {
+  it('缩放步进和适应窗口使用带无障碍名称的图标按钮', async () => {
     const box = await open(0, WALL);
-    expect(labelled(box, '缩小').innerHTML).toContain('href="#i-zoom-out"');
-    expect(labelled(box, '放大').innerHTML).toContain('href="#i-zoom-in"');
-    expect(labelled(box, '适应窗口').innerHTML).toContain('href="#i-maximize"');
+    for (const name of ['缩小', '放大', '适应窗口']) {
+      const button = labelled(box, name);
+      expect(button.querySelector('svg[aria-hidden="true"] use')).not.toBeNull();
+      expect(button.textContent).toBe('');
+    }
     expect(labelled(box, '原大小').textContent).toBe('1:1');
   });
 
@@ -402,10 +408,10 @@ describe('信息面板', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(box.isConnected).toBe(true);
     await click(toggle);
-    await escape();
+    await escape(q(panel, 'h2'));
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(box.isConnected).toBe(true);
-    await escape();
+    await escape(toggle);
     expect(box.isConnected).toBe(false);
   });
 });

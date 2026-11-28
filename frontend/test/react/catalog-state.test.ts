@@ -75,10 +75,10 @@ describe('目录地址与默认范围', () => {
     const previous = initial('/flagged', '?loc=pikpak&owner=none&creator=x&region=CN&jav=1&thumb=1');
     const state = resetCatalogFilters(previous, preferences, seed);
     expect(state).toEqual({
-      loc: 'pikpak', creator: '', studio: '', owner: '', tag: '', tag_match: 'all', len: '',
+      loc: 'pikpak', creator: '', performer: '', studio: '', owner: '', tag: '', tag_match: 'all', len: '',
       dur_min: '', dur_max: '', orient: '', region: '', year: '', state: '', sort: 'new', dir: 'asc',
       seed: 'fresh-seed', q: '', jav: '', thumb: '0',
-      browse: '', folder: '', folder_recursive: '',
+      browse: '', folder: '', folder_recursive: '', translation_missing: '',
     });
     const patch = homeCatalogState(state);
     expect(patch.state).toBe(state);

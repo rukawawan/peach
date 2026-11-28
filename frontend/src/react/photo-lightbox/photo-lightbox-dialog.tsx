@@ -4,7 +4,9 @@
  * （`key` 每次加一，Swiper 从头建），关掉时只把内容渲染成空，根和容器留着给下一次。不进
  * 路由树：那一套是给壳的页面容器用的，容器归壳、换页就被整块重写；灯箱浮在所有页面
  * 之上，哪一页都能打开，跟哪个页面容器都不同生共死。 */
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useFocusVisible } from 'react-aria';
+import { Button } from '@/components/base/buttons/button';
 import { createRoot, type Root } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 
@@ -18,6 +20,15 @@ import {
 } from './photo-lightbox';
 import { t } from '../../i18n';
 import { InterfaceLocale } from '../interface-locale';
+import { SpriteIcon } from '../settings/section';
+import './photo-lightbox.css';
+
+const CloseIcon = () => <SpriteIcon name="x" />;
+const ChevronIcon = () => <SpriteIcon name="chevron-left" />;
+const DetailsIcon = () => <SpriteIcon name="info" />;
+const ZoomOutIcon = () => <SpriteIcon name="zoom-out" />;
+const ZoomInIcon = () => <SpriteIcon name="zoom-in" />;
+const FitIcon = () => <SpriteIcon name="maximize" />;
 
 let host: HTMLElement | null = null;
 let root: Root | null = null;
@@ -47,7 +58,8 @@ export async function openPhotoLightbox(index: number, slides: LightboxSlide[], 
   }
   const at = lightboxRoot();
   flushSync(() => at.render(
-    <InterfaceLocale><PhotoLightbox key={++generation} slides={slides} index={index} Swiper={Swiper} host={actions ?? null} /></InterfaceLocale>,
+    <InterfaceLocale><PhotoLightbox key={++generation} slides={slides} index={index} Swiper={Swiper} host={actions}
+      onClose={closePhotoLightbox} /></InterfaceLocale>,
   ));
 }
 
@@ -62,9 +74,12 @@ interface Detail {
   isOpen(): boolean;
 }
 
-function PhotoLightbox({ slides, index, Swiper, host: actions }: {
-  slides: LightboxSlide[]; index: number; Swiper: SwiperConstructor; host: LightboxHost | null;
+export function PhotoLightbox({ slides, index, Swiper, host: actions, onClose, devicePixels = false, imageAction }: {
+  slides: LightboxSlide[]; index: number; Swiper: SwiperConstructor; host?: LightboxHost;
+  onClose(restoreFocus: boolean): void; devicePixels?: boolean;
+  imageAction?(active: number, dismiss: (after?: () => void) => void): ReactNode;
 }) {
+  const { isFocusVisible } = useFocusVisible();
   const many = slides.length > 1;
   const detailId = useId();
   const box = useRef<HTMLDialogElement>(null);
@@ -87,6 +102,18 @@ function PhotoLightbox({ slides, index, Swiper, host: actions }: {
   const [lost, setLost] = useState<ReadonlySet<number>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ at: number; text: string }>({ at: index, text: '' });
+
+  function dismissLightbox(after?: () => void, instant = false) {
+    const dialog = box.current;
+    if (!dialog?.open || dialog.hasAttribute('data-exiting')) return;
+    if (instant) dialog.dataset.motionInstant = '';
+    dialog.dataset.exiting = '';
+    void Promise.allSettled(dialog.getAnimations().map(animation => animation.finished)).then(() => {
+      if (box.current !== dialog) return;
+      onClose(!after);
+      after?.();
+    });
+  }
 
   useLayoutEffect(() => {
     const dialog = box.current!;
@@ -116,7 +143,7 @@ function PhotoLightbox({ slides, index, Swiper, host: actions }: {
       },
     });
     centerThumb(index, 0);
-    zoom.current = photoZoom(dialog, main, setPercent);
+    zoom.current = photoZoom(dialog, main, setPercent, devicePixels);
     const context = wireContextCard(dialog, toggle.current!, panel.current!);
     const dismiss = (returnFocus = false) => {
       context.hide();
@@ -140,11 +167,14 @@ function PhotoLightbox({ slides, index, Swiper, host: actions }: {
     const resize = new ResizeObserver(() => { main.update(); strip.update(); zoom.current?.resize() });
     resize.observe(dialog);
     const keys = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      const target = event.target;
+      if (event.key !== 'Escape' || !(target instanceof Element) || target.closest('dialog:modal') !== dialog) return;
+      const childModal = target.closest('[data-modal-surface]');
+      if (childModal && dialog.contains(childModal)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (detail.current?.isOpen()) detail.current.dismiss(true);
-      else closePhotoLightbox();
+      else dismissLightbox(undefined, true);
     };
     document.addEventListener('keydown', keys, true);
     return () => {
@@ -156,7 +186,7 @@ function PhotoLightbox({ slides, index, Swiper, host: actions }: {
       zoom.current = null;
       detail.current = null;
       dialog.close();
-      document.body.classList.remove('photolight-open');
+      if (!document.querySelector('dialog[open][data-photo-lightbox]')) document.body.classList.remove('photolight-open');
     };
     // 每次打开换一份新的（`key`），这一段只在挂上与卸下时各跑一次。
   }, []);
@@ -198,16 +228,18 @@ function PhotoLightbox({ slides, index, Swiper, host: actions }: {
 
   return (
     <dialog ref={box} aria-label={t('catalog:photoLightbox.label')} data-photo-lightbox="" data-has-strip={many ? '' : undefined}
-      onCancel={(event) => { event.preventDefault(); closePhotoLightbox() }}
+      data-motion-instant={isFocusVisible || undefined}
+      onCancel={(event) => { event.preventDefault(); dismissLightbox(undefined, true) }}
       onClick={(event) => {
         // 主画布铺满视口后，黑色留白属于 zoom 容器而不是最外层；两者都视为背景。
         // 点图片、缩略图条、工具栏和翻页按钮仍不退出。
         const target = event.target as Element;
         if (detail.current?.dismissOutside(target)) return;
-        if (target === box.current || target.classList.contains('swiper-zoom-container')) closePhotoLightbox();
+        if (target === box.current || target.classList.contains('swiper-zoom-container')) dismissLightbox();
       }}>
-      <button type="button" data-photo-close="" aria-label={t('catalog:shared.close')} onClick={closePhotoLightbox}
-        dangerouslySetInnerHTML={{ __html: icon('x') }} />
+      <Button data-photo-close="" variant="ghost" iconOnly leadingIcon={CloseIcon}
+        aria-label={t('catalog:shared.close')} onClick={() => dismissLightbox()} />
+      {imageAction && <div className="absolute start-3 top-3 z-5">{imageAction(active, dismissLightbox)}</div>}
       <div ref={mainEl} className="swiper" data-photo-main="" role="region" aria-roledescription={t('catalog:photoLightbox.carousel')}
         aria-label={t('catalog:photoLightbox.label')}>
         <div className="swiper-wrapper">
@@ -223,31 +255,31 @@ function PhotoLightbox({ slides, index, Swiper, host: actions }: {
             </div>
           ))}
         </div>
-        {/* 方向只翻图标，不转整个按钮。两枚都画朝左那一枚，朝右的在样式里转半圈。 */}
-        <button ref={back} type="button" data-photo-nav="back" aria-label={t('catalog:photoLightbox.previous')}
-          dangerouslySetInnerHTML={{ __html: icon('chevron-left') }} />
-        <button ref={fwd} type="button" data-photo-nav="fwd" aria-label={t('catalog:photoLightbox.next')}
-          dangerouslySetInnerHTML={{ __html: icon('chevron-left') }} />
+        <Button ref={back} data-photo-nav="back" variant="secondary" iconOnly leadingIcon={ChevronIcon}
+          aria-label={t('catalog:photoLightbox.previous')} />
+        <Button ref={fwd} data-photo-nav="fwd" variant="secondary" iconOnly leadingIcon={ChevronIcon}
+          aria-label={t('catalog:photoLightbox.next')} />
       </div>
       <div data-photo-bar="">
-        <button ref={toggle} type="button" data-photo-detail-toggle="" aria-expanded="false" aria-controls={detailId}
-          aria-haspopup="dialog" aria-label={t('catalog:photoLightbox.details')} title={t('catalog:photoLightbox.details')} dangerouslySetInnerHTML={{ __html: icon('info') }} />
+        <Button ref={toggle} data-photo-detail-toggle="" variant="ghost" iconOnly leadingIcon={DetailsIcon}
+          aria-expanded="false" aria-controls={detailId} aria-haspopup="dialog"
+          aria-label={t('catalog:photoLightbox.details')} title={t('catalog:photoLightbox.details')} />
         <div>
           <div data-photo-count="" aria-live="polite">{`${active + 1} / ${slides.length}`}</div>
           {many ? <div ref={pagination} data-photo-pagination="" aria-label={t('catalog:photoLightbox.choose')} /> : null}
         </div>
         <div data-photo-zoom="">
-          <button type="button" data-zoom-step="-1" aria-label={t('catalog:photoLightbox.zoomOut')}
-            onClick={() => apply(percent - PHOTO_ZOOM_STEP)} dangerouslySetInnerHTML={{ __html: icon('zoom-out') }} />
+          <Button data-zoom-step="-1" size="xs" variant="ghost" iconOnly leadingIcon={ZoomOutIcon}
+            aria-label={t('catalog:photoLightbox.zoomOut')} onClick={() => apply(percent - PHOTO_ZOOM_STEP)} />
           <input ref={range} type="range" min={PHOTO_ZOOM_MIN} max={PHOTO_ZOOM_MAX} step="1" value={percent}
             aria-label={t('catalog:photoLightbox.zoom')} onChange={(event) => apply(Number(event.currentTarget.value))} />
-          <button type="button" data-zoom-step="1" aria-label={t('catalog:photoLightbox.zoomIn')}
-            onClick={() => apply(percent + PHOTO_ZOOM_STEP)} dangerouslySetInnerHTML={{ __html: icon('zoom-in') }} />
+          <Button data-zoom-step="1" size="xs" variant="ghost" iconOnly leadingIcon={ZoomInIcon}
+            aria-label={t('catalog:photoLightbox.zoomIn')} onClick={() => apply(percent + PHOTO_ZOOM_STEP)} />
           <b data-photo-zoom-readout="">{`${percent}%`}</b>
-          <button type="button" data-photo-scale="fit" aria-label={t('catalog:photoLightbox.fit')} title={t('catalog:photoLightbox.fit')}
-            onClick={() => apply('fit')} dangerouslySetInnerHTML={{ __html: icon('maximize') }} />
-          <button type="button" data-photo-scale="original" aria-label={t('catalog:photoLightbox.actualSize')} title={t('catalog:photoLightbox.actualSize')}
-            onClick={() => apply(100)}>1:1</button>
+          <Button data-photo-scale="fit" size="xs" variant="ghost" iconOnly leadingIcon={FitIcon}
+            aria-label={t('catalog:photoLightbox.fit')} title={t('catalog:photoLightbox.fit')} onClick={() => apply('fit')} />
+          <Button data-photo-scale="original" size="xs" variant="ghost" aria-label={t('catalog:photoLightbox.actualSize')}
+            title={t('catalog:photoLightbox.actualSize')} onClick={() => apply(100)}>1:1</Button>
         </div>
       </div>
       {/* 图片详情只展示安全元数据，定位只把 asset id 交给服务端：绝不能为了显示路径把 ledger

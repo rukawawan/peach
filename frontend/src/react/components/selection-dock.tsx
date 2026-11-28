@@ -38,6 +38,7 @@ interface SelectionDockProps {
   count: string;
   label: string;
   visible: boolean;
+  placement?: 'floating' | 'inline';
 }
 
 /** 浮条上的写入键：确认、写入、回执都交给 `runBulkAction`。 */
@@ -67,16 +68,17 @@ const publishDockSpace = () => {
   else root.style.removeProperty('--selection-dock-space');
 };
 
-function DockSurface({ actions, leading, children, count, label }: Omit<SelectionDockProps, 'visible'>) {
+function DockSurface({ actions, leading, children, count, label, placement = 'floating' }: Omit<SelectionDockProps, 'visible'>) {
   const dock = useRef<HTMLDivElement>(null);
   const present = useIsPresent();
   const reduce = useSyncExternalStore(subscribeReduce, readReduce, () => false);
   const { isFocusVisible } = useFocusVisible();
   const instant = reduce || isFocusVisible;
-  const hidden = { opacity: 0, transform: 'translate(-50%, 8px)' };
+  const floating = placement === 'floating';
+  const hidden = { opacity: 0, transform: floating ? 'translate(-50%, 8px)' : 'translateY(4px)' };
   useLayoutEffect(() => {
     const node = dock.current;
-    if (!node || !present) return;
+    if (!node || !present || !floating) return;
     // 进入浏览器顶层，覆盖正文与侧栏各自的层叠上下文。
     node.showPopover?.();
     const measure = () => {
@@ -93,12 +95,13 @@ function DockSurface({ actions, leading, children, count, label }: Omit<Selectio
       dockSpaces.delete(node);
       publishDockSpace();
     };
-  }, [present]);
+  }, [present, floating]);
   return (
-    <motion.div ref={dock} popover="manual" role="group" aria-label={label} data-selection-dock data-glass-pane=""
+    <motion.div ref={dock} popover={floating ? 'manual' : undefined} role="group" aria-label={label}
+      data-selection-dock={floating ? '' : undefined} data-inline-selection-dock={!floating ? '' : undefined} data-glass-pane={floating ? '' : undefined}
       inert={!present} aria-hidden={!present || undefined}
       initial={instant ? false : hidden}
-      animate={{ opacity: 1, transform: 'translate(-50%, 0px)' }}
+      animate={{ opacity: 1, transform: floating ? 'translate(-50%, 0px)' : 'translateY(0px)' }}
       exit={{ ...hidden, transition: { duration: instant ? 0 : 0.12 } }}
       transition={{ duration: instant ? 0 : 0.16, ease: [0.23, 1, 0.32, 1] }}>
       <span role="status" className="px-2 text-body-2-regular whitespace-nowrap text-text-primary">

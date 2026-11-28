@@ -203,6 +203,8 @@ class ScriptTests(unittest.TestCase):
         return path
 
     def _run(self, root: Path, boxes: dict, extra: list[str]) -> dict:
+        root = root.resolve() / "中文头像"
+        root.mkdir()
         source = root / "avatars"
         source.mkdir()
         for name, box in boxes.items():
@@ -270,8 +272,22 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(
                 (out["source"] / "creator-1.img.ct")
                 .read_text(encoding="utf-8"), "image/jpeg")
-            kept = cv2.imread(str(out["source"] / "creator-1.img"))
+            kept = self.script.face_detect.decode(
+                (out["source"] / "creator-1.img").read_bytes())
             self.assertEqual(kept.shape[:2], (560, 400))
+            face = json.loads(self.script.avatar_face.sidecar_path(
+                out["source"] / "creator-1.img").read_text(encoding="utf-8"))
+            self.assertEqual(face["px"], [400, 560])
+            self.assertIsNone(face["face"])
+
+    def test_a_preview_that_cannot_be_encoded_reports_the_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp).resolve() / "中文预览" / "头像.png"
+            image = canvas(40, 60)
+            with mock.patch.object(cv2, "imencode", return_value=(False, None)):
+                with self.assertRaises(ValueError):
+                    self.script.annotate(image, [], image, target)
+            self.assertFalse(target.exists())
 
     def test_an_image_already_scrubbed_is_left_alone(self):
         with tempfile.TemporaryDirectory() as tmp:

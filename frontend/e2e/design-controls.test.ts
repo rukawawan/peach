@@ -6,7 +6,7 @@ import { expectBody, settle } from './harness.ts';
 import { ITEM, openItemPage } from './item-fixture.ts';
 import {
   DESKTOP, MOBILE, tokenColor, openAccess, settledRun, openActivity, qualityGoal, openQualityGoals,
-  openScraping, openProcessing, openCatalog, openCatalogBars, openCatalogFixture, RUNNING_JOB, FAILED_JOB,
+  openScraping, openProcessing, openCatalog, openCatalogBars, openCatalogFixture, catalogVideo, RUNNING_JOB, FAILED_JOB,
   installDesignBrowser, openReview, openJunkWith, junkItem,
 } from './design-fixture.ts';
 
@@ -607,8 +607,9 @@ describe('设计决定：控件、状态与首页顶部', () => {
   });
 
   it('数字首写静态、变值弹入；筛选读数原位淡入淡出并保留控件', { timeout: 60_000 }, async () => {
-    const opened = await openCatalogFixture(browser, (payload, url) => {
-      payload.total = url.searchParams.has('q') ? 34 : 12;
+    const results = Array.from({ length: 34 }, (_, index) => catalogVideo(91_100 + index));
+    const opened = await openCatalogFixture(browser, {
+      items: results.slice(0, 12), search: results,
     });
     try {
       await opened.page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -667,13 +668,11 @@ describe('设计决定：控件、状态与首页顶部', () => {
 
   it('五枚叠放头像浮于文字上展开，左缘与标题列不动', { timeout: 60_000 }, async () => {
     const names = Array.from({ length: 7 }, (_, index) => `演示演员 ${index + 1}`);
-    const opened = await openCatalogFixture(browser, (payload) => {
-      const item = payload.items[0];
-      if (!item) throw new Error('演示目录没有可替换的卡片');
-      item.creator = '';
-      item.performers = names;
-      item.performer_total = names.length;
-      item.performer_entities = names.map((name, index) => ({ id: 90_000 + index, name, has_image: false }));
+    const opened = await openCatalogFixture(browser, {
+      items: [catalogVideo(91_100, {
+        creator: '', performers: names, performer_total: names.length,
+        performer_entities: names.map((_, index) => ({ id: 90_000 + index, has_image: false })),
+      })],
     });
     try {
       await opened.page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -908,8 +907,9 @@ describe('设计决定：控件、状态与首页顶部', () => {
 
   it('首页版式默认小图，大图统一作品画面框，选择单独记住', { timeout: 60_000 }, async () => {
     /* 首张卡使用番号封面，第二张使用普通预览图。 */
-    const opened = await openCatalogFixture(browser, (payload) => {
-      Object.assign(payload.items[0], { is_jav: true, code: 'ABC-123', display_code: 'ABC-123', has_cover: true });
+    const opened = await openCatalogFixture(browser, {
+      items: [catalogVideo(91_100, { is_jav: true, code: 'ABC-123', display_code: 'ABC-123', has_cover: true }),
+        catalogVideo(91_101)],
     });
     const { page } = opened;
     const ratio = (index: number) => page.locator('#grid [data-media-grid] > [data-media-card][data-id]').nth(index).locator('[data-media-pic]')
@@ -934,31 +934,47 @@ describe('设计决定：控件、状态与首页顶部', () => {
     }
   });
 
-  it('首页标签：没加上去是 --field-ring-hover 的虚线，加上去是玻璃上那圈实线，视图不画虚线；触屏上排 48、视图与标签取紧凑档', { timeout: 60_000 }, async () => {
-    /* 虚线只说「这条筛选可加、此刻没加」，取 Vercel 筛选令牌未生效那一档；四枚视图恒有一枚生效，不画。
-       圆角同卡片、详情与交集条那一颗（`--tag-radius`）。触屏控件共用 30px 高度。 */
-    const opened = await openCatalogBars(browser);
+  it('首页筛选与排序对齐，浮窗边界与选项各留间距', { timeout: 60_000 }, async () => {
+    const opened = await openCatalogBars(browser, DESKTOP, 24);
     try {
       const { page } = opened;
-      const scope = '[data-catalog-filter]';
-      const ring = await tokenColor(page, scope, '--field-ring-hover');
-      const low = await tokenColor(page, scope, '--glass-low');
-      const edge = (selector: string) => page.locator(`${scope} ${selector}`).first().evaluate((element) => {
-        const style = getComputedStyle(element);
-        const probe = document.createElement('div');
-        probe.style.borderRadius = 'var(--tag-radius)';
-        element.append(probe);
-        const radius = getComputedStyle(probe).borderTopLeftRadius;
-        probe.remove();
-        return { style: style.borderTopStyle, color: style.borderTopColor, radius: style.borderTopLeftRadius === radius };
+      const trigger = page.locator('[data-catalog-filter] [data-table-column-filter="home-tags"]');
+      const view = page.locator('[data-catalog-filter] a[data-catalog-view]').first();
+      assert.equal(await trigger.evaluate(el => getComputedStyle(el).fontWeight),
+        await view.evaluate(el => getComputedStyle(el).fontWeight));
+      const sort = page.locator('[data-catalog-filter] [data-entity-sort="new"]');
+      const toolbar = await sort.evaluate(el => {
+        const row = el.closest('[data-entity-sorts]')!;
+        const filters = [...row.querySelectorAll('[data-filter-field], [data-entity-sort]')];
+        const typography = filters.map(field => {
+          const { fontFamily, fontSize, fontWeight, lineHeight, height } = getComputedStyle(field);
+          return [fontFamily, fontSize, fontWeight, lineHeight, height].join('|');
+        });
+        const separator = row.querySelector(':scope > [data-entity-sep]');
+        return { fontVariants: new Set(typography).size, separators: row.querySelectorAll('[data-entity-sep]').length,
+          afterIcons: separator?.previousElementSibling?.hasAttribute('data-folder-mode-toggle'),
+          beforeText: separator?.nextElementSibling?.hasAttribute('data-filter-fields') };
       });
-      assert.deepEqual(await edge('[data-catalog-tag][aria-pressed="false"]'), { style: 'dashed', color: ring, radius: true },
-        '没加上去的标签不是 --field-ring-hover 的虚线，或圆角不是 --tag-radius');
-      assert.notEqual((await edge('[data-catalog-view]')).style, 'dashed', '视图恒有一枚生效，不画虚线');
-      await page.locator(`${scope} [data-catalog-tag][aria-pressed="false"]`).first().click();
-      await page.locator(`${scope} [data-catalog-tag][aria-pressed="true"]`).waitFor({ timeout: 5_000 });
-      assert.deepEqual(await edge('[data-catalog-tag][aria-pressed="true"]'), { style: 'solid', color: low, radius: true },
-        '加上去的标签那圈线不是玻璃上的 --glass-low');
+      assert.deepEqual(toolbar, { fontVariants: 1, separators: 1, afterIcons: true, beforeText: true });
+      await sort.click();
+      const sortMenu = page.locator('[data-sort-direction-menu]');
+      await page.locator('[data-placement]:has([data-sort-direction-menu]):not([data-entering])').waitFor();
+      const gaps = await sortMenu.evaluate(el => {
+        const menu = el.closest('[data-placement]')!.getBoundingClientRect();
+        const divider = el.querySelector('[data-sort-menu-divider]')!.getBoundingClientRect();
+        const firstOption = el.querySelector('[data-filter-option="asc"]')!.getBoundingClientRect();
+        const toolbar = document.querySelector('[data-catalog-filter] [data-filter-glass]')!.getBoundingClientRect();
+        return { toToolbar: menu.top - toolbar.bottom, toChoice: firstOption.top - divider.bottom };
+      });
+      assert.ok(gaps.toToolbar >= 1 && gaps.toChoice >= 4, JSON.stringify(gaps));
+      await page.keyboard.press('Escape');
+      await trigger.click();
+      const menu = page.getByRole('dialog', { name: '标签', exact: true });
+      const track = menu.locator('[data-overlay-track="y"]:visible');
+      await track.waitFor();
+      const inset = await menu.evaluate(el => el.getBoundingClientRect().right);
+      const box = await track.boundingBox();
+      assert.ok(box && Math.abs(inset - (box.x + box.width)) <= 5, JSON.stringify({ inset, box }));
     } finally {
       await opened.close();
     }
@@ -971,7 +987,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
           return element ? Math.round(element.getBoundingClientRect().height) : null;
         };
         return { coarse: matchMedia('(pointer: coarse)').matches, row: height('[data-filter-row="top"]'),
-          view: height('[data-catalog-view]'), tag: height('[data-catalog-tag]'),
+          view: height('[data-catalog-view]'), tag: height('[data-table-column-filter="home-tags"]'),
           compact: parseFloat(getComputedStyle(document.querySelector('[data-catalog-filter]')!).getPropertyValue('--control-h-compact')) };
       });
       assert.equal(heights.compact, 32);
@@ -981,7 +997,7 @@ describe('设计决定：控件、状态与首页顶部', () => {
     }
   });
 
-  it('首页换一批：头像、厂牌与标签原地藏起来只露一层微光，名字条收成 52px，四枚视图不盖', { timeout: 60_000 }, async () => {
+  it('首页换一批时头像和厂牌显示微光，视图和筛选入口保持可见', { timeout: 60_000 }, async () => {
     /* 框就是它们自己的框，零位移；`visibility:hidden` 的控件也不可聚焦。视图由 state 决定，这一趟不改它们。 */
     const opened = await openCatalogBars(browser);
     let release = () => {};
@@ -999,14 +1015,15 @@ describe('设计决定：控件、状态与首页顶部', () => {
           return { hidden: getComputedStyle(element).visibility, sheen: getComputedStyle(element, '::after').visibility,
             width: Math.round(element.getBoundingClientRect().width) };
         };
-        return { tag: read('[data-catalog-tag]'), ring: read('[data-tier-ring]'), name: read('[data-tier-name]'),
+        return { tag: read('[data-table-column-filter="home-tags"]'), ring: read('[data-tier-ring]'), name: read('[data-tier-name]'),
           studio: read('[data-tier-studio]'), view: read('[data-catalog-view]') };
       });
-      for (const key of ['tag', 'ring', 'name', 'studio'] as const) {
+      for (const key of ['ring', 'name', 'studio'] as const) {
         assert.equal(shown[key]?.hidden, 'hidden', `换一批时${key}没有藏起来：${JSON.stringify(shown[key])}`);
         assert.equal(shown[key]?.sheen, 'visible', `换一批时${key}上没有那层微光：${JSON.stringify(shown[key])}`);
       }
       assert.equal(shown.name?.width, 52, '名字条没有收成首屏骨架那一宽');
+      assert.equal(shown.tag?.hidden, 'visible');
       assert.equal(shown.view?.hidden, 'visible', '视图不随这一趟变，不该盖');
     } finally {
       release();

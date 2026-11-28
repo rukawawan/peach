@@ -25,7 +25,7 @@ from .content_words import AGE_GATE_BUTTON, ONEPONDO_NAME
 from .follow_secrets import CredentialStore
 from . import browser_transport, peach_proxy
 from .http import HttpRequest, HttpxTransport
-from .scripting import USER_AGENT, host_under, hostname_of
+from .scripting import HostLimiter, USER_AGENT, host_under, hostname_of
 from .fsutil import atomic_write_text
 from .metadata import RelayableError
 from .user_messages import UserValueError
@@ -146,17 +146,17 @@ class SourceRefused(SourcePaused):
         self.reason = reason
 
 
-#: 用户亲手打开的页面（库外详情、查找资源、按名字搜演员）才带登录账号的 Cookie；见 `with_account`。
+#: 用户打开的页面和已确认登录墙的后台请求共用账号凭据。
 _WITH_ACCOUNT: ContextVar[bool] = ContextVar("peach_scraping_with_account", default=False)
+JAVDB_WEB_HOSTS = frozenset({"javdb.com", "www.javdb.com"})
+_JAVDB_ACCOUNT_LIMITER = HostLimiter({"javdb.com": 12.0})
 
 
 @contextmanager
 def with_account():
     """这一段里的请求带上 `account` 来源的登录 Cookie。
 
-    登录账号会被站方按浏览速度停用（2026-11-16 JavDB 停了一天），后台任务一个接一个地取页正是那种速度。
-    所以账号 Cookie 默认不带：浏览器添加队列、想要定时查找、资料处理与订阅源抓取都匿名取页，只有用户
-    在页面上点开的那一次请求进这一段。
+    默认匿名。用户主动查询和后台确认登录墙后的单次后备进入这一段。
     """
     token = _WITH_ACCOUNT.set(True)
     try:
@@ -396,6 +396,20 @@ def save(root: Path, source: str, body: dict) -> dict:
     return describe(root, source)
 
 
+def scraping_settings_revision(root: Path, source: str) -> tuple[int, int, int] | None:
+    """打开登录窗时记录本机凭据文件版本，保存或撤销时原子替换会更新版本。"""
+    return _store(root).revision("scraping-" + source)
+
+
+def save_captured_scraping_session(root: Path, source: str, cookies_text: str,
+                                   revision: tuple[int, int, int] | None) -> bool:
+    with _LOCK:
+        if scraping_settings_revision(root, source) != revision:
+            return False
+        save(root, source, {"cookies_text": cookies_text})
+    return True
+
+
 def _save_api_key(root, source, values, body):
     if body.get("revoke"):
         if values.pop("api_key", None):
@@ -425,6 +439,7 @@ def describe(root: Path, source: str) -> dict:
     key_status = {"accepts_api_key": True, "api_key_saved": bool(values.get("api_key"))} if source in KEY_SOURCES else {}
     return {"source": source, **coded("label", SOURCES[source]["label"]),
             "login": SOURCES[source]["login"], "accepts_cookie": bool(SOURCES[source].get("cookie")),
+            "browser_login": source == "fc2cmadb",
             "network": "direct" if values.get("network") == "direct" else "peach",
             "cookie_saved": bool(values.get("cookie") or values.get("cookies_text")),
             **key_status,
@@ -536,13 +551,42 @@ def client_for(root: Path, source: str, *, session: bool = False, **kwargs) -> h
     return httpx.Client(**options)
 
 
+def _javdb_web_url(url: str) -> bool:
+    parts = urlsplit(url)
+    return parts.scheme == "https" and parts.netloc.lower() in JAVDB_WEB_HOSTS
+
+
+def _javdb_login_required(response, requested_url: str) -> bool:
+    from .metadata import auth_wall, reason_blames_credentials
+
+    url = response.url or requested_url
+    return _javdb_web_url(url) and reason_blames_credentials(
+        auth_wall(status_code=response.status, final_url=url, body=response.body))
+
+
+def _rate_limit_until(retry_after: str, now: float) -> float:
+    """Retry-After 支持秒数和 HTTP 日期，缺失时按 15 分钟冷却。"""
+    try:
+        return now + max(0, int(retry_after))
+    except ValueError:
+        try:
+            return parsedate_to_datetime(retry_after).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            return now + 900
+
+
 class SourceTransport:
     """公开采集按来源复用连接池；登录会话由特定来源消费者显式建立。"""
 
     def __init__(self, secrets_root: Path, *, max_requests: int = 0,
-                 max_bytes: int = 0, max_seconds: float = 0, allow_browser: bool = True):
+                 max_bytes: int = 0, max_seconds: float = 0, allow_browser: bool = True,
+                 redirect_hosts: frozenset[str] | None = None, javdb_account_fallback: bool = False):
         self.root = secrets_root
         self.allow_browser = allow_browser
+        self.redirect_hosts = redirect_hosts
+        self.javdb_account_fallback = javdb_account_fallback
+        self._javdb_cookie_key: bytes | None = None
+        self._javdb_cookie_rejected = False
         self.transports: dict[str | None, HttpxTransport] = {}
         self.max_requests, self.max_bytes = max_requests, max_bytes
         from .processing_control import deadline_after
@@ -552,7 +596,37 @@ class SourceTransport:
     def __call__(self, request: HttpRequest, timeout: float, max_bytes: int):
         from .task_control import operation
         with operation():
-            return self._controlled_request(request, timeout, max_bytes)
+            response = self._controlled_request(request, timeout, max_bytes)
+            if (not self._javdb_fallback_request(request) or sends_cookie("javdb")
+                    or not _javdb_login_required(response, request.url)):
+                return response
+            return self._javdb_retry(request, timeout, max_bytes, response)
+
+    def _javdb_fallback_request(self, request: HttpRequest) -> bool:
+        return self.javdb_account_fallback and request.method == "GET" and _javdb_web_url(request.url)
+
+    def _javdb_retry(self, request, timeout, max_bytes, anonymous):
+        values = values_for(self.root, "javdb")
+        cookie = values.get("cookie") or values.get("cookies_text")
+        if not cookie:
+            return anonymous
+        key = hashlib.sha256(cookie.encode()).digest()
+        if key != self._javdb_cookie_key:
+            previous = self.transports.pop("javdb:account", None)
+            if isinstance(previous, HttpxTransport):
+                previous.close()
+            self._javdb_cookie_key = key
+            self._javdb_cookie_rejected = False
+        if self._javdb_cookie_rejected:
+            return anonymous
+        _JAVDB_ACCOUNT_LIMITER.wait(request.url)
+        # 订阅的缓存验证器来自上次响应，进入账号会话时重新读取正文。
+        headers = {name: value for name, value in request.headers.items()
+                   if name.lower() not in {"if-none-match", "if-modified-since"}}
+        with with_account():
+            result = self._controlled_request(HttpRequest("GET", request.url, headers), timeout, max_bytes)
+        self._javdb_cookie_rejected = _javdb_login_required(result, request.url)
+        return result
 
     def _controlled_request(self, request: HttpRequest, timeout: float, max_bytes: int):
         for _ in range(6):
@@ -570,9 +644,14 @@ class SourceTransport:
             if response.status not in {301, 302, 303, 307, 308} or not response.headers.get("location"):
                 return response
             target = urljoin(request.url, response.headers["location"])
-            if urlsplit(target).scheme != "https":
+            target_url = urlsplit(target)
+            if target_url.scheme != "https":
                 raise UserValueError("errors.scrapingAccess.redirectNotHttps")
-            cross_origin = urlsplit(target).netloc != urlsplit(request.url).netloc
+            if self.redirect_hosts is not None and target_url.hostname not in self.redirect_hosts:
+                raise UserValueError("errors.scrapingAccess.redirectOutsideSource")
+            if self._javdb_fallback_request(request) and sends_cookie("javdb") and not _javdb_web_url(target):
+                raise UserValueError("errors.scrapingAccess.redirectOutsideSource")
+            cross_origin = target_url.netloc != urlsplit(request.url).netloc
             module = KEY_SOURCES.get(source_for(request.url))
             if module is not None:
                 keyed = any(k.lower() in {"apikey", "authorization"} for k in request.headers)
@@ -621,11 +700,14 @@ class SourceTransport:
         until, blocks = _state_for(self.root, key, via)
         if until > time.time():
             raise _paused(source, "coolingDown", until)
-        if source not in self.transports:
-            self.transports[source] = self._transport_for(source)
+        transport_key = "javdb:account" if self._javdb_fallback_request(request) and sends_cookie("javdb") else source
+        if transport_key not in self.transports:
+            self.transports[transport_key] = self._transport_for(source)
         self.requests += 1
         try:
-            response = self.transports[source](request, timeout, max_bytes)
+            response = self.transports[transport_key](request, timeout, max_bytes)
+        except httpx.TimeoutException:
+            raise
         except (httpx.HTTPError, browser_transport.BrowserUnavailable):
             raise httpx.TransportError(Said("labels.scrapingAccess.unreachable")) from None
         except browser_transport.ChallengeUnsolved:
@@ -640,20 +722,18 @@ class SourceTransport:
                 cooldown.unlink(missing_ok=True)
                 response, via, blocks = verified, VIA_BROWSER, 0
         self.bytes += len(response.body)
+        self._record_response(source, request, response, cooldown, blocks, via)
+        return response
+
+    def _record_response(self, source, request, response, cooldown, blocks, via):
         if response.status == 429:
-            retry = response.headers.get("retry-after", "")
-            try:
-                until = time.time() + max(0, int(retry))
-            except ValueError:
-                try:
-                    until = parsedate_to_datetime(retry).timestamp()
-                except (ValueError, TypeError, OverflowError):
-                    until = time.time() + 900
+            until = _rate_limit_until(response.headers.get("retry-after", ""), time.time())
             _pause(cooldown, until, blocks, via)
             raise _paused(source, "rateLimited", until)
         self._refuse(source, request.url, response, cooldown, blocks, via)
         blocked_pause = SOURCES.get(source or "", {}).get("blocked_pause")
-        if response.status == 403 and blocked_pause:
+        if response.status == 403 and blocked_pause and not (
+                self._javdb_fallback_request(request) and _javdb_login_required(response, request.url)):
             blocks += 1
             until = time.time() + min(FIRST_BLOCKED_PAUSE * 2 ** (blocks - 1), blocked_pause)
             _pause(cooldown, until, blocks, via)
@@ -665,7 +745,6 @@ class SourceTransport:
         if blocks and response.status < 400:
             # 这一趟通了，封已经解除：清掉记录，下次撞上从最短的一档重新起算。
             cooldown.unlink(missing_ok=True)
-        return response
 
     @staticmethod
     def _refuse(source: str | None, url: str, response, cooldown: Path, blocks: int, via: str) -> None:
@@ -770,7 +849,10 @@ class SourceTransport:
         else:
             client = httpx.Client(**peach_proxy.client_options(self.root), follow_redirects=False,
                                   headers={"User-Agent": USER_AGENT})
-        return HttpxTransport(client, owns_client=True)
+        # 登录检查与自动账号重试需要在发出下一跳前核对主机。
+        check_redirect = self.redirect_hosts is not None or (
+            source == "javdb" and self.javdb_account_fallback and sends_cookie(source))
+        return HttpxTransport(client, owns_client=True, follow_redirects=not check_redirect)
 
     def renew(self):
         self.close()

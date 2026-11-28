@@ -1,0 +1,131 @@
+{
+  "model": "gpt-6-luna",
+  "results": {
+    "zh-CN": {
+      "translation": {
+        "title": "FIRST IMPRESSION 184：178厘米长腿白皙、拥有真正海外模特身材，曾活跃于世界舞台的北欧混血美女 天音ミシェル 来日AV出道！！",
+        "summary": "出生于北欧挪威、身高178厘米、长腿白皙的真正海外模特，震撼来日AV出道！"
+      },
+      "tags": [
+        {
+          "label": "国际模特",
+          "evidence": "标题称她是“本物海外モデル”，并称其“世界で活躍”。"
+        },
+        {
+          "label": "高挑身材",
+          "evidence": "标题标明身高178厘米，并提到“脚長”。"
+        }
+      ],
+      "vision": [
+        {
+          "label": "格纹连衣裙",
+          "evidence": "封面人物穿着蓝灰色格纹连衣裙。"
+        },
+        {
+          "label": "封面文字排版",
+          "evidence": "封面上方有大型日文标题，人物姓名和系列编号排在下方。"
+        }
+      ],
+      "metadata": [
+        {
+          "field": "code",
+          "before": "IPZZ690",
+          "after": "IPZZ-690",
+          "evidence": "DVD编号为IPZZ690；Peach展示编号采用连字符格式IPZZ-690。"
+        },
+        {
+          "field": "releaseDate",
+          "before": "",
+          "after": "2025-08-12",
+          "evidence": "官方详情页的DVD发行日期为2025-08-12。"
+        },
+        {
+          "field": "duration",
+          "before": "",
+          "after": "150分钟",
+          "evidence": "官方详情页的DVD时长为150分钟。"
+        }
+      ],
+      "organize": [
+        {
+          "id": "IPZZ-690",
+          "decision": "将官方关键词搜索结果IPZZ690与其指向的官方详情页关联为同一发行版本的两个参考；二者都不是用户文件。",
+          "evidence": "关键词搜索结果IPZZ690指向官方详情页IPZZ-690。"
+        },
+        {
+          "id": "IPZZ-893",
+          "decision": "将DVD IPZZ893与Blu-ray 9IPZZ893归入同一发行版本，同时保留各自的格式信息；不推断两者文件相同。",
+          "evidence": "官方详情页将DVD和Blu-ray列为两个格式，时长均为170分钟。"
+        },
+        {
+          "id": "IDPC-032",
+          "decision": "与IPZZ-893分开归档；同属FIRST IMPRESSION系列不足以证明是同一发行版本。",
+          "evidence": "IDPC032为系列第197号、橘春花；IPZZ893为第193号、白石るな。"
+        }
+      ]
+    },
+    "en": {
+      "translation": {
+        "title": "FIRST IMPRESSION 184: 178 cm, long-legged and fair-skinned, with a genuine international model’s physique—Nordic beauty 天音ミシェル, who has worked around the world, makes her Japanese AV debut!!",
+        "summary": "Born in Norway in Northern Europe, this 178 cm, long-legged and fair-skinned international model makes a stunning Japanese AV debut!"
+      },
+      "tags": [
+        {
+          "label": "International model",
+          "evidence": "The title calls her a “genuine international model” and says she has worked around the world."
+        },
+        {
+          "label": "Tall stature",
+          "evidence": "The title gives her height as 178 cm and describes her as long-legged."
+        }
+      ],
+      "vision": [
+        {
+          "label": "Plaid dress",
+          "evidence": "The person on the cover wears a blue-gray plaid dress."
+        },
+        {
+          "label": "Cover text layout",
+          "evidence": "Large Japanese title text appears at the top, with the subject’s name and series number below."
+        }
+      ],
+      "metadata": [
+        {
+          "field": "code",
+          "before": "IPZZ690",
+          "after": "IPZZ-690",
+          "evidence": "The DVD code is IPZZ690; the Peach display code uses a hyphen: IPZZ-690."
+        },
+        {
+          "field": "releaseDate",
+          "before": "",
+          "after": "2025-08-12",
+          "evidence": "The official detail page lists the DVD release date as 2025-08-12."
+        },
+        {
+          "field": "duration",
+          "before": "",
+          "after": "150 minutes",
+          "evidence": "The official detail page lists the DVD duration as 150 minutes."
+        }
+      ],
+      "organize": [
+        {
+          "id": "IPZZ-690",
+          "decision": "Link the official keyword-search result for IPZZ690 to the official detail page it points to as two references to one release; neither is a user file.",
+          "evidence": "The keyword-search result IPZZ690 points to the official IPZZ-690 detail page."
+        },
+        {
+          "id": "IPZZ-893",
+          "decision": "Group DVD IPZZ893 and Blu-ray 9IPZZ893 under the same release while retaining their distinct format information; do not infer that their files are identical.",
+          "evidence": "The official detail page lists DVD and Blu-ray as separate formats, both 170 minutes."
+        },
+        {
+          "id": "IDPC-032",
+          "decision": "Keep separate from IPZZ-893; sharing the FIRST IMPRESSION series does not establish that they are the same release.",
+          "evidence": "IDPC032 is number 197 with 橘春花; IPZZ893 is number 193 with 白石るな."
+        }
+      ]
+    }
+  }
+}

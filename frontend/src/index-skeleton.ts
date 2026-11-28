@@ -8,6 +8,7 @@
  *
  * 版式偏好由调用方读好交进来：这个模块壳与 React 包各带一份，设置 store 只能有一份。 */
 import { boardTabsHtml, fitSkeleton, iconSwitchHtml, indexSkeletonHtml } from '@peach/legacy/ui';
+import { filterDropdownSkeletonHtml } from './filter-controls-skeleton';
 import { identityFilterSkeletonHtml } from './identity-filter';
 import { islandButton, islandShortcutsEntry, islandSearchInput } from './island-skeleton';
 import { t } from './i18n';
@@ -60,13 +61,13 @@ type Choices = readonly (readonly [string, string, string])[];
 const tabs = (items: Choices, active: string, label: string) => boardTabsHtml(
   items.map(([value, text, symbol]) => ({ value, label: text, symbol })), { active, label, className: 'indextabs' });
 
-/* 标签页 Tabs 下面还有一块两排的筛选玻璃（React 的 `FilterGlassRows`）：上排是类型药丸，下排是读数、按首字
-   跳转和视图切换。药丸有哪几枚、读数多少、有哪些首字都要等数据，视图切换此刻就是最终那一档；块高与下边距同
-   旧 `.board-filter-frame`，页面落地时它原地换成真的那一块，下面的内容不下跳。 */
+/* 标签页的两排筛选条：上排是状态切换，下排是读数、字母跳转、版式和类型下拉。 */
 const tagFilterSkeletonHtml = (view: string) => `<div class="peach-react contents"><div data-filter-glass data-glass-pane class="sticky top-topbar z-10 mb-5.5 flex flex-col">
-    <div class="flex h-12 min-w-0 items-center gap-1.75 overflow-x-auto overscroll-x-contain px-3 py-2" data-filter-row="top" data-skeleton-tier="filter-pill" aria-label="${t('catalog:tagFilters.tagType')}"></div>
-    <div class="flex min-h-11.5 min-w-0 items-center gap-3 px-3 py-2" data-filter-row="bottom"><span class="countskeleton"></span>
-      <span class="ml-auto">${iconSwitchHtml('tag-view', t('catalog:tagFilters.tagView'), TAG_VIEWS, view, { className:'tag-skeleton-view' })}</span></div></div></div>`;
+    <div class="flex h-12 min-w-0 items-center gap-1.75 overflow-x-auto overscroll-x-contain px-3 py-2" data-filter-row="top" data-skeleton-tier="filter-pill" aria-label="${t('catalog:tagFilters.tagStatus')}"></div>
+    <div class="flex min-h-11.5 min-w-0 items-center gap-3 px-3 py-2" data-filter-row="bottom"><span class="countskeleton"></span><span data-filter-search aria-hidden="true"></span>
+      <span data-entity-sorts>${iconSwitchHtml('tag-view', t('catalog:tagFilters.tagView'), TAG_VIEWS, view, { className:'tag-skeleton-view' })}
+        <span data-entity-sep aria-hidden="true"></span><span data-filter-fields>${filterDropdownSkeletonHtml('index-tag-category', t('catalog:tagFilters.tagType'))}</span>
+      </span></div></div></div>`;
 
 export function indexPlaceholderHtml({ kind, q, scope, view, category }: IndexParams, layout: 'big' | 'compact'): string {
   const title = INDEX_TITLES[kind] || t('catalog:shared.tags'), people = kind !== 'tags', company = kind === 'studios' || kind === 'agencies' || kind === 'series';
@@ -78,7 +79,7 @@ export function indexPlaceholderHtml({ kind, q, scope, view, category }: IndexPa
       ${people ? '<span class="mono" id="indexCount"><span class="countskeleton"></span></span>' : ''}${switcher}
       ${islandShortcutsEntry('default')}
       ${kind === 'tags' ? islandButton({variant: 'ghost', glyph: 'pencil', attrs: `data-tag-mode data-skeleton-action disabled tabindex="-1" aria-label="${t('catalog:peopleIndex.manageTags')}"` }) : ''}
-      <div data-index-search class="ml-auto min-w-0 max-w-80 flex-1">${islandSearchInput('', q, t('catalog:peopleIndex.filterTitle', { title: noun }))}</div>
+      ${people ? `<div data-index-search class="ml-auto min-w-0 max-w-80 flex-1">${islandSearchInput('', q, t('catalog:peopleIndex.filterTitle', { title: noun }))}</div>` : ''}
     </div>
     ${kind === 'tags' ? tabs(INDEX_SCOPES, scope, t('catalog:peopleIndex.tagScope')) : kind === 'performers' || kind === 'creators'
       ? tabs(PEOPLE_INDEX_TABS, kind === 'performers' && scope === 'online' ? 'online' : kind, t('catalog:peopleIndex.roster'))

@@ -5,9 +5,11 @@ import { fetchWants, WANTS_KEY } from '../wants/wants';
 import type { CoverState, FaceRef, CoverItem } from '@peach/card-art';
 import { coverImage, javArtwork, remoteCoverUrl } from '@peach/card-art';
 import { esc } from '@peach/legacy/core';
-import { peachHistory, shellNavigate } from '@peach/history';
+import { useSyncExternalStore } from 'react';
+import { navigationBackground, peachHistory, shellNavigate } from '@peach/history';
 import { RELEASE_SORTS, type DiscoveryDirection, type DiscoverySort, type ReleaseSort } from './discovery-sorts';
 import { t } from '../../i18n';
+import { rememberedPageSize } from '../components/page-size-preferences';
 import { columnValueSelected, mapColumnSelection, readColumnFilters, writeColumnFilters, type ColumnFilterKey, type ColumnSelection } from '../../column-filters';
 
 export { JAV_TABS, javTab, javPath, javLibraryPath } from './jav-navigation';
@@ -19,11 +21,19 @@ export function writeJavQuery(patch: Record<string, string>): void {
   shellNavigate(location.pathname + (params.size ? `?${params}` : ''), { replace: true, state: peachHistory.navigation.location.state });
 }
 
+const navigationSeq = () => peachHistory.navigation.seq;
+/** JAV 页此刻对应的地址，随每一次历史变化重读；详情压在上面时是它下面那一页的。 */
+export function useJavAddress(): { pathname: string; search: string } {
+  useSyncExternalStore(peachHistory.listen, navigationSeq);
+  return navigationBackground() ?? { pathname: location.pathname, search: location.search };
+}
+
 export interface Discovery extends CoverItem {
   id: number; code: string; title: string; performers: string; release_date: string;
   studio: string; link: string; cover_url: string; has_cover: boolean; wanted: boolean;
+  online_cover_url?: string;
   studio_ref?: Omit<ReleaseFacetStudio, 'count'>;
-  performer_refs?: (FaceRef & { name: string; source_actor_id?: string; source_avatar?: boolean })[];
+  performer_refs?: (FaceRef & { name: string; source_actor_id?: string; source_avatar?: boolean; source_url?: string; dmm_id?: string })[];
   asset_id?: number | null; tags?: string[]; score?: number;
   /** 口味理由，服务端按中文渲染好的原句；`reason_codes`、`reason_params` 与它一一对应。 */
   reasons?: string[]; reason_codes?: string[]; reason_params?: Record<string, unknown>[];
@@ -126,7 +136,7 @@ export function controlDiscoveryMetadata(action: 'start' | 'refresh' | 'cancel',
 
 /** 新作分区的筛选与排序：都写在地址栏里，刷新与返回原样恢复。`seed` 只在换一批时有值。 */
 export interface ReleaseFilters {
-  page: number; size: number; performer: string; studio: string; tag: string; q: string;
+  page: number; size: number; performer: string; studio: string; tag: string; q: string; code?: string;
   sort: ReleaseSort; dir: DiscoveryDirection; seed: string;
   column_filters?: string;
 }
@@ -146,9 +156,12 @@ export function releaseFilters(search: string): ReleaseFilters {
   const sort = params.get('sort');
   const seed = params.get('seed') || '';
   const page = Number(params.get('page'));
-  const size = RELEASE_PAGE_SIZES.find(value => value === Number(params.get('size'))) || RELEASE_PAGE_SIZE;
+  const preferredSize = rememberedPageSize('jav-releases', RELEASE_PAGE_SIZE);
+  const size = RELEASE_PAGE_SIZES.find(value => value === Number(params.get('size')))
+    ?? RELEASE_PAGE_SIZES.find(value => value === preferredSize) ?? RELEASE_PAGE_SIZE;
   return { page: Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1, size, performer: params.get('performer') || '',
     studio: params.get('studio') || '', tag: params.get('tag') || '', q: (params.get('q') || '').trim(),
+    code: params.get('code') || '',
     sort: sort === 'random' && seed ? 'random' : RELEASE_SORTS.find(([key]) => key === sort)?.[0] || 'release_date',
     dir: params.get('dir') === 'asc' ? 'asc' : 'desc', seed,
     ...(params.get('column_filters') ? { column_filters: params.get('column_filters')! } : {}) };
@@ -172,8 +185,8 @@ export function setReleaseColumn(filters: ReleaseFilters, facet: 'performer' | '
     column_filters: writeColumnFilters(readColumnFilters(filters.column_filters), RELEASE_COLUMNS[facet], selected) };
 }
 export const releaseKey = (filters: ReleaseFilters) =>
-  ['jav-releases', filters.page, filters.size, filters.performer, filters.studio, filters.tag, filters.q, filters.sort, filters.dir, filters.seed, filters.column_filters || ''] as const;
-const RELEASE_FILTER_KEYS = ['performer', 'studio', 'tag', 'q', 'seed', 'column_filters'] as const;
+  ['jav-releases', filters.page, filters.size, filters.performer, filters.studio, filters.tag, filters.q, filters.code || '', filters.sort, filters.dir, filters.seed, filters.column_filters || ''] as const;
+const RELEASE_FILTER_KEYS = ['performer', 'studio', 'tag', 'q', 'code', 'seed', 'column_filters'] as const;
 function releaseParams(filters: ReleaseFilters) {
   const params = new URLSearchParams({ page: String(filters.page), size: String(filters.size),
     sort: filters.sort, direction: filters.dir });
@@ -187,7 +200,7 @@ export function fetchReleases(filters: ReleaseFilters, signal: AbortSignal) {
 export function releaseDateQuery(filters: ReleaseFilters) {
   const columnFilters = writeColumnFilters(readColumnFilters(filters.column_filters), 'release', undefined);
   const params = new URLSearchParams({ column: 'release' });
-  for (const key of ['performer', 'studio', 'tag', 'q'] as const) {
+  for (const key of ['performer', 'studio', 'tag', 'q', 'code'] as const) {
     if (filters[key]) params.set(key, filters[key]);
   }
   if (columnFilters) params.set('column_filters', columnFilters);
@@ -213,8 +226,8 @@ export function controlReleaseMetadata(action: 'start' | 'cancel', filters: Rele
 
 export function discoveryArtwork(item: Discovery, layout: 'big' | 'small', javImage: unknown): string {
   const local = javArtwork({ ...item, is_jav: true }, layout, false, javImage);
-  if (local.html || !item.cover_url || !item.code) return local.html;
-  const remote = esc(remoteCoverUrl(item));
+  if (local.html || !item.cover_url || (!item.code && !item.online_cover_url)) return local.html;
+  const remote = esc(item.online_cover_url || remoteCoverUrl(item));
   return coverImage(item, layout).replace(/ src="[^"]*"/,
     ` src="${remote}" data-jav-image="${item.id}" data-jav-cover="${remote}" data-jav-thumb="" data-jav-image-layout="${layout}"${layout === 'big' ? ' data-panel-prior="1"' : ''}`)
     .replace('data-drop="self"', `data-drop="initial" data-initial="${esc(t('shell:artworkGap.coverNotFound'))}" data-drop-class="media-nopic"`);

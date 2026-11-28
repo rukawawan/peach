@@ -10,6 +10,7 @@ import { Note } from '../components/note';
 import { Disclosure, FieldLabel, Footer, Help, Section, SectionSkeleton, Stack, SourceMark } from './section';
 import { sourceMark } from './folder-rows';
 import { busyProps, useAction } from './use-action';
+import { useCheckReceipt } from './use-check-receipt';
 import { CLOUD_PROXY_HELP, cloudProxySkeleton, rememberShape } from '../../configuration-skeleton';
 import { joinList, t } from '../../i18n';
 
@@ -36,12 +37,22 @@ export function CloudProxySettings({ receipt }: { receipt(message: string): void
   const [writing, setWriting] = useState(false);
   const refreshRef = useRef<() => void>(() => undefined);
   const action = useAction();
-  const refresh = () => { if (saving.current.size) return; void action.run('refresh', signal => apiGet<ProxyList>(CLOUD_PROXIES_URL, signal), result => {
-    dirty.current.clear();
-    setState(result);
-    setLoading(false);
-  }, cause => { setLoading(false); action.setError(cause instanceof Error ? cause.message : t('settings:cloudProxy.loadFailed')); }); };
-  refreshRef.current = refresh;
+  const { checked, checkFailed } = useCheckReceipt();
+  const refresh = (manual: boolean) => {
+    if (saving.current.size) return;
+    void action.run('refresh', signal => apiGet<ProxyList>(CLOUD_PROXIES_URL, signal), result => {
+      dirty.current.clear();
+      setState(result);
+      setLoading(false);
+      if (manual) checked(t('settings:cloudProxy.refreshed'));
+    }, cause => {
+      const message = cause instanceof Error ? cause.message : t('settings:cloudProxy.loadFailed');
+      setLoading(false);
+      action.setError(message);
+      if (manual) checkFailed(t('settings:cloudProxy.title'), message);
+    });
+  };
+  refreshRef.current = () => refresh(false);
   useEffect(() => {
     refreshRef.current();
     const focus = () => { if (!dirty.current.size) refreshRef.current(); };
@@ -60,8 +71,12 @@ export function CloudProxySettings({ receipt }: { receipt(message: string): void
     <Stack>
       <Help>{CLOUD_PROXY_HELP}</Help>
       <div className="flex min-w-0 flex-col gap-4">
-      {action.error ? <Note tone="error" title={t('settings:cloudProxy.readFailedTitle')}>{action.error} <LinkButton href="/settings/downloads" size="small">{t('settings:cloudProxy.downloadSettingsLink')}</LinkButton></Note> : null}
-      {state?.configured === false ? <Help>{t('settings:cloudProxy.notConfigured')} <LinkButton href="/settings/downloads" size="small">{t('settings:cloudProxy.downloadSettingsLink')}</LinkButton></Help>
+      {action.error ? <Note tone="error" title={t('settings:cloudProxy.readFailedTitle')} action={
+        <LinkButton href="/settings/downloads" size="small">{t('settings:cloudProxy.downloadSettingsLink')}</LinkButton>
+      }>{action.error}</Note> : null}
+      {state?.configured === false ? <Note tone="neutral" action={
+        <LinkButton href="/settings/downloads" size="small">{t('settings:cloudProxy.downloadSettingsLink')}</LinkButton>
+      }>{t('settings:cloudProxy.notConfigured')}</Note>
         : state?.accounts.length === 0 && !state.unlinked?.length ? <Help>{t('settings:cloudProxy.noLibraries')}</Help> : null}
       {state?.unlinked?.map(library => <div key={library.root} className="flex min-w-0 flex-col gap-1">
         <FieldLabel><span className="inline-flex items-center gap-2"><SourceMark mark={sourceMark(library.location)} />{library.name}</span></FieldLabel>
@@ -75,7 +90,7 @@ export function CloudProxySettings({ receipt }: { receipt(message: string): void
         onSaved={next => { dirty.current.delete(next.id); setState(current => current ? { ...current, accounts: current.accounts.map(row => row.id === next.id ? next : row) } : current); }} />)}
       </div>
     </Stack>
-    <Footer><Button variant="secondary" disabled={writing} onClick={refresh} {...busyProps(action.busy === 'refresh')}>{t('settings:shared.reload')}</Button></Footer>
+    <Footer><Button variant="secondary" disabled={writing} onClick={() => refresh(true)} {...busyProps(action.busy === 'refresh')}>{t('settings:shared.reload')}</Button></Footer>
   </Section>;
 }
 

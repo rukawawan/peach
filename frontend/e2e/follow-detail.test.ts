@@ -69,8 +69,7 @@ describe('关注详情岛', () => {
       const opened = await openDetail(browser, 1002, viewport);
       try {
         const { page } = opened;
-        // 关注详情的标签平时只读：先点行尾「编辑标签」。
-        await page.locator('#stage [data-follow-tags-edit]').click();
+        await page.locator('#stage [data-title-tools] [data-follow-tags-edit]').click();
         await page.locator('#stage [data-tag-plus]').click();
         const menu = page.locator('#stage [data-tag-picker]');
         await menu.waitFor({ state: 'visible' });
@@ -140,7 +139,7 @@ describe('关注详情岛', () => {
       await page.locator('[data-follow-item="1002"] [data-follow-open]').click();
       await pathIs(page, '/posts/1002');
       await page.locator(DETAIL_READY).waitFor();
-      assert.equal((await page.locator('#stage [data-follow-detail-name]').innerText()).trim(), '演示更新 1002');
+      assert.equal((await page.locator('#stage [data-follow-detail] [data-detail-title]').innerText()).trim(), '演示更新 1002');
       assert.deepEqual(seen.item, [], '列表缓存里有的这一条又单条取了一次');
       await page.locator('[data-follow-related] [data-follow-item]').first().waitFor();
       const listedBeforeClose = seen.list;
@@ -183,7 +182,7 @@ describe('关注详情岛', () => {
     try {
       const page = opened.page;
       assert.equal(await page.locator('[data-follow-feed]').count(), 0, '深链进详情时挂了列表岛');
-      assert.equal((await page.locator('#stage [data-follow-detail-name]').innerText()).trim(), '合集主条目 5101');
+      assert.equal((await page.locator('#stage [data-follow-detail] [data-detail-title]').innerText()).trim(), '合集主条目 5101');
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'closeStage');
       assert.deepEqual(withoutPlayer(opened.problems), []);
 
@@ -328,7 +327,7 @@ describe('关注详情岛', () => {
       assert.equal(await queue.locator('[data-follow-media-item="1"]').getAttribute('aria-current'), 'true');
       assert.equal(await page.locator('#stage .video-js').count(), 0, '换成图片后播放器没拆');
       assert.equal(new URL(page.url()).pathname, '/posts/5201');
-      // 当前是图，操作条里多一枚「隐藏这张图」。
+      // 当前是图，标题下方多一枚「隐藏这张图」。
       assert.equal(await page.locator('#stage [data-follow-media-hide="1"]').count(), 1);
       assert.deepEqual(withoutPlayer(opened.problems), []);
     } finally {
@@ -512,12 +511,21 @@ describe('关注详情岛', () => {
       const opened = await openDetail(browser, DETAIL.long, viewport);
       try {
         const page = opened.page;
+        const title = page.locator('#stage [data-follow-detail] [data-detail-title]');
+        const fold = page.locator('#stage [data-title-tools] [data-title-fold]');
+        await fold.waitFor();
+        const collapsedHeight = await title.evaluate(node => node.getBoundingClientRect().height);
+        await fold.click();
+        assert.equal(await fold.getAttribute('aria-expanded'), 'true');
+        assert.ok(await title.evaluate(node => node.getBoundingClientRect().height) > collapsedHeight);
+        await fold.click();
+        assert.equal(await fold.getAttribute('aria-expanded'), 'false');
         const measure = () => page.evaluate(() => {
           const side = document.querySelector('#stage [data-stage-side-content]')!;
           const summary = document.querySelector<HTMLElement>('#stage [data-follow-detail-summary]')!;
           const lineHeight = parseFloat(getComputedStyle(summary).lineHeight);
           const right = side.getBoundingClientRect().right;
-          const inside = ['[data-follow-detail-name]', '[data-follow-detail-summary]', '[data-follow-media-issue]']
+          const inside = ['[data-detail-title]', '[data-follow-detail-summary]', '[data-follow-media-issue]']
             .map((selector) => document.querySelector(`#stage ${selector}`)!.getBoundingClientRect().right)
             .every((edge) => edge <= right + 1);
           return { lines: summary.clientHeight / lineHeight, inside, scroll: side.scrollWidth, width: side.clientWidth };

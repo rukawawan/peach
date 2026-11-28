@@ -1,0 +1,46 @@
+[data-effort-flow] {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-text-secondary) 67%, var(--color-accent-950));
+}
+
+[data-effort-flow] svg {
+  width: 100%;
+  height: 100%;
+  animation: processing-flow-wave 1.5s ease-in-out infinite;
+}
+
+[data-effort-flow] i {
+  position: absolute;
+  right: 0;
+  top: var(--particle-y);
+  width: var(--particle-width);
+  height: 1px;
+  border-radius: 1px;
+  background: var(--color-text-white);
+  opacity: 0;
+  animation: processing-flow-particle 1.3s linear infinite;
+  animation-delay: var(--particle-delay);
+}
+
+[data-effort-flow][data-motion="paused"] :is(svg, i) {
+  animation-play-state: paused;
+}
+
+@keyframes processing-flow-wave {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(.83); }
+}
+
+@keyframes processing-flow-particle {
+  0% { right: 0; opacity: 0; }
+  25% { opacity: .28; }
+  68% { opacity: .45; }
+  100% { right: 100%; opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-effort-flow] :is(svg, i) { animation: none; }
+}

@@ -1,6 +1,8 @@
 # Changelog / 变更日志
 
-Notable changes in each Peach release. English and Chinese describe the same behavior: every line puts English first, then ` / `, then Chinese. Release notes and the in-app update notes split each line at the first ` / `, so English is the main text and Chinese sits in a folded 简体中文 section. / 本文件记录 Peach 每个发布版本里值得使用者知道的变化，中英文说同一件事：每行英文在前，` / ` 之后是中文。Release 正文与应用内的更新说明都按第一个 ` / ` 拆开，英文是正文，中文折叠在「简体中文」段里。
+[Telegram channel / Telegram 频道](https://t.me/peach_mitao)
+
+Notable changes in each Peach release. Each line puts English first, then ` / `, then Simplified Chinese. GitHub releases show English with a collapsed Chinese section. Sparkle shows the update notes in the preferred supported language. / 本文件记录 Peach 每个发布版本的主要变化。每行英文在前，` / ` 之后是简体中文。GitHub Release 正文显示英文，并附折叠的简体中文段。Sparkle 按首选语言显示英文或简体中文更新日志。
 
 The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Groups are `Added / 新增`, `Changed / 变更`, `Deprecated / 弃用`, `Removed / 移除`, `Fixed / 修复` and `Security / 安全`. / 格式遵循 [Keep a Changelog 1.1.0](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/spec/v2.0.0.html)；分组标题见上。
 
@@ -8,11 +10,78 @@ Each entry starts with an area tag on both sides; groups sort by the nature of t
 
 Version numbers move only at release points: every `X.Y.Z` has downloadable artifacts, and other commits on the main line are identified by commit (ADR-0012). `## [Unreleased]` collects changes already merged but not yet shipped. `0.7.0`–`0.7.2` predate the release workflow, and versions within `0.8`–`0.29` came from local integration bumps; neither has artifacts, so see Git history for those. / 版本号只在发布点推进，每个 `X.Y.Z` 都对应可下载的制品，主线其它提交由 commit 标识（ADR-0012）。`## [Unreleased]` 收已进主线、还没发出去的变化。`0.7.0`–`0.7.2` 早于发布工作流，`0.8`–`0.29` 的版本号由本地集成推进产生，都没有制品，逐条变化见 Git 历史。
 
-`python scripts/changelog.py` drafts entries from commit subjects; a person rewrites them for users, including the English half the draft leaves as `TODO`. Commits that only touch development (docs, tests, refactors, builds) stay out. / 条目草稿由 `python scripts/changelog.py` 从提交主题生成，措辞由人改成使用者读得懂的话，草稿留作 `TODO` 的英文也由人写；只改开发过程的提交（文档、测试、重构、构建）不进本文件。
+`python scripts/changelog.py` shows the curated Unreleased section. Commit subjects supply draft candidates and help find omissions. Before publishing, compare final behavior with the previous published release and record each change in the [release notes review](docs/OPERATIONS.md#发布说明审阅). / `python scripts/changelog.py` 显示整理后的「未发布」节，提交主题用于起草候选和查漏。发布前对照上一公开版，按最终行为逐条完成[发布说明审阅](docs/OPERATIONS.md#发布说明审阅)。
 
 Entries are written for users to scan: one sentence each, saying where something changed and what you now see; reasons, implementation and edge cases stay in commits and PRs. Changes to one feature become one entry, bigger ones first within each group. After the area tag, English stays within 160 characters and Chinese within 80, counting only displayed text; `release_tag.py` refuses to release while any released entry is longer. Release titles carry only the tag name, and the body ends with the Full Changelog link to the previous release. Entries after 0.58.0 end with their source number (#issue, or the PR number without an issue; `owner/repo#number` for other repositories) on both sides, including the Unreleased section; tests and releases refuse entries without one. / 条目给使用者扫读：每条一句话，写在哪儿看到了什么变化，原因、实现和边界情况留在提交与 PR。同一功能的几处改动合成一条，每组里影响大的排前面。标签之后英文不超过 160 个字符、中文不超过 80 字，只算显示出来的文字；任一已发布条目超长，`release_tag.py` 都拒绝定版。Release 标题只写标签名，正文末尾附到上一版的完整变更链接。0.58.0 之后的条目两半句末都带来源编号（#issue，没有 issue 就写 PR 编号；别的仓库写 `owner/repo#编号`），「Unreleased」段写进去时就要带，缺了测试与定版都会拒绝。
 
 ## [Unreleased]
+
+## [0.63.0] - 2026-11-27
+
+### Added / 新增
+
+- **Library**: Connect your AI service for library search, translations, tag suggestions and reusable tasks, and choose which models appear and in what order (#393). / **馆藏**：连接自己的 AI 服务搜索馆藏、翻译标题和简介、复核文本或画面标签建议、运行自定义任务，并可选择和排序助手模型（#393）。
+- **Interface**: Browse files in full screen, search, sort, select, create folders, rename, move, trash or restore files, and keep your place after details (#376). / **界面**：全屏浏览文件支持搜索、排序、多选、新建目录、重命名、移动和回收站还原，关闭作品详情后返回原目录和位置（#376）。
+- **Interface**: Send annotated screenshots and optional diagnostics in feedback, and choose what to publish if you create a GitHub issue (#882, #885). / **界面**：反馈支持截图标注和附加诊断，创建 GitHub issue 时可分别选择公开哪些图片和诊断信息（#882、#885）。
+- **Desktop**: Open Peach from the Windows tray or macOS menu bar in a native window that supports feedback screenshots (#882). / **桌面**：Windows 托盘和 macOS 菜单栏可打开支持反馈截图的原生窗口（#882）。
+- **Interface**: Search follows, JAV subscriptions, playlists, person and studio works, cleanup and review lists, downloads and task history by keyword (#880). / **界面**：关注动态和来源、JAV 订阅源、播放列表、人物与厂牌作品、清理与复核清单、下载和任务历史支持关键词查找（#880）。
+- **Interface**: See search suggestions in roster and JAV filters, the video wall, the online catalog and resource search (#880). / **界面**：名册和 JAV 筛选、播放墙、在线目录及资源查找可在输入时显示匹配建议（#880）。
+- **Following**: Choose which JavDB and DMM pages to subscribe to from the performer search results (#874). / **关注**：在艺人订阅搜索结果中选择要订阅的 JavDB 或 DMM 页面（#874）。
+- **Sourcing**: Sign in to JavDB in a browser opened from Peach so supported background tasks can retry with the saved session when needed (#874). / **采集**：可从 Peach 打开浏览器登录 JavDB，支持的后台任务在需要时使用保存的会话重试（#874）。
+- **Interface**: Filter JAV online catalog and discovery tables by more fields, including code, release status and duration where available (#874). / **界面**：JAV 在线目录和探索表格增加筛选条件，可按页面提供的番号、发行状态或时长等字段筛选（#874）。
+- **Playback**: Adjust subtitle timing in the web player and keep the offset with the selected track (#874). / **播放**：网页播放器可提前或延后字幕，并按字幕轨道记住调整值（#874）。
+- **Settings**: Review the space taken up by follow snapshots and open the cleanup preview from Storage (#867). / **配置**：在存储空间查看关注快照占用，并打开清理预览（#867）。
+- **Playback**: Start a playback queue from a saved filter in Favorites (#874). / **播放**：可在「收藏」中将保存的筛选结果作为播放队列播放（#874）。
+
+### Changed / 变更
+
+- **Interface**: Keep the JAV page title and tabs in place when switching sections, and align loading placeholders with the final layout on six pages (#880). / **界面**：切换 JAV 分区时保留标题和页签位置，想要、关注管理、口味、任务中心、来源和系列页的占位与加载后布局一致（#880）。
+- **Interface**: Save column widths, visibility and order per table for the instance, including the library, file browser and JAV releases (#874). / **界面**：馆藏、文件浏览、JAV 新作等表格的列宽、显隐和顺序按表保存在实例中（#874）。
+- **Settings**: Find the video playback settings, including transcoding and the quality limit, under Media library and import (#867). / **配置**：「视频播放」移到「媒体库与入库」，其中可设置转码方式和画质上限（#867）。
+- **Settings**: First setup validates required fields before continuing and shows the scope of library research before you opt in (#867). / **配置**：首次设置会在进入下一步前检查必填项，并在加入馆藏研究前显示共享范围（#867）。
+- **Settings**: Review and join library research and public metadata contributions together from the Peach community program (#867). / **配置**：可从「Peach 共建计划」统一查看并参加馆藏研究和公开资料贡献（#867）。
+
+### Fixed / 修复
+
+- **Interface**: Error notices report the specific failure and include available recovery actions (#624). / **界面**：错误提示说明具体原因，可处理时在提示条内提供入口（#624）。
+- **Interface**: The userscript explains paused downloads and keeps the status in the queue and details in sync (peach-mitao/peach-userscript#49). / **界面**：用户脚本显示下载暂停原因，列表与详情的任务状态保持一致（peach-mitao/peach-userscript#49）。
+- **Library**: Repair, organize and scan continue to the next readable file after a stalled file, even when the file reader starts slowly (#879). / **馆藏**：读盘进程启动较慢时，修复、整理和扫描在遇到读盘卡住的文件后仍会处理下一份可读文件（#879）。
+- **Interface**: Keep the JAV library usable after an avatar fails to load (#880). / **界面**：头像加载失败后仍可正常离开 JAV 馆藏分区（#880）。
+- **Playback**: Keep the current browser's resume position when an external player updates the same work (#874). / **播放**：外部播放器更新同一作品的进度时，网页仍保留当前浏览器的续播位置（#874）。
+- **Library**: Use custom release-code rules when checking whether files are eligible for collection (#870). / **馆藏**：采集预检沿用自定义番号规则（#870）。
+- **Library**: Upgrading retries known cover-install failures and rechecks failed QR analysis using saved previews (#820, #794). / **馆藏**：升级后自动补试已知的封面安装失败，并用已有九宫格重查失败的二维码分析（#820、#794）。
+- **Sourcing**: Upgrading reprocesses affected release codes, source failures and old NFO evidence (#788, #789, #431, #816, #725). / **采集**：升级后定向重查受影响的番号、来源失败及旧 NFO 资料（#788、#789、#431、#816、#725）。
+
+## [0.62.0] - 2026-11-24
+
+### Added / 新增
+
+- **Interface**: Drag to select cards or rows, with batch actions for new releases on the home and entity pages (#855). / **界面**：卡片和列表支持拖动框选，首页与资料页横排新作支持批量操作（#855）。
+- **Playback**: See recent playback request timings in the statistics panel (#855). / **播放**：播放统计面板显示最近的播放请求耗时（#855）。
+- **Interface**: Browse mapped media directories and locate files from Storage or playback details on headless servers (#376). / **界面**：无桌面部署可从 Storage 或播放详情浏览挂载目录并定位文件（#376）。
+- **Library**: Send magnets to qBittorrent and import completed files from a mapped local media folder, with progress and cancellation (#240). / **馆藏**：可将磁力交给 qBittorrent，跟踪进度、取消任务，并将映射目录中下载完成的文件自动入库（#240）。
+- **Settings**: Optionally confine horizontal scrolling on the desktop home page to the area beside the sidebar (#736). / **配置**：可将桌面首页横向滚动限制在侧栏右侧（#736）。
+
+### Changed / 变更
+
+- **Library**: Render thumbnails near the viewport in long lists while keeping titles available to browser search (#855). / **馆藏**：长列表按视口挂载缩略图，浏览器仍可查找当前页的作品标题（#855）。
+- **Library**: Refresh only the changed cover entries when artwork or its metadata changes (#847). / **馆藏**：封面或附属资料更新时，只重新读取有变化的封面索引条目（#847）。
+- **Interface**: Filter bar and card badge corners now nest evenly, and large English headings use tighter letter spacing (#842). / **界面**：筛选浮层与卡片角标的圆角改为同心，英文大标题字距收紧（#842）。
+
+### Fixed / 修复
+
+- **Sourcing**: Verify both JavDB pages and collect the regular edition when the same code also has a FANZA photo-bonus edition (#431). / **采集**：JavDB 网页采集遇到同番号的 FANZA 生写真特典版和通常版时，核对两份详情后采集通常版（#431）。
+- **Settings**: Show Windows Firewall help only during Windows setup and explain where to verify scraping requests in each browser mode (#811). / **配置**：仅在 Windows 首次设置显示防火墙提示，采集浏览器按当前模式说明手动验证条件（#811）。
+- **Library**: Sync and restore use the intended ledger when its path contains a hash sign or a percent escape (#859). / **馆藏**：账本路径含井号或百分号转义字样时，同步与恢复读取原路径对应的账本（#859）。
+- **Library**: Repair cover faces, spine recognition, and crop text checks under Windows paths with non-ASCII characters (#859). / **馆藏**：Windows 非 ASCII 封面路径下可补做人脸、识别书脊和检查取景切线文字（#859）。
+- **Library**: Read avatars and covers and write watermark review previews under Windows paths containing Chinese characters (#428). / **馆藏**：Windows 中文路径下可读取头像和封面，并写出水印复核对照图（#428）。
+- **Desktop**: Show the database sync and writer takeover actions in standalone builds when replication is enabled, and show CLI help from the packaged executable (#844). / **桌面**：独立发行版启用复制后显示数据库同步和写入端接管，打包程序支持显示命令行帮助（#844）。
+- **Review**: Move keyboard focus to a nearby card after processing the current one (#855). / **复核**：处理当前卡片后，键盘焦点会移到相邻卡片（#855）。
+- **Interface**: Pause glass drift after the home page has been idle for six seconds and resume it on interaction (#840). / **界面**：首页静置六秒后暂停玻璃光晕漂移，继续操作时恢复（#840）。
+- **Interface**: Resize cover and avatar crops with the keyboard while player shortcuts stay inactive during cropping (#846). / **界面**：封面和头像取景手柄支持键盘调整，取景时不会触发播放器快捷键（#846）。
+- **Desktop**: Follow the preferred macOS language in the menu bar and Software Update window (#833). / **桌面**：macOS 菜单栏和更新窗口跟随系统首选语言（#833）。
+- **Updates**: Show English and Simplified Chinese release notes in the macOS update window (#833). / **更新**：macOS 更新窗口显示英文和简体中文更新日志（#833）。
+- **Library**: Restore macOS text recognition for promotional text in video screenshots (#833). / **馆藏**：恢复 macOS 上对视频截图里推广文字的识别（#833）。
 
 ## [0.61.0] - 2026-11-21
 
@@ -95,9 +164,7 @@ Entries are written for users to scan: one sentence each, saying where something
 - **Settings**: Subscription feed fetching can be turned off or given its own interval, like automatic checks for follows (#661). / **配置**：Peach 配置里的「订阅源拉取」可以关掉或改间隔，和关注的自动检查一样（#661）。
 - **Settings**: First-time setup offers the interface language on its first page and switches the page right away; the choice carries over to Peach (#709). / **配置**：首次设置第一页即可选界面语言，选后整页换成该语言，进入 Peach 后沿用（#709）。
 - **Settings**: Wants recheck interval and give-up count, ledger backup count, log retention days and the transcode quality cap are adjustable (#661). / **配置**：「想要」老片的再查间隔与放弃次数、账本备份份数、日志保留天数和播放转码的画质上限都能在 Peach 配置里调了（#661）。
-- **Playback**: On phones and tablets, tap shows controls, double-tap seeks or pauses, long-press plays at 2x, and dragging sideways previews a seek (#156). / **播放**：手机和平板上轻点显示控制条，双击两侧快进快退、中间暂停，长按临时 2 倍速，横向拖动预览后跳转（#156）。
-- **Playback**: On phones and tablets, holding the left double-tap area pauses the picture and rewinds the target 2 seconds per second, jumping there on release (#684). / **播放**：手机和平板上按住画面左侧双击区，画面停住、目标每秒回退 2 秒，松手跳过去（#684）。
-- **Playback**: With a mouse, holding the left button on the picture speeds up (or rewinds on the left side) and dragging sideways previews a seek, like touch (#585). / **播放**：鼠标左键按住画面同样临时倍速（左侧为回退），横向拖动预览定位，和触屏一套手势（#585）。
+- **Playback**: Tap for controls or double-tap to seek or pause, and use touch or a mouse to drag to seek or hold to speed up or rewind on the left (#156, #684, #585). / **播放**：轻点显示控制条，双击快进、快退或暂停，触屏和鼠标均可横拖预览定位、按住左侧回退或在其余位置临时倍速（#156、#684、#585）。
 - **Playback**: Immersive mode gains hold-to-speed-up, a subtitles menu and a full-screen button that turns landscape videos sideways, and Back now leaves it (#585). / **播放**：沉浸模式可长按临时倍速，新增字幕菜单与全屏键（横版片自动横屏），返回键也能退出沉浸（#585）。
 - **Playback**: Playback settings adjust hold speed, drag span and double-tap width, disable gestures, or auto-fullscreen landscape videos on phones (#156, #618). / **播放**：「浏览与播放」可调长按倍速、拖动跳转幅度和双击区宽度，关闭手势，或在手机上自动全屏播放横版视频（#156、#618）。
 - **Playback**: Settings > Playback can turn on Chinese subtitles from the video's directory for videos whose subtitles you haven't picked yet; off by default (#428). / **播放**：设置「播放」里可打开「没选过字幕的影片自动打开同目录的中文字幕」，默认关（#428）。
@@ -133,9 +200,8 @@ Entries are written for users to scan: one sentence each, saying where something
 - **Playback**: Software transcoding of a whole video uses at most half the CPU cores, so other playing videos are not slowed down (#174). / **播放**：服务端软件转码整部视频时最多占一半 CPU 核，同时在播的视频不再被拖慢（#174）。
 - **Playback**: New videos start at the volume last set in this browser instead of 100% (#161). / **播放**：新打开的视频从这台浏览器上次调过的音量起播，不再每次都是 100%（#161）。
 - **Updates**: The changelog and release pages put English first; Chinese notes and downloads are folded by language (#680). / **更新**：更新日志与发布页改为英文在前，中文说明和下载说明按语言折叠（#680）。
-- **Sourcing**: Bundled userscript 0.7.18 shows the source, Peach’s retry reason and local time, for example “tonight 21:39” (peach-mitao/peach-userscript#40). / **采集**：随附用户脚本 0.7.18 显示重试来源、Peach 给的原因和时间，如「今晚 21:39」（peach-mitao/peach-userscript#40）。
-- **Sourcing**: The userscript gives the main button its own row and pairs other actions with icons, two to a row (peach-mitao/peach-userscript#38). / **采集**：用户脚本浮卡主按钮单独一行，其余操作带图标两个一行（peach-mitao/peach-userscript#38）。
-- **Sourcing**: The userscript puts notices at the top of its floating cards and every button at the bottom (peach-mitao/peach-userscript#37). / **采集**：用户脚本浮卡里的提示统一排在最上方，按钮都在最下面（peach-mitao/peach-userscript#37）。
+- **Sourcing**: Bundled userscript 0.7.20 shows the source, retry reason and local retry time (peach-mitao/peach-userscript#40). / **采集**：随附用户脚本 0.7.20 显示重试来源、原因及本地时间（peach-mitao/peach-userscript#40）。
+- **Sourcing**: Userscript card notices sit above a full-width main action and paired icon buttons (peach-mitao/peach-userscript#37, peach-mitao/peach-userscript#38). / **采集**：提示置顶，主按钮单列、其余成对（peach-mitao/peach-userscript#37、peach-mitao/peach-userscript#38）
 - **Sourcing**: The userscript scrolls codes and performer names that don't fit back and forth within the panel row (peach-mitao/peach-userscript#34). / **采集**：用户脚本浮卡里放不下的番号、女优名改为在行内来回滚动（peach-mitao/peach-userscript#34）。
 - **Updates**: Repairs and migrations is grouped by kind, and repairs awaiting your OK can be started all at once or a group at a time (#723). / **更新**：「修复与迁移」按类分组，等确认的修复可一次全部开始或按组开始（#723）。
 
@@ -247,18 +313,13 @@ Entries are written for users to scan: one sentence each, saying where something
 - **Sourcing**: When browser add finds no source, the video code goes to Wants (turn off in Add from browser settings); the userscript can add to Wants directly (#638). / **采集**：浏览器入库没搜到资源时自动把番号加入「想要」，可在浏览器添加设置里关闭；用户脚本也能直接加入想要（#638）。
 - **Sourcing**: For DMM titles with a bonus edition, browser add lets you pick the bonus or regular edition, and downloads prefer the chosen one. / **采集**：DMM 作品有特典版时，浏览器入库可选特典版或通常版，下载优先所选版本。
 - **Sourcing**: Queued browser add tasks can use Prioritize to jump to the front of the search queue. / **采集**：浏览器入库排队中的任务可以「提前处理」，排到搜索队列最前面。
-- **Sourcing**: Bundled userscript 0.7.9 reads video codes on FANZA clip pages, stops false conflicts on DMM and MGS pages, and counts Other tasks failures separately in red. / **采集**：随附用户脚本更新至 0.7.9，识别 FANZA 剪辑页的番号，DMM、MGS 页不再误判冲突，其他任务把失败单独计数并标红。
-- **Sourcing**: The userscript lists all Other tasks with failures first; Peach unreachable, paused channels and update notices show as toasts (#624). / **采集**：用户脚本的其他任务全部列出、失败项在前，连不上 Peach、渠道暂停与更新提醒都用提示框显示（#624）。
+- **Sourcing**: The userscript recognizes codes on FANZA clip pages and avoids false conflicts on DMM and MGS pages. / **采集**：用户脚本识别 FANZA 剪辑页的番号，并避免在 DMM 和 MGS 页误报冲突。
+- **Sourcing**: The userscript lists all Other tasks, counts failed tasks separately, puts them first in red and shows connection, pause and update notices (#624). / **采集**：用户脚本列出全部其他任务，失败项单独计数并标红置顶，连接异常、渠道暂停和更新使用提示框（#624）。
 - **Sourcing**: The userscript's on-page video code list sorts ascending or descending; progress pages for codes already in the library offer Open in library. / **采集**：用户脚本的本页番号列表可按番号升序、倒序排列；已入库番号的进度页可直接「打开馆藏」。
 - **Sourcing**: Click the video code in the userscript's floating card or progress page title to copy it. / **采集**：用户脚本浮卡与进度页标题上的番号点一下即复制。
-- **Interface**: In the English UI, the frontend's own pages, menus, hints and tutorials are all in English; titles, names, tags and server-sent text stay original. / **界面**：英文界面下，前端自己的页面、菜单、提示和教程全部换成英文；作品标题、人名、标签和服务端下发的文字仍是原文。
-- **Interface**: In the English UI, common server errors, Repairs and migrations items and install methods are in English; English messages no longer turn into Request failed. / **界面**：英文界面下，常见的服务端报错、「修复与迁移」各项和安装方式显示英文，页面上的英文提示不再被换成「请求失败」。
-- **Interface**: English UI translates task names, cloud download status, storage classes, backup uses, person categories, update results and release notes; dates are localized. / **界面**：英文界面下，任务名、云下载状态、存储类别、备份用途、人物分类、检查更新结果和更新说明显示英文，日期按界面语言排版。
-- **Interface**: In the English UI, Tasks shows in English what metadata fill-in tasks are working on and why they were skipped or stopped. / **界面**：英文界面下，任务中心里补资料一类任务在做哪一项、为什么跳过或中断显示英文。
-- **Interface**: In the English UI, current stages and batch action names for scan and sourcing, ledger backup, diagnostics export, Organize and media repair are in English. / **界面**：英文界面下，扫描与采集、账本备份、诊断导出、整理、媒体修复等任务的当前阶段和批量操作名显示英文。
-- **Interface**: In the English UI, Tasks shows results and image sources in English for avatar, alias, metadata, studio logo and sample image fill-in tasks. / **界面**：英文界面下，任务中心里补头像、别名、资料、厂牌标识、样张等任务的结论与图片来源显示英文。
-- **Interface**: In the English UI, errors and action hints on Settings, First-time setup, Review, Organize, Following and Downloads pages are in English. / **界面**：英文界面下，设置、首次设置、复核、整理、关注、下载等页面的报错与操作提示显示英文。
-- **Interface**: In the English UI, tray menu and notifications, sign-in, taste analysis, task progress and results, download settings and avatar change help are in English. / **界面**：英文界面下，托盘菜单与通知、登录页、口味分析、各后台任务的进度与结果、下载设置和换头像的说明显示英文。
+- **Interface**: English covers web pages, menus, tutorials, common server errors, update notes and dates while keeping titles, names and tags in their original form. / **界面**：英文界面覆盖网页、菜单、教程、常见服务端报错、更新说明和日期，作品标题、人名和标签保留原文。
+- **Interface**: In English, Tasks shows current stages, batch actions, skip or stop reasons, results and image sources. / **界面**：英文界面的任务中心显示英文的当前阶段、批量操作、跳过或停止原因、处理结果和图片来源。
+- **Desktop**: The tray menu and desktop notifications support English. / **桌面**：托盘菜单和桌面通知支持英文。
 - **Updates**: Docker image releases also push the `latest` tag, so NAS container panels can flag new versions (#586). / **更新**：Docker 镜像发布时同时推送 `latest` 标签，NAS 容器面板能提示新版本（#586）。
 - **Updates**: Docker images also ship for linux/arm64, so ARM NAS devices can pull them directly (#152). / **更新**：Docker 镜像同时提供 linux/arm64，ARM NAS 可以直接拉取（#152）。
 - **Settings**: Docker can set the run-as user with `PEACH_UID` and `PEACH_GID`; existing data volumes have their owner migrated on startup (#203, #277). / **配置**：Docker 可用 `PEACH_UID`、`PEACH_GID` 指定运行身份，已有数据卷启动时自动迁移所有者（#203、#277）。
@@ -302,8 +363,7 @@ Entries are written for users to scan: one sentence each, saying where something
 - **Sourcing**: When sources like JavDB fail, browser add retries after cooldown instead of logging no source found and adding to Wants; mislogged ones are rechecked (#646). / **采集**：浏览器入库遇到 JavDB 等来源没查成时按冷却自动重试，不再误记为未找到资源并加入想要；已误记的会自动重查（#646）。
 - **Sourcing**: Userscripts installed from Peach no longer warn about an update and a changed download URL on every Sleazy update. / **采集**：从 Peach 安装的用户脚本经 Sleazy 更新时，不再每次提示更新与下载地址被更换。
 - **Interface**: After closing title details or filtering on JAV and Manage pages, no leftover blank space stays at the bottom, and late content no longer shifts the viewport. / **界面**：关掉作品详情、在 JAV 与管理区页内筛选之后，页面底部不再留着上一屏的空白，晚到的内容也不再把视口顶走。
-- **Sourcing**: With the JavDB API now requiring sign-in, library sourcing reads javdb.com title pages, so metadata, tags and cover checks still work (#599, #614). / **采集**：JavDB 接口要求登录后，馆藏采集改读 javdb.com 作品页，资料、标签与封面印证照常取得（#599、#614）。
-- **Interface**: With the JavDB API requiring sign-in, out-of-library title details, reviews, magnets and the wanted list identify titles via javdb.com pages as before (#614). / **界面**：JavDB 接口要求登录后，库外作品详情、评论、磁链资源与待找清单改从 javdb.com 网页认作品，照常显示（#614）。
+- **Sourcing**: When the JavDB API requires sign-in, Peach uses title pages for library metadata, cover checks, online details, reviews and magnets (#599, #614). / **采集**：JavDB 接口要求登录时，Peach 通过作品网页继续取得馆藏资料、标签、封面依据、库外详情、评论与磁链（#599、#614）。
 - **Sourcing**: DMM pages for SOD bonus editions are matched by the regular edition code (e.g. SDJS-304) instead of reporting that no video code was found. / **采集**：DMM 上 SOD 特典版的作品页按通常版番号识别（如 SDJS-304），不再报未识别到作品番号。
 - **Sourcing**: A site verification window waiting during a scan that gets minimized from the taskbar is moved back on screen, no right-click Maximize needed. / **采集**：扫描中等待的站点验证页从任务栏点到最小化后，会自动放到屏幕内，不必再右键最大化。
 - **Interface**: In relaxed density, scrolling Library and Following no longer makes cards grow as they enter view and push the viewport down. / **界面**：宽松档下滚动馆藏与关注，卡片不再进屏才长高、把视口往下挤。
@@ -478,7 +538,7 @@ Entries are written for users to scan: one sentence each, saying where something
 - **Library**: Stop task for scan and fetch becomes Cancel task, Sync explains why it waits while a task runs, and command-line scans show file counts. / **馆藏**：扫描与采集的「停止任务」改为「取消任务」，任务未结束时点同步会说明原因，命令行扫描显示文件数。
 - **Library**: Promo clips, URL text files, and QR code images in cloud download folders move to the Trash automatically instead of entering the library. / **馆藏**：云下载落地目录里的推广短视频、网址文本和二维码图片自动移入回收站，不再混进馆藏。
 - **Interface**: Video wall, Home, and Library tools skeletons match their pages; video wall dragging is smoother and narrow screens no longer go black on return. / **界面**：播放墙、首页和数据管理各页的加载骨架与页面一致；播放墙拖动更顺，窄屏重新进入不再整面黑屏。
-- **Sourcing**: The bundled userscript updates to 0.6.11: floating cards switch without flicker, comment bylines aren't read as codes, and amateur avatars show one person. / **采集**：随附用户脚本更新至 0.6.11，浮卡切换不再闪，不把评论署名当番号，素人作品的头像不再变成两个人。
+- **Sourcing**: Userscript cards switch without flicker, ignore comment bylines when finding codes, and show one avatar for amateur titles. / **采集**：用户脚本浮卡切换稳定，查找番号时忽略评论署名，素人作品显示单人头像。
 - **Following**: Deleting titles or emptying the Trash no longer removes New releases and Wants covers as cache; missing creator avatars fall back to the archive site's copy. / **关注**：删除作品或清空回收站后，新作与想要清单的封面不再被当成缓存删掉；作者头像取不到时改用归档站那张。
 - **Desktop**: Local proxy or security software rewrites no longer trigger a false Submit from the Peach setup page; Windows relistens right after a client disconnects early. / **桌面**：本机代理或安全软件改写请求时，不再误报「请从 Peach 设置页提交」；Windows 上客户端提前断开后服务立即重新监听。
 - **Library**: `MCDV-24` (uncensored) and `MCDV-024` (censored) are no longer treated as the same title; each gets its own metadata and cover. / **馆藏**：`MCDV-24`（无码）与 `MCDV-024`（有码）不再被当成同一部，资料和封面各取各的。
@@ -577,7 +637,7 @@ The author started playing Phantom Blade Zero on October 29, 2026; updates and m
 - **Sourcing**: JavDB's new anonymous signature is supported, restoring download links on detail pages. / **采集**：适配 JavDB 新的匿名签名，详情页的资源链接恢复。
 - **Sourcing**: Mixed local and SMB media roots fetch normally; STRM files are no longer treated as junk videos; fetch failures record full diagnostic evidence. / **采集**：本地与 SMB 混合的媒体根能正常采集；STRM 文件不再被当成垃圾视频；采集失败时记录完整的取证信息。
 - **Sourcing**: Scan and fetch tasks stop safely and fill in the new import range and issue list. / **采集**：扫描与采集任务可以安全终止，补齐新入库范围与问题清单。
-- **Sourcing**: The browser userscript gets 0.6.4–0.6.7 fixes: auto lookup, magnet switching, full-page scans, install file updates, list page panel, FANZA settings bar. / **采集**：浏览器脚本同步 0.6.4 至 0.6.7 的修正，包括自动查询、换磁力、整页扫描、安装文件更新、列表页入口面板和 FANZA 页设置底栏。
+- **Sourcing**: Userscript 0.6.7 updates lookup, magnet switching, full-page scans, installation, the list panel and the FANZA settings bar. / **采集**：随附用户脚本 0.6.7 更新自动查询、换磁力、整页扫描、安装入口、列表面板和 FANZA 设置栏。
 - **Sourcing**: Garbled magnet trackers are dropped so 115 accepts cloud downloads; refused tasks can retry; magnet swaps check all sources; browser-added avatars crop to face. / **采集**：云下载提交前去掉磁力里的乱码 tracker，115 不再拒收；网盘没收下的任务可原样重试；换磁力时查完所有来源；浏览器添加的人物头像按人脸取景。
 - **Library**: Filters no longer stall when database statistics drift, and use the cache even with no tag selected. / **馆藏**：筛选项在数据库统计偏差时不再卡顿，未选标签时也使用缓存。
 - **Library**: File monitoring ignores events from before startup; face models load from paths with Chinese characters. / **馆藏**：文件监控忽略启动前的历史事件；人脸模型放在中文路径下也能加载。
@@ -1049,7 +1109,7 @@ This release includes local diagnostics; remote telemetry and feedback upload ar
 - **Playback**: Settings adds a Playback compatibility repair button that fixes MP4s missing timestamp tables in the background, in batches. / **播放**：设置里加一颗「播放兼容修复」，后台批量修缺时间戳表的 MP4
 - **Sourcing**: The HD upgrades page moves to React, and the island on the management content area unmounts when switching pages. / **采集**：高清版目标页迁到 React 档，换页时卸下管理区正文上的 island
 - **Interface**: React subtrees share one TanStack Query client. / **界面**：React 子树共用一个 TanStack Query 客户端
-- **Playback**: MP4s missing ctts play losslessly with a rebuilt header instead of being transcoded live. / **播放**：缺 ctts 的 MP4 改为重建头无损播，不再实时转码
+- **Playback**: MP4s with B-frames but no ctts use HLS while Peach rebuilds the header, then play directly on subsequent starts. / **播放**：含 B 帧但缺少 ctts 的 MP4 会在后台重建文件头，重建期间用 HLS 播放，完成后下次起播可直放。
 - **Sourcing**: JavBus is added as a third community source, and a cover is installed even when only one image source has it. / **采集**：JavBus 作第三个社区来源，封面只有一个图源时照样装上
 - **Following**: The first fetch fills up to 30 items; lookup reads the F95 profile card first and saves aliases when the follow is added. / **关注**：首次采集补足 30 条，查找先读 F95 名片并随登记写下别名
 - **Settings**: Access password is the pilot for React with stock BoardUI components. / **配置**：访问密码试点改用 React 与 BoardUI 原版组件
@@ -1100,16 +1160,13 @@ This release includes local diagnostics; remote telemetry and feedback upload ar
 - **Playback**: The background header-repair task uses the correct ffprobe path. / **播放**：修复头的后台任务取错了 ffprobe 的路径
 - **Sourcing**: Sourcing for existing libraries reads the correct credentials root, so cookies pasted in sourcing settings are applied. / **采集**：既有库采集读对凭据根，采集设置里贴的 Cookie 才跟着走
 - **Sourcing**: Online sources fill only fields the ledger has no value for, and candidates with the same value skip review. / **采集**：联网来源只补账本没有值的字段，同值候选不进复核
-- **Playback**: MP4s with B-frames but no ctts are transcoded. / **播放**：有 B 帧却没有 ctts 的 MP4 改走转码
 - **Library**: In numbered image sets, the image named like the main video is not used as the local poster. / **馆藏**：连号图集里和正片同名的那张不当本地海报
 - **Settings**: Save buttons on the Settings page are all named Save settings, and action buttons use the primary style. / **配置**：设置页保存键统一叫保存配置，操作键改用主按钮
 - **Sourcing**: Cover failure reasons distinguish removed-listing placeholders, a single image source, and disagreeing image sources. / **采集**：封面失败原因分清下架占位图、单一图源与图源不一致
 - **Settings**: Collapsible sections in Settings animate height again, and the check frequency note sits inline. / **配置**：设置页折叠恢复高度动画，检查频率说明并进行内
 - **Settings**: Switch rows in each settings group sit on gray cards, with white blocks inside each card. / **配置**：设置弹层各组开关行坐上灰卡，卡内分块改白底
 - **Interface**: The library icon panel returns to a seven-column grid, and React class names avoid the old stylesheet. / **界面**：媒体库图标面板恢复七列网格，React 类名避开旧样式表
-- **Interface**: Collapsing a ranking keeps the expand button in place, so the page no longer jumps up and back. / **界面**：收起排名时展开键钉在原位，页面不再先上移再回滚
-- **Interface**: Rankings and sidebar lists expand with Collapse height transitions, so the animation is visible. / **界面**：排名与侧栏名单展开改走 Collapse 的高度过渡，展开时看得见动画
-- **Interface**: Rankings on the Stats and Taste pages animate height when expanding and collapsing. / **界面**：统计与口味页的排名展开收起带上高度过渡
+- **Interface**: Rankings and sidebar lists animate their height when opening or closing and keep their expand control in place. / **界面**：统计与口味排行及侧栏名单展开或收起时有高度过渡，展开键保持原位。
 - **Interface**: React style output targets the Tailwind browser baseline, so CI rebuilds match the committed files. / **界面**：React 样式产物按 Tailwind 浏览器基线输出，CI 重建与提交一致
 - **Interface**: React subtrees declare BoardUI tokens with their original values, so text color in system dark mode matches manual dark mode. / **界面**：React 子树按 BoardUI 原值声明同名 token，跟随系统的深色文字色与手动深色一致
 - **Interface**: The iOS status bar is solid again, and the filter bar reveals on scroll-up on the compositor thread without stutter. / **界面**：iOS 状态栏回到实色，筛选条上滚放出改走合成线程不再卡顿
@@ -1226,9 +1283,8 @@ This release includes local diagnostics; remote telemetry and feedback upload ar
 
 ### Fixed / 修复
 
-- **Sourcing**: Vector studio logos also normalize into padded squares and stay vector; white-text logos get a dark background so they stay visible on light backgrounds. / **采集**：矢量的厂牌标识也能归一成带边距的方图，仍然是矢量；白字标配深底，不会在浅底上看不见。
-- **Sourcing**: Studio logos sit squarely in round slots: extra whitespace is trimmed, edge-to-edge logos get padding, and corners aren't clipped; pixels aren't scaled. / **采集**：厂牌标识在圆形图位里摆得端正：自带大留白的裁掉多余空白，顶到边的补足四周，标识的四角不再被圆形切掉。像素不缩放，清晰度不变。
-- **Sourcing**: Light-stroke bitmap logos also get a dark background, logos with a solid backing stay as is, and renormalizing installed logos starts from backed-up originals. / **采集**：浅色笔画的位图标识同样配深底；自带整块底的标识保持原样。已装的标识重跑归一时从备份原图开始，算法的改进也能落到它们身上。
+- **Sourcing**: Round logo slots trim excess whitespace or add padding, and use dark backing for light strokes while preserving vector logos and image resolution. / **采集**：圆形图位适当裁掉留白或加边距，浅色笔画配深底，带实底的标识保持原样，保留矢量格式和原图分辨率。
+- **Sourcing**: Renormalizing installed studio logos starts from the original backups. / **采集**：重做已安装的厂牌标识时使用备份原图。
 - **Sourcing**: The logo search also covers studios whose logo is too small to fill the round slot, swapping in a sharper copy if found; otherwise it only notes it for review. / **采集**：找厂牌标识时也收录「装着的那张太小、放大才铺满圆形图位」的厂牌，站点上有更清晰的就换上；找不到只在复核件留一行判词，原图不动。
 - **Sourcing**: Logos smaller than the small circle are padded to its pixel size with their own background, so the browser doesn't upscale them and strokes stay unscaled. / **采集**：比小圆片还小的厂牌标识用自己的底色补到圆片要的实像素，浏览器不再放大整张图；笔画不缩放，圆片里的标识变清楚了。
 - **Settings**: When creating or removing the desktop shortcut fails, the actual reason is reported instead of a generic failure. / **配置**：桌面快捷方式创建或移除失败时报出真实原因，而不是只说失败。
@@ -1299,7 +1355,9 @@ First Windows standalone test package. Earlier development (from 2026-08-14, inc
 - **Desktop**: The standalone package writes startup logs in UTF-8. / **桌面**：独立包使用 UTF-8 启动日志。
 - **Settings**: The redirect after first-time setup uses a freshly read mDNS name. / **配置**：首次设置后的跳转目标取新鲜读到的 mDNS 名。
 
-[Unreleased]: https://github.com/peach-mitao/peach/compare/v0.61.0...HEAD
+[Unreleased]: https://github.com/peach-mitao/peach/compare/v0.63.0...HEAD
+[0.63.0]: https://github.com/peach-mitao/peach/compare/v0.62.0...v0.63.0
+[0.62.0]: https://github.com/peach-mitao/peach/compare/v0.61.0...v0.62.0
 [0.61.0]: https://github.com/peach-mitao/peach/compare/v0.60.0...v0.61.0
 [0.60.0]: https://github.com/peach-mitao/peach/compare/v0.59.0...v0.60.0
 [0.59.0]: https://github.com/peach-mitao/peach/compare/v0.58.0...v0.59.0

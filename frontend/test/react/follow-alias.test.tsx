@@ -187,9 +187,8 @@ it('全部合并一条一条发，顺序照着待合并列表', async () => {
 it('合并半路断了，报出还剩几组没有合并', async () => {
   const asked = stubConfirm();
   let call = 0;
-  const fetcher = vi.fn(async () => {
-    call += 1;
-    if (call === 2) throw new TypeError('Failed to fetch');
+  const fetcher = vi.fn(async (input: unknown) => {
+    if (String(input) === FOLLOW_ALIAS_URL && ++call === 2) throw new TypeError('Failed to fetch');
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
   });
   const { host, toast } = await open(fetcher);

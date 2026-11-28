@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
   "ebmlite==3.4.1",
   "itsdangerous==2.2.0",
-  "filelock==4.2.12",
+  "filelock==4.3.1",
   "tldextract==5.4.0",
   "APScheduler==3.11.3",
   "beautifulsoup4==4.15.0",
@@ -40,8 +40,8 @@ dependencies = [
   # grpcio 与 protobuf 给云下载调 CloudDrive2 的 gRPC 接口（`downloads_clouddrive.py`）。
   # 消息代码由 grpcio-tools 1.84.0 生成后提交，它自带的 protoc 对应 protobuf 7.35.1，
   # 运行时 protobuf 必须同一大版本且不低于它。
-  "grpcio==1.85.3",
-  "httpx==0.28.1",
+  "grpcio==1.85.4",
+  "httpx==0.29.0",
   # 读网卡上的 IPv6 前缀与地址；zeroconf 本身也用它枚举网卡，版本与锁里的传递依赖一致。
   "ifaddr==0.2.0",
   "m3u8==6.0.0",
@@ -53,13 +53,13 @@ dependencies = [
   "qrcode==8.2",
   "pydantic==2.14.4",
   "resvg-py==0.5.0",
-  "sentry-sdk==2.75.0",
+  "sentry-sdk==3.0.1",
   "socksio==1.0.0",
   "starlette==1.10.0",
   "torznab==0.2.1",
   "tzlocal==5.4.5",
   "uvicorn==0.54.0",
-  "watchdog==7.1.0",
+  "watchdog==7.1.1",
   "zeroconf==0.154.0",
   "smbprotocol==1.17.0",
   # 应用内更新校验发布签名（Ed25519，ADR-0137）。
@@ -78,21 +78,24 @@ peach-tray = "peach.error_reporting:tray_main"
 [project.optional-dependencies]
 # 开发工具复用运行依赖 psutil 查询工作树进程。
 dev = [
-    "filelock==4.2.12",
+    "filelock==4.3.1",
     "httpx2==2.16.2",
     "ruff==0.17.6",
     "seiso==0.4.0",
 ]
 build = [
     "pyinstaller==6.22.3",
-    "dmgbuild==1.6.7; sys_platform == 'darwin'",
+    "dmgbuild==2.0.0; sys_platform == 'darwin'",
 ]
-macos = ["pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'"]
+macos = [
+    "pyobjc-framework-Cocoa==13.0; sys_platform == 'darwin'",
+    "pyobjc-framework-WebKit==13.0; sys_platform == 'darwin'",
+]
 # numpy 本来就是 opencv 的传递依赖，这里显式钉住：`face_detect.decode` 直接 import 它
 # 把字节喂给 `cv2.imdecode`，被 import 的外部模块必须有声明的归属。
 vision = [
     "opencv-python-headless==5.1.0.95", "numpy==2.5.5",
-    "pyobjc-framework-Vision==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Vision==13.0; sys_platform == 'darwin'",
 ]
 maintenance-115 = ["p115client==0.0.9.7.8.3"]
 # 字形复核与英文媒体文件名分词工具。

@@ -22,16 +22,16 @@ from .catalog_vocabulary import CENSORED, CHINESE_SUBTITLES
 from .coded_text import Said, coded, parallel
 from .content_words import PROMO_NAME, TRAILER_NAME
 from .downloads import parse_magnet
-from .jav_cover_fetch import HostLimitedTransport
+from .jav_cover_fetch import HostLimitedTransport, NotFound, Unavailable
 from .scripting import HostLimiter
-from .metadata import relay_args
+from .metadata import RELAYED, relay_args
 from .javdb_public import (_CACHE_ROOT, PUBLIC_API, PublicIdentityAmbiguous, PublicNotFound, PublicRequestBudget,
                            PublicSourceUnavailable, public_cache_scope)
-from .resource_search import qualities
+from .resource_search import qualities, request_failure
 from .source_page_words import JAVBUS_SUBTITLES
-from .scraping_access import SourceTransport, paused_until
+from .scraping_access import SourcePaused, SourceTransport, paused_until
 from .sources import FailureReason, Session, SourceFailure
-from .sources.base import PERMANENT_REASONS
+from .sources.base import PERMANENT_REASONS, http_failure
 from .task_retry import transient_delay
 from .user_messages import nested_message
 
@@ -266,14 +266,14 @@ class Fetcher:
 
     def javdb(self, code: str) -> list[dict]:
         """匿名 API 现取磁链区与前四页评论；快照兜底的失败也记成警告，预算跟随本轮期限。
-        接口要求登录时作品身份改读 javdb.com 搜索页与详情页，磁链与评论仍走接口。"""
+        接口要求登录时改用 JavDB 网页后备。定时查找先取公开页面，遇到登录墙才使用账号。"""
         from .sources.javdb import page_reader
         source = CHAIN[1]
         seconds = max(1, self.deadline - time.monotonic())
         budget = PublicRequestBudget(max_requests=12, max_seconds=seconds)
         try:
             with (public_cache_scope(_CACHE_ROOT.get()) as reads, PUBLIC_API.request_budget(budget),
-                  page_reader(self.root, seconds=seconds) as pages, PUBLIC_API.page_reader(pages)):
+                  page_reader(self.root, seconds=seconds, javdb_account_fallback=True) as pages, PUBLIC_API.page_reader(pages)):
                 result = PUBLIC_API.resources(code, refresh=True, review_pages=4)
         except PublicSourceUnavailable as error:
             reason = (FailureReason.PARSE_ERROR if isinstance(error, PublicIdentityAmbiguous)
@@ -368,6 +368,32 @@ class Fetcher:
         return rank_candidates(found)
 
 
+def _source_warning(source: Source, error: Exception) -> Said:
+    status = error.status_code if isinstance(error, SourceFailure) and error.code == RELAYED else 0
+    if isinstance(error, NotFound):
+        status = 404
+    if isinstance(error, SourcePaused):
+        status = {
+            'errors.scrapingAccess.refusedNamed': 403,
+            'errors.scrapingAccess.refusedCookieNamed': 403,
+            'errors.scrapingAccess.rateLimitedNamed': 429,
+        }.get(error.code, 0)
+        if not status and error.params.get('label') == source.label:
+            return Said(error.code, error.params)
+    reason = request_failure(error, status=status)
+    if reason is None:
+        if not isinstance(error, (SourceFailure, SourcePaused)):
+            return Said('labels.magnetChain.sourceUnfetched', source=source.label)
+        reason = nested_message(error)
+    return Said('labels.magnetChain.sourceFailed', source=source.label, error=reason)
+
+
+_CONNECTION_CHECK_CODES = frozenset({
+    'labels.resourceSearch.connectionFailed', 'labels.resourceSearch.unauthorized', 'labels.resourceSearch.accessDenied',
+    'errors.scrapingAccess.geoRestricted', 'errors.scrapingAccess.ipBanned',
+})
+
+
 def _search_status(root, linked, *, warnings, warning_sources, unfetched, retry_delays, available):
     """合并完整性、部分失败与来源冷却，保留已取得资源的可用状态。"""
     failed = bool(warnings) or bool(linked.get('magnet_failed') or linked.get('comments_failed') or linked.get('cache_stale'))
@@ -378,8 +404,21 @@ def _search_status(root, linked, *, warnings, warning_sources, unfetched, retry_
             retry_delays.append(max(0.0, until - time.time()))
     warnings.extend(linked.get('warnings') or [])
     warning_sources.extend(['javdb'] * len(linked.get('warnings') or []))
+    reasons = {}
+    connection_checks = set()
+    for key, warning in zip(warning_sources, warnings):
+        if getattr(warning, 'code', None) != 'labels.javdbPublic.reviewPagesQueried':
+            reasons.setdefault(key, warning)
+        if isinstance(warning, Said):
+            inner = warning.params.get('error')
+            code = inner.get('code') if isinstance(inner, dict) else warning.code
+            if code in _CONNECTION_CHECK_CODES:
+                connection_checks.add(key)
+    source_failures = [reasons[source.key] for source in CHAIN if source.label in unfetched and source.key in reasons]
     incomplete = failed and not available
     return {"warnings": warnings, 'warning_sources': warning_sources, 'complete': not failed,
+            'source_failures': source_failures,
+            'connection_checks': [source.key for source in CHAIN if source.key in connection_checks],
             'retry_after': max(retry_delays) if retry_delays else None, "unfetched_sources": unfetched,
             'state': 'error' if incomplete else 'ready',
             **coded('error', Said('labels.magnetChain.incomplete') if incomplete else '')}
@@ -416,23 +455,17 @@ def search(root: Path, code: str, *, transport=None, min_size: int = 0,
                 continue
             try:
                 items = collect(code)
-            except SourceFailure as error:
-                items = []
-                if error.reason != FailureReason.NOT_FOUND:
-                    warnings.append(Said("labels.magnetChain.sourceFailed", source=source.label,
-                                         error=nested_message(error)))
-                    warning_sources.append(source.key)
-                if error.reason != FailureReason.NOT_FOUND and error.reason not in PERMANENT_REASONS:
-                    unfetched.append(source.label)
-                if (delay := transient_delay(error)) is not None:
-                    retry_delays.append(delay)
             except Exception as error:
                 items = []
-                warnings.append(Said("labels.magnetChain.sourceUnfetched", source=source.label))
-                warning_sources.append(source.key)
-                unfetched.append(source.label)
-                if (delay := transient_delay(error)) is not None:
-                    retry_delays.append(delay)
+                # 作品查无此番号由各解析器明确报告。通用请求收到 404 可能是搜索接口消失。
+                failure = http_failure(error) if isinstance(error, Unavailable) and not isinstance(error, NotFound) else error
+                if not isinstance(failure, SourceFailure) or failure.reason != FailureReason.NOT_FOUND:
+                    warnings.append(_source_warning(source, failure))
+                    warning_sources.append(source.key)
+                    if not isinstance(failure, SourceFailure) or failure.reason not in PERMANENT_REASONS:
+                        unfetched.append(source.label)
+                    if (delay := transient_delay(failure)) is not None:
+                        retry_delays.append(delay)
             items = [item for item in items if min_size <= item["size"] <= max_size]
             found.extend(items)
             if (stop_on_preferred and not edition_preferences and source.key == "manko"

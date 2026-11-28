@@ -12,7 +12,7 @@ import { entityOptions, fetchItems, itemsParams, prefetchEntityPage, type Entity
 import { PENDING_REFETCH_MS } from '../../src/react/components/pending-work';
 import { EntityPage } from '../../src/react/entity-page/entity-page-view';
 import { queryClient } from '../../src/react/query';
-import { buttonNamed, click, mountRoot, pending, settle, type } from './render';
+import { buttonNamed, chooseFilter, click, mountRoot, pending, settle, type } from './render';
 
 afterEach(() => { queryClient.clear() });
 notifyManager.setScheduler((notify) => notify());
@@ -342,7 +342,7 @@ describe('换筛选与视图', () => {
     expect(cards(page.props)).toEqual(['7']);
     // 选了哪几枚由交集条列着，读数只报个数：标签名再列一遍，几枚长标签就能把这一行撑出页面。
     expect(readout(page.props)).toBe('视频 · 1 · 已选 1 个标签');
-    expect(page.props.hosts.filter.querySelector('[data-entity-tag="巨乳"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(page.props.hosts.filter.querySelector('[data-filter-tag="巨乳"]')?.getAttribute('aria-pressed')).toBe('true');
     await push({ filters: {} });
     await settle();
     expect(page.calls('/api/items')).toHaveLength(2);
@@ -518,7 +518,7 @@ describe('创作者的在线视图', () => {
     expect(followCards(page.props)).toEqual(['1', '2']);
     expect(page.props.hosts.body.querySelector('[data-follow-wall]')).toBeNull();
     const routed = vi.mocked(page.props.actions.route).mock.calls.length;
-    await click(page.props.hosts.filter.querySelector('[data-follow-provider="rule34video"]'));
+    await chooseFilter(page.props.hosts.filter.querySelector('[data-table-column-filter="entity-online-source"]'), 'rule34video');
     await settle();
     expect(page.calls('/api/follow').at(-1)?.searchParams.get('provider')).toBe('rule34video');
     expect(followCards(page.props)).toEqual(['3']);

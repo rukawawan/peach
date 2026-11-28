@@ -1,5 +1,6 @@
 {
   "configurationSections": {
+    "ai": "AI 接入",
     "diagnostics": "系统诊断",
     "downloads": "下载渠道",
     "feeds": "来源与订阅",
@@ -32,6 +33,7 @@
     "collection": "馆藏",
     "discover": "发现",
     "newReleases": "新作",
+    "online": "在线目录",
     "wanted": "想要"
   },
   "manage": {

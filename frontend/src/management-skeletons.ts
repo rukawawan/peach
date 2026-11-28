@@ -44,8 +44,8 @@ export function statsSkeleton(): string {
  *  流向图与维度面板。分段、范围框与读取键取 React 那侧渲染出的同一串类名，只有读数与图画占位。 */
 export function tasteSkeleton(): string {
   const segment = 'flex min-h-7 flex-none items-center gap-1.5 rounded-md px-2.5 py-1 text-body-medium whitespace-nowrap text-text-secondary data-selected:bg-background-primary-default data-selected:text-text-primary data-selected:shadow-card dark:data-selected:bg-background-primary-hover';
-  const track = (labels: string[]) => `<div class="inline-flex w-max max-w-full items-center gap-0.5 overflow-x-auto rounded-2lg bg-background-tertiary-default p-1" data-taste-segments>${labels.map((label, index) => `<span class="${segment}"${index === 0 ? ' data-selected="true"' : ''}>${label}</span>`).join('')}</div>`;
-  const metrics = [t('manage:tasteSkeleton.browsingHistory'), t('manage:tasteSkeleton.tasteDimensions'), t('manage:tasteSkeleton.browsingLeads'), t('manage:tasteSkeleton.privateExports')].map(label => `
+  const track = (labels: string[], selected = 0) => `<div class="inline-flex w-max max-w-full items-center gap-0.5 overflow-x-auto rounded-2lg bg-background-tertiary-default p-1" data-taste-segments>${labels.map((label, index) => `<span class="${segment}"${index === selected ? ' data-selected="true"' : ''}>${label}</span>`).join('')}</div>`;
+  const metrics = [t('manage:tasteSkeleton.browsingHistory'), t('manage:tasteSkeleton.tasteDimensions'), t('manage:tasteSkeleton.browsingLeads'), t('manage:taste.bookmarks')].map(label => `
     <div class="min-w-0 rounded-2xl shadow-card bg-background-secondary-default flex flex-col overflow-hidden pt-4 text-left">
       <span class="flex min-w-0 items-center gap-2 px-4 text-body-regular text-text-secondary max-sm:gap-1.5 max-sm:px-3"><i class="${placeholder} size-7 max-sm:size-6"></i>${label}</span>
       <b class="px-4 pt-3 pb-4 text-title-1-medium max-sm:px-3 max-sm:pb-3">${text('4em')}</b>
@@ -56,7 +56,7 @@ export function tasteSkeleton(): string {
   const heat = (title: string) => `<section class="${chart}"><h3 class="text-title-2-medium text-text-primary">${title}</h3><div class="${placeholder} h-40"></div></section>`;
   return `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">
     <div class="flex flex-col gap-5">
-      <div class="flex flex-wrap items-center justify-between gap-3">${track([t('manage:taste.browserHistory'), t('manage:taste.peachActivity')])}
+      <div class="flex flex-wrap items-center justify-between gap-3">${track([t('manage:taste.peachActivity'), t('manage:taste.browserHistory')], 1)}
         <div class="flex flex-wrap items-center gap-2">${islandSelect(t('manage:taste.allTime'))}<span data-button-group data-split-button data-variant="primary">${islandButton({ glyph: 'compass', label: t('manage:taste.readBrowserHistory'), attrs: wait })}${islandButton({ glyph: 'chevron-down', attrs: wait })}</span></div>
       </div>
       <div class="inline-grid w-full grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4" data-taste-metrics>${metrics}</div>
@@ -69,7 +69,7 @@ export function tasteSkeleton(): string {
       <div class="inline-grid w-full items-start gap-5 lg:grid-cols-2">${heat(t('manage:taste.browsingActivity'))}${heat(t('manage:taste.dailyActivity'))}</div>
       <section class="${chart}"><h3 class="text-title-2-medium text-text-primary">${t('manage:tasteCharts.creatorLeadSources')}</h3><div class="${placeholder} h-72 max-sm:h-48"></div></section>
       <section class="min-w-0 bg-background-secondary-default rounded-2xl shadow-card flex flex-col">
-        <div class="px-4 pt-3">${track([t('manage:shared.tags'), t('manage:shared.creators'), t('manage:taste.topSites'), t('manage:tasteSkeleton.browsingLeads')])}</div>
+        <div class="px-4 pt-3">${track([t('manage:shared.tags'), t('manage:shared.creators'), t('manage:shared.actresses'), t('manage:taste.topSites'), t('manage:tasteSkeleton.browsingLeads')])}</div>
         <div class="flex flex-col gap-3 px-4 pt-3.5 pb-4">${Array.from({ length: 5 }, () => `<div class="${placeholder} h-7"></div>`).join('')}</div>
       </section>
     </div>
@@ -107,7 +107,7 @@ export function qualityGoalsSkeleton(): string {
   </div></div>`;
 }
 
-/** 「修复与迁移」：页首说明与分区标题照写，结果面板里几行占位，和 `react/settings/repair-center.tsx`
+/** 「修复与迁移」：结果面板里几行占位，和 `react/settings/repair-center.tsx`
  *  的 `Row` 同一串类名：左边标题与说明，右边读数与状态标签。项数等数据才知道，按常见的三项画。 */
 export function repairCenterPanelSkeleton(rows = 3): string {
   const row = `<div class="${RESULT_SECTION} flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -117,8 +117,9 @@ export function repairCenterPanelSkeleton(rows = 3): string {
   return `<div class="${RESULT_PANEL}">${row.repeat(rows)}</div>`;
 }
 
+/* 分区标题是修复项所属的分组名（馆藏文件、作品资料……），要等数据：画占位条，不先写一个落地后不存在的标题。 */
 export function repairCenterSkeleton(): string {
   return `<div class="peach-react"><div class="mx-auto flex w-full max-w-board flex-col gap-8">
-    <section class="flex flex-col gap-4"><h2 class="text-title-2-medium! m-0! text-text-primary">${t('settings:repairCenter.itemsHeading')}</h2>${repairCenterPanelSkeleton()}</section>
+    <section class="flex flex-col gap-4"><h2 class="text-title-2-medium! m-0! text-text-primary">${text('4em')}</h2>${repairCenterPanelSkeleton()}</section>
   </div></div>`;
 }

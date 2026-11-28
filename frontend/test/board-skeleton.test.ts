@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { boardPageSkeleton, detailSkeletonBody } from '../src/board-skeleton';
 import { wireBoardSegments } from '../src/board-controls';
+import { catalogView, setCatalogView } from '../src/react/catalog-grid/catalog-view';
 
 vi.mock('@peach/legacy/core', async importOriginal => ({
   ...await importOriginal<object>(),
@@ -29,10 +30,11 @@ describe('Board 页面骨架', () => {
   it('JAV 新作分区在列表模式下画新作自己的表格骨架，下排有卡片／列表开关、没有文件夹开关', () => {
     const before = location.pathname + location.search;
     history.replaceState(null, '', '/jav?tab=releases');
-    localStorage.setItem('peach.catalog-view.v1', 'list');
+    const view = catalogView();
+    setCatalogView('list');
     const root = document.createElement('div');
     root.innerHTML = boardPageSkeleton('/jav');
-    localStorage.removeItem('peach.catalog-view.v1');
+    setCatalogView(view);
     history.replaceState(null, '', before);
     expect([...root.querySelectorAll('[data-catalog-table] th')].map(node => node.textContent).filter(Boolean))
       .toEqual(['作品', '艺人', '厂牌', '标签', '发行时间', '时长', '来源评分', '操作']);
@@ -40,14 +42,14 @@ describe('Board 页面骨架', () => {
     expect(root.querySelector('[aria-label="馆藏显示方式"] [aria-checked="true"]')?.getAttribute('aria-label')).toBe('列表');
     expect(root.querySelector('[data-folder-mode-toggle]')).toBeNull();
   });
-  it('JAV 新作分区骨架按下新作，页头是名册页那种筛选框，下面是两排头像占位与新作自己的排序键', () => {
+  it('JAV 新作分区骨架只画正文：两排头像占位与新作自己的排序键，标题和页签留给常驻页头', () => {
     const before = location.pathname + location.search;
     history.replaceState(null, '', '/jav?tab=releases&sort=duration&dir=asc');
     const root = document.createElement('div');
     root.innerHTML = boardPageSkeleton('/jav');
     history.replaceState(null, '', before);
-    expect([...root.querySelectorAll('span.whitespace-nowrap.rounded-md')].find(node => node.classList.contains('text-text-primary'))?.textContent).toBe('新作');
-    expect(root.querySelector('[data-index-search] input')?.getAttribute('aria-label')).toBe('筛选新作');
+    expect(root.querySelector('h2[data-page-title]')).toBeNull();
+    expect(root.querySelector('[data-index-search]')).toBeNull();
     expect(root.querySelector('form')).toBeNull();
     expect(root.querySelectorAll('[data-catalog-tier] [data-catalog-placeholder]').length).toBeGreaterThan(0);
     expect(root.querySelector('[data-entity-tag="external"]')).toBeNull();
@@ -63,7 +65,7 @@ describe('Board 页面骨架', () => {
   });
   it.each([
     ['/stats', '[data-stats-chart]', 2],
-    ['/tasks', '.activitysection', 3],
+    ['/tasks', '.activitysection', 2],
     ['/duplicates', '[data-duplicate-group] .duplicate-row', 4],
     ['/quality-goals', '.peach-react [data-quality-goals] [data-media-grid] > [data-jav-skeleton-card]', 6],
     ['/subscriptions', '.peach-react .ui-follow-skeleton-surface .follow-skeleton-author', 3],
@@ -147,9 +149,12 @@ describe('Board 页面骨架', () => {
     const root = document.createElement('div');
     root.innerHTML = boardPageSkeleton('/taste');
     expect(root.querySelector('.peach-react')).not.toBeNull();
-    expect(root.querySelector('[data-taste-segments] [data-selected]')?.textContent).toBe('浏览器记录');
+    const [evidence, dimensions] = [...root.querySelectorAll('[data-taste-segments]')];
+    expect([...evidence!.children].map((segment) => segment.textContent)).toEqual(['Peach 观看与评价', '浏览器记录']);
+    expect(evidence!.querySelector('[data-selected]')?.textContent).toBe('浏览器记录');
+    expect([...dimensions!.children].map((segment) => segment.textContent)).toEqual(['标签', '创作者', '女优', '常访问网站', '浏览线索']);
     expect([...root.querySelectorAll('[data-taste-metrics] > div > span')].map((span) => span.textContent))
-      .toEqual(['浏览记录', '口味维度', '浏览线索', '私有导出']);
+      .toEqual(['浏览记录', '口味维度', '浏览线索', '浏览器书签']);
     expect(root.querySelector('[data-taste-portrait]')?.textContent).toContain('浏览器画像');
     expect([...root.querySelectorAll('h3')].map((h3) => h3.textContent))
       .toEqual(['浏览活跃时间', '每日活跃', '创作者线索来源']);

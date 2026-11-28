@@ -4,8 +4,7 @@ import { completeReveal } from '../react/components/server-path-dialog';
 import { nextRating, ratingStars } from '../react/components/rating-values';
 /* catalog 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
 import { censorOn, preferencesState, refreshAll, replaceCatalogAddress, sidebarFacets, wireDrag } from './preferences.js';
-import { nextSortState } from './../sort-preferences';
-import { $, STATE_ROUTES, api, esc, firstGrapheme, isCatalogPath, leadingGraphemes } from '../core';
+import { $, STATE_ROUTES, api, isCatalogPath, leadingGraphemes } from '../core';
 import { barsContext, detailReturnBarsContext, notifyShell, pageOpens, runtimeConfigurable, selectMode, selected, state, writeShell } from './../shell/index';
 import { receiptsState } from './receipts.js';
 import { fetchBars, fetchTopsPage } from './../catalog-bars';
@@ -13,11 +12,10 @@ import { confirmModal, dissolveValue, fitSkeleton, wireHorizontalScroller } from
 import { navigationState, paintSidebar, syncNavigation } from './navigation.js';
 import { disposeStage, mediaState, openEditions, openItem, openMix, openParts, openTok } from './media.js';
 import { cardLayout, homeLayoutActive, javActive, layoutState, setHomeLayout, setJavLayout, showHomeSurfaces } from './layout.js';
-import { selectionState, setSelectMode, toggleSelection } from './selection.js';
+import { selectCardRectangle, selectionState, setSelectMode, toggleSelection } from './selection.js';
 import { javDisplayName, javTitleHtml } from '../core/jav-title';
 import { tagLabel } from '../core/tags';
 import { PORTRAIT } from '../core/stored-values';
-import { entityDisplayName } from '../core/entity-names';
 import { loadStage, stageApi } from '../react/application-residents';
 import { currentBarsContext, entityState, openEntity, pushEntityPage, routeEntityPage, sortKeys } from './entity.js';
 import { applicationEffects } from './effects';
@@ -27,7 +25,7 @@ import { catalogContentSkeletonHtml } from '../catalog-content-skeleton';
 import { discoveryGridSkeletonHtml, junkContentSkeletonHtml } from '../queue-skeleton';
 import { catalogView } from '../react/catalog-grid/catalog-view';
 import { JAV_LAYOUTS, cardRatio, gridLayout, javLayout } from './../appearance/layout';
-import { entityFaceImg, facePos, logoUrl } from './../card-art/markup';
+import { avatarInner, logoUrl } from './../card-art/markup';
 import { sidebarHasCatalogContent } from './../sidebar';
 import { rememberRepresentatives } from './../card-art/representatives';
 import { clearHomeFeed, isFeedNewPath, renderHomeFeed } from './feed.js';
@@ -147,7 +145,7 @@ export async function getBarsData(context){
   if(context.type==='home'&&state.state)facetParams.set('state',state.state);
   if(context.type!=='item'){
     const filters=entityState.activeFilterState();
-    ['loc','creator','studio','tag','tag_match','len','dur_min','dur_max','orient','region','year','q','thumb','folder','folder_recursive'].forEach(key=>{
+    ['loc','creator','performer','studio','tag','tag_match','len','dur_min','dur_max','orient','region','year','q','thumb','folder','folder_recursive','translation_missing'].forEach(key=>{
       if(filters[key])facetParams.set(key,filters[key]);
     });
   }
@@ -199,7 +197,7 @@ export function commitContextFilter(mutate){
 }
 
 export function catalogFilterBase(){
-  return {tiers:null,tiersPending:false,empty:false,tags:[],tagFirst:catalogState.TAGS_FIRST,views:catalogState.catalogViews(),state:'',count:null,
+  return {tiers:null,tiersPending:false,empty:false,tags:[],views:catalogState.catalogViews(),state:'',count:null,
     trash:false,trashHost:$('#trashFilter'),sorts:[],layout:null,refreshing:false,offscreen:false,combo:[],comboHidden:true,comboHost:$('#combo'),
     actions:catalogFilterActions(),
     helpers:{wireDrag,wireScroller:row=>{if(row)wireHorizontalScroller(row)}}};
@@ -214,7 +212,8 @@ export function paintCatalogFilter(patch){
   const offscreen=host.style.display==='none'||document.body.matches('.entity-open,.index-open');
   /* 两排头像可在设置里关掉（「首页显示女优与厂牌头像」），每次推都按此刻的偏好带上，切开关时推一份空补丁就跟上。 */
   const hideTiers=preferencesState.appSettings.homeTiers===false;
-  patch={...patch,offscreen,hideTiers};
+  patch={...patch,offscreen,hideTiers,
+    tableContext:location.pathname!=='/wall'?{filters:{...state},revision:catalogState.controller.revision}:undefined};
   catalogState.catalogFilterProps={...(catalogState.catalogFilterProps||catalogFilterBase()),...patch};
   if(catalogState.catalogFilterMounting)return;
   if(managedTaken(host)){updateManagedRoute(host,patch);return}
@@ -242,12 +241,17 @@ export function catalogFilterActions(){
       navigationState.route(homePath());buildBars();
     },
     toggleTag:tag=>toggleTag(tag),
+    /* 同顶栏搜索的落点（`searchActions.search`）：换词、写地址，目录照新词重取。 */
+    search:query=>{
+      catalogState.rememberSearchValue();disposeStage(false);
+      state.q=query;notifyShell();paintCatalogFilter({query});
+      navigationState.route(state.jav==='1'?homePath():state.q?'/?q='+encodeURIComponent(state.q):'/',true);
+    },
+    chooseFacet:(kind,name)=>commitContextFilter(filters=>{filters[kind]=filters[kind]===name?'':name}),
     clearFilter:key=>commitContextFilter(filters=>{filters[key]=''}),
-    clearAll:()=>commitContextFilter(filters=>{filters.tag='';filters.creator='';filters.studio='';filters.owner=''}),
-    setSort:key=>{
-      const next=nextSortState(key,state.sort,state.dir);
-      if(!next)return;
-      state.sort=next.sort;state.dir=next.dir;notifyShell();replaceCatalogAddress();
+    clearAll:()=>commitContextFilter(filters=>{filters.tag='';filters.creator='';filters.performer='';filters.studio='';filters.owner=''}),
+    setSort:(sort,dir)=>{
+      state.sort=sort;state.dir=dir;notifyShell();replaceCatalogAddress();
     },
     reshuffle:()=>refreshAll(),
     /* 读数旁的「显示全部」：这一次看全部，地址里不再带 `thumb`；回首页、刷新后按设置重新只看有预览图的。 */
@@ -272,7 +276,7 @@ export function catalogLayoutProp(){
 
 export function catalogHeadProps(){
   return {sorts:sortKeys(state.sort,state.dir),layout:catalogLayoutProp(),
-    state:state.state||'',trash:state.state==='trash',previewOnly:state.thumb==='1'&&state.state!=='trash'};
+    state:state.state||'',query:state.q||'',trash:state.state==='trash',previewOnly:state.thumb==='1'&&state.state!=='trash'};
 }
 
 export function catalogTags(filters){
@@ -280,13 +284,11 @@ export function catalogTags(filters){
 }
 
 export function tierPerformer(x){
-  return {name:x.k,ringHtml:`<span data-tier-initial>${esc(firstGrapheme(entityDisplayName('performer',x.k,x.id)))}</span>${entityFaceImg(
-    {id:x.id,hasImage:x.has_image,version:x.image_version,rep:x.has_avatar?x.rep:null,style:facePos(x.avatar_focus),focus:x.avatar_focus,
-      standIn:x.avatar_stand_in})}`};
+  return {...x,name:x.k,ringHtml:avatarInner(x.k,x,null)};
 }
 
 export function tierStudio(x){
-  return {name:x.k,fallback:leadingGraphemes(x.k,2),
+  return {name:x.k,has_logo:x.has_logo,logo_version:x.logo_version,fallback:leadingGraphemes(x.k,2),
     logo:x.has_logo?logoUrl(x.k,'icon',x.logo_version):''};
 }
 
@@ -364,7 +366,7 @@ export async function buildBars(){
   paintCatalogFilter({
     tiers:{key:String(catalogState.barsRequestSeq),performers:tops.performers.map(tierPerformer),studios:tops.studios.map(tierStudio)},
     tiersPending:false,
-    empty:emptyHome,tags:catalogTags(filterState),tagFirst:appliedTags.length+pickedTags.length,
+    empty:emptyHome,tags:catalogTags(filterState),
     views:catalogState.catalogViews(),state:filterState.state||'',
   });
   renderCombo();
@@ -407,7 +409,8 @@ export function toggleTag(t){commitContextFilter(filters=>{filters.tag=t?catalog
 export function comboItems(filters){
   const items=[];
   if(filters.creator)items.push({kind:'clear',key:'creator',label:`${catalogState.COMBO_LABELS.creator} ${filters.creator}`});
-  if(filters.studio)items.push({kind:'clear',key:'studio',label:`${catalogState.COMBO_LABELS.studio} ${filters.studio}`});
+  if(filters.performer)items.push({kind:'clear',key:'performer',value:filters.performer,label:`${tr('catalog:shared.performers')} ${filters.performer}`});
+  if(filters.studio)items.push({kind:'clear',key:'studio',value:filters.studio,label:`${catalogState.COMBO_LABELS.studio} ${filters.studio}`});
   if(filters.owner==='none')items.push({kind:'clear',key:'owner',label:tr('shell:catalogFilter.uncreditedChip', { label: catalogState.COMBO_LABELS.owner })});
   if(filters.year)items.push({kind:'clear',key:'year',label:tr('shell:catalogFilter.yearChip', { years: joinList(filters.year.split(',').map(year=>year==='none'?tr('shell:catalogFilter.unknownYear'):year)) })});
   catalogState.tagList(filters.tag).forEach(t=>items.push({kind:'untag',key:t,label:tagLabel(t)}));
@@ -646,6 +649,7 @@ catalogState.gridActions = {
     commitContextFilter(filters=>{filters.tag=catalogState.tagPressed(filters.tag,tag)?'':tag});
   },
   toggleSelection:(id,range)=>toggleSelection(id,range),
+  selectCardRectangle,
   watchLater:(it,onChange)=>toggleWatchLater(it,onChange),
   rate:(it,star,onChange,signal)=>rateCatalogItem(it,star,onChange,signal),
   resourceOperation:(it,operation)=>runResourceOperation(it,operation),
@@ -678,6 +682,7 @@ catalogState.hideCatalogCombo = ()=>{if(catalogState.catalogFilterProps)paintCat
 export function installCatalog19() {
 catalogState.junkQueueHelpers = {badgeHtml:(location,cost)=>preferencesState.srcBadge(location,cost)};
 catalogState.junkQueueActions = {
+  selectRectangle:selectCardRectangle,
   /* 换分类、换视图：先收起多选，再改地址，由目录元素重读。 */
   navigate:path=>{if(selectMode)setSelectMode(false,true);navigationState.route(path)},
   toggleSelection:(id,range)=>toggleSelection(id,range),

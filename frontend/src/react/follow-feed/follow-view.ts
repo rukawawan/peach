@@ -11,7 +11,7 @@ export function readFollowView(search: string, previousSeed: number, rollSeed: (
     status: FOLLOW_FILTERS.find(([key]) => key && key === status)?.[0] || '',
     media: params.get('media') === 'images' ? 'images' : 'videos',
     author: csv('author')[0] || '', provider: csv('provider')[0] || '', work: csv('work')[0] || '',
-    tags: csv('tag'), durMin: seconds('dur_min'), durMax: seconds('dur_max'),
+    tags: csv('tag'), durMin: seconds('dur_min'), durMax: seconds('dur_max'), q: (params.get('q') || '').trim(),
     sort: sort === FOLLOW_RANDOM_SORT ? sort : FOLLOW_FEED_SORTS.find(([key]) => key === sort)?.[0] || 'new',
     seed: Number(params.get('seed')) >>> 0 || previousSeed || rollSeed(),
     dir: params.get('dir') === 'asc' ? 'asc' : 'desc',
@@ -26,6 +26,7 @@ export function followViewPath(view: FollowView): string {
   if (view.work) params.set('work', view.work);
   if (view.durMin) params.set('dur_min', String(view.durMin));
   if (view.durMax) params.set('dur_max', String(view.durMax));
+  if (view.q) params.set('q', view.q);
   if (view.status) params.set('status', view.status);
   if (view.media === 'images') params.set('media', view.media);
   if (view.sort !== 'new') params.set('sort', view.sort);
@@ -36,10 +37,10 @@ export function followViewPath(view: FollowView): string {
 
 /** 索引跳转问的是这一位的全部更新；排序与取样仍属于当前关注会话。 */
 export function followAuthorView(view: FollowView, author: string): FollowView {
-  return { ...view, author, provider: '', work: '', tags: [], durMin: 0, durMax: 0, media: 'videos', status: '' };
+  return { ...view, author, provider: '', work: '', tags: [], durMin: 0, durMax: 0, q: '', media: 'videos', status: '' };
 }
 
 /** 在线标签跳转保持当前题材，与关注页的来源筛选采用各自的地址语义。 */
 export function followTagView(view: FollowView, tag: string): FollowView {
-  return { ...view, author: '', provider: '', tags: [tag], durMin: 0, durMax: 0, media: 'videos', status: '' };
+  return { ...view, author: '', provider: '', tags: [tag], durMin: 0, durMax: 0, q: '', media: 'videos', status: '' };
 }

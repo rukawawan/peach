@@ -192,7 +192,7 @@ class ImportedPerformerProfileTests(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["avatars"], 0)
         self.assertEqual([asset_id for asset_id, _message in issues], [1])
-        self.assertIn("头像未取得", phrase_text(issues[0][1]))
+        self.assertIn("头像采集失败", phrase_text(issues[0][1]))
         self.assertEqual(issues[0][1]["code"], "errors.metadataPerformerProfiles.avatarUnfetched")
         self.assertFalse((self.root / "avatars" / "performer-7.img").exists())
 

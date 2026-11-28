@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type MouseEvent } from 'react';
-import { animate } from 'motion';
 import { clampWall, WALL_CULL_PAD, wallExtent, type WallCamera, type WallRect, type WallSize } from './wall-layout';
+import { wallDepthAnchor } from './wall-depth';
 
 const INITIAL: WallCamera = { x: 16, y: 16, scale: 1 };
 const MIN_SCALE = .65, MAX_SCALE = 1.6;
@@ -20,38 +20,36 @@ function stillCovered(next: WallCamera, by: WallCamera, size: WallSize): boolean
 }
 
 /** 镜头每帧只写世界层；视口快走出已渲染的磁贴范围时才发布一次 React 状态。 */
-export function useWallCamera(count: number, finite: boolean, initial: WallCamera = INITIAL, focused = false) {
+export function useWallCamera(count: number, finite: boolean, initial: WallCamera = INITIAL) {
   const viewport = useRef<HTMLDivElement>(null);
   const world = useRef<HTMLDivElement>(null);
+  const projection = useRef<((view: WallCamera, size: WallSize) => void) | null>(null);
   const size = useRef<WallSize>({ width: 0, height: 0 });
   const current = useRef<WallCamera>({ ...initial });
   const [view, setView] = useState({ camera: { ...initial }, size: size.current });
   const published = useRef<WallCamera>({ ...initial });
-  const options = useRef({ count, finite, focused });
-  options.current = { count, finite, focused };
+  const options = useRef({ count, finite });
+  options.current = { count, finite };
   const frame = useRef<number | null>(null);
-  const flight = useRef<{ stop():void } | null>(null);
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* 滚轮与键盘共用的缓动目标：平移余量、目标比例（0 表示不缩放）和缩放不动点（视口坐标）。 */
   const glide = useRef({ x: 0, y: 0, scale: 0, anchorX: 0, anchorY: 0, previous: 0 });
-  const didDrag = useRef(false);
+  const skipClick = useRef(false);
   const pointer = useRef<{ id: number; x: number; y: number; camera: WallCamera;
     lastX: number; lastY: number; time: number; vx: number; vy: number; dragged: boolean } | null>(null);
   const stop = useCallback(() => {
-    flight.current?.stop(); flight.current = null;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
     Object.assign(glide.current, { x: 0, y: 0, scale: 0, previous: 0 });
   }, []);
-  const apply = useCallback((next: WallCamera, force = false, center = false) => {
-    const { count: total, finite: bounded, focused: expanded } = options.current;
-    const actual = clampWall(next, size.current, wallExtent(total), bounded && !expanded && !center);
+  const apply = useCallback((next: WallCamera, force = false) => {
+    const { count: total, finite: bounded } = options.current;
+    const actual = clampWall(next, size.current, wallExtent(total), bounded);
     const before = current.current;
     current.current = actual;
-    const ratio = window.devicePixelRatio || 1;
     const layer = world.current;
     if (layer) {
-      layer.style.transform = `translate3d(${Math.round(actual.x * ratio) / ratio}px, ${Math.round(actual.y * ratio) / ratio}px, 0) scale(${actual.scale})`;
+      layer.style.transform = `translate3d(${actual.x}px, ${actual.y}px, 0) scale(${actual.scale})`;
       /* 移动期间让合成器整块搬动世界层：不挂 `will-change` 时 Chrome 每挪一次都把整面墙重新
          光栅化，拖动的 GPU 光栅化时间差四倍。停下后摘掉，按最终比例重画一次清晰的。 */
       if (actual.x !== before.x || actual.y !== before.y || actual.scale !== before.scale) {
@@ -65,6 +63,7 @@ export function useWallCamera(count: number, finite: boolean, initial: WallCamer
       viewport.current.dataset.cameraY = String(actual.y);
       viewport.current.dataset.cameraScale = String(actual.scale);
     }
+    projection.current?.(actual, size.current);
     if (force || !stillCovered(actual, published.current, size.current)) {
       published.current = actual;
       setView({ camera: actual, size: { ...size.current } });
@@ -107,7 +106,6 @@ export function useWallCamera(count: number, finite: boolean, initial: WallCamer
     frame.current = requestAnimationFrame(tick);
   }, [apply]);
   const glideBy = useCallback((pan: { x: number; y: number } | null, zoom: { factor: number; x: number; y: number } | null) => {
-    flight.current?.stop(); flight.current = null;
     const state = glide.current;
     if (reduced()) {
       let next = current.current;
@@ -119,35 +117,44 @@ export function useWallCamera(count: number, finite: boolean, initial: WallCamer
     if (pan) { state.x += pan.x; state.y += pan.y }
     if (frame.current === null && (state.scale || state.x || state.y)) { state.previous = 0; frame.current = requestAnimationFrame(tick) }
   }, [apply, tick]);
+  const hitPoint = (x: number, y: number) => projection.current && size.current.width && size.current.height
+    ? wallDepthAnchor(x, y, size.current) : { x, y };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !event.isPrimary || pointer.current) return;
-    stop(); didDrag.current = false;
+    stop();
     if (event.target instanceof Element && event.target.closest('button,input,[data-wall-queue]')) return;
-    pointer.current = { id: event.pointerId, x: event.clientX, y: event.clientY, camera: current.current,
-      lastX: event.clientX, lastY: event.clientY, time: event.timeStamp, vx: 0, vy: 0, dragged: false };
+    const point = hitPoint(event.clientX, event.clientY);
+    pointer.current = { id: event.pointerId, ...point, camera: current.current,
+      lastX: point.x, lastY: point.y, time: event.timeStamp, vx: 0, vy: 0, dragged: false };
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const from = pointer.current;
     if (!from || from.id !== event.pointerId) return;
-    const dx = event.clientX - from.x, dy = event.clientY - from.y;
+    const point = hitPoint(event.clientX, event.clientY);
+    const dx = point.x - from.x, dy = point.y - from.y;
     if (!from.dragged && Math.hypot(dx, dy) > 7) {
-      from.dragged = true; didDrag.current = true;
+      from.dragged = true; skipClick.current = true;
       event.currentTarget.setPointerCapture(event.pointerId);
     }
     const elapsed = event.timeStamp - from.time;
     if (elapsed > 0) {
-      from.vx = (event.clientX - from.lastX) / elapsed;
-      from.vy = (event.clientY - from.lastY) / elapsed;
+      from.vx = (point.x - from.lastX) / elapsed;
+      from.vy = (point.y - from.lastY) / elapsed;
     }
-    from.lastX = event.clientX; from.lastY = event.clientY; from.time = event.timeStamp;
+    from.lastX = point.x; from.lastY = point.y; from.time = event.timeStamp;
     if (from.dragged) apply({ ...from.camera, x: from.camera.x + dx, y: from.camera.y + dy });
   };
-  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>, tap: (target: Element) => boolean) => {
     const from = pointer.current;
     if (!from || from.id !== event.pointerId) return;
     pointer.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (!from.dragged || reduced() || event.timeStamp - from.time > 80) return;
+    if (!from.dragged) {
+      // 一些触屏浏览器在甩动后会丢掉合成 click，直接处理这次轻点。
+      if (event.pointerType === 'touch' && event.target instanceof Element && tap(event.target)) skipClick.current = true;
+      return;
+    }
+    if (reduced() || event.timeStamp - from.time > 80) return;
     let previous = performance.now(), vx = Math.max(-4, Math.min(4, from.vx)), vy = Math.max(-4, Math.min(4, from.vy));
     const coast = (now: number) => {
       const dt = Math.min(50, now - previous); previous = now;
@@ -161,13 +168,14 @@ export function useWallCamera(count: number, finite: boolean, initial: WallCamer
     frame.current = requestAnimationFrame(coast);
   };
   const onClickCapture = (event: MouseEvent<HTMLDivElement>) => {
-    if (!didDrag.current || event.detail === 0) return;
-    didDrag.current = false; event.preventDefault(); event.stopPropagation();
+    if (!skipClick.current || event.detail === 0) return;
+    skipClick.current = false; event.preventDefault(); event.stopPropagation();
   };
   useEffect(() => {
     const node = viewport.current;
     if (!node) return;
     const wheel = (event: WheelEvent) => {
+      if (node.closest('[data-video-wall][data-focused]')) return;
       if (event.target instanceof Element && event.target.closest('[data-wall-queue],[data-wall-player]')) return;
       event.preventDefault();
       if (node.closest('[data-video-wall][data-refreshing]')) return;
@@ -180,37 +188,31 @@ export function useWallCamera(count: number, finite: boolean, initial: WallCamer
       if (Math.abs(horizontal) > Math.abs(vertical)) { glideBy({ x: -horizontal * unit, y: 0 }, null); return }
       if (!vertical) return;
       const box = node.getBoundingClientRect();
-      glideBy(null, { factor: Math.exp(-vertical * unit * (event.ctrlKey ? .01 : .0015)),
-        x: event.clientX - box.left, y: event.clientY - box.top });
+      const anchor = hitPoint(event.clientX - box.left, event.clientY - box.top);
+      glideBy(null, { factor: Math.exp(-vertical * unit * (event.ctrlKey ? .01 : .0015)), ...anchor });
     };
     const cancel = () => { stop(); pointer.current = null };
+    const press = () => { cancel(); skipClick.current = false };
     node.addEventListener('wheel', wheel, { passive: false });
-    node.addEventListener('pointerdown', cancel);
+    node.addEventListener('pointerdown', press);
     node.addEventListener('keydown', cancel);
     window.addEventListener('blur', cancel);
     return () => {
-      cancel(); node.removeEventListener('wheel', wheel); node.removeEventListener('pointerdown', cancel);
+      cancel(); node.removeEventListener('wheel', wheel); node.removeEventListener('pointerdown', press);
       node.removeEventListener('keydown', cancel); window.removeEventListener('blur', cancel);
     };
   }, [glideBy, stop]);
-  const reveal = (rect: WallRect, animated = false, fit = false) => {
+  const reveal = (rect: WallRect) => {
     stop();
-    const from = current.current;
-    const scale = fit ? Math.min(from.scale, (size.current.width - 24) / rect.width, (size.current.height - 32) / rect.height) : from.scale;
-    const target = { scale, x:size.current.width / 2 - (rect.x + rect.width / 2) * scale,
-      y:size.current.height / 2 - (rect.y + rect.height / 2) * scale };
-    if (!animated || reduced()) { apply(target, true, fit); return }
-    // Folia useWallCameraPan 的 420ms 飞行；世界层每帧变换，磁贴位置由块内弹簧接管。
-    flight.current = animate(0, 1, { duration:.42, ease:[.22,1,.36,1],
-      onUpdate:progress => apply({ x:from.x + (target.x - from.x) * progress,
-        y:from.y + (target.y - from.y) * progress, scale:from.scale + (target.scale - from.scale) * progress }, false, fit),
-      onComplete:() => { flight.current = null; apply(target, true, fit) },
-    });
+    const { scale } = current.current;
+    apply({ scale, x:size.current.width / 2 - (rect.x + rect.width / 2) * scale,
+      y:size.current.height / 2 - (rect.y + rect.height / 2) * scale }, true);
   };
   /** 键盘缩放以视口中心为不动点，与滚轮同一条缓动。 */
   const zoom = (factor: number) => glideBy(null, { factor, x: size.current.width / 2, y: size.current.height / 2 });
-  return { viewport, world, view, reveal, zoom, snapshot: () => ({ ...current.current }), reset: () => { stop(); apply({ ...INITIAL }, true) },
+  return { viewport, world, projection, view, reveal, zoom, onPointerUp, onClickCapture,
+    snapshot: () => ({ ...current.current }), reset: () => { stop(); apply({ ...INITIAL }, true) },
     pan: (x: number, y: number) => { stop(); apply({ ...current.current, x: current.current.x + x, y: current.current.y + y }, true) },
-    handlers: { onPointerDown, onPointerMove, onPointerUp, onClickCapture,
+    handlers: { onPointerDown, onPointerMove,
       onPointerCancel: () => { pointer.current = null; stop() } } };
 }

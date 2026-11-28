@@ -7,10 +7,11 @@ import httpx
 from PIL import Image
 
 from .scraping_access import SOURCES, SourcePaused, SourceTransport, describe, save
+from .source_browser_login import cancel_source_browser_login
 
 from . import interface_text
 from .coded_text import coded
-from .source_checks import check_source
+from .source_checks import check_javdb_session, check_source
 from .user_messages import UserValueError, failure_fields
 
 
@@ -210,11 +211,17 @@ def w_scraping_settings(contract, body):
         from .scraping_access import save_browser_mode
         return {"ok": True, "browser_mode": save_browser_mode(contract.follow_secrets_root,
                                                               str(body.get("browser_mode") or ""))}
-    return {"ok": True, "saved": save(contract.follow_secrets_root, str(body.get("source", "")), body)}
+    source = str(body.get("source", ""))
+    if body.get("revoke") or body.get("cookie") or body.get("cookies_text"):
+        cancel_source_browser_login(contract, source)
+    return {"ok": True, "saved": save(contract.follow_secrets_root, source, body)}
 
 
 def w_scraping_check(contract, body):
-    return check_source(contract.follow_secrets_root, str(body.get("source", "")))
+    source = str(body.get("source", ""))
+    if source == "javdb" and body.get("verify_session") is True:
+        return check_javdb_session(contract.follow_secrets_root)
+    return check_source(contract.follow_secrets_root, source, lookup=body.get("lookup") is True)
 
 
 def w_scraping_check_all(contract, _body):

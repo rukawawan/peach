@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser, Page } from 'playwright-core';
+import { wallDepthAnchor } from '../src/react/video-wall/wall-depth.ts';
 import { layout, launch, requiredEnv, settle, VIEWPORTS, visit } from './harness.ts';
 import { openItemPage } from './item-fixture.ts';
 
@@ -16,15 +17,15 @@ async function enter(page: Page) {
   await page.locator('[data-wall-tile]').first().waitFor();
 }
 async function pick(page: Page) {
-  const key = await page.locator('[data-wall-tile]').evaluateAll(nodes => {
+  const key = await page.locator('[data-wall-hit]').evaluateAll(nodes => {
     const viewport = document.querySelector('[data-wall-viewport]')!.getBoundingClientRect();
-    return (nodes.find(node => {
+    return nodes.find(node => {
       const box = node.getBoundingClientRect();
       return box.left >= viewport.left && box.right <= viewport.right && box.top >= viewport.top && box.bottom <= viewport.bottom;
-    }) as HTMLElement | undefined)?.dataset.wallTile;
+    })?.closest<HTMLElement>('[data-wall-tile]')?.dataset.wallTile;
   });
   assert.ok(key, '视口内有完整磁贴');
-  await page.locator(`[data-wall-tile="${key}"]`).click();
+  await page.locator(`[data-wall-tile="${key}"] [data-wall-hit]`).click();
   await page.locator('[data-wall-focus]').waitFor();
 }
 
@@ -79,7 +80,7 @@ describe('播放墙的浏览与详情', () => {
       assert.deepEqual(opened.problems, []);
     } finally { await opened.close() }
   });
-  it('选中作品具有发光描边，其余变暗；队列滚轮只滚列表；换批等待时墙面变糊', async () => {
+  it('选中作品显示光盘和灰度背景；队列滚轮只滚列表；换批等待时墙面变糊', async () => {
     const opened = await openItemPage(browser, '/', VIEWPORTS[0]!, { ready:'[data-media-card]' });
     const { page } = opened;
     let release = () => {};
@@ -97,11 +98,12 @@ describe('播放墙的浏览与详情', () => {
       });
       await page.goto(new URL('/wall', page.url()).href);
       await page.locator('[data-wall-tile]').first().waitFor(); await pick(page);
-      await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('[data-wall-dim]')!).opacity) > .6);
-      const glow = await page.locator('[data-wall-focus]').evaluate(node => {
-        const style = getComputedStyle(node, '::before'); return { width:style.borderTopWidth, shadow:style.boxShadow };
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-wall-world]')!).filter.includes('grayscale(1)'));
+      await page.waitForFunction(() => {
+        const disc = document.querySelector('[data-wall-scene] [data-wall-disc]')!.getBoundingClientRect();
+        const jacket = document.querySelector('[data-wall-jacket]')!.getBoundingClientRect();
+        return disc.right > jacket.right + 24;
       });
-      assert.equal(glow.width, '2px'); assert.match(glow.shadow, /inset/);
       await page.getByRole('button', { name:'切换视频',exact:true }).click();
       const list = page.locator('[data-wall-queue] [data-mix-list]');
       const box = await list.boundingBox(); assert.ok(box);
@@ -136,7 +138,7 @@ describe('播放墙的浏览与详情', () => {
         await page.getByRole('button', { name:'退出播放墙',exact:true }).click();
         await page.waitForURL(url => url.pathname === path);
       }
-    } finally { await page.unrouteAll({ behavior:'wait' }); await opened.close() }
+    } finally { await opened.close() }
   });
   for (const viewport of VIEWPORTS) it(`${viewport.name}：四向浏览自动续页，磁贴位置稳定且优先展示未出现作品`, async () => {
     const opened = await openItemPage(browser, '/', viewport, { ready:'[data-media-card]' });
@@ -243,7 +245,7 @@ describe('播放墙的浏览与详情', () => {
       assert.equal(await page.locator('html').getAttribute('data-wall-entry'), null);
     } finally { releaseModule(); releaseItems(); await context.close() }
   });
-  it('无封面作品不入墙，有正封框时保留完整人物高度', async () => {
+  it('无封面作品不入墙，横封和窄格中的整张封面均完整显示', async () => {
     const opened = await openItemPage(browser, '/', VIEWPORTS[0]!, { ready:'[data-media-card]', catalogIds:[11,18,21] });
     const { page } = opened;
     try {
@@ -252,15 +254,16 @@ describe('播放墙的浏览与详情', () => {
       })).concat([{ id:11, medium:'video', location:'local', is_jav:false, code:'', has_cover:false, has_thumb:true }]), total:6 } }));
       await page.goto(new URL('/wall?q=作品', page.url()).href); await page.locator('[data-wall-tile]').first().waitFor();
       assert.equal(await page.locator('[data-wall-id="11"]').count(), 0);
-      const img = page.locator('[data-wall-id="21"] img').first();
-      await page.waitForFunction(() => document.querySelector<HTMLImageElement>('[data-wall-id="21"] img')?.dataset.frame === 'sleeve');
-      const framing = await img.evaluate(node => ({ panel:node.classList.contains('panel'), height:node.style.getPropertyValue('--panel-height'), clip:node.style.getPropertyValue('--panel-clip'), fit:getComputedStyle(node).objectFit }));
-      assert.equal(framing.panel, true); assert.equal(framing.height, '100%'); assert.equal(framing.fit, 'fill');
-      const [top,,bottom] = framing.clip.split(' ');
-      assert.equal(top, '0%'); assert.equal(bottom, '0%');
-      assert.equal(await img.evaluate(node => getComputedStyle(node.closest('[data-media-pic]')!).clipPath), 'inset(0px)');
-      const wide = await page.locator('[data-wall-id="1"] img').evaluate(node => ({ whole:node.classList.contains('whole'), fit:getComputedStyle(node).objectFit }));
-      assert.deepEqual(wide, { whole:true, fit:'cover' });
+      for (const id of [1,21]) {
+        const selector = `[data-wall-id="${id}"] img`;
+        await page.waitForFunction(sel => document.querySelector<HTMLImageElement>(sel)?.naturalWidth, selector);
+        const framing = await page.locator(selector).first().evaluate(node => {
+          const style = getComputedStyle(node);
+          return { fit:style.objectFit, position:style.objectPosition, clip:style.clipPath,
+            fullBox:node.clientWidth === node.parentElement!.clientWidth && node.clientHeight === node.parentElement!.clientHeight };
+        });
+        assert.deepEqual(framing, { fit:'contain', position:'50% 50%', clip:'none', fullBox:true });
+      }
       await page.getByRole('button', { name:'显示视频缩略图', exact:true }).click();
       assert.equal(await page.locator('[data-wall-id="11"]').count(), 0);
       assert.deepEqual(opened.problems, []);
@@ -288,6 +291,35 @@ describe('播放墙的浏览与详情', () => {
       } finally { await opened.close() }
     }
   });
+  it('详情翻页沿用墙面作品顺序，分卷队列独立且翻页不启动播放', async () => {
+    const opened = await openItemPage(browser, '/wall?q=作品', VIEWPORTS[0]!, { ready:'[data-wall-tile]', catalogIds:[18,21,41] });
+    const { page } = opened;
+    try {
+      await page.locator('[data-wall-id="21"] [data-wall-hit]').click();
+      const focus = page.locator('[data-wall-focus]');
+      await focus.waitFor();
+      await page.waitForFunction(() => !document.querySelector('[data-wall-play][aria-busy="true"]'));
+      const pager = focus.locator('[data-wall-pager]');
+      assert.equal(await pager.locator('span').textContent(), '2 / 3');
+      const playRequests: string[] = [];
+      page.on('request', request => {
+        if (new URL(request.url()).pathname === '/api/item') playRequests.push(request.url());
+      });
+      const next = pager.getByRole('button', { name:'下一个视频' });
+      await next.click();
+      await page.locator('[data-wall-focus][data-wall-active-id="41"]').waitFor();
+      assert.equal(await pager.locator('span').textContent(), '3 / 3');
+      assert.equal(await next.isDisabled(), true);
+      await page.keyboard.press('ArrowLeft');
+      await page.locator('[data-wall-focus][data-wall-active-id="21"]').waitFor();
+      assert.equal(await pager.locator('span').textContent(), '2 / 3');
+      assert.equal(await focus.locator('[data-wall-player]').isVisible(), false);
+      assert.deepEqual(playRequests, []);
+      await focus.getByRole('button', { name:'切换分卷或版本' }).click();
+      await focus.locator('[data-wall-source="22"]').waitFor();
+      assert.equal(await pager.locator('span').textContent(), '2 / 3');
+    } finally { await opened.close() }
+  });
   it('切换墙内另一作品时播放器挂到选中磁贴内', async () => {
     const opened = await openItemPage(browser, '/wall?q=作品', VIEWPORTS[0]!, { ready:'[data-wall-tile]', catalogIds:[18,41] });
     const { page } = opened;
@@ -297,35 +329,33 @@ describe('播放墙的浏览与详情', () => {
       const requested = page.waitForRequest(request => new URL(request.url()).pathname === '/api/item' && new URL(request.url()).searchParams.get('id') === '41');
       await page.locator('[data-wall-source="41"]').click();
       await requested;
-      await page.locator('[data-wall-focus][data-wall-id="41"] [data-wall-player] video.vjs-tech').waitFor();
+      await page.locator('[data-wall-focus][data-wall-active-id="41"] [data-wall-player] video.vjs-tech').waitFor();
       assert.equal(await page.locator('[data-wall-player] video.vjs-tech').count(), 1);
       assert.equal(new URL(page.url()).pathname, '/wall');
     } finally { await opened.close() }
   });
-  it('鼠标展开在同一磁贴内让位，收起沿同一路径返回', async () => {
+  it('鼠标展开封套与右侧详情时保留背景磁贴的实例和几何', async () => {
     const opened = await openItemPage(browser, '/wall?q=作品', VIEWPORTS[0]!, { ready:'[data-wall-tile]', catalogIds:[18,21,31] });
     const { page } = opened;
     try {
       await page.emulateMedia({ reducedMotion:'no-preference' });
       const tile = page.locator('[data-wall-tile]').first();
-      const key = await tile.getAttribute('data-wall-tile');
+      const id = await tile.getAttribute('data-wall-id');
       const neighbor = page.locator('[data-wall-tile]').nth(1);
       const readSlot = () => neighbor.evaluate(node => ['--wall-left','--wall-top','--wall-width','--wall-height'].map(name => (node as HTMLElement).style.getPropertyValue(name)));
       const before = await readSlot();
       await tile.evaluate(node => node.setAttribute('data-motion-instance','original'));
-      await tile.click();
+      await tile.locator('[data-wall-hit]').click();
       const focus = page.locator('[data-wall-focus]');
       await focus.waitFor();
-      assert.equal(await focus.getAttribute('data-wall-tile'), key);
-      assert.equal(await focus.getAttribute('data-motion-instance'), 'original');
-      assert.notDeepEqual(await readSlot(), before);
-      await page.waitForFunction(() => {
-        const node = document.querySelector<HTMLElement>('[data-wall-focus]')!;
-        const box = node.getBoundingClientRect();
-        return Math.abs(box.width - box.height) < .5 && Math.abs(box.left + box.width / 2 - innerWidth / 2) < 1;
-      });
+      assert.equal(await focus.getAttribute('data-wall-active-id'), id);
+      assert.equal(await page.locator('[data-wall-world][inert] [data-motion-instance="original"]').count(), 1);
+      assert.deepEqual(await readSlot(), before);
+      const stage = await page.locator('[data-wall-stage-media]').boundingBox();
+      const details = await page.locator('[data-wall-details-panel]').boundingBox();
+      assert.ok(stage && details && stage.x + stage.width <= details.x + 1);
       await page.getByRole('button', { name:'收起作品' }).click();
-      assert.equal(await page.locator('[data-wall-focus]').count(), 0);
+      await focus.waitFor({ state:'detached' });
       assert.deepEqual(await readSlot(), before);
       assert.equal(await page.locator('[data-motion-instance="original"]').count(), 1);
       assert.deepEqual(opened.problems, []);
@@ -377,10 +407,11 @@ describe('播放墙的浏览与详情', () => {
         assert.notDeepEqual(await camera(page), initial);
         assert.equal(await page.locator('[data-wall-focus]').count(), 0, '拖动不展开作品');
         const anchor = { x: box.x + box.width * .6, y: box.y + box.height * .4 };
+        const projected = wallDepthAnchor(anchor.x - box.x, anchor.y - box.y, box);
         const under = () => region.evaluate((node, point) => {
           const view = (node as HTMLElement).dataset, scale = Number(view.cameraScale);
           return { scale, x: (point.x - Number(view.cameraX)) / scale, y: (point.y - Number(view.cameraY)) / scale };
-        }, { x: anchor.x - box.x, y: anchor.y - box.y });
+        }, projected);
         const before = await under();
         await page.mouse.move(anchor.x, anchor.y); await page.mouse.wheel(0, -300);
         // 缓动走完、世界层摘掉 `will-change` 才算停稳。
@@ -396,26 +427,19 @@ describe('播放墙的浏览与详情', () => {
         await toggle.click(); assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
         await pick(page);
         const visuals = await page.locator('[data-video-wall]').evaluate(root => {
-          const tile = root.querySelector('[data-wall-tile]')!;
-          const focus = root.querySelector('[data-wall-focus]')!;
-          const box = focus.getBoundingClientRect();
-          const title = root.querySelector('[data-wall-focus-head] strong')!;
+          const media = root.querySelector('[data-wall-stage-media]')!.getBoundingClientRect();
+          const panel = root.querySelector('[data-wall-details-panel]')!.getBoundingClientRect();
+          const title = root.querySelector('#wall-detail-title')!;
           title.textContent = '测试长标题'.repeat(30);
-          return { background:getComputedStyle(root).backgroundColor, radius:getComputedStyle(tile).borderRadius,
-            square:Math.abs(box.width - box.height) < 2,
-            blur:getComputedStyle(root.querySelector('[data-wall-focus-backdrop]')!).filter,
-            scene:root.querySelector('[data-wall-scene]')!.getBoundingClientRect().height / box.height,
-            title:(root.querySelector('[data-wall-focus-head]')!.getBoundingClientRect().top - box.top) / box.height,
-            wrap:getComputedStyle(title).whiteSpace, ellipsis:getComputedStyle(title).textOverflow,
-            single:title.getBoundingClientRect().height < parseFloat(getComputedStyle(title).lineHeight) + 1,
+          return { background:getComputedStyle(root).backgroundColor, aside:panel.left >= media.right - 1,
+            below:panel.top >= media.bottom - 1,
+            multipleLines:title.getBoundingClientRect().height > parseFloat(getComputedStyle(title).lineHeight) + 1,
             clipped:title.scrollWidth > title.clientWidth };
         });
         assert.equal(visuals.background, 'rgb(7, 7, 7)');
-        assert.equal(visuals.radius, '0px'); assert.equal(visuals.square, true);
-        assert.match(visuals.blur, /blur\(36px\)/);
-        assert.ok(visuals.scene > .98); assert.ok(visuals.title > .3);
-        assert.equal(visuals.wrap, 'nowrap'); assert.equal(visuals.ellipsis, 'ellipsis');
-        assert.equal(visuals.single, true); assert.equal(visuals.clipped, true);
+        assert.ok(viewport.mobile ? visuals.below : visuals.aside);
+        assert.equal(visuals.multipleLines, true);
+        assert.equal(visuals.clipped, false);
         const selectedCamera = await camera(page);
         await page.screenshot({ path: `../build/video-wall-${viewport.mobile ? 'mobile' : 'desktop'}.png` });
         await page.getByRole('button', { name: '详情', exact: true }).click();
@@ -453,8 +477,8 @@ describe('播放墙的浏览与详情', () => {
         const url = new URL(request.url());
         return url.pathname === '/api/items' && url.searchParams.get('q') === '新的关键词';
       });
-      await page.getByRole('searchbox', { name:'搜索播放墙' }).fill('新的关键词');
-      await page.getByRole('searchbox', { name:'搜索播放墙' }).press('Enter');
+      await page.getByRole('combobox', { name:'搜索播放墙' }).fill('新的关键词');
+      await page.getByRole('combobox', { name:'搜索播放墙' }).press('Enter');
       await searched;
       await page.locator('[data-wall-tile]').first().waitFor();
       const returned = page.waitForRequest(request => {
@@ -489,19 +513,23 @@ describe('播放墙的浏览与详情', () => {
     } finally { await opened.close() }
   });
   it('换到下一批后进出详情仍保留该批次和镜头', async () => {
-    const opened = await openItemPage(browser, '/', VIEWPORTS[0]!, { ready: '[data-media-card]' });
+    const opened = await openItemPage(browser, '/', VIEWPORTS[0]!, {
+      ready: '[data-media-card]', settings: { batchSize: 180 },
+    });
     const { page } = opened;
     try {
-      const first = Array.from({ length: 60 }, (_, index) => ({ id: 1000 + index, name: `作品 ${index}`, medium: 'video', location: 'local', has_cover:true, cover_key:'NON-JAV' }));
+      const first = Array.from({ length: 180 }, (_, index) => ({ id: 1000 + index, name: `作品 ${index}`, medium: 'video', location: 'local', has_cover:true, cover_key:'NON-JAV' }));
       const next = [11,17,18].map(id => ({ id, name: `作品 ${id}`, medium: 'video', location: 'local', has_cover:true, cover_key:'NON-JAV' }));
+      const works = [...first, ...next];
       await page.route(url => url.pathname === '/api/items', route => {
         const params = new URL(route.request().url()).searchParams;
         if (params.has('orient')) return route.fulfill({ json: { items: [], total: 0 } });
         const offset = Number(params.get('offset') || 0);
-        return route.fulfill({ json: { items: offset ? next : first, total: 63, has_more: !offset } });
+        const end = offset + Number(params.get('limit') || first.length);
+        return route.fulfill({ json: { items: works.slice(offset, end), total: works.length, has_more: end < works.length } });
       });
-      await page.reload(); await page.locator('[data-media-card]').first().waitFor();
-      await enter(page);
+      await page.goto(new URL('/wall?returnTo=%2F', page.url()).href);
+      await page.locator('[data-wall-tile]').first().waitFor();
       for (const viewport of VIEWPORTS) {
         await page.setViewportSize({ width:viewport.width, height:viewport.height });
         const controls = await page.locator('[data-video-wall]').evaluate(root => {
@@ -522,7 +550,7 @@ describe('播放墙的浏览与详情', () => {
       const ids = () => page.locator('[data-wall-id]').evaluateAll(nodes => [...new Set(nodes.map(node => (node as HTMLElement).dataset.wallId))].sort());
       assert.ok((await ids()).includes('11'));
       await page.locator('[data-wall-id="11"]').first().dispatchEvent('click');
-      await page.locator('[data-wall-focus][data-wall-id="11"]').waitFor();
+      await page.locator('[data-wall-focus][data-wall-active-id="11"]').waitFor();
       await page.evaluate(async () => {
         for (let frame = 0; frame < 2; frame++) await new Promise(requestAnimationFrame);
       });
@@ -540,7 +568,7 @@ describe('播放墙的浏览与详情', () => {
       assert.deepEqual(await camera(page), position);
     } finally { await opened.close() }
   });
-  it('真实演示短片在墙内播放，拖动不卸载播放器，详情认领同一实例', async () => {
+  it('真实演示短片在墙内播放，展开后固定镜头，详情认领同一实例', async () => {
     const opened = await visit(browser, '/', VIEWPORTS[0]!);
     const { page } = opened;
     try {
@@ -553,15 +581,12 @@ describe('播放墙的浏览与详情', () => {
         return !!video && video.readyState >= 2 && !video.paused && video.currentTime > 0;
       }, undefined, { timeout: 30_000 });
       const playingStyle = await page.locator('[data-wall-focus]').evaluate(root => {
-        const box = root.getBoundingClientRect(), title = root.querySelector('[data-wall-focus-head]')!;
-        return { blur:getComputedStyle(root.querySelector('[data-wall-scene]')!).filter,
-          title:(title.getBoundingClientRect().top - box.top) / box.height,
-          font:parseFloat(getComputedStyle(title.querySelector('b')!).fontSize),
-          close:getComputedStyle(root.querySelector('[data-wall-focus-close]')!).backgroundColor,
+        return { art:getComputedStyle(root.querySelector('[data-wall-scene]')!).visibility,
+          controlsInDetails:!!root.querySelector('[data-wall-details-panel] [data-wall-focus-actions]'),
           overlays:[...root.querySelectorAll('[data-player-stats-button],[data-player-net],[data-player-stats]')].map(node => getComputedStyle(node).display) };
       });
-      assert.match(playingStyle.blur, /blur\(36px\)/); assert.ok(playingStyle.title < .2);
-      assert.equal(playingStyle.font, 22); assert.equal(playingStyle.close, 'rgba(0, 0, 0, 0.66)');
+      assert.equal(playingStyle.art, 'hidden');
+      assert.equal(playingStyle.controlsInDetails, true);
       assert.equal(playingStyle.overlays.length, 3); assert.ok(playingStyle.overlays.every(value => value === 'none'));
       await page.getByRole('button', { name:'暂停', exact:true }).click();
       await page.waitForFunction(() => document.querySelector<HTMLVideoElement>('[data-wall-player] video')?.paused);
@@ -571,13 +596,18 @@ describe('播放墙的浏览与详情', () => {
         const video = document.querySelector('[data-wall-player] video')!;
         video.setAttribute('data-wall-instance', 'same');
       });
-      await page.locator('[data-wall-viewport]').focus(); await page.keyboard.press('ArrowLeft');
+      const position = await camera(page);
+      const viewport = (await page.locator('[data-wall-viewport]').boundingBox())!;
+      await page.mouse.move(viewport.x + 8, viewport.y + viewport.height / 2);
+      await page.mouse.wheel(0, -300);
+      await settle(page);
+      assert.deepEqual(await camera(page), position);
       assert.equal(await page.locator('[data-wall-player] video[data-wall-instance="same"]').count(), 1);
       await page.getByRole('button', { name: '详情', exact: true }).click();
       await page.locator('#stage video[data-wall-instance="same"]').waitFor();
       await page.keyboard.press('Escape');
       await page.locator('#stage[open]').waitFor({ state: 'hidden' });
-    } finally { await page.unrouteAll({ behavior:'wait' }); await opened.close() }
+    } finally { await opened.close() }
   });
   it('搜索无结果时保留返回和工具，清空搜索可继续浏览', async () => {
     const opened = await visit(browser, '/wall?q=不会匹配的查询', VIEWPORTS[0]!);
@@ -589,11 +619,11 @@ describe('播放墙的浏览与详情', () => {
       assert.equal(await page.getByRole('button', { name:'退出播放墙' }).isVisible(), true);
       assert.equal(await page.getByRole('button', { name:'清除筛选', exact:true }).isVisible(), true);
       await page.getByRole('button', { name:'打开搜索', exact:true }).click();
-      await page.getByRole('searchbox', { name:'搜索播放墙' }).fill('');
-      await page.getByRole('searchbox', { name:'搜索播放墙' }).press('Enter');
+      await page.getByRole('combobox', { name:'搜索播放墙' }).fill('');
+      await page.getByRole('combobox', { name:'搜索播放墙' }).press('Enter');
       await page.locator('[data-wall-tile]').first().waitFor();
       assert.deepEqual(opened.problems, []);
-    } finally { await page.unrouteAll({ behavior:'wait' }); await opened.close() }
+    } finally { await opened.close() }
   });
   it('读取失败留在墙内并可原地重试', async () => {
     const opened = await visit(browser, '/', VIEWPORTS[0]!);

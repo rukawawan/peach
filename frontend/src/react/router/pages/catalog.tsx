@@ -34,7 +34,7 @@ import {
 } from '../../../history/page-navigation';
 import { ShellActionsContext, useOpenEpoch } from '../router';
 import type { CatalogShell, ShellActions } from '../shell-actions';
-import { JavLibraryHeader } from '../../jav/jav-header';
+import { JavPageHeader } from '../../jav/jav-header';
 import { CatalogFolders } from '../../catalog-folders/catalog-folders-page';
 import { removeWallBootSkeleton } from '../../video-wall/wall-boot';
 
@@ -211,10 +211,10 @@ export function CatalogMatch() {
   </>;
 }
 
-/** JAV 页头常驻；壳在目标内容提交时切换显隐，路由取数期间不拆掉旧页头。 */
+/** JAV 页头常驻，馆藏与其余四个分区共用这一棵；壳按表面切换显隐，换分区和路由取数期间都不拆。 */
 export function CatalogChrome() {
   const actions = useContext(ShellActionsContext);
   const host = document.getElementById('javLibraryHeader');
-  return host && actions ? createPortal(<JavLibraryHeader navigate={actions.navigate}
+  return host && actions ? createPortal(<JavPageHeader navigate={actions.navigate}
     receipt={message => actions.receipt(message)} />, host) : null;
 }

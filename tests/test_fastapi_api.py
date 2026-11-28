@@ -68,7 +68,7 @@ if HAS_DEPS:
     from fastapi.routing import APIRoute
     from starlette.routing import Mount
     from peach import api as api_module
-    from peach import routes_auth
+    from peach import routes_auth, routes_feedback
     from peach import routes_jav_browser
     from peach.api import create_app
     from peach.follow_secrets import credential_store_for
@@ -355,6 +355,9 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         # 删除与清空回收站后的缓存清理按想要清单认封面的主人；整份 0042 迁移还要连带
         # 修订号与账户表，这里只建清理读的两列。
         con.execute("CREATE TABLE want_item(code_key TEXT, state TEXT NOT NULL)")
+        # 批量删除与目录筛选只读取译文的作品、语言两列；完整迁移与修订触发器由迁移测试验证。
+        con.execute("CREATE TABLE asset_content_translation(asset_id INTEGER NOT NULL, language TEXT NOT NULL, "
+                    "PRIMARY KEY(asset_id, language))")
         con.execute(
             """INSERT INTO asset(id,location,path,name,medium,size,creator,studio,duration,
                                   width,height,ctx_orient,snapshot_path,first_seen)
@@ -3548,11 +3551,14 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(local_playback, 'available', return_value=True), \
                 patch.object(local_playback, 'installed', return_value={'vlc': ('VLC', '/private/vlc')}), \
                 patch('peach.web_local_access.local_client', return_value=True), \
-                patch.object(local_playback, 'open_media') as launch:
+                patch.object(local_playback, 'open_media') as launch, \
+                patch.object(local_playback, 'open_custom_media', return_value=False) as custom:
             options = await self.client.get('/api/local-players', headers=headers)
             self.assertEqual(options.json(), {'players': [
                 {'id': 'default', 'label': '系统默认播放器', 'label_code': 'labels.routesMedia.defaultPlayer'},
-                {'id': 'vlc', 'label': 'VLC'}]})
+                {'id': 'vlc', 'label': 'VLC'},
+                {'id': 'custom', 'label': '自定义播放器…', 'label_code': 'labels.routesMedia.customPlayer'},
+            ]})
             result = await self.client.post('/api/local-playback?id=1&player=vlc', json={}, headers=headers)
             self.assertEqual(result.status_code, 200, result.text)
             self.assertEqual(launch.call_args.args[1], 'vlc')
@@ -3560,11 +3566,20 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
             missing = await self.client.post('/api/local-playback?id=999999', json={}, headers=headers)
             self.assertEqual(missing.status_code, 404)
             launch.assert_not_called()
+            cancelled = await self.client.post('/api/local-playback?id=1&player=custom', json={}, headers=headers)
+            self.assertEqual(cancelled.status_code, 200, cancelled.text)
+            self.assertEqual(cancelled.json(), {'opened': False})
+            custom.assert_called_once()
+            custom.reset_mock()
             forwarded = {**headers, 'X-Forwarded-For': '192.0.2.1'}
             self.assertEqual((await self.client.get('/api/local-players', headers=forwarded)).json(), {'players': []})
             self.assertEqual((await self.client.post('/api/local-playback?id=1', json={}, headers=forwarded)).status_code, 403)
             remote = {**headers, 'Origin': 'https://attacker.example'}
             self.assertEqual((await self.client.post('/api/local-playback?id=1', json={}, headers=remote)).status_code, 403)
+            for denied in (forwarded, remote):
+                rejected = await self.client.post('/api/local-playback?id=1&player=custom', json={}, headers=denied)
+                self.assertEqual(rejected.status_code, 403)
+            custom.assert_not_called()
             launch.assert_not_called()
             with patch.object(local_playback, 'available', return_value=False):
                 self.assertEqual((await self.client.get('/api/local-players', headers=headers)).json(), {'players': []})
@@ -4152,6 +4167,21 @@ class FastApiContractTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 200)
         reveal.assert_called_once_with(source)
+
+    async def test_headless_reveal_returns_position_without_probing_media(self):
+        self._seed_photo()
+        with patch('peach.nas_directories.available', return_value=False), \
+                patch('peach.media_io.bounded', side_effect=AssertionError('must not probe')):
+            response = await self.client.post('/api/reveal', headers={'X-Token': 'secret'}, json={'id': 9})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['mode'], 'server')
+        self.assertEqual(response.json()['id'], 9)
+
+    async def test_media_directory_requires_authentication(self):
+        with patch('peach.web_media_directory.media_io._request') as reader:
+            response = await self.client.get('/api/media-directory')
+        self.assertEqual(response.status_code, 401)
+        reader.assert_not_called()
 
     async def test_reveal_answers_within_the_deadline_when_the_drive_is_stuck(self):
         """文件所在的盘答不上：回 503 说明盘没响应，不当成文件已删，也不把请求挂住。"""
@@ -4862,6 +4892,9 @@ class RouteAuthContractTests(unittest.TestCase):
             follow_state_root=root / "state"))
         cls.guards = {getattr(routes_auth, name) for name in cls.GUARD_NAMES}
         cls.special_guards = {
+            ("GET", routes_feedback.ENVIRONMENT_PATH): routes_feedback.require_feedback_environment,
+            ("GET", routes_feedback.DIAGNOSTICS_PATH): routes_feedback.require_feedback_diagnostics,
+            ("POST", routes_feedback.PATH): routes_feedback.require_feedback_submission,
             ("GET", "/api/jav-browser"): routes_jav_browser.browser_client,
             ("GET", "/api/jav-browser/active"): routes_jav_browser.browser_client,
             ("GET", "/api/jav-browser/identify"): routes_jav_browser.browser_client,
@@ -4898,7 +4931,7 @@ class RouteAuthContractTests(unittest.TestCase):
                          "新路由没挂 routes_auth 的 require_* 依赖；确实该公开就写进 "
                          "PUBLIC_ROUTES 并注明理由")
 
-    def test_browser_addition_requires_its_scoped_bearer_dependency(self):
+    def test_special_routes_require_their_scoped_auth_dependency(self):
         for key, guard in self.special_guards.items():
             with self.subTest(route=key):
                 self.assertIn(guard, self.routes[key])

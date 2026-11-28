@@ -100,6 +100,25 @@ describe('数据库那一份落进本地缓存', () => {
     return { store, changed, save: vi.spyOn(store, 'save') };
   };
 
+  it('设备覆盖只影响外观，关闭时立即恢复实例主题', () => {
+    const { store, changed } = stage({ theme: 'dark', localAppearance: true });
+    applySyncedSettings({ browsePreferences: { theme: 'light', catalogView: 'list' } }, changed, store);
+    expect(store.value).toMatchObject({ theme: 'dark', catalogView: 'list' });
+    expect(changed.mock.calls).toEqual([['browsePreferences', ['catalogView']]]);
+    store.value.localAppearance = false;
+    store.save();
+    expect(store.value.theme).toBe('light');
+    expect(changed.mock.calls).toEqual([['browsePreferences', ['catalogView']], ['browsePreferences', ['theme']]]);
+  });
+
+  it('读取旧的馆藏视图后优先采用实例已保存的值', () => {
+    const browser = { getItem: (key: string) => key === 'peach.catalog-view.v1' ? 'list' : null };
+    const { store, changed } = stage(readAppSettings(browser).settings);
+    expect(store.value.catalogView).toBe('list');
+    applySyncedSettings({ browsePreferences: { catalogView: 'cards' } }, changed, store);
+    expect(store.value.catalogView).toBe('cards');
+  });
+
   it('合法的值落盘，认不出的不碰；搜索记录条数变了才叫壳推给搜索岛', () => {
     const { store, changed } = stage();
     applySyncedSettings({
@@ -189,7 +208,7 @@ describe('数据库那一份落进本地缓存', () => {
     const client = stage({ sortControls: { follow: { order: ['dur', 'new', 'hot'], hidden: ['hot'] } } });
     applySyncedSettings({ sortControls: { follow: { order: ['hot', 'new', 'dur'], hidden: ['hot', 'new', 'dur'] } } },
       client.changed, client.store);
-    expect(client.store.value.sortControls.follow).toEqual({ order: ['hot', 'new', 'dur'], hidden: ['hot', 'new', 'dur'] });
+    expect(client.store.value.sortControls.follow).toEqual({ order: ['source', 'tags', 'hot', 'new', 'dur'], hidden: ['hot', 'new', 'dur'] });
     applySyncedSettings({ sortControls: {} }, client.changed, client.store);
     expect(client.store.value.sortControls).toEqual({});
   });

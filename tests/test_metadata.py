@@ -80,9 +80,12 @@ class MetadataProviderTests(unittest.TestCase):
             status_code=200, final_url="https://www.dmm.co.jp/age_check/=/declared=yes/"))
         self.assertIn("javdb 登录页", auth_wall_reason(
             status_code=200, body="<title> 登入 | JavDB</title>".encode()))
+        login_form = b'<form class="auth-view"><input type="password"></form>'
+        self.assertIn("javdb 登录页", auth_wall_reason(status_code=200, body=login_form))
         for benign in (dict(status_code=404),
                        dict(status_code=200, final_url="https://javdb.com/v/loginbait"),
                        dict(status_code=503),
+                       dict(status_code=200, body=b'<div class="modal">' + login_form + b'</div>'),
                        dict(status_code=200, body=b"<title>ABW-220</title>")):
             with self.subTest(benign=benign):
                 self.assertEqual(auth_wall_reason(**benign), "")

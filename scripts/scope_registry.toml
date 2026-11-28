@@ -48,6 +48,7 @@ sync = [
 ]
 metadata = [
     "test_junk_visual.py", "test_custom_metadata.py", "test_scraping_access.py", "test_browser_transport.py", "test_metadata*.py",
+    "test_follow_source_browser_login.py",
     "test_genre_taxonomy.py", "test_processing_control.py", "test_processing_traffic.py",
     "test_processing_inventory.py", "test_fc2*.py", "test_local_poster.py", "test_media_io.py",
     "test_community_catalog.py", "test_babepedia_match.py", "test_western_artwork.py",
@@ -73,7 +74,7 @@ metadata = [
 ]
 tooling = [
     "test_scripts.py", "test_trash_junk.py", "test_auth.py", "test_access.py", "test_cli.py",
-    "test_server.py", "test_diagnostics.py", "test_error_reporting.py", "test_remote_reporting.py",
+    "test_server.py", "test_diagnostics.py", "test_error_reporting.py", "test_remote_reporting.py", "test_feedback.py",
     "test_reporting_*.py", "test_library_sharing.py", "test_research_archive.py",
     "test_library_diagnostics.py", "test_script_policy.py", "test_scan.py", "test_record_rehome.py",
     "test_wants.py", "test_push_discovery.py", "test_media_probe.py", "test_subtitles.py",
@@ -115,6 +116,8 @@ delivery = [
 # 所以本域也要登记它们：改了 `web/app.js` 却漏跑读它的测试，`test_test_planning.py`
 # 的域映射门槛会在本地就红。
 web = [
+    "test_ai_inference.py", "test_ai_library.py", "test_ai_openai_oauth.py",
+    "test_web_media_directory.py",
     "test_frontend_build.py", "test_frontend_preflight.py", "test_web_ui.py", "test_web_js.py",
     "test_web_e2e.py", "test_tag_management.py", "test_subtitle_search.py", "test_subtitle_memory.py",
     "test_legacy_shell_routes.py", "test_web_perf.py", "test_copy_final_state.py", "test_agency_entity.py",
@@ -155,6 +158,15 @@ follow = [
 # 一个文件可以落到多个域：读它的测试登记在哪个域，改它就得跑到哪个域。
 # `tests/test_test_planning.py` 按测试源码里真实读到的路径反查这两张表，漏一条本地就红。
 [auto_scope_files]
+# 升级补修与派生产物的规则版本：没有同名测试，消费者互相导入，按名字和导入者都推不出域。
+# 取直接读它们的测试与补修模块所在的域。
+"src/peach/upgrade_rules.py" = ["catalog", "media", "metadata", "tooling", "web"]
+"src/peach/artifact_rules.py" = ["catalog", "media", "metadata", "tooling", "web"]
+# 文档检查器的规则，只由 checks 里的文案终态检查读取。
+"seiso.toml" = ["checks"]
+"src/peach/attended_browser_login.py" = ["catalog", "follow", "metadata"]
+"src/peach/browser_transport.py" = ["catalog", "follow", "metadata"]
+"src/peach/source_browser_login.py" = ["follow", "metadata"]
 "scripts/run_gitlab_runner.py" = ["tooling"]
 "scripts/render_star_history.py" = ["tooling"]
 "frontend/e2e/jav-userscript-contract.ts" = ["catalog", "web"]
@@ -185,9 +197,16 @@ follow = [
 "scripts/dev/copy-editor.js" = ["web"]
 # 路由页面同时被目录、工具与前端三个域的测试读源码。
 "src/peach/routes_pages.py" = ["catalog", "tooling", "web"]
+"src/peach/routes_feedback.py" = ["catalog", "tooling"]
+"src/peach/feedback_r2.py" = ["tooling"]
+"src/peach/feedback_github.py" = ["tooling"]
 # 托盘既是 sync 域的服务编排，也被版本与桌面设置那些 tooling 测试读源码。
 "src/peach/tray.py" = ["sync", "tooling"]
+"src/peach/windows_webview.py" = ["sync", "tooling", "packaging"]
+"scripts/build_windows_webview.ps1" = ["tooling", "packaging"]
+"scripts/windows_webview.cs" = ["tooling", "packaging"]
 "src/peach/menubar.py" = ["sync", "tooling"]
+"src/peach/macos_webview.py" = ["sync", "tooling", "packaging"]
 # Sparkle 更新器由菜单栏持有，打包与发布门槛的测试也直接导入它。
 "src/peach/sparkle_update.py" = ["sync", "tooling", "packaging"]
 # 托盘子服务与隧道的 cloudflared 共用这份 Job Object；两边的测试都要跑到。
@@ -253,6 +272,15 @@ follow = [
 # `test_metadata_verification.py`，路由登记在 `test_rm_web.py`。
 "src/peach/auto_landing_revert.py" = ["catalog", "metadata", "tooling"]
 "src/peach/web_auto_landings.py" = ["catalog", "metadata", "web"]
+"src/peach/ai_custom_tasks.py" = ["catalog", "web"]
+"src/peach/ai_library.py" = ["catalog", "web"]
+"src/peach/ai_inference.py" = ["web"]
+"src/peach/ai_endpoints.py" = ["web"]
+"src/peach/ai_usage.py" = ["web"]
+"src/peach/ai_timeline.py" = ["catalog", "web"]
+"src/peach/ai_search.py" = ["catalog", "web"]
+"src/peach/ai_credentials.py" = ["web"]
+"src/peach/ai_openai_oauth.py" = ["web"]
 # 实体事实种子包（ADR-0073）：导出导入的逻辑与命令行，测试都在 `test_seed_pack.py`；
 # 扫描结算后自动导入的后继（ADR-0075）在 `test_seed_followup.py`。
 "src/peach/seed_pack.py" = ["metadata", "tooling"]
@@ -646,6 +674,7 @@ browser_tests = [
 tooling_workflows = [
     ".github/workflows/project-board.yml",
     ".github/workflows/docker.yml",
+    ".github/workflows/dockerhub-readme.yml",
     ".github/workflows/star-history.yml",
     ".github/workflows/issue-intake.yml",
     ".github/workflows/gitgud-mirror.yml",

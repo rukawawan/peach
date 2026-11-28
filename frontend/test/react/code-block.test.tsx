@@ -14,7 +14,9 @@ describe('只读代码块', () => {
     await click(buttonNamed('复制完整内容', host));
     await settle();
     expect(writeText).toHaveBeenCalledWith(code);
-    expect(host.querySelector('[role="status"]')?.textContent).toBe('已复制');
+    const receipt = host.querySelector('[role="status"]');
+    expect(receipt?.textContent).toBe('已复制');
+    expect(receipt?.parentElement).toBe(buttonNamed('复制完整内容', host)?.parentElement);
   });
 
   it('剪贴板被拒绝时保留可选中的原文和可重试按钮', async () => {

@@ -1392,7 +1392,7 @@ class AvatarPickerRouteTests(unittest.TestCase):
     def test_missing_online_images_and_oversized_images_have_different_errors(self):
         item_id = self._online_creator()
         project = mock.Mock(return_value=avatar_online.MediaChoices(cover="https://example.com/image.jpg", images=()))
-        for payload, message in ((None, "未取得"), (b"12345", "大小上限")):
+        for payload, message in ((None, "图片加载失败"), (b"12345", "大小上限")):
             with self.subTest(payload=payload), mock.patch("peach.avatar_online.MAX_IMAGE_BYTES", 4), \
                     self.app.state.database.read_connection() as connection, \
                     self.assertRaisesRegex(avatar_picker.PickerError, message):

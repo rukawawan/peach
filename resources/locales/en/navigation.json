@@ -1,5 +1,6 @@
 {
   "configurationSections": {
+    "ai": "AI connections",
     "diagnostics": "Diagnostics",
     "downloads": "Downloads",
     "feeds": "Feeds",
@@ -33,6 +34,7 @@
     "collection": "Collection",
     "discover": "Discover",
     "newReleases": "New releases",
+    "online": "Online catalog",
     "wanted": "Wanted"
   },
   "manage": {

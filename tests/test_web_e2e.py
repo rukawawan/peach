@@ -222,7 +222,7 @@ def offline_attempts(log: str, proxy: OfflineProxy) -> list[str]:
 #: 测量动画中间帧、密度切换和等待态替换的文件。独立测量这些时序，避免其他浏览器
 #: 的渲染与共享设置请求影响取值时刻；其余文件保留并行。
 TIMING_SENSITIVE_SUITES = frozenset({
-    "e2e/sidebar-motion.test.ts",  # 开合过渡 300ms 里的帧数
+    "e2e/sidebar-motion.test.ts",  # 开合点击那一帧的主线程占用
     "e2e/sidebar.test.ts",         # 当前项那块玻璃 900ms 内要经过中间位置
     "e2e/design-cards.test.ts",     # 紧凑密度切换的即时样式
     "e2e/design-follow-alignment.test.ts",  # 等待标题与内容标题的替换

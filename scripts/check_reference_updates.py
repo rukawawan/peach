@@ -160,15 +160,23 @@ def inspect_source(
     revision_resolver: Callable[[dict], str | None] = resolve_git_revision,
 ) -> dict:
     snapshot = (root / source["snapshot"]).read_bytes()
-    live = fetcher(source["url"])
-    live_sha = sha256_bytes(live)
     live_revision = revision_resolver(source)
     locked_revision = (source.get("git") or {}).get("revision")
     revision_moved = live_revision != locked_revision
+    url = source["url"]
+    live_url = url
     # 内容没变、仓库往前走了，不算这份证据有更新；每次取回都不同的网页反过来只认 revision。
     if source.get("volatile") and live_revision is not None:
+        if locked_revision and url.startswith("https://github.com/"):
+            live_url = url.replace(f"/blob/{locked_revision}/", f"/blob/{live_revision}/", 1)
+        live = snapshot
+        live_sha = sha256_bytes(snapshot)
         changed = revision_moved
     else:
+        if locked_revision and live_revision and url.startswith("https://raw.githubusercontent.com/"):
+            live_url = url.replace(f"/{locked_revision}/", f"/{live_revision}/", 1)
+        live = fetcher(live_url)
+        live_sha = sha256_bytes(live)
         changed = live_sha != source["sha256"]
     return {
         "id": source["id"],
@@ -178,6 +186,7 @@ def inspect_source(
         "live_sha256": live_sha,
         "pinned_revision": locked_revision,
         "live_revision": live_revision,
+        "live_url": live_url,
         "diff": unified_diff(source, snapshot, live) if changed else "",
         "live": live,
     }
@@ -258,6 +267,7 @@ def command_accept(args: argparse.Namespace) -> int:
             return 2
 
     (root / source["snapshot"]).write_bytes(result["live"])
+    source["url"] = result["live_url"]
     source["sha256"] = result["live_sha256"]
     source["checked_on"] = dt.date.today().isoformat()
     if result["live_revision"] is not None:

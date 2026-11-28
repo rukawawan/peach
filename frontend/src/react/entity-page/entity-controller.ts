@@ -1,5 +1,4 @@
 import { entityPath, ENTITY_ROUTES } from '@peach/legacy/core';
-import { nextSortState } from '../../sort-preferences';
 import type { EntityFilters, EntityMedia, EntityPageActions, EntityPageHelpers, EntityPageProps } from './entity-page';
 import { emptyEntityFilters, entityViewPath } from './entity-route';
 
@@ -65,10 +64,7 @@ export function createEntityController(ports: EntityControllerPorts, helpers: En
       clearAll: () => ports.changeFilter(filters => {
         filters.tag = ''; filters.creator = ''; filters.studio = ''; filters.owner = '';
       }),
-      setSort: key => {
-        const filters = live(), next = nextSortState(key, filters.sort || 'new', filters.dir || '');
-        if (next) route(kind, name, { ...filters, ...next });
-      },
+      setSort: (sort, dir) => route(kind, name, { ...live(), sort, dir }),
       reshuffleVideos: () => {
         const seed = ports.rollSeed();
         ports.writeSeed(seed);

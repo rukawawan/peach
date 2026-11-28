@@ -2,9 +2,10 @@ import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, ButtonLink } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
-import { ApiError, apiGet, apiSend } from '../../api';
+import { ApiError, apiGet, apiSend, errorMessage } from '../../api';
 import { diagnosticHeaders } from '../../browser-diagnostics';
 import { withBackoff } from '../../polling';
+import { ActionSpinner } from '../components/action-spinner';
 import { Fieldset, FieldsetTitle } from '../components/fieldset';
 import { Note } from '../components/note';
 import { TaskProgress } from '../components/task-progress';
@@ -35,8 +36,12 @@ export function DiagnosticExportAction({ kind, codes = '', children }: {
   const query = useQuery({ queryKey: KEY, queryFn: ({ signal }) => apiGet<ExportState>(URL, signal),
     refetchInterval: exportInterval });
   const state = query.data;
-  const mine = state?.kind === kind;
+  const starting = action.busy === 'start';
+  const cancelling = action.busy === 'cancel';
+  const ownState = !starting && state?.kind === kind ? state : undefined;
   const active = state?.status === 'running' || state?.status === 'cancelling';
+  const stopping = ownState?.status === 'cancelling';
+  const total = stopping ? 0 : ownState?.total;
   const label = kind === 'support' ? t('manage:diagnosticsExport.downloadReport') : t('manage:diagnosticsExport.exportFetchLog');
   const update = (next: ExportState) => { queryClient.setQueryData(KEY, next) };
   const start = () => void action.run('start', async signal => {
@@ -47,27 +52,33 @@ export function DiagnosticExportAction({ kind, codes = '', children }: {
     if (!result || !result.job_id) throw new Error(t('manage:diagnosticsExport.statusNotFound'));
     return result as ExportState;
   }, update);
-  const cancel = () => void action.run('cancel', signal => apiSend<ExportState>(
-    `${URL}/${state!.job_id}/cancel`, {}, 'POST', signal), update);
-  return <div className="flex min-w-0 flex-col gap-3">
-    <div className={kind === 'support' ? 'flex flex-wrap justify-end gap-2' : 'flex flex-wrap gap-2'}>
-      <Button type="button" variant="secondary" disabled={active} {...busyProps(action.busy === 'start')} onClick={start}>{label}</Button>
-      {mine && active ? <Button type="button" variant="secondary" disabled={state.status === 'cancelling'}
-        {...busyProps(action.busy === 'cancel')} onClick={cancel}>{t('manage:diagnosticsExport.cancelExport')}</Button> : null}
-      {mine && state.status === 'complete' && state.download_url ? <ButtonLink variant="secondary"
-        href={state.download_url}>{t('manage:diagnosticsExport.downloadFile')}</ButtonLink> : null}
+  const exportButton = <Button type="button" variant="secondary" disabled={!state || active}
+    leadingIcon={starting ? ActionSpinner : undefined} {...busyProps(starting)} onClick={start}>{label}</Button>;
+  return <div className="flex w-full min-w-0 flex-col gap-3">
+    <div className="flex flex-wrap justify-end gap-2">
+      {kind === 'support' ? exportButton : null}
+      {ownState && active ? <Button type="button" variant="secondary" disabled={stopping}
+        leadingIcon={cancelling ? ActionSpinner : undefined} {...busyProps(cancelling)}
+        onClick={() => void action.run('cancel', signal => apiSend<ExportState>(
+          `${URL}/${ownState.job_id}/cancel`, {}, 'POST', signal), update)}>{t('manage:diagnosticsExport.cancelExport')}</Button> : null}
+      {ownState?.status === 'complete' && ownState.download_url ? <ButtonLink variant="secondary"
+        href={ownState.download_url}>{t('manage:diagnosticsExport.downloadFile')}</ButtonLink> : null}
+      {kind === 'scraping' ? exportButton : null}
       {children}
     </div>
-    {mine && active ? <TaskProgress embedded={kind === 'scraping'} kind={activityKind('diagnostic-export', state.stage_code)} value={state.done || 0} total={state.total}
-      label={state.total ? t('manage:diagnosticsExport.progress', { stage: stageText(state), done: state.done || 0, count: state.total })
-        : [stageText(state) || t('manage:diagnosticsExport.preparing'), state.rows ? t('manage:diagnosticsExport.candidateCount', { count: state.rows }) : '',
-          state.files ? t('manage:diagnosticsExport.fileCount', { count: state.files }) : ''].filter(Boolean).join(' · ')} /> : null}
-    {mine && state.status === 'complete' ? <p role="status" className="text-body-2-regular text-text-secondary">
-      {t('manage:diagnosticsExport.completedSize', { size: ((state.bytes || 0) / 1024 / 1024).toFixed(2) })}</p> : null}
-    {mine && state.status === 'cancelled' ? <Note tone="neutral">{t('manage:diagnosticsExport.canceled')}</Note> : null}
-    {query.isError ? <Note tone="error" action={<Button type="button" variant="secondary"
-      {...busyProps(query.isFetching)} onClick={() => { void query.refetch() }}>{t('manage:diagnosticsExport.reload')}</Button>}>{t('manage:diagnosticsExport.progressNotFound')}</Note> : null}
-    {action.error || mine && state.status === 'failed' ? <Note tone="error">{action.error || state?.error}</Note> : null}
+    {ownState && active ? <TaskProgress embedded={kind === 'scraping'} kind={activityKind('diagnostic-export', ownState.stage_code)} value={ownState.done || 0} total={total}
+      label={total ? t('manage:diagnosticsExport.progress', { stage: stageText(ownState), done: ownState.done || 0, count: total })
+        : [stageText(ownState) || t('manage:diagnosticsExport.preparing'),
+          !stopping && ownState.rows ? t('manage:diagnosticsExport.candidateCount', { count: ownState.rows }) : '',
+          !stopping && ownState.files ? t('manage:diagnosticsExport.fileCount', { count: ownState.files }) : ''].filter(Boolean).join(' · ')} /> : null}
+    {ownState?.status === 'complete' ? <p role="status" className="text-right text-body-2-regular text-text-secondary">
+      {t('manage:diagnosticsExport.completedSize', { size: ((ownState.bytes || 0) / 1024 / 1024).toFixed(2) })}</p> : null}
+    {ownState?.status === 'cancelled' ? <Note tone="neutral">{t('manage:diagnosticsExport.canceled')}</Note> : null}
+    {query.isError ? <Note tone="error" title={t('manage:diagnosticsExport.progressNotFound')}
+      action={<Button type="button" variant="secondary" {...busyProps(query.isFetching)}
+        onClick={() => { void query.refetch() }}>{t('manage:diagnosticsExport.reload')}</Button>}>
+      {errorMessage(query.error)}</Note> : null}
+    {action.error || ownState?.status === 'failed' ? <Note tone="error">{action.error || ownState?.error}</Note> : null}
   </div>;
 }
 

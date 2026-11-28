@@ -6,9 +6,12 @@ import { COMPLETION_ROW_SKELETON_HTML, completionRowRemembered } from './react/l
 
 /** 列表骨架一格的内容，壳与列表岛共用：名称格是缩略图和两行标题，艺人格是圆头像加一条，媒体库、厂牌格是
  *  小标识加一条，其余列一条短条。 */
-export function catalogListSkeletonCellHtml(column: string): string {
+export function catalogListSkeletonCellHtml(column: string, separateCode = false): string {
   if (column === 'actions') return '<span class="flex gap-1"><i class="skeleton-sheen size-8 rounded-2lg"></i><i class="skeleton-sheen size-8 rounded-2lg"></i><i class="skeleton-sheen size-8 rounded-2lg"></i></span>';
-  if (column === 'name') return '<span data-list-skeleton-name><i class="skeleton-sheen"></i><span><i class="skeleton-sheen"></i><i class="skeleton-sheen"></i></span></span>';
+  if (column === 'name') {
+    const line = '<i class="skeleton-sheen"></i>';
+    return `<span data-list-skeleton-name>${line}<span${separateCode ? ' data-list-skeleton-code' : ''}>${line.repeat(separateCode ? 3 : 2)}</span></span>`;
+  }
   if (column === 'people' || column === 'library' || column === 'studio') return `<span data-list-skeleton-mark="${column}"><b class="skeleton-sheen"></b><i class="skeleton-sheen"></i></span>`;
   return '<i data-list-skeleton-bar class="skeleton-sheen"></i>';
 }
@@ -20,16 +23,17 @@ function catalogListSkeletonHtml(label: string): string {
     + listTableSkeletonHtml(catalogTableSnapshot(), completionRowRemembered() ? COMPLETION_ROW_SKELETON_HTML : '') + '</div>';
 }
 
-/** 工具栏一行加按列偏好排好的表格骨架；馆藏列表、JAV 新作列表与处理队列页列表共用，`between` 插在工具栏与表格之间。 */
-export function listTableSkeletonHtml(columns: TableSnapshot, between = ''): string {
-  const flexible = columns.some(column => column.width === null);
+/** 按列偏好排好的表格骨架。在线目录的固定列占满表格，筛选栏已经在表格上方。 */
+export function listTableSkeletonHtml(columns: TableSnapshot, between = '', { fixed = false, separateCode = false } = {}): string {
+  const space = !fixed && !columns.some(column => column.width === null);
   const minimum = columns.reduce((sum, column) => sum + (column.width ?? column.min), 0);
   const cols = columns.map(column => column.width === null ? '<col>' : `<col style="width:${column.width}px">`).join('')
-    + (flexible ? '' : '<col>');
-  const head = columns.map(column => `<th>${esc(column.label)}</th>`).join('') + (flexible ? '' : '<th></th>');
-  const row = `<tr>${columns.map(column => `<td>${catalogListSkeletonCellHtml(column.id)}</td>`).join('')}${flexible ? '' : '<td></td>'}</tr>`;
-  return '<div data-list-skeleton aria-hidden="true"><div data-list-skeleton-tools><i class="skeleton-sheen"></i></div>' + between
-    + `<div data-board-data-table><div class="w-full overflow-x-auto"><table class="bui-table bui-table-sm" style="table-layout:fixed;min-width:${minimum}px">`
+    + (space ? '<col>' : '');
+  const head = columns.map(column => `<th>${esc(column.label)}</th>`).join('') + (space ? '<th></th>' : '');
+  const row = `<tr data-list-skeleton-row>${columns.map(column => `<td>${catalogListSkeletonCellHtml(column.id, separateCode)}</td>`).join('')}${space ? '<td></td>' : ''}</tr>`;
+  return '<div data-list-skeleton aria-hidden="true">'
+    + (fixed ? '' : '<div data-list-skeleton-tools><i class="skeleton-sheen"></i></div>') + between
+    + `<div data-board-data-table${fixed ? ' data-follow-table' : ''}><div class="w-full overflow-x-auto"><table class="bui-table bui-table-sm" style="table-layout:fixed;min-width:${minimum}px">`
     + `<colgroup>${cols}</colgroup><thead><tr>${head}</tr></thead><tbody>${row.repeat(6)}</tbody></table></div></div></div>`;
 }
 

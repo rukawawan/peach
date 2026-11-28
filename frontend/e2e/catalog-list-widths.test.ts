@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, layout, VIEWPORTS, visit } from './harness.ts';
+import { launch, layout, settle, VIEWPORTS, visit } from './harness.ts';
 
 describe('馆藏表格列宽与占位图', () => {
   let browser: Browser;
@@ -42,7 +42,7 @@ describe('馆藏表格列宽与占位图', () => {
         && geometry.titleHeight <= geometry.lineHeight * 2 + 1, JSON.stringify(geometry));
       assert.equal(await row.locator('[data-list-name]').getAttribute('title'), name);
       const defaultLabels = ['作品', '作品操作', '艺人', '媒体库', '标签', '时长', '评分', '观看次数', '入库时间'];
-      const visibleLabels = () => page.locator('[data-catalog-table] th:not([data-table-space]) > span').allTextContents();
+      const visibleLabels = () => page.locator('[data-catalog-table] th:not([data-table-space]) > span:not([data-table-column-divider])').allTextContents();
       assert.deepEqual(await visibleLabels(), defaultLabels);
       const countHeader = await page.locator('[data-catalog-table] th[data-key="plays"]').evaluate(header => {
         const label = header.querySelector<HTMLElement>('button .truncate')!;
@@ -63,6 +63,10 @@ describe('馆藏表格列宽与占位图', () => {
       assert.equal(await row.locator('[data-rating-stars] [data-rate]').count(), 5);
       assert.equal(await row.locator('[data-rating-stars] [data-rate][data-on="true"]').count(), 4);
       assert.ok((await row.textContent())?.includes('2026-01-03'));
+      if (viewport.mobile) {
+        await page.setViewportSize({ width: 760, height: viewport.height });
+        await settle(page);
+      }
       const header = page.locator('[data-catalog-table] th[data-key="name"]');
       const initialWidth = (await header.boundingBox())!.width;
       if (!viewport.mobile) {
@@ -78,6 +82,8 @@ describe('馆藏表格列宽与占位图', () => {
       }
       const beforeKeyboard = (await header.boundingBox())!.width;
       const resizer = header.getByRole('slider');
+      await row.focus();
+      await page.locator('[data-catalog-row][data-focused]').first().waitFor();
       await resizer.focus();
       await resizer.press('Enter');
       await resizer.press('ArrowRight');
@@ -112,13 +118,19 @@ describe('馆藏表格列宽与占位图', () => {
         return { left: node.scrollLeft, extra: node.scrollWidth - node.clientWidth };
       });
       assert.ok(scrolled.extra > 0 && scrolled.left > 0, JSON.stringify(scrolled));
-      await page.getByRole('button', { name: '重置列宽', exact: true }).click();
+      await page.getByRole('button', { name: '列布局', exact: true }).click();
+      await page.getByRole('dialog', { name: '表格的列布局', exact: true }).getByRole('button', { name: '重置列宽', exact: true }).click();
+      await page.keyboard.press('Escape');
       await page.waitForFunction(width => Math.abs(document.querySelector('[data-catalog-table] th[data-key="name"]')!.getBoundingClientRect().width - width) <= 1, initialWidth);
       await scroll.evaluate(node => { node.scrollLeft = 0 });
       await page.getByRole('button', { name: '显示列', exact: true }).click();
       await page.getByRole('button', { name: '恢复默认显示', exact: true }).click();
       await page.keyboard.press('Escape');
       assert.deepEqual(await visibleLabels(), defaultLabels);
+      if (viewport.mobile) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        await settle(page);
+      }
       const measured = await layout(page);
       assert.ok(measured.scrollWidth <= measured.viewportWidth + 1, JSON.stringify(measured));
       const screenshots = join('..', 'build', 'agent-verification', 'library-table');

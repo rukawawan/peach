@@ -108,7 +108,7 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v${ReleaseVersion}") { throw 'Tag 与版本不一致' }
           "version=${ReleaseVersion}" >> $env:GITHUB_OUTPUT
       - name: 安装构建依赖
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -301,13 +301,29 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: 创建原生架构构建环境
         run: |
-          uv sync --locked --all-extras --python python
+          sync_args=(--locked --all-extras --python python)
+          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+            # Intel 没有 cryptography 官方 wheel。静态链接避免 PyInstaller 合并 Python 与
+            # cryptography 各自使用的同名 OpenSSL dylib。
+            OPENSSL_DIR="$(brew --prefix openssl@3)"
+            export OPENSSL_DIR OPENSSL_STATIC=1
+            sync_args+=(--no-cache --no-binary-package cryptography)
+          fi
+          uv sync "${sync_args[@]}"
+          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+            binding="$(.venv/bin/python -c 'from cryptography.hazmat.bindings import _rust; print(_rust.__file__)')"
+            dependencies="$(otool -L "$binding")"
+            if grep -Eq '/lib(ssl|crypto)(\.[0-9]+)*\.dylib' <<< "$dependencies"; then
+              echo "Intel cryptography 必须静态链接 OpenSSL" >&2
+              exit 1
+            fi
+          fi
           uv pip check --python .venv/bin/python
           npm ci --prefix frontend
       - name: 安装固定版本的媒体编译工具
@@ -418,7 +434,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -473,7 +489,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -539,7 +555,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -659,8 +675,26 @@ jobs:
               docker tag "longmeidao/peach:candidate-$arch" "$image:$version-$arch"
               docker push "$image:$version-$arch"
             done
-            docker buildx imagetools create --tag "$image:$version" --tag "$image:edge" --tag "$image:latest"               "$image:$version-amd64" "$image:$version-arm64"
-            docker buildx imagetools inspect "$image:$version"
+            docker buildx imagetools create --tag "$image:$version" --tag "$image:edge" --tag "$image:latest" \
+              "$image:$version-amd64" "$image:$version-arm64"
+          done
+      - name: 回读两个镜像仓库的标签与架构
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          expected_digest=
+          for image in longmeidao/peach ghcr.io/peach-mitao/peach; do
+            for tag in "$version" edge latest; do
+              manifest="$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$image:$tag")"
+              digest="$(jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest")"
+              expected_digest="${expected_digest:-$digest}"
+              echo "$image:$tag $digest"
+              if [[ "$digest" != "$expected_digest" ]] ||
+                 ! jq -e '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort == ["linux/amd64", "linux/arm64"]' \
+                   <<< "$manifest" > /dev/null; then
+                echo "::error::$image:$tag 的摘要或架构与本次发布不符"
+                exit 1
+              fi
+            done
           done
 
   project-board:
@@ -692,3 +726,49 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh workflow run gitgud-mirror.yml --ref master -f "tag=$GITHUB_REF_NAME"
+
+  publication-report:
+    name: 发布同步回执
+    if: always() && github.ref_type == 'tag'
+    needs: [release, docker-publish, r2-mirror, sparkle-appcast, project-board, gitgud-backup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: 汇总发布结果与线上演示来源
+        env:
+          PUBLISH_JOBS: ${{ toJSON(needs) }}
+        run: |
+          row() {
+            local result
+            result="$(jq -er --arg job "$1" '.[$job].result' <<< "$PUBLISH_JOBS")"
+            case "$result" in
+              success) result="$3" ;;
+              failure) result="失败" ;;
+              cancelled) result="已取消" ;;
+              skipped) result="已跳过" ;;
+            esac
+            printf '| %s | %s |\n' "$2" "$result"
+          }
+          {
+            printf '## %s 发布同步回执\n\n| 入口 | 状态 |\n| --- | --- |\n' "$GITHUB_REF_NAME"
+            row release 'GitHub Release' '桌面制品已发布'
+            row docker-publish 'Docker Hub / GHCR' '版本号、edge、latest 的架构与摘要已回读'
+            row r2-mirror 'R2 备用下载' '制品与公开索引已回读'
+            row sparkle-appcast 'macOS 更新源' '两个架构的公开 appcast 已回读'
+            row gitgud-backup '[GitGud 备份](https://github.com/peach-mitao/peach/actions/workflows/gitgud-mirror.yml)' '已触发，备份结果见独立工作流'
+            row project-board '[项目看板](https://github.com/peach-mitao/peach/actions/workflows/project-board.yml)' '已触发，同步结果见独立工作流'
+            if demo_source="$(curl --fail --silent --show-error --max-time 15 \
+              'https://demo.peach.video/_demo/frontend-source.json')" &&
+              demo_version="$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<< "$demo_source")" &&
+              demo_commit="$(jq -er '.commit | select(test("^[0-9a-f]{40}$"))' <<< "$demo_source")"; then
+              if [[ "v$demo_version" == "$GITHUB_REF_NAME" && "$demo_commit" == "$GITHUB_SHA" ]]; then
+                demo_status="已同步到本次发布"
+              else
+                demo_status="来源与本次发布不同，按演示影响面复核"
+              fi
+              printf '| 在线演示 | v%s (%s)，%s |\n' "$demo_version" "$demo_commit" "$demo_status"
+            else
+              printf '| 在线演示 | 未取得公开来源清单 |\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

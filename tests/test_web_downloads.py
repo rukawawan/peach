@@ -305,6 +305,54 @@ class RouteTests(_App):
 class SettingsBlockTests(_App):
     """CloudDrive2 那一侧换成 `self.answer`；没有令牌时走真的 `check`，它在连网之前就停。"""
 
+    def test_qbittorrent_password_is_stored_but_never_returned(self):
+        from peach import web_downloads
+        self.app.state.push_discovery.declared_roots = {"local": ("R:\\media",)}
+        self.service.channel_catalog = lambda: {"providers": [], "problems": []}
+        client = TestClient(self.app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1")
+        with mock.patch.object(web_downloads, "check_qbittorrent", return_value={
+                "ok": True, "address": "http://192.0.2.10:8085", "version": "v4.6.4",
+                "webapi_version": "2.9.3", "save_path": "/vol1/media/Peach",
+                "media_root": "R:\\media", "problems": []}):
+            response = client.post("/api/configuration/downloads", json={
+                "qbittorrent_address": "http://192.0.2.10:8085",
+                "qbittorrent_save_path": "/vol1/media/Peach",
+                "qbittorrent_media_root": "R:\\media",
+                "qbittorrent_username": "admin",
+                "qbittorrent_password": "test-only-password",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["qbittorrent"]["username"], "admin")
+        self.assertTrue(body["qbittorrent"]["password_set"])
+        self.assertEqual(body["qbittorrent"]["save_path"], "/vol1/media/Peach")
+        self.assertNotIn("test-only-password", response.text)
+        self.assertIn("test-only-password", self.secrets()["download-qbittorrent.json"])
+
+    def test_qbittorrent_check_without_configuration_reports_the_missing_fields(self):
+        client = TestClient(self.app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1")
+        response = client.get("/api/configuration/downloads/qbittorrent/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertFalse(body["ok"])
+        self.assertIn("地址", " ".join(body["problems"]))
+
+    def test_qbittorrent_check_can_discover_an_unsaved_default_directory(self):
+        from peach import downloads_qbittorrent
+        self.app.state.push_discovery.declared_roots = {"local": ("R:\\media",)}
+        client = TestClient(self.app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1")
+        with mock.patch.object(downloads_qbittorrent, "check", return_value={
+                "ok": True, "version": "v5.1.0", "webapi_version": "2.11.3",
+                "save_path": "/downloads", "problems": []}):
+            response = client.post("/api/configuration/downloads/qbittorrent/check", json={
+                "qbittorrent_address": "http://192.0.2.10:8085", "qbittorrent_save_path": "",
+                "qbittorrent_media_root": "R:\\media", "qbittorrent_username": "admin",
+                "qbittorrent_password": "test-only-password"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["save_path"], "/downloads")
+        self.assertEqual(self.service.config.qbittorrent_save_path, "")
+
     def test_invalid_service_address_is_refused_before_settings_or_token_are_saved(self):
         self.service.save_settings({"clouddrive_address": "localhost:19798", "wait_hours": 48}, self.roots())
         before = self.service.settings.path.read_bytes()
@@ -603,6 +651,20 @@ class ResourceIndexerRoutes(_App):
         self.assertEqual((args[0][0]["key"], args[1], args[2].goal), ("one", "ABC-123", "chinese"))
         self.assertEqual(direct.call_args.kwargs["goal"], "chinese")
         self.assertEqual(self.client.get("/api/resources/search?code=ABC-123&min_size=-1").status_code, 400)
+
+    def test_missing_fallback_indexer_keeps_complete_empty_searches_distinct_from_source_failures(self):
+        baseline = {"items": [], "warnings": [], "trace": [], "next_sources": [], "reference_only": []}
+        with mock.patch("peach.web_resource_search.direct_search",
+                        return_value={**baseline, "complete": True}):
+            complete = self.client.get("/api/resources/search?code=ABC-123").json()
+        self.assertEqual((complete["state"], complete["error"]), ("ready", ""))
+
+        with mock.patch("peach.web_resource_search.direct_search", return_value={
+                **baseline, "complete": False, "unfetched_sources": ["sukebei"], "connection_checks": ["sukebei"]}):
+            failed = self.client.get("/api/resources/search?code=ABC-123").json()
+        self.assertEqual(failed["state"], "unavailable")
+        self.assertEqual(failed["error_code"], "labels.resourceSearch.noIndexer")
+        self.assertEqual(failed["connection_checks"], ["sukebei"])
 
     def test_switching_magnets_searches_every_source_and_drops_skipped_hashes(self):
         from peach.web_resource_search import q_resource_search

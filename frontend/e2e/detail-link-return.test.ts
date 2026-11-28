@@ -1,14 +1,40 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, layout, VIEWPORTS } from './harness.ts';
+import { launch, layout, settle, VIEWPORTS } from './harness.ts';
 import { FAILED_JOB } from './design-fixture.ts';
 import { ITEM, openItemPage } from './item-fixture.ts';
 
-describe('问题清单详情返回', () => {
+describe('详情返回', () => {
   let browser: Browser;
   before(async () => { browser = await launch() });
   after(async () => { await browser?.close() });
+  it('作品详情关闭与浏览器后退保留馆藏卡片原来的位置和焦点', { timeout: 60_000 }, async () => {
+    const viewport = VIEWPORTS.find(view => view.mobile)!;
+    const opened = await openItemPage(browser, '/unseen', viewport, { ready: '#grid [data-media-card] [data-media-title]' });
+    const { page } = opened;
+    try {
+      const button = page.locator('#grid [data-media-card] button[data-media-title]').last();
+      await button.evaluate(element => {
+        element.scrollIntoView({ block: 'center', behavior: 'instant' });
+        element.focus({ preventScroll: true });
+      });
+      const source = await page.evaluate(() => scrollY);
+      assert.ok(source > 0);
+      const close = page.locator('#stage[open] #closeStage');
+      for (const previous of [false, true]) {
+        await page.keyboard.press('Enter');
+        await close.waitFor();
+        if (previous) await page.goBack();
+        else await close.click();
+        await page.waitForURL('**/unseen');
+        await close.waitFor({ state: 'hidden' });
+        await settle(page);
+        assert.ok(Math.abs(await page.evaluate(() => scrollY) - source) <= 2);
+        assert.equal(await button.evaluate(element => element === document.activeElement), true);
+      }
+    } finally { await opened.close(); }
+  });
   for (const viewport of VIEWPORTS) {
     it(`${viewport.name}：退出详情保留数据管理页、展开的清单与来源地址`, { timeout: 60_000 }, async () => {
       const opened = await openItemPage(browser, '/', viewport, { ready: '#grid [data-media-card]' });

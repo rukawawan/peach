@@ -27,6 +27,16 @@ describe('右方向键临时二倍速', () => {
     it(`${protocol}：短按跳转，进度条焦点长按不跳转，松开及失焦恢复且不写入倍速记忆`, { timeout: 60_000 }, async () => {
       const savedRates: number[] = [];
       const opened = await visit(browser, `/assets/${requiredEnv('PEACH_E2E_ITEM')}`, VIEWPORTS[0]!, async page => {
+        await page.route('**/api/item?**', async route => {
+          const response = await route.fetch();
+          return route.fulfill({ response, json: {
+            ...await response.json(), has_cover: true, cover_key: 'CROP-001', poster_box: null,
+          } });
+        });
+        await page.route('**/cover?**', route => route.fulfill({
+          contentType: 'image/svg+xml',
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="540"><rect width="800" height="540" fill="gray"/></svg>',
+        }));
         await page.route('**/api/player/memory?**', route => {
           if (route.request().method() === 'PUT') {
             const patch = route.request().postDataJSON();
@@ -74,6 +84,18 @@ describe('右方向键临时二倍速', () => {
         await page.waitForFunction(() => document.querySelector<HTMLVideoElement>('#stage video.vjs-tech')!.currentTime > 1);
         const jumped = await video.evaluate((node: HTMLVideoElement) => node.currentTime);
         assert.ok(jumped > 9 && jumped < 11, `短按应只跳一次快进秒数：${jumped}`);
+        await page.locator('[data-cover-crop]').click();
+        const crop = page.locator('[data-crop-box]');
+        const left = () => crop.evaluate(node => node.getBoundingClientRect().left);
+        const startLeft = await left();
+        await crop.press('ArrowLeft');
+        const shiftedLeft = await left();
+        assert.ok(shiftedLeft < startLeft, '左方向键移动取景框');
+        await crop.press('ArrowRight');
+        assert.ok(await left() > shiftedLeft, '右方向键由取景框接收');
+        assert.equal(await video.evaluate((node: HTMLVideoElement) => node.currentTime), jumped, '取景时播放器进度不变');
+        await page.locator('[data-modal-kind="cover-crop"]').getByRole('button', { name: '关闭', exact: true }).click();
+        await crop.waitFor({ state: 'detached' });
         await video.evaluate((node: HTMLVideoElement) => { node.currentTime = 0; return node.play() });
         await page.waitForFunction(() => document.querySelector<HTMLVideoElement>('#stage video.vjs-tech')!.currentTime > .15);
         await thumb.focus();

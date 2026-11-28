@@ -4,7 +4,7 @@
 
 本地优先的影片刮削与媒体管理工具。
 
-[官网](https://peach.video) · [下载](#下载与使用) · [在线演示](https://demo.peach.video) · [文档](#文档) · [English](README.md)
+[官网](https://peach.video) · [下载](#下载与使用) · [在线演示](https://demo.peach.video) · [文档](#文档) · [Telegram 频道](https://t.me/peach_mitao) · [English](README.md)
 
 [![Release](https://img.shields.io/github/v/release/peach-mitao/peach?include_prereleases&sort=semver&label=release&logo=github)](https://github.com/peach-mitao/peach/releases)
 [![CI 流水线](https://img.shields.io/github/actions/workflow/status/peach-mitao/peach/test.yml?branch=master&label=CI&logo=githubactions&logoColor=white)](https://github.com/peach-mitao/peach/actions/workflows/test.yml)
@@ -47,7 +47,7 @@
 - **本地与网盘**：统一浏览本地硬盘、SMB、已挂载网盘和 PikPak 媒体库。
 - **播放与记录**：网页与外部播放器、字幕、倍速、旋转、续播和时间轴预览。
 - **关注与发现**：订阅人物与创作者更新，发现作品，管理「想要」清单。
-- **云下载**：按影片编号查找或提交磁力，下载完成后整理入库。
+- **云下载与本地下载**：按影片编号查找或提交磁力，可交给 115、PikPak 或 qBittorrent，下载完成后整理入库。
 - **馆藏管理**：管理标签、重复文件、多版本与分卷；按女优批量永久删除影片，保留人物档案和照片。资料和观看记录保存在本机。
 - **任务中心**：暂停、继续或取消本机后台任务，查看可取得的各任务 CPU、GPU 与下载活动。
 
@@ -55,8 +55,8 @@
 
 | 方式 | 入口 |
 | --- | --- |
-| Windows x64 | [安装版](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-windows-x64-setup.exe) · [免安装版](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-windows-x64.zip) |
-| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.60.0/Peach-0.60.0-macos-x86_64.dmg) |
+| Windows x64 | [安装版](https://github.com/peach-mitao/peach/releases/download/v0.62.0/Peach-0.62.0-windows-x64-setup.exe) · [免安装版](https://github.com/peach-mitao/peach/releases/download/v0.62.0/Peach-0.62.0-windows-x64.zip) |
+| macOS | [Apple Silicon / ARM64](https://github.com/peach-mitao/peach/releases/download/v0.62.0/Peach-0.62.0-macos-arm64.dmg) · [Intel / x86_64](https://github.com/peach-mitao/peach/releases/download/v0.62.0/Peach-0.62.0-macos-x86_64.dmg) |
 | Docker / NAS | [部署说明](docs/DOCKER.md) |
 | 源码运行 | [安装步骤](docs/OPERATIONS.md#从源码运行windowsmacos)，需要 Git、uv 和 Python 3.14+ |
 
@@ -64,7 +64,7 @@
 
 ## 文档
 
-[运行与配置](docs/OPERATIONS.md) · [来源支持](docs/SOURCING.md) · [外部播放器](docs/EXTERNAL_PLAYERS.md) · [诊断与数据分享](docs/DIAGNOSTICS.md) · [更新日志](CHANGELOG.md)
+[运行与配置](docs/OPERATIONS.md) · [来源支持](docs/SOURCING.md) · [本地下载](docs/LOCAL_DOWNLOAD.md) · [外部播放器](docs/EXTERNAL_PLAYERS.md) · [诊断与数据分享](docs/DIAGNOSTICS.md) · [更新日志](CHANGELOG.md)
 
 参与开发：[贡献说明](CONTRIBUTING.md) · [开发约定](AGENTS.md) · [测试](docs/TESTING.md)
 

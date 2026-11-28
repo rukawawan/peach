@@ -73,6 +73,7 @@ export function useMediaContextMenu() {
     ] };
   };
   return {
+    touchProps: menu.touchProps,
     onContextMenu: (event: MouseEvent<HTMLElement>, props: MediaActionProps) => menu.onContextMenu(event, context(props)),
     onKeyDown: (event: KeyboardEvent<HTMLElement>, props: MediaActionProps, anchor?: HTMLElement) => {
       menu.onKeyDown(event, context(props), anchor);

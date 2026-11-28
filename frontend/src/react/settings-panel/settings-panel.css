@@ -159,25 +159,6 @@
 [data-settings-panel] [data-sidebar-setting]{display:grid;gap:12px;padding:0}
 [data-settings-panel] [data-sidebar-setting]>span b,[data-settings-panel] [data-sidebar-setting]>span small{display:block}
 [data-settings-panel] [data-sidebar-setting]>span small{margin-top:3px;color:var(--muted);line-height:1.45}
-[data-settings-panel] [data-sidebar-order]{display:grid;gap:6px}
-/* 这一列的行、下面那个下拉和「添加」按钮同高：它们是同一张清单的三段，差几像素就
-   看得出是两拨控件。紧凑档的图标钮加上下 1px 内边距和 1px 边框正好是 --control-h。 */
-[data-settings-panel] [data-sidebar-row]{position:relative;display:flex;align-items:center;justify-content:space-between;min-height:var(--control-h);padding:1px 5px;border:1px solid var(--line-soft);border-radius:var(--surface-radius);background:var(--surface);cursor:grab}
-[data-settings-panel] [data-sidebar-row]:active{cursor:grabbing}
-[data-settings-panel] [data-sidebar-row]>span{display:flex;align-items:center;gap:8px}
-[data-settings-panel] [data-sidebar-row] svg{width:18px;height:18px;stroke:currentColor;fill:none}
-/* 名目前那枚字形与名字同行，随字号缩放；拖柄和右端的上移、下移键仍按键的尺寸。 */
-[data-settings-panel] [data-sidebar-label]>svg{width:var(--icon-inline);height:var(--icon-inline)}
-[data-settings-panel] [data-sidebar-label]{min-width:0}
-[data-settings-panel] [data-sidebar-label]>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-[data-settings-panel] [data-sidebar-grip]{display:grid;place-items:center;width:24px;color:var(--muted)}
-[data-settings-panel] [data-sidebar-grip] svg{width:20px;height:20px}
-[data-settings-panel] [data-sidebar-actions]{flex:none}
-[data-settings-panel] [data-sidebar-row] button{display:grid;place-items:center;min-width:var(--control-h-compact);height:var(--control-h-compact);border:0;border-radius:var(--control-radius);background:transparent;color:var(--muted);cursor:pointer}
-[data-settings-panel] [data-sidebar-row] button:hover:not(:disabled){background:var(--hover);color:var(--ink)}
-[data-settings-panel] [data-sidebar-row] button:disabled{opacity:.25;cursor:not-allowed}
-[data-settings-panel] [data-sidebar-add-row]{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:5px}
-[data-settings-panel] [data-sidebar-picker-icon] svg{width:var(--icon-inline);height:var(--icon-inline);stroke:currentColor;fill:none}
 [data-settings-panel]>[data-react-overlays]{display:contents}
 @media (max-width:600px){[data-settings-panel] [data-settings-scroll]{padding:0 17px 17px}}
 @media (max-width:600px){[data-settings-panel] [data-settings-head]{padding:17px 17px 14px}}
@@ -331,7 +312,7 @@ html[data-theme-snapshot] [data-settings-panel] :is([data-settings-glide],[data-
 @media (max-width:760px){
   [data-settings-panel] [data-settings-card] [data-settings-scroll] [data-setting-row]{display:flex;flex-wrap:wrap;gap:8px 12px}
   [data-settings-panel] [data-settings-card] [data-settings-scroll] [data-setting-row]>:first-child{flex:1 1 max-content;min-width:0}
-  [data-settings-panel] [data-settings-card] [data-settings-scroll] [data-setting-row]:has(>span>small)>:first-child{flex-basis:0}
+  [data-settings-panel] [data-settings-card] [data-settings-scroll] [data-setting-row]>span>small{contain:inline-size}
   /* 说明折成几行时整块变高，控件居中会落到标题下面；对齐到顶部，和标题同一行。 */
   [data-settings-panel] [data-settings-card] [data-settings-scroll] [data-setting-row]:has(>span>small)>:last-child{align-self:flex-start}
   [data-settings-panel] [data-settings-card] [data-settings-scroll] [data-setting-row]>:last-child{flex:0 0 auto;margin-left:auto;max-width:100%}
@@ -339,9 +320,9 @@ html[data-theme-snapshot] [data-settings-panel] :is([data-settings-glide],[data-
 }
 @media (max-width:760px){[data-settings-panel] [data-settings-card]>[data-settings-nav]{min-width:0;max-width:100%}}
 /* 纯图标按钮不继承浏览器按钮的水平内边距。 */
-[data-settings-panel] :is([data-settings-head] button,[data-sidebar-row] button){padding:0;display:inline-grid;place-items:center;line-height:1;flex-shrink:0}
-[data-settings-panel] :is([data-settings-head] button,[data-sidebar-row] button)>svg{display:block;margin:0;flex-shrink:0;align-self:center;justify-self:center}
-[data-settings-panel] :is([data-settings-head] button,[data-sidebar-row] button)[hidden]{display:none}
+[data-settings-panel] [data-settings-head] button{padding:0;display:inline-grid;place-items:center;line-height:1;flex-shrink:0}
+[data-settings-panel] [data-settings-head] button>svg{display:block;margin:0;flex-shrink:0;align-self:center;justify-self:center}
+[data-settings-panel] [data-settings-head] button[hidden]{display:none}
 /* 进场用 backwards 而不是 both：终点帧本来就是元素的自然状态，保留它只多留下一个
    `filter:blur(0)`。非 none 的 filter 会另起一个 backdrop root，卡片里任何
    backdrop-filter 从此只采样得到卡片自己的内容——左栏的玻璃于是退化成一块半透明色。

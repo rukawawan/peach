@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { configurationBody, expectBody, layout, settle, visit, VIEWPORTS } from './harness.ts';
+import { CONFIGURATION_ROUTE, configurationBody, expectBody, layout, settle, visit, VIEWPORTS } from './harness.ts';
 import { followCredential, installDesignBrowser, openActivity, openFollowManage, settledRun } from './design-fixture.ts';
 import { openHome, openPanel, PANEL } from './settings-fixture.ts';
 
@@ -267,7 +267,7 @@ describe('设计决定：配置控件', () => {
       const opened = await visit(browser, '/settings/library', viewport);
       try {
         const page = opened.page;
-        await page.route('**/api/configuration', async (route) => {
+        await page.route(CONFIGURATION_ROUTE, async (route) => {
           const data = await (await route.fetch()).json();
           const paths = ['R:\\media', 'B:\\', 'A:\\'];
           await route.fulfill({ json: { ...data, editable: true, windows: true, media_dirs: paths, media_sources: paths.map((path, index) => ({

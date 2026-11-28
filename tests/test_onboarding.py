@@ -573,6 +573,30 @@ class SetupJsonContractTests(_SetupHttpCase):
             self.assertEqual(response.status_code, 400)
             self.assertFalse((self.data_root / "config.toml").exists())
 
+    def test_setup_saves_current_library_sharing_consent_in_the_selected_data_root(self):
+        from peach import library_sharing
+        scope = self._send("GET", self.QUESTIONS).json()["library_sharing"]
+        self.assertEqual(scope["field_codes"], list(library_sharing.FIELD_CODES))
+        selected = self.root / "selected-data"
+        choice = {"consent": True, "consent_schema": scope["consent_schema"]}
+        self._submit(data_root=str(selected), library_sharing=choice, scan_now=False)
+        config = settings_file.load_config(environ={"PEACH_DATA_ROOT": str(selected)})
+        self.assertEqual(library_sharing.consent_state(config), "enabled")
+        self.assertEqual(library_sharing.consent_state(self.config), "not-selected")
+
+    def test_setup_rejects_missing_or_stale_library_sharing_consent(self):
+        from peach import library_sharing
+        version = library_sharing.CONSENT_SCHEMA
+        for choice in (False, {"consent_schema": version},
+                       {"consent": True, "consent_schema": version - 1}):
+            with self.subTest(choice=choice):
+                response = self._send("POST", self.SUBMIT, json=self._body(library_sharing=choice))
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("library_sharing", response.json()["errors"])
+                self.assertFalse((self.data_root / "config.toml").exists())
+        self._submit(scan_now=False)
+        self.assertEqual(library_sharing.consent_state(self.config), "not-selected")
+
     def test_proxy_questions_expose_status_without_credentials_and_detect_docker(self):
         from peach import peach_proxy
         peach_proxy.save(self.config.directory("secrets"), {
@@ -926,6 +950,17 @@ class SetupJsonContractTests(_SetupHttpCase):
         mdns = next(item for item in data["questions"] if item["key"] == "mdns_name")
         self.assertEqual(mdns["prefix"], "http://")
         self.assertIn("http://peach.local:8900", mdns["help"][0])
+
+    def test_the_firewall_help_only_appears_for_windows_standalone_setup(self):
+        from types import SimpleNamespace
+        from peach.routes_pages import _question_view
+
+        question = SimpleNamespace(key="mdns_name")
+        with mock.patch.object(distribution, "standalone", return_value=True):
+            windows = _question_view(question, windows=True)
+            macos = _question_view(question, windows=False)
+        self.assertEqual(windows["help"], "pages.setup.question.mdnsName.standaloneWindowsHelp")
+        self.assertEqual(macos["help"], "pages.setup.question.mdnsName.standaloneHelp")
 
     def test_the_questions_are_guarded_like_the_submission_but_ignore_the_origin(self):
         cases = (

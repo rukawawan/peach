@@ -71,7 +71,8 @@ const open = (given: IndexProps) =>
   mount(<QueryClientProvider client={queryClient}><Shell {...given} /></QueryClientProvider>);
 
 const cells = (host: ParentNode) => [...host.querySelectorAll('[data-index-cell]')];
-const search = (host: ParentNode) => host.querySelector<HTMLInputElement>('[data-index-search] input')!;
+/** 名册的筛选框在页头；标签页有筛选浮层，查找在浮层下排。 */
+const search = (host: ParentNode) => host.querySelector<HTMLInputElement>('[data-index-search] input, [data-filter-search] input')!;
 const tab = (host: ParentNode, value: string) => host.querySelector(`[role="tab"][data-tab="${value}"]`);
 const alphaTag = (host: ParentNode, k: string) => host.querySelector(`[data-alpha-tag][data-k="${k}"]`);
 
@@ -433,10 +434,11 @@ describe('标签', () => {
     serve(() => ({ items: [tag('痴女')], has_more: false, categories: { role: 1 } }));
     const given = props({ kind: 'tags' });
     const host = await open(given);
-    // 状态那一组（使用中、已隐藏）平时也在，类型药丸跟在后面。
-    const pills = [...host.querySelectorAll('[data-tag-pill]')].map((pill) => pill.textContent);
-    expect(pills).toEqual(['使用中', '已隐藏', '全部', '角色设定', '情境场所']);
-    await click([...host.querySelectorAll('[data-tag-pill]')].find((pill) => pill.textContent === '角色设定'));
+    expect([...host.querySelectorAll('[data-tag-pill]')].map((pill) => pill.textContent)).toEqual(['使用中', '已隐藏']);
+    await click(host.querySelector('[data-table-column-filter="index-tag-category"]'));
+    expect([...document.querySelectorAll('[data-filter-option]')].map(option => option.getAttribute('data-filter-option')))
+      .toEqual(['all', 'role', 'scene']);
+    await click(document.querySelector('[data-filter-option="role"]'));
     expect(given.route).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'role' }), { replace: false });
   });
 

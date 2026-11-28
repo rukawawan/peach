@@ -123,6 +123,56 @@ class GitHubTestEvidenceTests(unittest.TestCase):
         with patch.object(evidence, 'selected_plan', return_value=(plan, ('full',))):
             self.assertEqual(self.validate(proof=proof, jobs=jobs, scopes=('web',))['scopes'], ['full'])
 
+    def merged(self, *, plan=None, **overrides):
+        """主线合并提交向 GitHub 查同内容 PR 运行：运行列表、作业与证明制品都由夹具回答。"""
+        values = {'run': self.run, 'proof': self.proof, 'jobs': self.jobs} | overrides
+
+        def api(_root, endpoint, **_options):
+            if '/workflows/test.yml/runs?' in endpoint:
+                self.assertIn(f'head_sha={self.head}', endpoint)
+                self.assertIn('event=pull_request', endpoint)
+                return {'workflow_runs': [values['run']]}
+            return {'total_count': len(values['jobs']), 'jobs': values['jobs']}
+        with patch.object(evidence, 'api', side_effect=api), \
+                patch.object(evidence, 'read_artifact', return_value=values['proof']):
+            return evidence.merged_pull_request(self.root, self.repo, self.base, plan or self.plan, ('checks',))
+
+    def test_a_mainline_merge_reuses_the_pull_request_run_that_passed_on_the_same_tree(self):
+        self.git('checkout', 'master')
+        self.git('merge', '--no-ff', '-m', "Merge branch 'agent/codex/proof' (#1)", 'agent/codex/proof')
+        receipt = self.merged()
+        self.assertEqual((receipt['run_id'], receipt['head'], receipt['tree']), (123, self.head, self.tree))
+        rejected = [{'run': self.run | {'head_repository': {'full_name': 'fork/peach'}}},
+                    {'run': self.run | {'conclusion': 'failure'}},
+                    {'proof': self.proof | {'tree': '0' * 40}},
+                    {'jobs': [self.jobs[0] | {'conclusion': 'failure'}, *self.jobs[1:]]},
+                    {'plan': self.plan | {'browser': True}},
+                    {'plan': self.plan | {'wide': True}}]
+        for change in rejected:
+            with self.subTest(change=sorted(change)):
+                self.assertIsNone(self.merged(**change))
+
+    def test_a_mainline_commit_with_other_content_runs_its_own_tests(self):
+        self.git('checkout', 'master')
+        with patch.object(evidence, 'api', side_effect=AssertionError('直接提交不查询 PR 运行')):
+            self.assertIsNone(evidence.merged_pull_request(self.root, self.repo, self.base, self.plan, ('checks',)))
+        (self.root / 'NOTES.md').write_text('mainline\n', encoding='utf8')
+        self.git('add', '--', 'NOTES.md')
+        self.git('commit', '-m', 'docs: mainline')
+        self.git('merge', '--no-ff', '-m', "Merge branch 'agent/codex/proof' (#1)", 'agent/codex/proof')
+        with patch.object(evidence, 'api', side_effect=AssertionError('合并后内容不同于 PR 头时不查询')):
+            self.assertIsNone(evidence.merged_pull_request(self.root, self.repo, self.base, self.plan, ('checks',)))
+
+    def test_a_pull_request_that_changed_the_protocol_is_not_reused_on_the_mainline(self):
+        (self.root / 'scripts/ci_plan.py').write_text('print("changed execution")\n', encoding='utf8')
+        self.git('add', '--', 'scripts/ci_plan.py')
+        self.git('commit', '-m', 'test: protocol')
+        head, tree = self.git('rev-parse', 'HEAD'), self.git('rev-parse', 'HEAD^{tree}')
+        self.git('checkout', 'master')
+        self.git('merge', '--no-ff', '-m', "Merge branch 'agent/codex/proof' (#1)", 'agent/codex/proof')
+        self.head = head
+        self.assertIsNone(self.merged(run=self.run | {'head_sha': head}, proof=self.proof | {'tree': tree}))
+
     def test_proof_archive_digest_and_attempt_are_verified(self):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, 'w') as archive:

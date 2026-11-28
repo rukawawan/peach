@@ -73,7 +73,17 @@ const field = (root: ParentNode, key: string) => root.querySelector<HTMLInputEle
 const radio = (root: ParentNode, label: string) =>
   [...root.querySelectorAll('label')].find((node) => node.textContent?.trim() === label);
 const advanced = (root: ParentNode) => [...root.querySelectorAll('summary')].find((node) => node.textContent === '高级设置');
+async function fillRequiredInputs(root: ParentNode) {
+  for (const path of paths(root)) if (!path.value) await type(path, 'D:\\Videos');
+  const password = root.querySelector<HTMLInputElement>('#access-password');
+  const confirmation = root.querySelector<HTMLInputElement>('#access-confirm');
+  if (!password || !confirmation) return;
+  if (!password.value) await type(password, 'setup-password');
+  if (!confirmation.value) await type(confirmation, password.value);
+}
+
 const submitForm = async (root: ParentNode) => {
+  await fillRequiredInputs(root);
   for (let count = 0; count < 3 && !buttonNamed('完成设置', root); count++) {
     await click(buttonNamed('开始设置', root) || buttonNamed('继续', root));
     await settle();
@@ -116,6 +126,7 @@ it('编辑草稿随步骤匹配场景标题、说明和操作文字', async () =
   apply();
   expect(caption()).toEqual(['私人馆藏。', '整理你的收藏。']);
   await click(buttonNamed('开始整理', host));
+  await fillRequiredInputs(host);
   apply();
   expect(caption()).toEqual(['让文件成为馆藏。', '按媒体库归类，文件保留在原来的位置。']);
   await click(buttonNamed('下一步', host));
@@ -133,14 +144,21 @@ it('编辑草稿随步骤匹配场景标题、说明和操作文字', async () =
 it('首启版本统计与错误诊断默认勾选，取消后共同关闭', async () => {
   const reporting = { usage: true, errors: true, available: false,
     fields: { usage: '版本与系统', errors: '异常链与错误码' }, notice: '不发送媒体信息' };
-  const { host, sent } = await open({ remote_reporting: reporting, access_enabled: false },
+  const librarySharing = { available: false, consent_schema: 5, fields: ['作品编号'], field_codes: [],
+    notice: '每周最多发送一次', notice_code: '' };
+  const { host, sent } = await open({ remote_reporting: reporting, library_sharing: librarySharing, access_enabled: false },
     { [SETUP_URL]: { status: 200, body: done() } });
   const reportingSwitches = host.querySelectorAll<HTMLInputElement>('input[aria-label="发送版本统计与错误诊断（推荐）"]');
   expect(reportingSwitches).toHaveLength(1);
   expect(reportingSwitches[0]!.checked).toBe(true);
   await click(reportingSwitches[0]!);
+  const consent = host.querySelector<HTMLInputElement>('input[role="switch"][aria-label="参与馆藏与偏好研究"]');
+  expect(consent?.checked).toBe(false);
+  expect([...host.querySelectorAll('[data-status-tone="neutral"]')].filter(node => node.textContent === '上传服务未配置')).toHaveLength(2);
+  await click(consent);
   await submitForm(host);
   expect(sent(SETUP_URL).remote_reporting).toEqual({ usage: false, errors: false });
+  expect(sent(SETUP_URL).library_sharing).toEqual({ consent: true, consent_schema: 5 });
 });
 
 /** 这句错误在页面上只有一份，落在一个 `role="alert"` 里，并由框的 `aria-describedby` 指到。 */
@@ -235,6 +253,28 @@ it('选「只有这台电脑」时局域网地址整项消失，也不随提交�
 });
 
 describe('访问密码', () => {
+  it('打开密码后，空密码、缺少确认和不匹配都留在访问步骤', async () => {
+    const { host, fetcher } = await open({ access_enabled: false });
+    await click(buttonNamed('开始设置', host));
+    await type(paths(host)[0], 'D:\\Videos');
+    await click(buttonNamed('继续', host));
+    await click(switches(host)[0]);
+    const password = host.querySelector<HTMLInputElement>('#access-password');
+    const confirmation = host.querySelector<HTMLInputElement>('#access-confirm');
+    await click(buttonNamed('继续', host));
+    expect(document.activeElement).toBe(password);
+    expectAnnounced(host, password, '请输入访问密码');
+    await type(password, 'setup-password');
+    await click(buttonNamed('继续', host));
+    expect(document.activeElement).toBe(confirmation);
+    expect(confirmation?.getAttribute('aria-invalid')).toBe('true');
+    await type(confirmation, 'wrong-password');
+    await click(buttonNamed('继续', host));
+    expectAnnounced(host, confirmation, '两次输入的密码不一致');
+    expect(buttonNamed('完成设置', host)).toBeNull();
+    expect(fetcher.mock.calls.some(([url]) => url === SETUP_URL)).toBe(false);
+  });
+
   it('切换访问范围保留已填写的密码，访问地址跟随表单值', async () => {
     const { host, sent } = await open({}, { [SETUP_URL]: { status: 200, body: done() } });
     await type(host.querySelector<HTMLInputElement>('#access-password'), 'secret-password');
@@ -273,9 +313,9 @@ describe('访问密码', () => {
 describe('Peach 代理', () => {
   const proxyMode = (host: ParentNode) => host.querySelector('[aria-labelledby="setup-proxy-title"] [aria-haspopup="listbox"]');
 
-  it('跟随环境为初始值，自定义地址随设置提交，直连不携带隐藏地址', async () => {
+  it('跟随系统为初始值，自定义地址随设置提交，直连不携带隐藏地址', async () => {
     const { host, sent } = await open({}, { [SETUP_URL]: { status: 400, body: { error: '稍后重试' } } });
-    expect(proxyMode(host)?.textContent).toContain('跟随环境');
+    expect(proxyMode(host)?.textContent).toContain('跟随系统');
     expect(host.querySelector('#setupProxyAddress')).toBeNull();
     await submitForm(host);
     expect(sent(SETUP_URL).peach_proxy).toEqual({ mode: 'environment', proxy: '' });
@@ -312,7 +352,7 @@ describe('Peach 代理', () => {
     expect(host.textContent?.includes('回环地址指向容器自身')).toBe(docker);
     await type(address, 'http://host.docker.internal:7890');
     expect(host.textContent).not.toContain('回环地址指向容器自身');
-    await choose(proxyMode(host), '跟随环境');
+    await choose(proxyMode(host), '跟随系统');
     expect(host.textContent).not.toContain('回环地址指向容器自身');
   });
 });
@@ -357,7 +397,9 @@ describe('媒体库', () => {
     await choose(rows(host)[0]!.querySelector('[aria-haspopup="listbox"]'), 'OneDrive');
     const policy = rows(host)[0]!.querySelector('[data-media-read-policy] [aria-haspopup="listbox"]');
     expect(policy?.textContent).toContain('选择读取策略');
-    await submitForm(host);
+    await click(buttonNamed('开始设置', host));
+    await click(buttonNamed('继续', host));
+    expect(document.activeElement).toBe(policy);
     expect(host.textContent).toContain('请选择媒体读取策略');
     await choose(policy, '正常读取');
     await submitForm(host);

@@ -183,6 +183,7 @@ function loadSlide(slide: Slide, item: ImmerseItem): Promise<void> {
   return new Promise((resolve) => {
     slide.release = mountPlayer(slide.video, {
       kind: 'immerse', item, session: slide.session, onLoaded: resolve,
+      resumeRestartPercent: immerseHost().resumeRestartPercent?.(),
       onEnded: () => { if (view.open) void step(1) },
       /* 字幕菜单跟着这一格的播放器走：轨道、加载文件、在线搜索与外观和舞台同一套。CC 键是这一格私有的
          空按钮，动作列的字幕键只管打开当前格的菜单，切片时不串到正在预载的那一格上。 */

@@ -194,7 +194,7 @@ class WesternSourceTests(unittest.TestCase):
 
     def test_graphql_errors_are_unavailable(self):
         def error(*args): return HttpResponse(200, {}, b'{"errors":[{"message":"blocked"}]}')
-        with self.assertRaisesRegex(ValueError, '未取得'):
+        with self.assertRaisesRegex(ValueError, '未返回有效资料'):
             artwork.official_scene(error, 'tushy', 'Lena Anderson', '2019-08-14')
 
     def test_malformed_search_and_detail_are_failures_not_missing_scenes(self):
@@ -269,7 +269,7 @@ class WesternSourceTests(unittest.TestCase):
 
     def test_a_different_profile_or_challenge_page_is_unavailable(self):
         for page in (b'<h1 id="babename">Melody Other</h1>', b'<title>Just a moment</title>'):
-            with self.assertRaisesRegex(ValueError, '未取得'):
+            with self.assertRaisesRegex(ValueError, '档案身份不匹配'):
                 artwork.babepedia_portraits(lambda *a, body=page: HttpResponse(200, {}, body), 'Melody Marks')
 
     def test_explicit_profile_alias_binds_a_different_stage_name(self):

@@ -7,9 +7,11 @@
 import { appSettingsStore } from '@peach/appearance';
 import type { CoverState } from '@peach/card-art';
 import { api } from '@peach/legacy/core';
+import { apiSend } from '../../api';
 
 import { withBackoff } from '../../polling';
 import { queryClient } from '../query';
+import { invalidateWants } from '../wants/wants';
 
 /** `/api/feeds/discoveries` 的回话：条目与最近一轮取封面断在连接上的部数。 */
 export interface FeedDiscoveries { items?: FeedNewItem[]; cover_network?: number; error?: string }
@@ -62,6 +64,16 @@ export const feedNewOptions = (entityId: number | null, rowHtml: FeedRowHtml) =>
 export const postFeedAction = (feedId: number, action: string): Promise<void> =>
   (api('/api/feeds/discovery', { method: 'POST', body: JSON.stringify({ action, ids: [feedId] }) }) as Promise<unknown>)
     .then(() => undefined, () => undefined);
+
+export async function applyFeedBatch(action: string, ids: readonly number[]): Promise<void> {
+  await apiSend('/api/feeds/discovery', { action, ids });
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['feed-new'] }),
+    queryClient.invalidateQueries({ queryKey: ['jav-releases'] }),
+    queryClient.invalidateQueries({ queryKey: ['jav-discoveries'] }),
+    invalidateWants(),
+  ]);
+}
 
 /** 首页那一行（`feed-new` island）。宿主是 `index.html` 里那块常驻的 `#feedNew`：岛的根挂在它
  *  里面的 `.peach-react` 上，卡片 portal 回宿主本身，落在 Preflight 的范围外。 */

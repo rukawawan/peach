@@ -310,7 +310,7 @@ class RecordTests(_StoreCase):
                                moment=MOMENT)
         self.assertEqual(outcome.added, 1)
         self.assertIsNone(outcome.evidence_path)
-        self.assertIn("证据未取得", outcome.evidence_error)
+        self.assertIn("无法写入证据目录", outcome.evidence_error)
         item = store.items()[0]
         self.assertEqual(item.title, "Fiona - Paizuri")
         self.assertIsNone(item.metadata.get("evidence_path"))
@@ -1839,6 +1839,14 @@ class EvidenceRetentionTests(_StoreCase):
         center = repair_center.snapshot(self.connection, {}, cloud_pending=0,
                                         follow_evidence_status=reclaim.status())
         self.assertNotIn("follow-evidence", [row["id"] for row in center["items"]])
+
+    def test_snapshot_cleanup_remains_visible_when_estimate_has_nothing_to_delete(self):
+        from peach import repair_center
+        center = repair_center.snapshot(self.connection, {}, cloud_pending=0,
+                                        follow_evidence_status={"phase": "ready", "files": 0, "bytes": 0})
+        item = next(row for row in center["items"] if row["id"] == "follow-evidence")
+        self.assertEqual(item["state"], "none")
+        self.assertNotIn("files", item)
 
 
 if __name__ == "__main__":

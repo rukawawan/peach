@@ -1,12 +1,9 @@
 import { useState } from 'react';
 
-import { SettingsRow } from '@/components/application/settings/settings-rows';
-import { Switch } from '@/components/base/switch/switch';
-import { StatusLabel } from '../components/status-label';
-
 import { apiSend } from '../../api';
-import { Disclosure, ErrorText, Help, Rows, Stack } from './section';
-import { busyProps, useAction } from './use-action';
+import { Disclosure, ErrorText, Help, Stack } from './section';
+import { SharingChoice } from './sharing-choice';
+import { useAction } from './use-action';
 import { codedText, serverLabel } from '../../core/server-text';
 import { interfaceLanguage, t } from '../../i18n';
 
@@ -21,15 +18,9 @@ export interface RemoteReportingState {
 export function ReportingChoices({ value, onChange, busy = false }: {
   value: RemoteReportingState; onChange(value: RemoteReportingState): void; busy?: boolean;
 }) {
-  return <>
-    <Rows>
-      <SettingsRow label={t('settings:dataSharing.reportErrors')} description={t('settings:dataSharing.reportErrorsHelp')}>
-        <Switch aria-label={t('settings:dataSharing.reportErrors')} isSelected={value.usage && value.errors}
-          onChange={(enabled) => onChange({ ...value, usage: enabled, errors: enabled })} {...busyProps(busy)} />
-      </SettingsRow>
-    </Rows>
-    {!value.available ? <Stack divided><span className="self-start"><StatusLabel>{t('settings:librarySharing.unavailable')}</StatusLabel></span></Stack> : null}
-  </>;
+  return <SharingChoice label={t('settings:dataSharing.reportErrors')} description={t('settings:dataSharing.reportErrorsHelp')}
+    selected={value.usage && value.errors} available={value.available} busy={busy}
+    onChange={(enabled) => onChange({ ...value, usage: enabled, errors: enabled })} />;
 }
 
 export function RemoteReportingSettings({ initial, receipt }: {

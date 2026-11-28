@@ -160,7 +160,7 @@ class LandingTests(Case):
     def test_a_refused_site_is_unfetched_cools_down_and_retries_later(self):
         creator = self.entity("lucky")
         self.transport.pages[page_url("sougouwiki", "lucky")] = (403, b"")
-        self.assertEqual(told(self.run_followup(creator))["outcome"], "未取得")
+        self.assertEqual(told(self.run_followup(creator))["outcome"], "采集失败")
         self.assertEqual(self.claims(creator), set())
         self.assertTrue(paused_until(self.cooldown, SEESAA.name))
         self.assertFalse(paused_until(self.cooldown, AV_NEME.name))

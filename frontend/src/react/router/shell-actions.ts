@@ -24,6 +24,7 @@ export interface ShellActions {
   closeSettings?(): void;
   /** 打开作品详情（舞台）。 */
   openItem(id: number): void;
+  catalogFileAction?(operation: 'like' | 'seen' | 'later', ids: number[], button: HTMLElement): Promise<unknown>;
   /** 打开实体资料页。`kind` 是 `creator`／`performer` 等。 */
   openEntity(kind: string, name: string): void;
   /** 回目录并按这个标签筛选。 */
@@ -62,6 +63,7 @@ export interface ShellActions {
   savePeopleLayout(patch: { layout: PeopleLayout }): void;
   /** 退出顶栏的选择模式：键归壳。 */
   exitSelectMode(): void;
+  clearMediaSelection?(): void;
   /** 本地名册一格的头像（圆框里那段 HTML 与人脸取景），回落链在壳里只有一份。 */
   personAvatar(item: IndexPerson, entityKind: string, big: boolean): PersonAvatar;
   /** 在线创作者一格的头像 HTML：主页头像优先、归档兜底，都取不到落回首字母。 */
@@ -73,6 +75,7 @@ export interface ShellActions {
   openFollowTag(tag: string): void;
   /** 打开一份播放列表的播放队列（舞台），从 `resumeAssetId` 那一个接着播。 */
   openPlaylist(id: number, resumeAssetId: number): void;
+  playSavedFilter(id: string): void;
   /** 此刻能不能悬停翻页：壳的多选、遮挡、减少动效与滚动中都回 false。 */
   canFlip(): boolean;
   /** 页面组换了一页：路由树里的页面元素挂上、开始取数之前报一次。壳收起上一页留下的面（悬停预览、在途读请求、
@@ -165,6 +168,7 @@ export type SurfaceKind = 'management' | 'index' | 'entity' | 'catalog' | 'follo
 export interface ManagedOpenProps extends Record<ConfigurationPath, { section?: string }>,
   Record<import('../../cleanup-tools').CleanupToolPath, Record<string, never>> {
   '/jav': { tab: string; readOnly: boolean };
+  '/ai': Record<string, never>;
   '/stats': Record<string, never>;
   '/taste': { onboarding: boolean };
   '/review': { category: string; queue?: string; readOnly: boolean; readOnlyMessage: string; writerUrl: string };

@@ -65,6 +65,10 @@ export function setNarrowSearchOpen(open){
   applicationEffects.handler(motion, 'onfinish', ()=>{if(searchState.searchMorph===motion)finishSearchMorph()});
 }
 
+function cropOwnsKeyboard(){
+  return !!document.querySelector('[data-modal-kind="cover-crop"]:not([data-exiting]),[data-modal-kind="avatar-picker"]:not([data-exiting]):has([data-crop-box])');
+}
+
 export function activeVideo(){
   if(mediaState.immerseOpen())return immerseApi().activeVideo();
   return stageApi()?.activeVideo()||null;
@@ -122,7 +126,8 @@ applicationEffects.listen($('#q'), 'pointerdown', e=>{if(e.currentTarget.value)c
 
 export function installSearch22() {
 applicationEffects.own(installHoldSpeed({
-  activeVideo:()=>!applicationEffects.isActive || settingsPanelApi()?.isOpen()
+  // 右键长按在窗口捕获阶段就取当前播放器，取景框的 preventDefault 尚未执行。
+  activeVideo:()=>!applicationEffects.isActive || settingsPanelApi()?.isOpen() || cropOwnsKeyboard()
     || document.querySelector('#stage[open] [data-media-carousel]:not([data-carousel-video-active])')
     ? null : activeVideo(),
   seek:video=>seekVideoBy(video,preferencesState.appSettings.seekSeconds),
@@ -161,7 +166,7 @@ applicationEffects.listen(document, 'keydown', e=>{
        菜单）先收掉的会 `preventDefault`，那一下只关弹层。焦点落在浮窗外（body）时在这里转给舞台。 */
     /* 详情上面又开了一层挂在 body 的模态框（编辑资料、确认框）：这一下由浏览器关那一层，舞台留着。 */
     const modal=e.target instanceof Element?e.target.closest('dialog[open]'):null;
-    if(modal&&modal.id!=='stage'&&mediaState.stageOpen())return;
+    if(modal&&modal.id!=='stage')return;
     if(mediaState.stageOpen()){if(!e.defaultPrevented){e.preventDefault();stageApi().requestEscape()}return}
     /* 这一下已经被浮窗或弹层用掉了：舞台可能在冒泡到这里之前就关完，不能再顺手收侧栏或退出多选。 */
     if(e.defaultPrevented)return;
@@ -174,7 +179,8 @@ applicationEffects.listen(document, 'keydown', e=>{
   // SFW 开关键（默认 Shift+S，可在设置里改）：有人走近时不必先打开设置（同 javm 的老板键
   // `2304ab2`）。绑定必带修饰键，所以要在下一行放过修饰键组合之前比对。
   if(!e.defaultPrevented&&matchesShortcut(e,sfwShortcut())){e.preventDefault();setCensored(!censorOn());return}
-  if(e.defaultPrevented||e.target.closest?.('select,[role="menu"],.vjs-peach-settings-menu,media-volume-slider'))return;
+  if(e.defaultPrevented||e.target.closest?.('select,[role="menu"],.vjs-peach-settings-menu,media-volume-slider,[data-player-stats]'))return;
+  if(cropOwnsKeyboard())return;
   // Ctrl（macOS 为 Command）加左右方向键按长步长快进快退。
   if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){
     const longVideo=activeVideo();

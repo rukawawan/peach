@@ -37,11 +37,11 @@ describe('本地与在线艺人共用名册布局', () => {
           await settle(page);
           const read = () => page.locator('[data-index-head]').evaluate(head => {
             const title = head.querySelector('h2')!.getBoundingClientRect();
-            const search = head.querySelector('[data-index-search]')!.getBoundingClientRect();
+            const search = head.querySelector('[data-index-search]')?.getBoundingClientRect();
             const controls = [...head.querySelectorAll('[data-shortcuts-trigger],[data-tag-mode],[data-index-layout]')];
             return {
-              searchWidth: search.width,
-              centers: [search, ...controls.map(node => node.getBoundingClientRect())].map(box => (box.top + box.bottom - title.top - title.bottom) / 2),
+              searchWidth: search?.width ?? null,
+              centers: [...(search ? [search] : []), ...controls.map(node => node.getBoundingClientRect())].map(box => (box.top + box.bottom - title.top - title.bottom) / 2),
               contained: controls.every(node => { const box = node.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth }),
               overflow: document.documentElement.scrollWidth > innerWidth,
             };
@@ -51,7 +51,9 @@ describe('本地与在线艺人共用名册布局', () => {
             await settle(page);
             const shown = await read();
             assert.ok(shown.centers.every(delta => Math.abs(delta) < 1), `${width}px 操作或搜索框没有和标题同排：${JSON.stringify(shown)}`);
-            assert.ok(shown.searchWidth >= 64 && shown.searchWidth <= 320, `${width}px 搜索框没有保持可输入宽度：${shown.searchWidth}`);
+            // 标签页的查找在筛选浮层里，页头没有搜索框。
+            if (path.startsWith('/tags')) assert.equal(shown.searchWidth, null);
+            else assert.ok(shown.searchWidth !== null && shown.searchWidth >= 64 && shown.searchWidth <= 320, `${width}px 搜索框没有保持可输入宽度：${shown.searchWidth}`);
             assert.equal(shown.contained, true);assert.equal(shown.overflow, false);
             if (managing) await page.locator('[data-tag-mode]').click();
           }
@@ -154,7 +156,7 @@ describe('本地与在线艺人共用名册布局', () => {
           await page.locator('#index [data-index-page]').waitFor();
           assert.deepEqual(await page.locator('#index [role="tab"]').allTextContents(), ['艺人', '卖家', '在线']);
           const ready = await headControls(page, {
-            search: '#index [data-index-search] [role="presentation"]', icon: '#index [data-index-search] svg',
+            search: '#index [data-index-search] [data-rac]', icon: '#index [data-index-search] svg',
             layout: '#index [data-index-layout]' });
           // 标题行的搜索框与版式开关接管时原地换下：框高、竖向落位、图标与开关宽度都不跳。
           // 横向位置跟着计数读数的字宽走，骨架那条占位条量不出真数字，不比。

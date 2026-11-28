@@ -366,6 +366,7 @@ class SubmitTests(_Deployment):
 class PollingTests(_Deployment):
     def test_the_poll_interval_backs_off_and_caps(self):
         self.assertEqual([dl.poll_delay(n) for n in (0, 1, 2, 6, 40)], [10, 30, 60, 900, 900])
+        self.assertEqual(dl.poll_delay(40, ceiling=dl.LOCAL_POLL_CEILING), 60)
         task_id = self.submit()["task"]["id"]
         for _ in range(4):
             self.tick(dl.POLL_DELAYS[-1])
@@ -723,7 +724,8 @@ class SettingsTests(_Deployment):
         loaded = self.service.settings.load()
         self.assertEqual(loaded.payload(), stored)
         self.assertIn("端口", loaded.problems[0])
-        self.assertEqual(dl.problem_codes(loaded.problems), [{"code": "errors.downloads.addressPortInvalidIpv6", "params": {}}])
+        self.assertEqual(dl.problem_codes(loaded.problems),
+                         [{"code": "errors.downloads.addressPortInvalidIpv6", "params": {"label": "CloudDrive2"}}])
         self.assertEqual(path.read_bytes(), payload)
         corrected = self.service.settings.save({**stored, "clouddrive_address": "localhost:19798"}, None)
         self.assertEqual(corrected.problems, ())
@@ -811,6 +813,24 @@ class SettingsTests(_Deployment):
         last = self.service.snapshot(2, before_id=second["next_before_id"])
         self.assertEqual([row["id"] for row in last["tasks"]], [1])
         self.assertFalse(last["has_more"])
+
+    def test_snapshot_search_matches_code_title_and_names_and_pages_within_the_matches(self):
+        for number, (name, code, title) in enumerate([
+                ("ABC-123 1080p", "ABC-123", "示例作品"), ("random_file", "XYZ-900", "另一部"),
+                ("abc-123 字幕", "ABC-123", ""), ("100%_off", None, None), ("plain", None, None)]):
+            self.service.store.save(dl.DownloadTask(
+                id=0, info_hash=f"{number:040x}", provider="115", source_uri=MAGNET,
+                display_name=name, target="/cloud", state=dl.SUBMITTED, code=code, title=title))
+        found = self.service.snapshot(1, q=" abc-123 ")
+        self.assertEqual((found["total"], [row["id"] for row in found["tasks"]], found["has_more"]), (2, [3], True))
+        older = self.service.snapshot(1, before_id=found["next_before_id"], q="abc-123")
+        self.assertEqual(([row["id"] for row in older["tasks"]], older["has_more"]), ([1], False))
+        self.assertEqual([row["id"] for row in self.service.snapshot(q="另一部")["tasks"]], [2])
+        # `%` 与 `_` 是文件名里的普通字符，不当通配符。
+        self.assertEqual([row["id"] for row in self.service.snapshot(q="0%_o")["tasks"]], [4])
+        self.assertEqual(self.service.snapshot(q="_")["total"], 2)
+        self.assertEqual(self.service.snapshot(q="没有这一条")["total"], 0)
+        self.assertEqual(self.service.snapshot()["total"], 5)
 
 
 class CredentialSaveTests(unittest.TestCase):

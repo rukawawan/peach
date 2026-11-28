@@ -50,7 +50,7 @@ export function useTableFilters<T>(items: readonly T[], columns: Record<string, 
     onChange();
   };
 
-  const header = (id: string, label: string) => {
+  const header = (id: string, label: string, copyKey?: string) => {
     const filter = columns[id];
     if (!filter) return null;
     const selection = values[id];
@@ -61,7 +61,7 @@ export function useTableFilters<T>(items: readonly T[], columns: Record<string, 
         const value = matches(item, id) ? filter.value(item) : null;
         return value == null ? [] : [value];
       }) : undefined;
-      return <TableColumnRange id={id} label={label} kind={filter.range}
+      return <TableColumnRange id={id} label={label} copyKey={copyKey} kind={filter.range}
         value={isColumnRange(selection) ? selection : undefined} rangeValues={rangeValues} onChange={change} />;
     }
     const options = () => {
@@ -81,7 +81,7 @@ export function useTableFilters<T>(items: readonly T[], columns: Record<string, 
           label: id || t('cleanup:shared.none'), ...filter.option?.(id, representatives.get(id)) }))
         .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
     };
-    return <TableColumnFilter id={id} label={label} options={options}
+    return <TableColumnFilter id={id} label={label} copyKey={copyKey} options={options}
       values={isColumnRange(selection) ? undefined : selection} onChange={change} />;
   };
   return { items: filtered, header, values, clear: (id: string) => changeFilter(id, undefined) };

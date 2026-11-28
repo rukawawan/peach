@@ -15,7 +15,7 @@ DMM 女优编号现拼，这里只负责从女优页认人。认人先看页面�
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from . import entities, feeds, web_feeds
 from .jav_browser import source_site
@@ -94,8 +94,11 @@ def performer_status(contract, preview, source_url: str, names=()) -> dict:
         found = _resolve(connection, page)
         following = feeds.entity_following(connection, int(found["id"])) if found else False
     avatar = entity_avatar(contract, preview, int(found["id"])) if found else ""
+    name = str(found["canonical_name"]) if found else (page["names"] or [""])[0]
+    selection = ("/subscriptions?" + urlencode({"tab": "add", "performer": name}) + "#add-jav-subscription"
+                 if page["site"] == "missav" and not following and name else "")
     return {"ok": True, "site": page["site"],
-            "name": str(found["canonical_name"]) if found else (page["names"] or [""])[0],
+            "name": name, **({"selection_url": selection} if selection else {}),
             "entity_id": int(found["id"]) if found else None,
             "following": following, **({"avatar": avatar} if avatar else {})}
 
@@ -134,12 +137,17 @@ def _follow_dmm(contract, page: dict) -> None:
 def _follow_by_search(contract, page: dict, found) -> None:
     """只有名字的页：按名字到 JavDB 搜，名字对得上、又能确认是同一个人的卡才登记并订。"""
     names = list(dict.fromkeys([*([str(found["canonical_name"])] if found else []), *page["names"]]))
+    unavailable = None
     for name in names:
         result = web_feeds.q_feed_lookup(contract, {"q": name})
         if result["suggested"]:
             web_feeds.w_feed_source(contract, {"action": "follow-name", "ids": result["suggested"],
                                                "name": str(found["canonical_name"]) if found else name})
             return
+        if unavailable is None and result.get("unavailable_code"):
+            unavailable = UserValueError(result["unavailable_code"], result.get("unavailable_params"))
+    if unavailable is not None:
+        raise unavailable
     raise UserValueError("api.javBrowserPerformer.javdbUnconfirmed", {"name": names[0]})
 
 

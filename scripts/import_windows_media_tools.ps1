@@ -75,18 +75,54 @@ function Install-PeachBinary([string]$Source, [string]$RelativeDirectory, [strin
     $Copies += @(Get-ChildItem -LiteralPath $SourceDirectory -Filter '*.dll' -File -ErrorAction SilentlyContinue)
     New-Item -ItemType Directory -Path $TargetDirectory -Force | Out-Null
     $BackupDirectory = Join-Path $DataRoot ('tools\import-backup-' + [guid]::NewGuid().ToString('N'))
-    foreach ($File in $Copies) {
+    $Changes = @(foreach ($File in $Copies) {
         $Target = Join-Path $TargetDirectory $File.Name
         if ([IO.Path]::GetFullPath($File.FullName) -eq [IO.Path]::GetFullPath($Target)) { continue }
+        $Expected = (Get-FileHash -LiteralPath $File.FullName).Hash
+        $Previous = $null
         if (Test-Path -LiteralPath $Target -PathType Leaf) {
-            if ((Get-FileHash -LiteralPath $Target).Hash -eq (Get-FileHash -LiteralPath $File.FullName).Hash) { continue }
-            New-Item -ItemType Directory -Path $BackupDirectory -Force | Out-Null
-            Copy-Item -LiteralPath $Target -Destination (Join-Path $BackupDirectory $File.Name)
+            $Previous = (Get-FileHash -LiteralPath $Target).Hash
+            if ($Previous -eq $Expected) { continue }
+            $Writable = [IO.File]::Open($Target, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+            $Writable.Dispose()
         }
-        Copy-Item -LiteralPath $File.FullName -Destination $Target -Force
-        if ((Get-FileHash -LiteralPath $Target).Hash -ne (Get-FileHash -LiteralPath $File.FullName).Hash) {
-            throw "File copy verification failed: $Target"
+        [pscustomobject]@{
+            Source = $File.FullName
+            Target = $Target
+            Expected = $Expected
+            Previous = $Previous
+            Backup = Join-Path $BackupDirectory $File.Name
         }
+    })
+    foreach ($Change in $Changes | Where-Object Previous) {
+        New-Item -ItemType Directory -Path $BackupDirectory -Force | Out-Null
+        Copy-Item -LiteralPath $Change.Target -Destination $Change.Backup
+    }
+    $Started = [Collections.Generic.List[object]]::new()
+    try {
+        foreach ($Change in $Changes) {
+            $Started.Add($Change)
+            Copy-Item -LiteralPath $Change.Source -Destination $Change.Target -Force
+            if ((Get-FileHash -LiteralPath $Change.Target).Hash -ne $Change.Expected) {
+                throw "File copy verification failed: $($Change.Target)"
+            }
+        }
+    } catch {
+        for ($Index = $Started.Count - 1; $Index -ge 0; $Index--) {
+            $Change = $Started[$Index]
+            try {
+                if ($Change.Previous) {
+                    if ((Get-FileHash -LiteralPath $Change.Target -ErrorAction SilentlyContinue).Hash -ne $Change.Previous) {
+                        Copy-Item -LiteralPath $Change.Backup -Destination $Change.Target -Force
+                    }
+                } elseif (Test-Path -LiteralPath $Change.Target -PathType Leaf) {
+                    Remove-Item -LiteralPath $Change.Target -Force
+                }
+            } catch {
+                Write-Warning "Could not restore $($Change.Target): $($_.Exception.Message)"
+            }
+        }
+        throw
     }
     Write-Output "READY: $TargetDirectory"
 }
@@ -100,14 +136,14 @@ try {
             $ArchiveFolders = @($SearchRoots)
             if ($ArchiveFolders.Count -eq 0) { $ArchiveFolders = @("$env:USERPROFILE\Downloads", $PSScriptRoot, (Split-Path -Parent $PSScriptRoot)) }
             foreach ($Folder in $ArchiveFolders) {
-                $CandidateArchive = Join-Path $Folder 'ffmpeg-9.0.2-essentials_build.zip'
+                $CandidateArchive = Join-Path $Folder 'ffmpeg-9.1-essentials_build.zip'
                 if (Test-Path -LiteralPath $CandidateArchive -PathType Leaf) { $ArchivePath = $CandidateArchive; break }
             }
         }
         if ($ArchivePath) {
-            $ExpectedHash = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba'
+            $ExpectedHash = 'b9bbbb3acece000cbeec994f856649354e52c773807841e78908374b24d658fd'
             if ((Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ExpectedHash) {
-                throw 'The FFmpeg ZIP does not match the verified Gyan 9.0.2 essentials download. Download the exact linked file again.'
+                throw 'The FFmpeg ZIP does not match the verified Gyan 9.1 essentials download. Download the exact linked file again.'
             }
             $ExtractionRoot = Join-Path ([IO.Path]::GetTempPath()) ('peach-ffmpeg-import-' + [guid]::NewGuid().ToString('N'))
             Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ExtractionRoot
@@ -118,7 +154,7 @@ try {
         Write-Output "Found FFmpeg: $FFmpeg"
         Install-PeachBinary $FFmpeg 'ffmpeg\bin' @('ffmpeg.exe', 'ffprobe.exe')
     } else {
-        Write-Output 'NOT FOUND: ffmpeg.exe. Put ffmpeg-9.0.2-essentials_build.zip in Downloads, then run this script again.'
+        Write-Output 'NOT FOUND: ffmpeg.exe. Put ffmpeg-9.1-essentials_build.zip in Downloads, then run this script again.'
     }
     $Untrunc = Find-PeachBinary 'untrunc.exe' $Roots
     if ($Untrunc) {

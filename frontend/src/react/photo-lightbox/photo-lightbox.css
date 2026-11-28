@@ -45,6 +45,15 @@
   color: #fff;
 }
 
+/* 全屏灯箱复用模态面板的时序，只过渡透明度。 */
+.peach-react [data-photo-lightbox]:not([open]) { display: none; }
+.peach-react [data-photo-lightbox][open] { transition: opacity var(--modal-surface-motion); }
+.peach-react [data-photo-lightbox][data-exiting] { opacity: 0; pointer-events: none; }
+.peach-react [data-photo-lightbox][data-motion-instant] { transition: none; }
+@starting-style {
+  .peach-react [data-photo-lightbox][open] { opacity: 0; }
+}
+
 /* 全站焦点环（`01-base.css`）把 React 子树排除在外，这里自己画同一副。 */
 .peach-react [data-photo-lightbox] :focus-visible {
   outline: 2px solid var(--tungsten);
@@ -130,11 +139,6 @@
   flex: none;
   width: 24px;
   height: 24px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .peach-react [data-photo-close] {
   top: 12px;
@@ -270,15 +274,17 @@
   background: rgba(0, 0, 0, .78);
   color: #fff;
 }
-.peach-react [data-photo-detail-toggle] svg {
-  display: block;
-  width: 20px;
-  height: 20px;
+.peach-react [data-photo-lightbox] :is([data-photo-close], [data-photo-nav], [data-photo-detail-toggle], [data-photo-zoom]) svg {
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+.peach-react [data-photo-detail-toggle] svg {
+  display: block;
+  width: 20px;
+  height: 20px;
 }
 
 .peach-react [data-photo-zoom] {
@@ -311,9 +317,6 @@
   display: block;
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
 }
 .peach-react [data-photo-zoom] [data-photo-scale] {
   width: 30px;

@@ -1,0 +1,12 @@
+[data-filter-menu-scroll-host] {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+[data-filter-menu-scroll] {
+  max-height: min(18rem, 42dvh);
+  overflow: hidden auto;
+  overscroll-behavior-y: contain;
+  padding-inline: 12px 16px;
+}
+[data-filter-menu-scroll-host] > [data-overlay-scrollbar-axis="y"] { margin-inline-end: 3px; }

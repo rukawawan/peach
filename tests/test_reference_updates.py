@@ -155,6 +155,7 @@ class ReferenceUpdateTests(unittest.TestCase):
              "vercel-geist-tabs-secondary",
              "vercel-geist-switch-segmented",
              "boardui-input",
+             "boardui-modal",
              "boardui-theme",
              "boardui-auth-card",
              "fluid-springs", "fluid-tabs",
@@ -239,7 +240,7 @@ class ReferenceUpdateTests(unittest.TestCase):
             self.assertTrue(any("快照校验失败" in problem for problem in problems))
 
     def _git_source(self, root: Path, **extra) -> dict:
-        (root / "snapshot.md").write_text("same\n", encoding="utf-8")
+        (root / "snapshot.md").write_bytes(b"same\n")
         return {
             "id": "example",
             "url": "https://example.invalid/reference.md",
@@ -260,19 +261,56 @@ class ReferenceUpdateTests(unittest.TestCase):
             self.assertFalse(result["changed"])
             self.assertTrue(result["revision_moved"])
 
+    def test_a_pinned_raw_url_fetches_and_accepts_the_resolved_revision(self):
+        import argparse
+        import json
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self._git_source(root)
+            old = "a" * 40
+            new = "b" * 40
+            source["url"] = f"https://raw.githubusercontent.com/o/r/{old}/reference.md"
+            expected_url = f"https://raw.githubusercontent.com/o/r/{new}/reference.md"
+            fetcher = mock.Mock(return_value=b"updated\n")
+            inspect = self.checker.inspect_source
+            registry = root / "docs" / "reference-sources.json"
+            registry.parent.mkdir()
+            registry.write_text(json.dumps({"sources": [source]}), encoding="utf-8")
+
+            def inspect_latest(root, source):
+                return inspect(root, source, fetcher=fetcher, revision_resolver=lambda _source: new)
+
+            args = argparse.Namespace(
+                registry=registry, source=source["id"],
+                expected_sha256=self.checker.sha256_bytes(b"updated\n"), expected_revision=new,
+            )
+            with mock.patch.object(self.checker, "inspect_source", side_effect=inspect_latest):
+                self.assertEqual(self.checker.command_accept(args), 0)
+
+            fetched = self.checker.load_registry(registry)["sources"][0]
+            fetcher.assert_called_once_with(expected_url)
+            self.assertEqual(fetched["url"], expected_url)
+            self.assertEqual(fetched["git"]["revision"], new)
+            self.assertEqual((root / source["snapshot"]).read_bytes(), b"updated\n")
+
     def test_a_volatile_page_is_judged_by_its_revision_alone(self):
         with tempfile.TemporaryDirectory() as temp:
             source = self._git_source(Path(temp), volatile=True)
+            fetcher = mock.Mock(side_effect=AssertionError("volatile HTML is not snapshot evidence"))
             same_revision = self.checker.inspect_source(
-                Path(temp), source, fetcher=lambda _url: b"session token 123\n",
+                Path(temp), source, fetcher=fetcher,
                 revision_resolver=lambda _source: "a" * 40,
             )
             moved = self.checker.inspect_source(
-                Path(temp), source, fetcher=lambda _url: b"session token 456\n",
+                Path(temp), source, fetcher=fetcher,
                 revision_resolver=lambda _source: "b" * 40,
             )
             self.assertFalse(same_revision["changed"])
             self.assertTrue(moved["changed"])
+            self.assertEqual(moved["live"], b"same\n")
+            self.assertEqual(moved["diff"], "")
+            fetcher.assert_not_called()
 
     def test_every_source_has_a_cadence_and_volatile_pages_without_git_are_manual(self):
         with tempfile.TemporaryDirectory() as temp:

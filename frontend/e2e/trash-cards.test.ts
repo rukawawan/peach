@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, requiredEnv, VIEWPORTS } from './harness.ts';
+import { isolateBrowseSettings, launch, requiredEnv, VIEWPORTS } from './harness.ts';
 
 describe('回收站卡片', () => {
   let browser: Browser;
@@ -12,6 +12,7 @@ describe('回收站卡片', () => {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       try {
         const page = await context.newPage();
+        await isolateBrowseSettings(page, { catalogView: 'cards' });
         await page.addInitScript(() => localStorage.setItem('peach.settings.v1', JSON.stringify({ detailAutoplay: false })));
         const reasons = ['manual', 'junk', 'duplicate', 'missing', null];
         const items = Array.from({ length: 10 }, (_, i) => ({

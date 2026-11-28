@@ -88,12 +88,21 @@ describe('关注与馆藏共用卡片交互', () => {
     try {
       const page = opened.page;
       const creator = page.locator('[data-follow-detail-identity] a[data-id-cell]');
-      await creator.hover();
       const face = creator.locator('[data-id-face]');
       assert.deepEqual(await face.evaluate(node => {
+        const frame = node.getBoundingClientRect();
         const style = getComputedStyle(node);
-        return [style.width, style.height];
-      }), ['46px', '46px']);
+        const avatar = node.firstElementChild!;
+        const { x, y, width, height } = avatar.getBoundingClientRect();
+        const avatarStyle = getComputedStyle(avatar);
+        return {
+          frame: [style.width, style.height],
+          fillsFrame: x === frame.x && y === frame.y && width === frame.width && height === frame.height,
+          background: avatarStyle.backgroundColor,
+          outline: avatarStyle.outlineStyle,
+        };
+      }), { frame: ['46px', '46px'], fillsFrame: true, background: 'rgba(0, 0, 0, 0)', outline: 'none' });
+      await creator.hover();
       assert.notEqual(await face.evaluate(node => getComputedStyle(node).boxShadow), 'none');
       await creator.focus();
       assert.notEqual(await creator.evaluate(node => getComputedStyle(node).outlineStyle), 'none');
@@ -115,14 +124,14 @@ describe('关注与馆藏共用卡片交互', () => {
       assert.deepEqual([hovered.inside, hovered.top, hovered.bottom], [true, true, true],
         '接着看的卡片内容与悬停面不越过横排的裁切边');
       assert.notEqual(hovered.fill, hovered.ground, '悬停面和接着看底色同色，浅色主题下看不出悬停');
-      const geometry =await page.locator('[data-follow-detail-actions]').evaluate(node => {
+      const geometry = await page.locator('[data-follow-detail-actions]').evaluate(node => {
         const styles = [...node.querySelectorAll('button, a')].map(button => {
           const style = getComputedStyle(button);
           return [style.width, style.height, style.borderRadius];
         });
         return styles;
       });
-      assert.ok(geometry.length > 3);
+      assert.ok(geometry.length >= 4);
       assert.ok(geometry.every(style => JSON.stringify(style) === JSON.stringify(geometry[0])), JSON.stringify(geometry));
       const row = page.locator('[data-follow-related] [data-related-row]');
       const scroll = await row.evaluate(node => {
@@ -141,7 +150,7 @@ describe('关注与馆藏共用卡片交互', () => {
       });
       await next.locator('[data-follow-open]').click();
       await page.waitForFunction(id => location.pathname === `/posts/${id}`, id);
-      await page.locator('#stage [data-follow-detail-name]').filter({ hasText: `演示更新 ${id}` }).waitFor();
+      await page.locator('#stage [data-follow-detail] [data-detail-title]').filter({ hasText: `演示更新 ${id}` }).waitFor();
       assert.deepEqual(singleRequests, [], '接着看已有条目缓存却再次单条取数');
       await page.locator('#closeStage').click();
       await page.waitForFunction(() => location.pathname === '/follow');

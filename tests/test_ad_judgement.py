@@ -3,6 +3,7 @@
 样本全部来自 2026-08-15 的真实误判与用户手工标记的真广告：命中推广词本身
 不是证据，要看剥掉推广词后还剩不剩内容。
 """
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -307,6 +308,26 @@ class ResourceJunkQueueTests(unittest.TestCase):
     def disposals(self):
         with closing(sqlite3.connect(self.db_path)) as connection:
             return dict(connection.execute("SELECT id, disposal_reason FROM asset WHERE disposal='trash'").fetchall())
+
+    def test_search_narrows_the_listing_and_the_bulk_disposal_alike(self):
+        # 搜索词走 `column_filters` 里的 `q`：读到的是搜索结果，「全部移入回收站」动的也只是这些。
+        for asset_id in range(1000, 1006):
+            self.add(asset_id, "local", rf"R:\media\入口{asset_id}.url", "other", 128)
+        filters = json.dumps({"q": " 入口1003 "})
+        found = q_ads(self.contract, kind="url", column_filters=filters)
+        self.assertEqual((found["total"], [item["id"] for item in found["items"]]), (1, [1003]))
+        self.assertEqual(q_ads(self.contract, kind="url", column_filters=json.dumps({"q": "没有这个文件"}))["total"], 0)
+        with self.assertRaises(ValueError):
+            web_batch.w_ads_dispose_all(self.contract, {
+                "kind": "url", "status": "pending", "expected": 6, "column_filters": filters})
+        self.assertEqual(self.disposals(), {})
+
+        result = web_batch.w_ads_dispose_all(self.contract, {
+            "kind": "url", "status": "pending", "expected": 1, "column_filters": filters})
+
+        self.assertEqual((result["changed"], result["ids"]), (1, [1003]))
+        self.assertEqual(list(self.disposals()), [1003])
+        self.assertEqual(q_ads(self.contract, kind="url")["total"], 5)
 
     def test_dispose_all_moves_every_undecided_item_of_the_kind_beyond_one_page(self):
         # 网址快捷方式在媒体目录里直接进待判断：造 205 条，比页面一次取回的 200 条多。

@@ -133,6 +133,23 @@ const stateNamed = (root: ParentNode, name: string) =>
 const statusText = (root: ParentNode) =>
   [...root.querySelectorAll('[role="status"]')].map((node) => node.textContent?.trim());
 
+it('移除聚焦的复核卡后，优先聚焦后一张，再退到前一张和面板', async () => {
+  const { host } = await open({ data: review({ sections: { metadata_fields: [row(1), row(2), row(3)] } }) });
+  const skip = async (index: number) => {
+    const button = buttonIn(cards(host)[index]!, '稍后处理')!;
+    button.focus();
+    await click(button);
+    await settle();
+  };
+  await skip(1);
+  expect(document.activeElement).toBe(cards(host)[1]);
+  expect(keys(host)).toEqual(['row-1', 'row-3']);
+  await skip(1);
+  expect(document.activeElement).toBe(cards(host)[0]);
+  await skip(0);
+  expect(document.activeElement).toBe(host.querySelector('[role="tabpanel"]'));
+});
+
 it('展开来源依据不选择候选，也不提交资料判定', async () => {
   const entry = row(1);
   entry.candidates![0]!.catalog_evidence = { runtime: { display_value: '120 分钟' } };

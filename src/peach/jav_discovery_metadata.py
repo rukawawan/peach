@@ -55,7 +55,8 @@ def movie_from_payload(code: str, payload: dict, source: str) -> dict | None:
     """官方目录快照换成 JavDB 作品资料的字段名；演员都是女优（DMM 只列女优）。"""
     if not isinstance(payload, dict) or not payload.get("title"):
         return None
-    actors = [{"name": str(row.get("japanese_name") or row.get("name") or ""), "gender": "female"}
+    actors = [{"name": str(row.get("japanese_name") or row.get("name") or ""), "gender": "female",
+               **({"dmm_id": str(row["dmm_id"])} if row.get("dmm_id") else {})}
               for row in payload.get("actresses") or [] if isinstance(row, dict)]
     movie = {"number": normalise_code_key(code), "title": payload["title"],
              "release_date": payload.get("release_date") or "", "maker_name": payload.get("maker") or "",

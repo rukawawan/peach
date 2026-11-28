@@ -125,11 +125,12 @@ export function TaskControls({ run, runs = [run] }: { run: TaskRunPayload; runs?
           const label = (followups ? FOLLOWUP_LABELS : LABELS)[action];
           const busy = action === 'cancel' ? cancellation.isPending : change.isPending && change.variables?.action === action;
           const unavailable = action === 'cancel' ? cancelling : change.isPending || cancelling;
-          return <Button key={action} type="button" variant="secondary" size="small" iconOnly
+          return <Button key={action} type="button" variant="secondary" size="small"
             leadingIcon={ICONS[action]} aria-label={label} title={label}
             {...busyProps(busy)} aria-disabled={unavailable || undefined}
-            onClick={() => submit(action)}
-            data-tooltip-copy-key={`tasks.control.action.${followups ? 'followups.' : ''}${action}`} />;
+            onClick={() => submit(action)}>
+            <span data-copy-key={`tasks.control.action.${followups ? 'followups.' : ''}${action}`}>{label}</span>
+          </Button>;
         })}
       </div>
       {speed.error ? <Note tone="error">{errorMessage(speed.error)}</Note> : null}

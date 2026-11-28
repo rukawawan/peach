@@ -44,6 +44,14 @@ JP_KANJI_TO_SIMPLIFIED = {
 # 表里不收，逐字换的时候原样留下——`桜咲姫莉` 该变成 `樱咲姬莉`，不是变成半个空格。
 _KANA = re.compile(r"[぀-ヿ]")
 _LATIN = re.compile(r"[A-Za-z]")
+_JAPANESE_SEARCH = str.maketrans({**{
+    simplified: japanese for japanese, simplified in reversed(JP_KANJI_TO_SIMPLIFIED.items())
+}, "户": "戸"})
+
+
+def japanese_search_spelling(name: str) -> str:
+    """为按字面检索提供一个日文字形候选，保留原始输入用于并行比对。"""
+    return name.translate(_JAPANESE_SEARCH)
 
 
 def fold_glyphs(text: str) -> str:

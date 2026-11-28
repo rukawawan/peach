@@ -52,7 +52,7 @@ def manifest(root: Path) -> dict:
     modes = {entry.split("\t", 1)[1]: entry.split(" ", 1)[0] for entry in stages if "\t" in entry}
     # 未跟踪文件按 Git 的 filemode 策略预估暂存模式，暂存本身不使内容记录失效。
     policy = git(root, "config", "--get", "--default", "true", "core.filemode") == "true"
-    files, signatures = {}, {}
+    files, signatures, locale_sources = {}, {}, {}
     for name in sorted(set(names.split("\0")) - {""}):
         path = root / name
         if path.is_symlink():
@@ -62,11 +62,13 @@ def manifest(root: Path) -> dict:
             mode = stat.S_IMODE(path.stat().st_mode)
             index_mode = modes.get(name, "100755" if policy and mode & 0o111 else "100644")
             files[name] = [mode, hashlib.sha256(content).hexdigest(), index_mode]
-            if name.endswith(".py") or name in {*change_impact.PACKAGE_FILES, "pyproject.toml", change_impact.REGISTRY}:
-                try:
+            try:
+                if change_impact.locale_file(name):
+                    locale_sources[name] = content.decode("utf-8")
+                elif name.endswith(".py") or name in {*change_impact.PACKAGE_FILES, "pyproject.toml", change_impact.REGISTRY}:
                     signatures[name] = change_impact.signatures(name, content.decode("utf-8"))
-                except UnicodeError:
-                    pass
+            except UnicodeError:
+                pass
         elif not path.exists():
             continue
         else:
@@ -74,7 +76,10 @@ def manifest(root: Path) -> dict:
     version = root / "src/peach/__init__.py"
     body = version.read_text(encoding="utf-8") if version.is_file() else ""
     body = re.sub(r'(?m)^__version__ = "\d+\.\d+\.\d+"$', '__version__ = "VERSION"', body)
-    return {"files": files, "signatures": signatures, "version_body": digest(body)}
+    result = {"files": files, "signatures": signatures, "version_body": digest(body)}
+    if locale_sources:
+        result["locale_sources"] = locale_sources
+    return result
 
 
 def snapshot(root: Path) -> str:
@@ -290,6 +295,11 @@ def valid_manifest(manifest) -> bool:
     if not isinstance(manifest, dict) or not isinstance(manifest.get('files'), dict):
         return False
     if not isinstance(manifest.get('signatures', {}), dict):
+        return False
+    sources = manifest.get('locale_sources', {})
+    if not isinstance(sources, dict) or any(
+            not isinstance(name, str) or not change_impact.locale_file(name) or not isinstance(source, str)
+            for name, source in sources.items()):
         return False
     for name, value in manifest['files'].items():
         if not isinstance(name, str):

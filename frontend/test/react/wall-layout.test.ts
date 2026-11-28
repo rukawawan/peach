@@ -1,12 +1,53 @@
 import { describe, expect, it } from 'vitest';
-import { clampWall, expandedWallTiles, finiteWallFilters, finiteWallTile, visibleWallTiles, wallExtent, wallHasCover, wallTileAt, WallExploration } from '../../src/react/video-wall/wall-layout';
+import { clampWall, finiteWallFilters, finiteWallTile, visibleWallTiles, wallExtent, wallHasCover, wallTileAt, WallExploration } from '../../src/react/video-wall/wall-layout';
+import { packWallTiles } from '../../src/react/video-wall/wall-packing';
 
 const view = { width: 1280, height: 720 };
 const camera = { x: 16, y: 16, scale: 1 };
 describe('二维播放墙', () => {
+  it('混合宽窄封面以原比例排紧并保持作品实例键', () => {
+    const block = visibleWallTiles(12, true, camera, view, true).filter(tile => tile.key.startsWith('0:0:'));
+    const ratios = [.7, 1.48, 1.78, 1.48, .75, 1.6, 1.48, 1.48, .7, 1.78, 1.3, 1.48];
+    const packed = packWallTiles(block, new Map(), tile => ratios[tile.index]!);
+    expect(packed.map(tile => tile.key)).toEqual(block.map(tile => tile.key));
+    for (const tile of packed) expect(tile.width / tile.height).toBeCloseTo(ratios[tile.index]!);
+    const neighbors = packed.slice(1).flatMap((tile, index) => {
+      const previous = packed[index]!;
+      return tile.y === previous.y ? [tile.x - previous.x - previous.width] : [];
+    });
+    expect(neighbors.length).toBeGreaterThan(4);
+    for (const gap of neighbors) {
+      expect(gap).toBeGreaterThanOrEqual(31.99);
+      expect(gap).toBeLessThanOrEqual(48.01);
+    }
+    const filled = packed.reduce((sum, tile) => sum + tile.width * tile.height, 0);
+    const { width, height } = wallExtent(12);
+    expect(filled / (width * height)).toBeGreaterThan(.64);
+  });
+  it('相邻分块将纵向余量分摊到各行，交界处不积成空带', () => {
+    const visible = visibleWallTiles(12, false, camera, { ...view, height: 1500 }, true);
+    const blocks = visible.filter(tile => /^(0:0|0:1):/.test(tile.key));
+    const placed = packWallTiles(blocks, new Map(), () => 1.48);
+    const upper = placed.filter(tile => tile.key.startsWith('0:0:'));
+    const lower = placed.filter(tile => tile.key.startsWith('0:1:'));
+    const gap = Math.min(...lower.map(tile => tile.y)) - Math.max(...upper.map(tile => tile.y + tile.height));
+    expect(gap).toBeGreaterThanOrEqual(31.9);
+    expect(gap).toBeLessThan(84);
+  });
+  it('封面显示后，迟到图片与续页只填原有位置', () => {
+    const block = visibleWallTiles(12, true, camera, view, true).filter(tile => tile.key.startsWith('0:0:'));
+    const slots = block.map(tile => tile.index === 2 ? { ...tile, index: -1 } : tile);
+    const placements = new Map();
+    expect(packWallTiles(slots, placements, tile => tile.index === 1 ? undefined : 1.48)
+      .every(tile => tile.preparing)).toBe(true);
+    const shown = packWallTiles(slots, placements, tile => tile.index === 1 ? .7 : 1.48);
+    expect(shown.some(tile => tile.preparing)).toBe(false);
+    expect(packWallTiles(block, placements, () => 2.6))
+      .toEqual(shown.map((tile, index) => ({ ...tile, index })));
+  });
   it('探索作品按四向浏览顺序分配，返回已有位置和续页均保持身份与几何', () => {
     const pool = new WallExploration(), positions = new Map<string, number>();
-    for (const point of [{ x:0,y:0 },{ x:3000,y:0 },{ x:3000,y:3000 },{ x:-3000,y:3000 },{ x:-3000,y:-3000 }]) {
+    for (const point of [camera, { x:3000,y:0 },{ x:3000,y:3000 },{ x:-3000,y:3000 },{ x:-3000,y:-3000 }]) {
       const visible = visibleWallTiles(12, false, { ...camera,x:point.x,y:point.y }, view);
       for (const tile of pool.assign(visible, 200, true)) {
         if (positions.has(tile.key)) expect(tile.index).toBe(positions.get(tile.key));
@@ -46,22 +87,6 @@ describe('二维播放墙', () => {
     expect(wallHasCover({ id:3, has_cover:false, has_thumb:true })).toBe(false);
     expect(wallHasCover({ id:4, has_cover:true })).toBe(false);
     expect(wallHasCover({ id:5, has_cover:true, code:'PCH-005', medium:'photo' })).toBe(false);
-  });
-  it('展开所在块完整让位，选中磁贴变成方形 6×6，收起位置可重建', () => {
-    for (const position of ['0:0:0','1:0:2','2:1:11','-1:-2:5']) {
-      const active = wallTileAt(60, false, position)!;
-      const expanded = expandedWallTiles(60, false, active);
-      const focus = expanded.get(position)!;
-      expect(expanded.size).toBe(12);
-      expect(focus.width).toBeCloseTo(614.08);
-      expect(focus.height).toBe(focus.width);
-      const rects = [...expanded.values()];
-      for (let a = 0; a < rects.length; a += 1) for (let b = a + 1; b < rects.length; b += 1) {
-        const one = rects[a]!, two = rects[b]!;
-        expect(one.x < two.x + two.width && one.x + one.width > two.x && one.y < two.y + two.height && one.y + one.height > two.y).toBe(false);
-      }
-      expect(wallTileAt(60, false, position)).toEqual(active);
-    }
   });
   it('空集合不产生磁贴', () => {
     expect(visibleWallTiles(0, false, camera, view)).toEqual([]);

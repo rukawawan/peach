@@ -109,6 +109,7 @@ export interface MediaCardActions {
   toggleTag(tag: string): void;
   /** 切换一张的选中；`range` 是按住 Shift 连选。 */
   toggleSelection(id: number, range: boolean): void;
+  selectCardRectangle?(ids: number[], add: boolean): void;
   /** 切换稍后看。写 ledger；成功与撤销都把新值回给 `onChange`，失败由壳报。 */
   watchLater(item: MediaItem, onChange: (on: boolean) => void): Promise<void>;
   /** 设置星级；成功与撤销回传服务端评分，忙态和原位错误由调用方呈现。 */

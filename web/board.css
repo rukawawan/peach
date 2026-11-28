@@ -95,7 +95,7 @@
   background-size:200% 200%,200% 200%,auto;background-repeat:no-repeat,no-repeat,repeat;
   background-position:50% 20%,80% 70%,0 0;
   animation:glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;
-  animation-play-state:var(--glow-drift-play);
+  animation-play-state:var(--glow-idle-play,var(--glow-drift-play));
   backdrop-filter:var(--glass-optic,blur(22px)) saturate(160%) var(--glass-lume);-webkit-backdrop-filter:var(--glass-optic,blur(22px)) saturate(160%) var(--glass-lume);
   border:0;box-shadow:inset 0 1px 0 var(--glass-rim),inset 1px 0 0 var(--glass-low),inset -1px 0 0 var(--glass-low),inset 0 -1px 0 var(--glass-low),var(--glass-shadow);
 }
@@ -121,9 +121,9 @@
 :is(.board-filter-frame,.entitycollectionhead,.top .search,.top>.ib,[data-glass-pane])>[data-glass-drift]{
   display:block;position:absolute;inset:0;z-index:-3;overflow:hidden;border-radius:inherit;pointer-events:none}
 [data-glass-drift]>span{position:absolute;left:0;top:0;width:200%;height:200%;
-  animation:calc(41s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-drift-play)}
+  animation:calc(41s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-idle-play,var(--glow-drift-play))}
 [data-glass-drift]>span>span{position:absolute;inset:0;
-  animation:calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-drift-play)}
+  animation:calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-idle-play,var(--glow-drift-play))}
 /* 静止位置就是原来的 `background-position:50% 20%,80% 70%`：减少动效时动画撤掉，停在这里。 */
 [data-glass-drift]>[data-drift="a"]{transform:translateX(-25%);animation-name:drift-k1-x}
 [data-glass-drift]>[data-drift="a"]>span{transform:translateY(-10%);animation-name:drift-k3-y;background:var(--glass-drift-a)}
@@ -145,8 +145,8 @@ html[data-theme-snapshot] :is(.board-filter-frame,.entitycollectionhead,.search,
    路上的颜色就会闪，所以上面那条规则自己把过渡关掉。 */
 .board-filter-frame.board-filter-frame,.entitycollectionhead.entitycollectionhead,.board-library-menu.board-library-menu,.board-glow-menu.board-glow-menu{
   transition:background-color .28s ease,backdrop-filter .28s ease,-webkit-backdrop-filter .28s ease}
-.board-filter-frame.board-filter-frame{border-radius:22px;isolation:isolate;color:var(--glass-text);overflow:visible}
-.entitycollectionhead.entitycollectionhead.entitycollectionhead{border-radius:22px;color:var(--glass-text)}
+.board-filter-frame.board-filter-frame{border-radius:16px;isolation:isolate;color:var(--glass-text);overflow:visible}
+.entitycollectionhead.entitycollectionhead.entitycollectionhead{border-radius:16px;color:var(--glass-text)}
 /* 浮层材质与吸顶归外框，槽位只负责排列内容。 */
 .board-filter-frame.board-filter-frame.board-filter-frame.board-filter-frame>[data-filter-row]{position:relative;top:auto;left:auto;
   width:auto;margin:0;min-width:0;z-index:auto;border:0;box-shadow:none;background:none;
@@ -162,8 +162,8 @@ html[data-theme-snapshot] :is(.board-filter-frame,.entitycollectionhead,.search,
 .board-filter-frame.board-filter-frame .iconswitch>label:hover,
 .board-filter-frame.board-filter-frame .iconswitch>label:has(input:checked){color:var(--glass-text)}
 .board-filter-frame.board-is-stuck::before,.board-filter-frame.board-is-stuck::after{display:none}
-.board-filter-frame.board-filter-frame .tagbar{border-radius:22px 22px 0 0}
-.board-filter-frame.board-filter-frame .count{border-radius:0 0 22px 22px}
+.board-filter-frame.board-filter-frame .tagbar{border-radius:16px 16px 0 0}
+.board-filter-frame.board-filter-frame .count{border-radius:0 0 16px 16px}
 .board-filter-frame.board-filter-frame .pill{color:var(--glass-text)}
 .board-filter-frame.board-filter-frame .tagbar .pill:is([data-tag],[data-follow-tag],[data-follow-provider]):not([aria-pressed="true"]){border-color:var(--glass-low)}
 /* 四枚视图之间只有一块玻璃在移动，不是四块各自亮灭：Apple 把同一层里的玻璃先合成
@@ -325,7 +325,7 @@ body #stats [data-section-items]>[aria-selected]:focus-visible{outline:2px solid
    上面这 22px 改不动（两处都是别的页面共用的），所以自己不再加，下面照同一个数写。 */
 .board-filter-frame{position:sticky;top:calc(var(--topH) + 8px);z-index:60;border:0;border-radius:16px;background:var(--ground);margin:0 0 22px;box-shadow:0 2px 14px light-dark(#00000014,#00000066)}
 @media(max-width:760px){.board-filter-frame.board-filter-frame[data-filter-free]{top:var(--filter-free-top)}}
-/* 首页那块住在 `body` 底下，两侧没有任何东西给它留白，22px 的圆角直接切在屏幕边沿上；
+/* 首页那块住在 `body` 底下，两侧没有任何东西给它留白，圆角直接切在屏幕边沿上；
    资料页那块在 `#index` 里，`main` 的 16px 已经把它让开了。这里补的就是那 16px，取的
    也是 `main` 自己的那个数，所以两页的浮层和底下的网格对在同一条竖线上。 */
 body>.board-filter-frame{margin-inline:16px}
@@ -584,8 +584,8 @@ button,input,select,textarea{font-family:inherit}
    套到一枚三十像素高的标签上，圆角会吃掉两端的字。改这一个 token 就够了——卡片、详情
    面板、筛选条、交集条和标签骨架都从它取值，一处改完五处一起走。 */
 :root{--tag-radius:8px}
-body,.disp{font-family:var(--board-font);letter-spacing:0}body{font:var(--board-body)}button,input,textarea,select{font-family:var(--board-font)}
-.listtitle,.index .ihead h2,.indexheading{font:var(--board-title);letter-spacing:0}.configfieldset h2,.configfieldset h3,.cleanupfieldset h3{font:var(--board-heading);letter-spacing:0}.board-library-rows button{font:var(--board-body)}
+body,.disp{font-family:var(--board-font)}body{letter-spacing:0}body{font:var(--board-body)}button,input,textarea,select{font-family:var(--board-font)}
+.listtitle,.index .ihead h2,.indexheading{font:var(--board-title)}.configfieldset h2,.configfieldset h3,.cleanupfieldset h3{font:var(--board-heading);letter-spacing:0}.board-library-rows button{font:var(--board-body)}
 .geist-button{background-color:var(--color-background-primary-default);border-color:var(--color-border-button-default);color:var(--color-text-primary);transition:background-color .15s ease,border-color .15s ease,color .15s ease}
 /* 悬停只抬填充，那圈线一步不动：按钮静止态已经带一圈 1px，悬停再把它加深，
    鼠标扫过一排次级键就是一排边框忽明忽暗，而键本身并没有变化。 */
@@ -609,7 +609,7 @@ body[data-density="dense"] .catalog-skeleton .skeletoncard{padding-top:7px}
 body[data-density="dense"] .postercard-skeleton .skeletoncard b{height:1.35em}
 body[data-density="dense"] .postercard-skeleton .skeletoncard em{height:1.35em}
 body[data-density="dense"] .postercard-skeleton .skeletoncard u{height:30px}
-.skeleton,.skeletoncard i,.skeletoncard b,.skeletoncard em,.skeletoncard s,.skeletoncard u{background:var(--color-background-tertiary-default);border-radius:8px}.skeletoncard i{border-radius:12px}.postercard-skeleton .skeletoncard{gap:6px 12px}.postercard-skeleton .skeletoncard s{border-radius:50%}.cleanup-skeleton .skeletoncard{border:0;border-radius:16px}.cleanup-skeleton .skeletoncard i,.review-skeleton .skeletoncard i{border-radius:8px}.index-skeleton .icell .ring{border-radius:50%}.entityskeletontext .skeleton{height:20px;border-radius:8px}.entityportrait.skeleton{border-radius:16px}.follow-content-skeleton .skeletoncard{padding-bottom:16px}
+.skeleton,.skeletoncard i,.skeletoncard b,.skeletoncard em,.skeletoncard s,.skeletoncard u{background:var(--color-background-tertiary-default);border-radius:8px}.skeletoncard i{border-radius:12px}.postercard-skeleton .skeletoncard{gap:6px 12px}.postercard-skeleton .skeletoncard s{border-radius:50%}.review-skeleton .skeletoncard i{border-radius:8px}.index-skeleton .icell .ring{border-radius:50%}.entityskeletontext .skeleton{height:20px;border-radius:8px}.entityportrait.skeleton{border-radius:16px}.follow-content-skeleton .skeletoncard{padding-bottom:16px}
 
 /* Board secondary：实体细边框、轻阴影和统一的三档控件尺寸。
    悬停只换填充，那圈线一动不动——按用户要求跟 BoardUI 的强调档对齐（2026-09-12 实测
@@ -689,8 +689,8 @@ body .popmenu>:is(button,[role=option],[role=menuitem]):is(:hover,:focus-visible
    排除条件写的是那枚圆盘 `[data-link-icon]`（资料卡岛里的）本身，不写「有没有 `<img>`」：常见社媒的标记
    是内联 `<svg>`，一枚 `<img>` 都没有，按后一个判据照样漏进来。只认圆盘还把这条豁免收在
    资料页那一排上，别处的外链——包括包着图的——继续按这条走，不因为多一张图就长出个框。 */
-body a[target=_blank]:not(:has([data-link-icon])):not(.cardlink):where(:not([data-button-link])){display:inline-flex;align-items:center;gap:4px;min-height:20px;padding:0;border:0;border-radius:4px;background:transparent;box-shadow:none;color:var(--tungsten);font-weight:500;text-decoration:none;text-underline-offset:3px}
-body a[target=_blank]:not(:has([data-link-icon])):not(.cardlink):where(:not([data-button-link])):hover{background:transparent;text-decoration:underline;box-shadow:none}
+body a[target=_blank]:not(:has([data-link-icon])):not(.cardlink):where(:not([data-work-card-link])):where(:not([data-button-link])){display:inline-flex;align-items:center;gap:4px;min-height:20px;padding:0;border:0;border-radius:4px;background:transparent;box-shadow:none;color:var(--tungsten);font-weight:500;text-decoration:none;text-underline-offset:3px}
+body a[target=_blank]:not(:has([data-link-icon])):not(.cardlink):where(:not([data-work-card-link])):where(:not([data-button-link])):hover{background:transparent;text-decoration:underline;box-shadow:none}
 [data-button-group]{display:inline-flex;align-items:center;overflow:hidden;border:1px solid var(--color-border-button-default);border-radius:10px;background:var(--color-background-primary-default);box-shadow:var(--elevation-xs)}
 [data-button-group]>button{height:34px;padding:0 12px;border:0;border-radius:0;box-shadow:none;color:var(--color-text-secondary);font:var(--board-body);white-space:nowrap}
 [data-button-group]:not([data-variant=primary])>button{background:transparent}
@@ -735,7 +735,7 @@ body [data-follow-status=seen],body [data-follow-status=ignored]{background:colo
 /* 玻璃面这一层料只有一份：漂移的两团、那道斜光、底色、内嵌的四条边和落影。认 `data-glass-pane`
    的元素全都拿它，各块自己只留几何、`backdrop-filter` 的饱和度和文字色——那三样本来就一块一个数。
    高对比与 `prefers-reduced-transparency` 的回退在下面同一个属性选择器上，不必各自再写一遍。 */
-[data-glass-pane]{border:0;background:var(--glass-drift-a),var(--glass-drift-b),linear-gradient(125deg,var(--glass-sheen),transparent 42%,var(--glass-low)),var(--glass-fill);background-size:200% 200%,200% 200%,auto;background-repeat:no-repeat,no-repeat,repeat;background-position:50% 20%,80% 70%,0 0;animation:glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-drift-play);box-shadow:inset 0 1px 0 var(--glass-rim),inset 1px 0 0 var(--glass-low),inset -1px 0 0 var(--glass-low),inset 0 -1px 0 var(--glass-low),var(--glass-shadow)}
+[data-glass-pane]{border:0;background:var(--glass-drift-a),var(--glass-drift-b),linear-gradient(125deg,var(--glass-sheen),transparent 42%,var(--glass-low)),var(--glass-fill);background-size:200% 200%,200% 200%,auto;background-repeat:no-repeat,no-repeat,repeat;background-position:50% 20%,80% 70%,0 0;animation:glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-idle-play,var(--glow-drift-play));box-shadow:inset 0 1px 0 var(--glass-rim),inset 1px 0 0 var(--glass-low),inset -1px 0 0 var(--glass-low),inset 0 -1px 0 var(--glass-low),var(--glass-shadow)}
 /* React 产物会按构建目标把标准属性折成 `-webkit-backdrop-filter`，当前 Chromium 不认后者。
    标准属性留在不经转换的共享样式表里，数值逐项对齐首页上下两块玻璃。 */
 body .peach-react :is([data-review-filter],[data-filter-glass]){backdrop-filter:var(--glass-optic,blur(22px)) saturate(160%) var(--glass-lume)}

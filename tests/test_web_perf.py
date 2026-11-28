@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support.ledger import fresh_ledger
+from peach import cover_artwork, jav_poster_crop, web_state
 
 HAS_DEPS = all(importlib.util.find_spec(name) for name in ("fastapi", "httpx"))
 if HAS_DEPS:
@@ -527,6 +528,245 @@ class CoverIndexTests(unittest.TestCase):
                 thread.join(5)
         self.assertEqual(results, [True] * 4)
         self.assertEqual(scans, [1])
+
+    def _write_cover_set(self, code: str, *, face_cy: float = 0.42, poster_x0: int = 419,
+                         front: bool = False, scraping: dict | None = None,
+                         mtime_ns: int | None = None) -> Path:
+        cover = self.covers / f"{code}.jpg"
+        cover.write_bytes(f"jpg-{code}".encode("utf-8"))
+        face = self.covers / f"{code}.face.json"
+        face.write_text(json.dumps({"face": {"cy": face_cy}}), encoding="utf-8")
+        poster = self.covers / f"{code}.poster.json"
+        poster.write_text(json.dumps({
+            "version": jav_poster_crop.ALGORITHM_VERSION,
+            "px": [800, 540],
+            **({"layout": "still", "front": [379, 540]} if front else {}),
+            "box": {"x0": poster_x0, "y0": 0, "x1": 800, "y1": 540, "method": "fold"},
+        }), encoding="utf-8")
+        written = [cover, face, poster]
+        if scraping is not None:
+            evidence = self.covers / f"{code}.scraping.json"
+            evidence.write_text(json.dumps(scraping), encoding="utf-8")
+            written.append(evidence)
+        if front:
+            front_file = jav_poster_crop.front_path(cover)
+            front_file.parent.mkdir(parents=True, exist_ok=True)
+            front_file.write_bytes(b"front")
+            written.append(front_file)
+        if mtime_ns is not None:
+            for item in written:
+                os.utime(item, ns=(mtime_ns, mtime_ns))
+        return cover
+
+    def _bump_dir(self, mtime_ns: int) -> None:
+        os.utime(self.covers, ns=(mtime_ns, mtime_ns))
+
+    def test_adding_a_cover_reuses_unchanged_entries_without_reopening_sidecars(self):
+        """新增封面触发重扫时，已稳定且未变动的封面与跳过记录直接复用，不重读边车。"""
+        settled = web_state.time.time_ns() - 60 * 1_000_000_000
+        self._write_cover_set("ABC-001", face_cy=0.31, poster_x0=420, front=True,
+                              scraping={"source": "dmm"}, mtime_ns=settled)
+        self._write_cover_set("JDB-001", scraping={"source": "javdb"}, mtime_ns=settled)
+        self._bump_dir(settled)
+
+        self.assertTrue(self.contract.has_cover("ABC-001"))
+        self.assertFalse(self.contract.has_cover("JDB-001"))
+
+        with patch.object(self.contract, "_poster_record", wraps=self.contract._poster_record) as poster_spy, \
+                patch.object(self.contract, "_cover_focus", wraps=self.contract._cover_focus) as face_spy, \
+                patch.object(cover_artwork, "has_javdb_source", wraps=cover_artwork.has_javdb_source) as javdb_spy:
+            self._write_cover_set("NEW-002", face_cy=0.55, poster_x0=410,
+                                  scraping={"source": "dmm"}, mtime_ns=settled)
+            self._bump_dir(settled + 1_000_000)
+
+            self.assertTrue(self.contract.has_cover("NEW-002"))
+            self.assertEqual(self.contract.cover_frame("ABC-001"),
+                             {"cy": 0.31, "layout": "still", "front": True})
+            self.assertEqual(self.contract.cover_frame("NEW-002"), {"cy": 0.55})
+            self.assertEqual(self.contract.poster_box("NEW-002")["x0"], 410)
+            self.assertFalse(self.contract.has_cover("JDB-001"))
+
+            self.assertEqual(poster_spy.call_count, 1)
+            self.assertEqual(face_spy.call_count, 1)
+            self.assertEqual(javdb_spy.call_count, 1)
+            self.assertTrue(poster_spy.call_args.args[0].endswith("NEW-002.poster.json"))
+            self.assertTrue(face_spy.call_args.args[0].endswith("NEW-002.face.json"))
+            self.assertEqual(javdb_spy.call_args.args[0].name, "NEW-002.jpg")
+
+    def test_modifying_a_cover_or_its_sidecars_refreshes_only_that_cover(self):
+        """封面图、各边车、竖版正封或 JavDB 印证判定变动时，只重读受影响的那张封面。"""
+        settled = web_state.time.time_ns() - 60 * 1_000_000_000
+        abc = self._write_cover_set("ABC-001", face_cy=0.25, poster_x0=420, front=True,
+                                    scraping={"source": "dmm"}, mtime_ns=settled)
+        self._write_cover_set("DEF-002", face_cy=0.75, poster_x0=430, front=True,
+                              scraping={"source": "dmm"}, mtime_ns=settled)
+        self._bump_dir(settled)
+        initial_version = self.contract.cover_version("ABC-001")
+        step = iter(range(1, 20))
+
+        def tick() -> int:
+            return settled + next(step) * 1_000_000
+
+        with patch.object(self.contract, "_poster_record", wraps=self.contract._poster_record) as poster_spy, \
+                patch.object(self.contract, "_cover_focus", wraps=self.contract._cover_focus) as face_spy, \
+                patch.object(cover_artwork, "has_javdb_source", wraps=cover_artwork.has_javdb_source) as javdb_spy:
+            # 1) 替换封面图本身
+            abc.write_bytes(b"jpg-ABC-001-v2")
+            t1 = tick()
+            os.utime(abc, ns=(t1, t1))
+            self._bump_dir(t1)
+            self.assertNotEqual(self.contract.cover_version("ABC-001"), initial_version)
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (1, 1, 1))
+
+            # 2) 修改人脸边车
+            face = self.covers / "ABC-001.face.json"
+            face.write_text(json.dumps({"face": {"cy": 0.62}}), encoding="utf-8")
+            t2 = tick()
+            os.utime(face, ns=(t2, t2))
+            self._bump_dir(t2)
+            self.assertEqual(self.contract.cover_frame("ABC-001")["cy"], 0.62)
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (2, 2, 2))
+
+            # 3) 修改正封边车
+            poster = self.covers / "ABC-001.poster.json"
+            poster.write_text(json.dumps({
+                "version": jav_poster_crop.ALGORITHM_VERSION, "px": [800, 540],
+                "layout": "still", "front": [379, 540],
+                "box": {"x0": 405, "y0": 0, "x1": 800, "y1": 540, "method": "fold"},
+            }), encoding="utf-8")
+            t3 = tick()
+            os.utime(poster, ns=(t3, t3))
+            self._bump_dir(t3)
+            self.assertEqual(self.contract.poster_box("ABC-001")["x0"], 405)
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (3, 3, 3))
+
+            # 4) 撤除并重装竖版正封
+            front_file = jav_poster_crop.front_path(abc)
+            front_file.unlink()
+            self._bump_dir(tick())
+            self.assertNotIn("front", self.contract.cover_frame("ABC-001"))
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (4, 4, 4))
+
+            front_file.write_bytes(b"front-v2")
+            t4 = tick()
+            os.utime(front_file, ns=(t4, t4))
+            self._bump_dir(t4)
+            self.assertTrue(self.contract.cover_frame("ABC-001")["front"])
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (5, 5, 5))
+
+            # 5) 翻转来源边车让 has_javdb_source 在真假之间切换
+            evidence = self.covers / "ABC-001.scraping.json"
+            evidence.write_text(json.dumps({"source": "javdb"}), encoding="utf-8")
+            t5 = tick()
+            os.utime(evidence, ns=(t5, t5))
+            self._bump_dir(t5)
+            self.assertFalse(self.contract.has_cover("ABC-001"))
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (5, 5, 6))
+
+            evidence.write_text(json.dumps({"source": "javdb", "watermarked": True}), encoding="utf-8")
+            t6 = tick()
+            os.utime(evidence, ns=(t6, t6))
+            self._bump_dir(t6)
+            self.assertTrue(self.contract.has_cover("ABC-001"))
+            self.assertEqual(self.contract.cover_frame("DEF-002"),
+                             {"cy": 0.75, "layout": "still", "front": True})
+            self.assertEqual((poster_spy.call_count, face_spy.call_count, javdb_spy.call_count), (6, 6, 7))
+
+    def test_deleting_a_cover_removes_it_from_index_and_prunes_entry_cache(self):
+        """删除封面后，索引与单档缓存同步移除该条目，且不重读其余未变封面。"""
+        settled = web_state.time.time_ns() - 60 * 1_000_000_000
+        abc = self._write_cover_set("ABC-001", face_cy=0.22, mtime_ns=settled)
+        self._write_cover_set("DEF-002", face_cy=0.66, mtime_ns=settled)
+        self._bump_dir(settled)
+
+        self.assertTrue(self.contract.has_cover("ABC-001"))
+        self.assertIn("abc-001", self.contract._cover_entries)
+
+        with patch.object(self.contract, "_cover_focus", wraps=self.contract._cover_focus) as face_spy:
+            abc.unlink()
+            self._bump_dir(settled + 1_000_000)
+
+            self.assertFalse(self.contract.has_cover("ABC-001"))
+            self.assertTrue(self.contract.has_cover("DEF-002"))
+            self.assertNotIn("abc-001", self.contract._cover_entries)
+            self.assertEqual(face_spy.call_count, 0)
+
+    def test_same_tick_overwrite_within_settle_window_refreshes_cover(self):
+        """刚写过的封面在 `SETTLE_SECONDS` 内即使以同长度同刻度覆写，也当场重读。"""
+        tick = web_state.time.time_ns()
+        cover = self.covers / "ABC-001.jpg"
+        face = self.covers / "ABC-001.face.json"
+        cover.write_bytes(b"jpg")
+        face.write_text('{"face":{"cy":0.11}}', encoding="utf-8")
+        os.utime(cover, ns=(tick, tick))
+        os.utime(face, ns=(tick, tick))
+        self._bump_dir(tick)
+
+        within_window = tick + 500_000_000
+        with patch.object(web_state.time, "time_ns", return_value=within_window):
+            self.assertEqual(self.contract.cover_frame("ABC-001"), {"cy": 0.11})
+            self.assertNotIn("abc-001", self.contract._cover_entries)
+
+            # 同字节长度、同一修改时间刻度覆写，模拟快速连续写入撞在同一时钟刻度。
+            face.write_text('{"face":{"cy":0.88}}', encoding="utf-8")
+            os.utime(face, ns=(tick, tick))
+            self._bump_dir(tick + 1_000_000)
+            self.assertEqual(self.contract.cover_frame("ABC-001"), {"cy": 0.88})
+
+        # 超过稳定窗口后首次扫描才写入单档缓存，后续重扫复用。
+        settled_now = tick + (web_state.SETTLE_SECONDS + 1) * 1_000_000_000
+        with patch.object(web_state.time, "time_ns", return_value=settled_now):
+            self._bump_dir(tick + 2_000_000)
+            self.assertEqual(self.contract.cover_frame("ABC-001"), {"cy": 0.88})
+            self.assertIn("abc-001", self.contract._cover_entries)
+            with patch.object(self.contract, "_cover_focus", wraps=self.contract._cover_focus) as face_spy:
+                self._bump_dir(tick + 3_000_000)
+                self.assertEqual(self.contract.cover_frame("ABC-001"), {"cy": 0.88})
+                self.assertEqual(face_spy.call_count, 0)
+
+    def test_front_case_mismatch_defers_to_filesystem_existence_check(self):
+        """竖版正封大小写与封面不一致时交由文件系统判存在性，并与精确匹配／缺省路径一致。"""
+        settled = web_state.time.time_ns() - 60 * 1_000_000_000
+        abc = self._write_cover_set("ABC-001", front=False, mtime_ns=settled)
+        (self.covers / "ABC-001.poster.json").write_text(json.dumps({
+            "version": jav_poster_crop.ALGORITHM_VERSION, "px": [800, 540],
+            "layout": "still", "front": [379, 540],
+            "box": {"x0": 0, "y0": 0, "x1": 800, "y1": 540, "method": "none"},
+        }), encoding="utf-8")
+        os.utime(self.covers / "ABC-001.poster.json", ns=(settled, settled))
+        self._write_cover_set("DEF-002", front=True, mtime_ns=settled)
+        self._write_cover_set("GHI-003", front=False, mtime_ns=settled)
+
+        front_dir = self.covers / jav_poster_crop.FRONT_DIRECTORY
+        front_dir.mkdir(exist_ok=True)
+        mismatched = front_dir / "ABC-001.JPG"
+        mismatched.write_bytes(b"front")
+        os.utime(mismatched, ns=(settled, settled))
+        self._bump_dir(settled)
+
+        seen_has_front: dict[str, bool | None] = {}
+        original = self.contract._with_poster_layout
+
+        def capture(frame, record, cover, *, has_front=None):
+            seen_has_front[cover.name] = has_front
+            return original(frame, record, cover, has_front=has_front)
+
+        with patch.object(self.contract, "_with_poster_layout", side_effect=capture):
+            expected_abc = jav_poster_crop.front_path(abc).is_file()
+            self.assertEqual(bool((self.contract.cover_frame("ABC-001") or {}).get("front")), expected_abc)
+            self.assertTrue((self.contract.cover_frame("DEF-002") or {}).get("front"))
+            self.assertFalse((self.contract.cover_frame("GHI-003") or {}).get("front"))
+
+        self.assertEqual(seen_has_front, {
+            "ABC-001.jpg": None,
+            "DEF-002.jpg": True,
+            "GHI-003.jpg": False,
+        })
+
+        # 撤除大小写不同的竖版正封后，单档戳记失效并同步更新索引。
+        mismatched.unlink()
+        self._bump_dir(settled + 1_000_000)
+        self.assertFalse((self.contract.cover_frame("ABC-001") or {}).get("front"))
 
 
 if __name__ == "__main__":

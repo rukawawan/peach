@@ -90,6 +90,7 @@ function SubmitForm({ header, snapshot, prefill, close, receipt, provider: prefe
   const [code, setCode] = useState(prefill.code ?? '');
   const [target, setTarget] = useState(first?.target || '');
   const [work, setWork] = useState<DownloadPrefill | null>(prefill.code ? prefill : null);
+  const [metadataNotice, setMetadataNotice] = useState('');
   const [failure, setFailure] = useState('');
   const usable = snapshot.available && configured.some(row => row.key === provider);
   const action = useAction();
@@ -120,20 +121,26 @@ function SubmitForm({ header, snapshot, prefill, close, receipt, provider: prefe
     <form aria-label={t('manage:cloudDownloadDialog.submit')} noValidate onSubmit={submit} className="flex min-h-0 flex-col">
       {header}
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto p-5">
-        {work?.code || code.trim() ? <div className="flex min-w-0 items-start gap-4" data-resource-work="">
+        {work?.code || metadataNotice ? <div className="flex min-w-0 items-start gap-4" data-resource-work="">
           {work?.cover ? <img src={work.cover} alt="" referrerPolicy="no-referrer" onError={event => event.currentTarget.remove()}
             className="w-card-cover shrink-0 rounded-2lg" /> : null}
           <div className="flex min-w-0 flex-col gap-2">
-            <p className="break-words text-body-medium text-text-primary">{work ? [work.code, work.title].filter(Boolean).join(' · ') : t('manage:cloudDownloadDialog.noMetadata')}</p>
+            <p className="break-words text-body-medium text-text-primary">{work ? [work.code, work.title].filter(Boolean).join(' · ') : metadataNotice}</p>
             {work ? <Help>{[work.performers, work.studio, work.release_date, work.duration ? t('manage:cloudDownloadDialog.minutes', { count: Math.round(work.duration / 60) }) : ''].filter(Boolean).join(' · ')}</Help> : null}
           </div>
         </div> : null}
         <ResourceSearch initialCode={prefill.code ?? ''} reason={prefill.searchReason} onSearch={requested => {
           if (!sameWorkCode(requested, work?.code)) { setWork(sameWorkCode(requested, prefill.code) ? prefill : null); setMagnet('') }
           setCode(requested);
-        }} onWork={next => setWork(current => next ? sameWorkCode(current?.code, next.code)
-          ? { ...current, ...next, origin: current?.origin || next.origin } : next
-          : sameWorkCode(current?.code, prefill.code) ? current : null)} choose={(uri, selectedCode) => {
+          setMetadataNotice(t('manage:cloudDownloadDialog.loadingMetadata'));
+        }} onWork={(next, error) => {
+          setMetadataNotice(next ? '' : error
+            ? t('manage:cloudDownloadDialog.metadataLookupFailed', { error })
+            : t('manage:cloudDownloadDialog.noMetadata'));
+          setWork(current => next ? sameWorkCode(current?.code, next.code)
+            ? { ...current, ...next, origin: current?.origin || next.origin } : next
+            : sameWorkCode(current?.code, prefill.code) ? current : null);
+        }} choose={(uri, selectedCode) => {
           setMagnet(uri); setCode(selectedCode); input.current?.focus();
         }} />
         <Input ref={input} label={t('manage:cloudDownloadDialog.magnetLink')} placeholder="magnet:?xt=urn:btih:…" autoComplete="off" maxLength={4000}
@@ -153,7 +160,7 @@ function SubmitForm({ header, snapshot, prefill, close, receipt, provider: prefe
         {/* 带着番号进来时它和搜索框是同一个值，选中候选也会跟着换，不再单列一格。 */}
         {prefill.code ? null
           : <Input label={t('manage:shared.code')} placeholder={t('manage:cloudDownloadDialog.optional')} autoComplete="off" maxLength={60} value={code} onChange={value => {
-            setCode(value); if (!sameWorkCode(value, work?.code)) setWork(null);
+            setCode(value); setMetadataNotice(''); if (!sameWorkCode(value, work?.code)) setWork(null);
           }} />}
         {failure || action.error ? <ErrorText>{failure || action.error}</ErrorText> : null}
       </div>

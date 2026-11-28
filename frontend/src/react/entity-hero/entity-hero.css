@@ -96,7 +96,7 @@
 .peach-react [data-entity-portrait="square"] { border-radius: var(--floating-radius); }
 .peach-react [data-entity-portrait] > span { grid-area: 1 / 1; }
 /* 首字母只是取不到图时的垫底，有图就让位；兜底链把 img 摘掉后 `:has` 不再匹配，它自己回来。 */
-.peach-react [data-entity-portrait]:has(img) > span { display: none; }
+.peach-react [data-entity-portrait]:has(img:not([hidden])) > span { display: none; }
 /* 预检给每张图的 `max-width:100%` 要放开：人脸放大往图上写的宽常常超过框宽（`avatarFrame`）。 */
 .peach-react [data-entity-portrait] img {
   position: absolute;

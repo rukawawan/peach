@@ -7,26 +7,33 @@
  * 加一条筛选不重画这几排：成员（`tiers.key` 与标签的顺序）不变，React 只改按下态，人横着续到第
  * 六十枚、停在第 600 像素上的那一排原样留着。换了口径或换了一批，壳给新的 `tiers.key`，两排从头摆。
  * 详情浮窗打开期间壳不推任何东西，关掉回来还是同一批节点（`buildBars` 那段注释讲了为什么）。 */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { entityDisplayName } from '../../core/entity-names';
 import { useEntityNames } from '../use-entity-names';
-import { popBadges } from '@peach/legacy/ui';
 import { AsyncText } from '../components/async-text';
 import { Button } from '@/components/base/buttons/button';
 
-import { FilterGlassRows, FilterPill, FilterActionButton } from '../components/filter-glass';
-import { useViewGlide } from '../components/use-view-glide';
+import { FilterGlassRows, FilterActionButton, FilterSearch, FilterTagStrip, FilterToolbarControls, useFilterScope } from '../components/filter-glass';
+import { ColumnFilterAvatar, ColumnFilterStudioAvatar } from '../components/column-filter-avatar';
+import { FilterDropdown } from '../components/filter-dropdown';
 import { LibraryShortcuts } from '../library-shortcuts/shortcut-controls';
 import { FolderBrowseToggle } from '../catalog-folders/catalog-folders-page';
 import { useCatalogView } from '../catalog-grid/catalog-view';
 import { CatalogViewToggle } from '../catalog-grid/catalog-view-toggle';
+import { catalogListScope } from '../catalog-grid/catalog-grid';
+import { useCatalogListPosition } from '../catalog-grid/catalog-list-position';
+import { CatalogColumnFilter, CatalogColumnRangeFilter } from '../catalog-grid/catalog-column-filter';
+import { columnRangeKinds, isColumnRangeKey, readColumnFilters } from '../../column-filters';
+import { outsideTableDateBound } from '../components/table-column-range';
+import type { SortFieldFilter } from '../components/sort-controls';
 import { Combo, Segments, Shuffle, SortKeys } from '../entity-filter/entity-filter-page';
 import {
   EMPTY_SLOTS, ROW_AHEAD, ROW_BATCH, ROW_FIRST, rememberedTiers, rememberTiers, type CatalogFilterProps,
-  type CatalogTag, type TierKind, type TierPerformer, type TierStudio,
+  type TierKind, type TierPerformer, type TierStudio,
 } from './catalog-filter';
 import { t } from '../../i18n';
+import { CatalogPerformerTile, CatalogStudioTile } from './catalog-tiles';
 
 export function CatalogFilterPage(props: CatalogFilterProps) {
   const loading = !props.tiers;
@@ -51,24 +58,23 @@ export const TRASH_FRAME = 'mx-auto w-full max-w-board';
 /** 玻璃浮层两排：上排四枚视图与标签，下排读数、换一批、版式与排序键。回收站只有下排。 */
 function Glass(props: CatalogFilterProps) {
   const { actions, helpers } = props;
-  const pane = useRef<HTMLSpanElement>(null);
   const viewRow = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
-  const tagRow = useRef<HTMLDivElement>(null);
   const bottomRow = useRef<HTMLDivElement>(null);
   const [singleRow, setSingleRow] = useState(false);
-  const glide = useViewGlide(pane, viewRow, '[data-catalog-view][aria-pressed="true"]', props.state);
+  const scope = useFilterScope(props.state, viewRow);
+  const tags = props.tags.map(tag => ({ id: tag.k, label: tag.label, count: tag.n, selected: tag.selected }));
+  const selectedPerformer = props.combo.find(item => item.key === 'performer')?.value;
+  const selectedStudio = props.combo.find(item => item.key === 'studio')?.value;
 
   /* 标签那一格是 `overflow-x:auto` 加隐藏滚动条，鼠标够不着，所以登记全站横向行那套拖动加滚轮。
      窄屏下滚的是外面那层（视图跟着一起走），两层都登记；下排窄屏下整条横滚，同一套。 */
   useEffect(() => {
-    helpers.wireDrag(tagRow.current);
     helpers.wireScroller(scroll.current);
     helpers.wireDrag(bottomRow.current);
   }, [helpers]);
 
   const loading = !props.tiers;
-  const tags = usePaged(tagRow, props.tags, props.tiers?.key ?? '', props.tagFirst);
   useLayoutEffect(() => {
     // 首次加载按两行占位；已有内容刷新时沿用已测量的排布，不拿骨架宽度重新合行。
     if (loading || props.trash) { setSingleRow(false); return }
@@ -81,51 +87,46 @@ function Glass(props: CatalogFilterProps) {
       return [...element.children].reduce((total, child) => total + child.getBoundingClientRect().width, 0)
         + Math.max(0, element.children.length - 1) * (parseFloat(style.columnGap) || 0);
     };
-    const measure = () => setSingleRow(frame.clientWidth >= width(viewRow.current) + width(tagRow.current)
-      + width(bottomRow.current) + 64);
+    const measure = () => setSingleRow(frame.clientWidth >= width(viewRow.current)
+      + width(bottomRow.current) + (tags.length ? 160 : 64));
     const observer = new ResizeObserver(measure);
     observer.observe(frame);
     measure();
     return () => observer.disconnect();
-  }, [loading, props.trash, props.tiersPending, tags, props.count, props.layout, props.sorts]);
-  /* 计数徽标变了值的那几枚弹一下（遗留层 `popBadges`，按上一次的值判断，不按节点新不新）。 */
-  useLayoutEffect(() => { popBadges(tagRow.current, 'tagbar') }, [tags]);
+  }, [loading, props.trash, props.tiersPending, props.count, props.layout, props.sorts, tags.length]);
 
   return (
     <FilterGlassRows label={t('catalog:catalogFilter.filterAndSort')} topLabel={t('catalog:catalogFilter.viewsAndTags')}
       attrs={{ 'data-filter-frame': '', 'data-catalog-frame': '', ...(singleRow ? { 'data-single-row': '' } : {}) }}
       className={props.trash ? TRASH_FRAME : 'mx-4'} topClassName="gap-1.5 overflow-visible" bottomClassName="min-h-12"
       bottomRef={bottomRow} busy={props.count === null || props.refreshing}
-      panes={<span ref={pane} data-view-glide="" aria-hidden="true" />}
+      panes={scope.pane}
       top={props.trash ? null : (
         <div ref={scroll} data-catalog-scroll="">
-          <div ref={viewRow} role="group" aria-label={t('catalog:catalogFilter.views')} data-catalog-views="" onPointerLeave={glide.leave}>
-            {props.views.map((view) => (
-              <a key={view.k} href={view.href} data-catalog-view={view.k} data-entity-press=""
-                aria-pressed={props.state === view.k} onPointerEnter={glide.hover}
-                onClick={(event) => { event.preventDefault(); actions.setView(view.k) }}>
-                {view.label}
-              </a>
-            ))}
-            <span data-entity-sep="" aria-hidden="true" />
-          </div>
-          <div ref={tagRow} data-catalog-tags="">
-            {props.empty || loading ? <Placeholders kind="tag" /> : null}
-            {tags.map((tag) => <TagPill key={tag.k} tag={tag} pending={props.tiersPending} onPress={actions.toggleTag} />)}
-          </div>
+          {scope.choices(t('catalog:catalogFilter.views'), props.views.map(({ k, ...view }) => ({ ...view, key: k })), actions.setView)}
+          <FilterTagStrip choices={tags} onSelect={actions.toggleTag} />
         </div>
       )}
-      bottom={props.trash ? <TrashHead {...props} /> : <Head {...props} />}
+      bottom={props.trash ? <TrashHead {...props} /> : <Head {...props} filters={
+          <>
+            <FilterDropdown id="home-performers" orderKey="performer" label={t('catalog:shared.performers')} active={!!selectedPerformer}
+              choices={(props.tiers?.performers || []).map(person => ({
+                id: person.name, label: entityDisplayName('performer', person.name, person.id), selected: person.name === selectedPerformer,
+                searchTerms: [person.name], leading: <ColumnFilterAvatar person={person} />,
+              }))} onSelect={name => actions.chooseFacet('performer', name)}
+              onClear={selectedPerformer ? () => actions.clearFilter('performer') : undefined} />
+            <FilterDropdown id="home-studios" orderKey="studio" label={t('catalog:shared.label')} active={!!selectedStudio}
+              choices={(props.tiers?.studios || []).map(studio => ({
+                id: studio.name, label: studio.name, selected: studio.name === selectedStudio,
+                leading: <ColumnFilterStudioAvatar studio={studio} />,
+              }))} onSelect={name => actions.chooseFacet('studio', name)}
+              onClear={selectedStudio ? () => actions.clearFilter('studio') : undefined} />
+            <FilterDropdown id="home-tags" orderKey="tags" label={t('catalog:shared.tags')}
+              choices={tags} onSelect={actions.toggleTag}
+              onClear={tags.some(tag => tag.selected) ? () => actions.toggleTag('') : undefined} />
+          </>
+      } />}
     />
-  );
-}
-
-function TagPill({ tag, pending, onPress }: { tag: CatalogTag; pending: boolean; onPress(tag: string): void }) {
-  return (
-    <FilterPill data-catalog-tag={tag.k} data-entity-press="" pressed={tag.selected} onPress={() => onPress(tag.k)}>
-      <AsyncText text={tag.label} busy={pending} />
-      {tag.n == null ? null : <span data-count-badge={tag.k}>{tag.n.toLocaleString()}</span>}
-    </FilterPill>
   );
 }
 
@@ -160,21 +161,16 @@ function Tiers(props: CatalogFilterProps) {
       {hasPerformers ? (
         <div ref={performers} data-catalog-tier="performers">
           {empty ? <Placeholders kind="performer" /> : (shownPerformers as TierPerformer[]).map((person) => (
-            <button key={person.name} type="button" data-tier-performer="" data-entity-kind="performer"
-              data-entity-name={person.name} onClick={() => actions.openEntity('performer', person.name)}>
-              <span data-tier-ring="" dangerouslySetInnerHTML={{ __html: person.ringHtml }} />
-              <span data-tier-name=""><AsyncText text={entityDisplayName('performer', person.name)} busy={props.tiersPending} /></span>
-            </button>
+            <CatalogPerformerTile key={person.name} name={entityDisplayName('performer', person.name)} entityName={person.name}
+              ringHtml={person.ringHtml} busy={props.tiersPending} onClick={() => actions.openEntity('performer', person.name)} />
           ))}
         </div>
       ) : null}
       {hasStudios ? (
         <div ref={studios} data-catalog-tier="studios">
           {empty ? <Placeholders kind="studio" /> : (shownStudios as TierStudio[]).map((studio) => (
-            <button key={studio.name} type="button" data-tier-studio="" data-entity-kind="studio"
-              data-entity-name={studio.name} onClick={() => actions.openEntity('studio', studio.name)}>
-              <StudioMark studio={studio} /><AsyncText text={studio.name} busy={props.tiersPending} />
-            </button>
+            <CatalogStudioTile key={studio.name} name={studio.name} entityName={studio.name} logo={studio.logo}
+              fallback={studio.fallback} busy={props.tiersPending} onClick={() => actions.openEntity('studio', studio.name)} />
           ))}
         </div>
       ) : null}
@@ -182,26 +178,9 @@ function Tiers(props: CatalogFilterProps) {
   );
 }
 
-/** 厂牌标识。兜底只剩「装了但读不出来」这一种：文件坏了，或归一漏掉、图小到看不出是什么；
- *  没装标识的壳根本不给地址，不出这张图。 */
-function StudioMark({ studio }: { studio: TierStudio }) {
-  const [broken, setBroken] = useState(false);
-  return (
-    <span data-tier-mark="">
-      {studio.logo && !broken ? (
-        <img src={studio.logo} alt="" width={28} height={28} loading="lazy" decoding="async" onError={() => setBroken(true)}
-          onLoad={(event) => { if (event.currentTarget.naturalWidth < 32) setBroken(true) }} />
-      ) : studio.fallback}
-    </span>
-  );
-}
-
 /** 空馆藏的占位：每排六十四格，由容器裁到可用宽度。它不是控件，不接指针。 */
-function Placeholders({ kind }: { kind: 'performer' | 'studio' | 'tag' }) {
+function Placeholders({ kind }: { kind: 'performer' | 'studio' }) {
   const slots = Array.from({ length: EMPTY_SLOTS }, (_, index) => index);
-  if (kind === 'tag') {
-    return <span data-catalog-placeholder="tag" aria-hidden="true">{slots.map((i) => <span key={i} />)}</span>;
-  }
   return (
     <>
       {slots.map((i) => (kind === 'performer' ? (
@@ -214,9 +193,31 @@ function Placeholders({ kind }: { kind: 'performer' | 'studio' | 'tag' }) {
 }
 
 /** 下排：读数、换一批、版式与排序。回收站的下排是 `TrashHead`。 */
-function Head({ count, refreshing, layout, sorts, previewOnly, actions }: CatalogFilterProps) {
+function Head({ count, refreshing, layout, sorts, previewOnly, actions, filters, tableContext, query }: CatalogFilterProps & { filters: ReactNode }) {
   const view = useCatalogView();
   const [shuffling, setShuffling] = useState(false);
+  const scope = tableContext?.filters || {};
+  const [position, setPosition] = useCatalogListPosition(catalogListScope({ mode: 'catalog', filters: scope }));
+  const selected = readColumnFilters(position.filters.column_filters);
+  const changeFilters = (next: Record<string, string>) =>
+    setPosition(current => ({ ...current, filters: next, pagination: { ...current.pagination, pageIndex: 0 } }));
+  const fieldFilters: Record<string, SortFieldFilter> = {};
+  if (tableContext && scope.browse !== 'folders') for (const { key, label } of sorts) {
+    const props = { label, scope, revision: tableContext.revision, filters: position.filters, embedded: true };
+    if (isColumnRangeKey(key)) {
+      const kind = columnRangeKinds[key];
+      fieldFilters[key] = {
+        active: !!selected[key], shouldCloseOnInteractOutside: kind === 'date' || kind === 'timestamp' ? outsideTableDateBound : undefined,
+        render: close => <CatalogColumnRangeFilter {...props} column={key}
+          onChange={next => { changeFilters(next); close() }} />,
+      };
+    } else if (key === 'rating') {
+      fieldFilters[key] = {
+        active: selected.rating !== undefined,
+        render: () => <CatalogColumnFilter {...props} column="rating" tagLabel={tag => tag} onChange={changeFilters} />,
+      };
+    }
+  }
   const shuffle = () => {
     setShuffling(true);
     actions.reshuffle().finally(() => setShuffling(false));
@@ -224,17 +225,24 @@ function Head({ count, refreshing, layout, sorts, previewOnly, actions }: Catalo
   return (
     <>
       <span data-catalog-summary=""><Readout count={count} /><LibraryShortcuts currentHref={actions.currentHref} />
+        {actions.search ? <FilterSearch compact label={t('catalog:catalogFilter.search')} value={query || ''}
+          onQuery={(q) => { if (q !== (query || '')) actions.search!(q) }} /> : null}
         {/* 只显示有预览图时（设置或地址），这一次看全部的入口；回首页、刷新后按设置重新生效。 */}
         {previewOnly && actions.showAll ? <FilterActionButton onPress={actions.showAll}>{t('catalog:catalogFilter.showAll')}</FilterActionButton> : null}</span>
-      <span data-entity-sorts="">
+      <FilterToolbarControls tools={<>
         <Shuffle onPress={shuffle} busy={shuffling || refreshing} />
         {/* 按名字换键：JAV 与首页各一组，React Aria 的单选组挂上之后不改 `name`。 */}
         {layout && view === 'cards' ? <Segments key={layout.name} name={layout.name} label={layout.label} value={layout.value} options={layout.options}
           onChange={actions.setLayout} /> : null}
         <CatalogViewToggle />
         <FolderBrowseToggle />
-        <SortKeys group={layout?.name === 'jav-layout' ? 'jav' : 'catalog'} sorts={sorts} onSort={actions.setSort} />
-      </span>
+        </>} fields={filters} fieldGroup={{ role: 'group', 'aria-label': t('catalog:catalogFilter.filterAndSort') }} sorts={<SortKeys group={layout?.name === 'jav-layout' ? 'jav' : 'catalog'} sorts={sorts} filters={fieldFilters}
+          onSort={(key, dir) => {
+            if (position.sorting.length || position.pagination.pageIndex) setPosition(current => ({
+              ...current, sorting: [], pagination: { ...current.pagination, pageIndex: 0 },
+            }));
+            actions.setSort(key, dir);
+          }} />} />
     </>
   );
 }

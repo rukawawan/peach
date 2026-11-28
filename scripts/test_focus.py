@@ -35,7 +35,8 @@ def selection(root: Path, selectors: list[str], t=_dev) -> tuple[unittest.TestSu
                 raise ValueError(t("test_focus.vitestOutside", selector=selector))
             islands.append(path.relative_to(root / "frontend").as_posix())
         else:
-            name = selector.removeprefix("tests/").removesuffix(".py")
+            # `tests/test_x.py`、`tests.test_x` 与 `test_x` 指同一个模块。
+            name = selector.removeprefix("tests/").removeprefix("tests.").removesuffix(".py")
             if not re.fullmatch(r"test_\w+(?:\.\w+)*", name, flags=re.ASCII) \
                     or not (root / "tests" / (name.split(".")[0] + ".py")).is_file():
                 raise ValueError(t("test_focus.badSelector", selector=selector))

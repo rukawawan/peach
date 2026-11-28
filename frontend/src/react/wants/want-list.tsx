@@ -19,6 +19,7 @@ import { cardClass } from '../components/card';
 import { SelectionDock } from '../components/selection-dock';
 import { JavBatchResources } from '../jav/jav-batch-resources';
 import { useJavSelection } from '../jav/jav-selection';
+import { useRectangleSelection, type RectangleCommit } from '../components/rectangle-selection';
 import type { Discovery } from '../jav/jav';
 import { EmptyState, EmptyFocusButton } from '../components/empty-state';
 import { Note } from '../components/note';
@@ -91,7 +92,7 @@ function WantRow({ want, readOnly, busy, onReset, onRemove, onCloudDownload, dow
     disabled: readOnly || !!busy, run: onRemove });
   const menuContext = { key: want.id, operations };
   return (
-    <li data-want-id={want.id}
+    <li data-want-id={want.id} data-rectangle-key={want.id}
       onContextMenu={event => menu.onContextMenu(event, menuContext)} onKeyDown={event => menu.onKeyDown(event, menuContext)}
       className={cardClass({ className: 'flex flex-col gap-4 max-sm:p-4' })}>
       {menu.menu}
@@ -132,8 +133,8 @@ function WantRow({ want, readOnly, busy, onReset, onRemove, onCloudDownload, dow
 }
 
 /** 一段（待找、未发售……）：标题带总数，各段独立保存页码与每页数量。 */
-function WantPhase({ phase, label, rows, row }: {
-  phase: string; label: string; rows: Want[]; row(want: Want): ReactNode;
+function WantPhase({ phase, label, rows, row, onRectangle, selecting }: {
+  phase: string; label: string; rows: Want[]; row(want: Want): ReactNode; onRectangle?: RectangleCommit | undefined; selecting: boolean;
 }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(WANT_PAGE_SIZE);
@@ -143,6 +144,7 @@ function WantPhase({ phase, label, rows, row }: {
   const available = rows.filter(hasMagnet);
   const filtered = phase !== 'searching' || magnetFilter === 'all' ? rows
     : rows.filter(want => hasMagnet(want) === (magnetFilter === 'available'));
+  const rectangle = useRectangleSelection(filtered.length ? onRectangle : undefined, { selecting, start: '[data-want-items]' });
   const win = pageWindow(filtered.length, pageSize, page);
   return (
     <section aria-label={label} data-want-phase={phase} className="flex flex-col gap-4">
@@ -162,7 +164,9 @@ function WantPhase({ phase, label, rows, row }: {
       </div>
       {!filtered.length ? <EmptyState size="compact" icon={RiStarLine} title={t('catalog:wants.noFilterMatches')}
         actions={<Button size="small" onClick={() => { setMagnetFilter('all'); setPage(1) }}>{t('catalog:shared.viewAll')}</Button>}>{null}</EmptyState> : null}
-      <ul className="flex flex-col gap-4">{filtered.slice(win.start, win.end).map(row)}</ul>
+      <div data-rectangle-gutter="" {...rectangle}>
+        <ul data-want-items="" className="flex flex-col gap-4">{filtered.slice(win.start, win.end).map(row)}</ul>
+      </div>
       <div data-want-pager="">
         <DataTableFooter label={label} total={win.total} pagination={{ pageIndex: win.page - 1, pageSize }}
           onChange={next => { setPageSize(next.pageSize); setPage(next.pageIndex + 1) }} unit={t('catalog:wants.itemUnit')} />
@@ -289,7 +293,9 @@ export function WantList({ readOnly, toast, query = '', clearQuery }: WantListPr
         const rows = items.filter((want) => want.phase === phase);
         if (!rows.length) return null;
         return (
-          <WantPhase key={phase} phase={phase} label={label} rows={rows} row={(want) => (
+          <WantPhase key={phase} phase={phase} label={label} rows={rows} selecting={selecting}
+            onRectangle={selection && !action.busy ? (keys, add) =>
+              setPicked(current => new Set([...(add ? current : []), ...keys.map(Number)])) : undefined} row={(want) => (
             <WantRow key={want.id} want={want} readOnly={readOnly} busy={action.busy}
               downloads={downloads.data} provider={selected} toast={toast}
               picked={selecting ? { on: picked.has(want.id), toggle: (on) => setPicked((current) => {

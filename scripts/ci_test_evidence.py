@@ -107,8 +107,8 @@ def read_artifact(root: Path, repo: str, run_id: int, attempt: int) -> dict:
         return proof
 
 
-def validate_run(root: Path, repo: str, run: dict) -> str:
-    head = test_evidence.git(root, 'rev-parse', 'HEAD')
+def validate_run(root: Path, repo: str, run: dict, *, head: str | None = None) -> str:
+    head = head or test_evidence.git(root, 'rev-parse', 'HEAD')
     if (run.get('path') != WORKFLOW or run.get('event') not in {'push', 'pull_request', 'workflow_dispatch'}
             or run.get('status') != 'completed' or run.get('conclusion') != 'success'
             or run.get('head_sha') != head
@@ -122,8 +122,8 @@ def validate_run(root: Path, repo: str, run: dict) -> str:
 
 
 def validate(root: Path, repo: str, run: dict, proof: dict, jobs: list[dict],
-             scopes: tuple[str, ...], target: str) -> dict:
-    head = validate_run(root, repo, run)
+             scopes: tuple[str, ...], target: str, *, head: str | None = None) -> dict:
+    head = validate_run(root, repo, run, head=head)
     changes = test_evidence.git(root, 'diff', '--name-only', target, 'HEAD', '--', *POLICY).splitlines()
     contents = test_runner.changed_contents(root, target, changes)
     if any(path not in contents or change_impact.kind(path, *contents[path]) != 'prose' for path in changes):
@@ -172,6 +172,37 @@ def verify(root: Path, run_id: int, scopes: tuple[str, ...], target: str) -> dic
         raise ValueError(t("ci_test_evidence.jobListIncomplete"))
     proof = read_artifact(root, repo, run_id, run['run_attempt'])
     return validate(root, repo, run, proof, payload['jobs'], scopes, target)
+
+
+def merged_pull_request(root: Path, repo: str, base: str, plan: dict, scopes: tuple[str, ...]) -> dict | None:
+    """主线合并提交的内容树与刚通过的 PR Test 相同时，取回那次运行的回执；否则返回 None。
+
+    集成先把分支 rebase 到主线再 `--no-ff` 合入，合并提交的树就是 PR 头的树；PR 上那一轮
+    已经验证过同一份内容，主线再跑一遍只是重复。判据沿用 `validate`：同仓库的成功运行、
+    证明里的内容树、协议未改、计划与作业齐全、范围覆盖；另外要求 PR 那轮的计划不比主线这轮窄。
+    任何一项不符就照常执行。
+    """
+    parents = test_evidence.git(root, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:]
+    tree = test_evidence.git(root, 'rev-parse', 'HEAD^{tree}')
+    if len(parents) != 2 or test_evidence.git(root, 'rev-parse', parents[1] + '^{tree}') != tree:
+        return None
+    listing = api(root, f'repos/{repo}/actions/workflows/test.yml/runs'
+                        f'?head_sha={parents[1]}&event=pull_request&status=success&per_page=20')
+    for run in listing.get('workflow_runs', ()):
+        try:
+            payload = api(root, f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100")
+            if payload['total_count'] != len(payload['jobs']):
+                continue
+            proof = read_artifact(root, repo, run['id'], run['run_attempt'])
+            receipt = validate(root, repo, run, proof, payload['jobs'], scopes, base, head=parents[1])
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            continue
+        tested = proof['plan']
+        if tested.get('wide') is True or (not plan['wide'] and all(
+                tested.get(name) or not plan[name] for name in ('browser', 'frontend', 'vendor', 'wheel'))
+                and len(tested['matrix']['include']) >= len(plan['matrix']['include'])):
+            return receipt
+    return None
 
 
 def receipt_path(root: Path) -> Path:

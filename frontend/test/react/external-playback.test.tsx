@@ -58,6 +58,24 @@ it('本机可选择已安装播放器并在打开成功后回执，失败保留�
   expect(opened).toHaveBeenCalledOnce();
 });
 
+it('自定义播放器在最后一项，取消选取时不回执已打开', async () => {
+  const opened = vi.fn();
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/local-players'
+    ? { players: [{ id: 'default', label: '系统默认播放器' }, { id: 'custom', label: '自定义播放器…' }] }
+    : { opened: false })));
+  vi.stubGlobal('fetch', fetcher);
+  const host = await mount(<ExternalPlayback id={12} onOpened={opened} />);
+  await settle();
+  await click(playerSelect(host));
+  expect([...document.querySelectorAll('[role="option"]')].at(-1)?.textContent?.trim()).toBe('自定义播放器…');
+  await choose(playerSelect(host), '自定义播放器…');
+  await click(host.querySelector('[aria-label="使用外部播放器打开"]'));
+  expect(fetcher).toHaveBeenLastCalledWith('/api/local-playback?id=12&player=custom',
+    expect.objectContaining({ method: 'POST' }));
+  expect(opened).not.toHaveBeenCalled();
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
 it('M3U 与本机播放器共用打开入口，切换方式时清除网络地址', async () => {
   const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url === '/api/local-players'
     ? { players: [{ id: 'default', label: '系统默认播放器' }] }

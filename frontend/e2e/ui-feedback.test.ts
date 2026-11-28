@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, layout, settle, VIEWPORTS, visit } from './harness.ts';
+import { CONFIGURATION_ROUTE, launch, layout, settle, VIEWPORTS, visit } from './harness.ts';
 
 /* 每个分区取一块不随本机配置出没的卡：骨架按终态结构画，随配置变的卡（下载渠道的「云下载」
    跟着媒体库里有没有网盘）照本机上次记下的结构画，新开的浏览器里没有记录，按最小结构画。 */
@@ -20,7 +20,7 @@ describe('等待反馈与文件夹模式', () => {
       let release = () => {};
       const held = new Promise<void>(resolve => { release = resolve });
       const opened = await visit(browser, `/settings/${key}`, viewport, async page => {
-        await page.route('**/api/configuration', async route => { await held; await route.continue() });
+        await page.route(CONFIGURATION_ROUTE, async route => { await held; await route.continue() });
       });
       try {
         const { page } = opened;

@@ -857,6 +857,8 @@ def _evidence_candidates(row: dict, field: str = "") -> list[dict]:
     来源在这个字段上连候选都不算，所以也不会因为「只剩它一家」而被采信。
     身份尚未确认的候选保留供人工处理，不参与自动补空（ADR-0150）。
     """
+    from .metadata_amane import current_date_candidate
+    code = str(row.get('code') or '')
     return [c for c in row.get("candidates") or []
             if (str(c.get("source") or "").strip() in SOURCE_SPECS
                 or str(c.get("source") or "").strip() == LOCAL_NFO_SOURCE)
@@ -864,8 +866,9 @@ def _evidence_candidates(row: dict, field: str = "") -> list[dict]:
             and not c.get('requires_identity_review')
             and (str(c.get('source') or '').strip() != 'javdb' or current_javdb_candidate(c))
             and current_seed_candidate(c)
+            and current_date_candidate(code, c)
             and candidate_text_is_valid(c)
-            and _original_title_candidate(field, c, str(row.get('code') or ''))]
+            and _original_title_candidate(field, c, code)]
 
 
 def _unmasked_titles(field: str, candidates: list[dict], current: str = "") -> list[dict]:

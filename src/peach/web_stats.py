@@ -705,6 +705,10 @@ def q_quality_goals(contract: WebContract, args):
             "ORDER BY g.updated_at DESC,a.id DESC",
             (DEFAULT_PROFILE_ID,),
         )]
+    # 按番号或文件名找一部，先于列筛选：列头的候选项跟着搜索结果收窄。
+    needle = str(args.get("q") or "").strip().casefold()
+    if needle:
+        rows = [row for row in rows if needle in f"{row.get('code') or ''}\n{row.get('name') or ''}".casefold()]
     from .media_identity import ownership
     config = settings_file.active()
     for row in rows:

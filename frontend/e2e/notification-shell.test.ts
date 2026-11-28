@@ -47,6 +47,19 @@ describe('通知和任务卡的共用外框', () => {
         // 外观与坐标使用同一次测量，尺寸必须来自可见的布局框。
         for (const item of aligned) assert.ok(item.visibility === 'visible' && item.width > 0 && item.height > 0, JSON.stringify(item));
         const box = aligned.find(item => item.kind === 'task')!, top = aligned.find(item => item.kind === 'receipt')!.y;
+        const feedback = page.locator('[data-feedback-launcher] button');
+        const launcher = await feedback.boundingBox();
+        assert.ok(launcher);
+        assert.ok(launcher.y - (box.y + box.height) >= 8, '任务卡要给反馈入口留出间距');
+        const feedbackOpacity = () => feedback.evaluate(button => getComputedStyle(button).opacity);
+        assert.equal(await feedbackOpacity(), '0.65');
+        if (!viewport.mobile) {
+          await feedback.hover();
+          assert.equal(await feedbackOpacity(), '1');
+          await page.mouse.move(0, 0);
+          assert.equal(await feedbackOpacity(), '0.65');
+        }
+        await feedback.click({ trial: true });
         const clip = { x: Math.max(0, viewport.width - 600), y: Math.max(0, top - 20),
           width: Math.min(viewport.width, 600), height: viewport.height - Math.max(0, top - 20) };
         assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);

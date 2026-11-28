@@ -1,5 +1,5 @@
 /* layout 域控制器：本域状态与动作，启动由 Application 的生命周期统一安装。 */
-import { javCardPage, javSelectPage } from '../jav-controls';
+import { javCardPage, javSelectPage, syncJavSelection } from '../jav-controls';
 import { pageSelectPath } from '../react/components/page-selection';
 import { DIRECT_MANAGE_NAV, MANAGE_MENU_SECTIONS, MANAGE_SECTIONS, NAV_CATALOG, OPTIONAL_SIDEBAR_ITEMS, SIDEBAR_ITEMS, getManageMenuSections } from './navigation-items';
 import { FOLLOW_INITIAL_RANGE_OPTIONS } from './initial-follow-ranges';
@@ -23,6 +23,8 @@ import { THEME_OPTIONS } from './../appearance/theme';
 import { JAV_LAYOUTS, cardLayoutFor, storeHomeLayout, storeJavLayout, storeVideoLayout } from './../appearance/layout';
 import { receiptsState } from './receipts.js';
 import { applySyncedSettings } from './../appearance/settings';
+import { queryClient } from '@peach/query';
+import { PROFILE_SETTINGS_KEY } from '../table-column-order';
 import { loadManageHeader, loadSettingsPanel, loadSidebar, manageHeaderApi, sidebarApi } from '../react/application-residents';
 import { sidebarSkeletonHtml } from './../sidebar-skeleton';
 import { trashFilterSkeletonHtml } from './../catalog-filter-skeleton';
@@ -54,7 +56,8 @@ export function showManagementBody({manage=true,placeholder=''}={}){
 }
 
 export function enterManagementSurface(){
-  $('#javLibraryHeader').hidden=true;
+  // JAV 的想要、新作、发现、在线目录画在管理区，页头与馆藏共用常驻的那一棵，留着不藏。
+  $('#javLibraryHeader').hidden=location.pathname!=='/jav';
   catalogState.hideCatalogCombo();
   hideDiscoveryBars();
   document.body.classList.remove('entity-open','index-open');
@@ -140,7 +143,7 @@ export function sidebarHost(){
       filters.len='';filters.dur_min=lo?String(Math.round(lo*60)):'';filters.dur_max=hi===null?'':String(Math.round(hi*60))}),
     openFollowTag:tag=>{
       followState.followAuthors=new Set();followState.followProviders=new Set();followState.followMediaView='videos';followState.followFilter='saved';
-      followState.followDurMin=followState.followDurMax=0;followState.followTags=new Set([tag]);openDrawer(false);openRoutedPage(followViewPath())},
+      followState.followDurMin=followState.followDurMax=0;followState.followQuery='';followState.followTags=new Set([tag]);openDrawer(false);openRoutedPage(followViewPath())},
     selectFollowTag:tag=>{followState.followTags=new Set([tag]);openDrawer(false);openRoutedPage(followViewPath())},
     selectFollowProvider:provider=>routeFollowFromSidebar({provider:followState.followProviders.has(provider)?'':provider}),
     setFollowDuration:(lo,hi)=>routeFollowFromSidebar({durMin:Math.round(lo*60),durMax:hi===null?0:Math.round(hi*60)}),
@@ -164,9 +167,9 @@ export function mountSidebar(){
 export async function loadSyncedSettings(){
   const effects=applicationEffects;
   let remote=null;
-  try{remote=await api('/api/settings',{signal:effects.signal})}catch{return}
+  try{remote=await queryClient.fetchQuery({queryKey:PROFILE_SETTINGS_KEY,queryFn:({signal})=>api('/api/settings',{signal})})}catch{return}
   if(!effects.isActive)return;
-  applySyncedSettings(remote,effect=>preferencesState.settingsEffects[effect]?.());
+  applySyncedSettings(remote,(effect,keys)=>preferencesState.settingsEffects[effect]?.(keys));
 }
 
 export function manageSection(){
@@ -410,6 +413,7 @@ export function syncHeaderActions(){
   const entityView=entity?(entityState.entityPageView||(media==='photos'||media==='online'?media:'videos')):'';
   const catalog=isCatalogPath(path)||path==='/trash';
   const javCards=javCardPage(path,location.search);
+  syncJavSelection(path,location.search);
   if((path==='/jav'||pageSelectPath(path))&&selectMode)setSelectMode(false,true);
   /* 标签页两种范围都能多选：本地拼目录筛选，在线做隐藏与屏蔽。本地名册做批量动作，艺人页的在线那档不在内。 */
   const tagsSelectable=path==='/tags';
@@ -489,7 +493,7 @@ layoutState.settingsHost = ()=>({
   highContrast:()=>document.documentElement.classList.contains('board-high-contrast'),setHighContrast,
   receipt:message=>receiptsState.actionReceipt(message),
   failure:receiptsState.actionFailure,
-  syncRemote:remote=>applySyncedSettings(remote,effect=>preferencesState.settingsEffects[effect]?.()),
+  syncRemote:remote=>applySyncedSettings(remote,(effect,keys)=>preferencesState.settingsEffects[effect]?.(keys)),
   openConfiguration:()=>navigationState.navigatePath('/settings/library'),
   attached:()=>preferencesState.syncGlassOptics(),
   /* 「这台电脑」那一格的判据：服务由托盘管、已完成配置、请求来自本机三条同时成立。 */

@@ -38,9 +38,13 @@ export function catalogParams(filters: Readonly<Record<string, string>>, exclude
   return params.toString();
 }
 
-export function catalogListScope(props: CatalogGridProps): string {
+export function catalogListScope(props: Pick<CatalogGridProps, 'mode' | 'filters' | 'listScope' | 'entityKey' | 'wall'>): string {
   const params = new URLSearchParams(catalogParams(props.filters || {}, false));
   if (!new URLSearchParams(globalThis.location?.search).has('seed')) params.delete('seed');
+  if (props.mode === 'catalog' && !props.wall && props.filters?.state !== 'trash') {
+    params.delete('sort');
+    params.delete('dir');
+  }
   return `${props.mode}:${props.listScope || props.entityKey || ''}:${params}`;
 }
 

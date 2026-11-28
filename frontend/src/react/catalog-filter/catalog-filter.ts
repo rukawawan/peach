@@ -8,12 +8,13 @@
  *
  * 交集条与排序键、换一批、版式开关和资料页那一条（`entity-filter`）是同一份清单、同一组组件。 */
 import type { EntityComboItem, EntitySortKey, SegmentOption } from '../entity-filter/entity-filter';
+import type { FaceRef } from '../../card-art/markup';
+import type { SortDirection } from '../../sort-preferences';
 
 export type { EntityComboItem, EntitySortKey, SegmentOption };
 
-/** 头像条上的一位女优。圆框里那两层（首字母与头像图）由遗留层 `entityFaceImg` 拼：取景、
- *  回落图与异步解码都在那里，React 不拥有里面的节点。 */
-export interface TierPerformer {
+/** 头像条和筛选菜单共用艺人的头像信息。 */
+export interface TierPerformer extends FaceRef {
   name: string;
   ringHtml: string;
 }
@@ -23,6 +24,8 @@ export interface TierStudio {
   name: string;
   logo: string;
   fallback: string;
+  has_logo?: boolean;
+  logo_version?: string;
 }
 
 export type TierKind = 'performers' | 'studios';
@@ -66,11 +69,14 @@ export interface CatalogFilterActions {
   /** 四枚视图里的一枚。 */
   setView(view: string): void;
   toggleTag(tag: string): void;
+  /** 浮层下排的查找：同顶栏搜索，改的是这一页的搜索词。 */
+  search?(q: string): void;
+  chooseFacet(kind: 'performer' | 'studio', name: string): void;
   /** 撤掉交集条上的一颗创作者／厂牌／归属。 */
   clearFilter(key: string): void;
   /** 交集条末尾的「全部清除」。 */
   clearAll(): void;
-  setSort(key: string): void;
+  setSort(key: string, dir: SortDirection): void;
   /** 换一批：网格与三层成员一起换，换批键转圈到这个 Promise 落定。 */
   reshuffle(): Promise<void>;
   setLayout(value: string): void;
@@ -97,9 +103,8 @@ export interface CatalogFilterProps {
   tiersPending: boolean;
   /** 空馆藏：两排与标签条摆一行占位，说的是「这里将来会有东西」。 */
   empty: boolean;
-  /** 标签条成员，已选的排在最前；前 `tagFirst` 枚先摆，其余横滚到右端再续。 */
+  /** 标签筛选的选项与部数。 */
   tags: CatalogTag[];
-  tagFirst: number;
   views: readonly CatalogView[];
   /** 当前视图：''、fresh、later、flagged、trash。 */
   state: string;
@@ -110,9 +115,12 @@ export interface CatalogFilterProps {
   /** 回收站浮层的宿主（`#trashFilter`）：它住在正文里管理页头下面，首页那个宿主在正文外、标题上面。 */
   trashHost: Element | null;
   sorts: EntitySortKey[];
+  tableContext?: { filters: Record<string, string>; revision: number };
   layout: CatalogLayout | null;
   /** 正只显示有预览图的作品（设置或地址上的 `thumb=1`）：读数旁给「显示全部」。 */
   previewOnly?: boolean;
+  /** 这一页的搜索词（壳的 `state.q`），浮层下排的查找框显示它。 */
+  query?: string;
   /** 换一批这一趟：三层与标签铺一层微光，换批键转圈。 */
   refreshing: boolean;
   /** 筛选条被收起（资料页、索引页与管理页）：浮层两排不画，只留两排头像。 */

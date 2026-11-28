@@ -14,10 +14,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Protocol
 
 from . import wants
+from . import view_preferences
 from .catalog_rules import CodePatternError, compile_code_patterns
 from . import feeds
 from .feeds import FEED_COMPILATION_SWITCHES
@@ -28,9 +30,11 @@ from .user_messages import UserValueError
 
 from .profiles import DEFAULT_PROFILE_ID
 
-#: 默认就在侧栏里的入口，顺序即默认顺序。首页之后是关注（每天有新东西的那一屏），
-#: 再是主库最常用的浏览模式 JAV，然后三个索引，回头找的已标记，管理垫底。
+#: 默认侧栏顺序。首页和 AI 助手是跨馆藏入口。
 DEFAULT_SIDEBAR_ORDER = (
+    "", "ai", "follow", "jav", "performers", "tags", "studios", "flagged", "manage",
+)
+_SIDEBAR_ORDER_BEFORE_AI = (
     "", "follow", "jav", "performers", "tags", "studios", "flagged", "manage",
 )
 #: 可以加进侧栏、但默认不在的入口。播放列表和沉浸模式都是从一条作品或一个索引里
@@ -69,7 +73,8 @@ NAME_LANGUAGE_CHOICES = ("zh-CN", "ja", "en", "ja-local", "local-ja")
 #: 「想要」老片多久查一次、查几次放弃（`wants.cadence`）是定时查找读的，同样跟着账本走。
 #: 扫描与采集每趟向外部来源要多少（`library_processing.source_budget`）是后台任务读的，同样跟着账本走。
 SYNCED_SETTING_KEYS = frozenset({
-    "sidebarOrder", "manageOrder", "navigationOrders", "sortControls", "libraryOrder", "followInitialDays", "postSetupTutorialDone",
+    "sidebarOrder", "manageOrder", "navigationOrders", "sortControls", "libraryOrder", "tableLayouts", "browsePreferences",
+    "followInitialDays", "postSetupTutorialDone",
     "organizeTemplates", "feedHideGroupCompilations", "feedHideSoloCompilations",
     "feedHideExcerpts", "searchHistoryLimit", "codePatterns", "performerNameLanguage", "taskSpeedMode",
     "interfaceLanguage", "javBrowserWantOnNoMatch", "wantStaleSearchDays", "wantStaleAttemptLimit",
@@ -92,19 +97,28 @@ DEFAULT_MANAGE_ORDER = ('stats', 'taste', 'cleanup', 'follow', 'activity', 'conf
 NAVIGATION_ORDERS = {
     'review': ('metadata_fields', 'creator_tags', 'code_creators', 'western_identity', 'performer_avatars',
                'studio_logos', 'fc2_markings', 'fc2_similarity', 'video_endcards'),
-    'configuration': ('library', 'sources', 'downloads', 'network', 'maintenance', 'diagnostics'),
+    'configuration': ('library', 'sources', 'ai', 'downloads', 'network', 'maintenance', 'diagnostics'),
     'favorites': ('all', 'filters', 'performer', 'creator', 'tag', 'series', 'studio', 'agency'),
-    'jav': ('library', 'wants', 'releases', 'discover'),
+    'jav': ('library', 'wants', 'releases', 'discover', 'online'),
     'follow': ('list', 'add', 'tags'),
     'tags': ('local', 'online'),
     'preferences': ('appearance', 'browsing', 'jav', 'search', 'content'),
 }
+FILTER_CONTROL_KEYS = {
+    'catalog': ('performer', 'studio', 'tags'),
+    'jav': ('performer', 'studio', 'tags'),
+    'follow': ('source', 'tags'),
+    'releases': ('performer', 'studio', 'tags'),
+    'discover': ('performer', 'studio', 'tags'),
+    'javOnline': ('performer', 'studio', 'tags'),
+}
 SORT_CONTROL_KEYS = {
-    'catalog': ('rating', 'o', 'plays', 'dur', 'size', 'new', 'played', 'release'),
-    'jav': ('release', 'rating', 'o', 'plays', 'dur', 'size', 'new', 'played'),
-    'follow': ('new', 'hot', 'dur'),
-    'releases': ('release_date', 'source_score', 'duration', 'code', 'taste'),
-    'discover': ('taste', 'release_date', 'source_score', 'duration', 'code'),
+    'catalog': (*FILTER_CONTROL_KEYS['catalog'], 'rating', 'o', 'plays', 'dur', 'size', 'new', 'played', 'release'),
+    'jav': (*FILTER_CONTROL_KEYS['jav'], 'release', 'rating', 'o', 'plays', 'dur', 'size', 'new', 'played'),
+    'follow': (*FILTER_CONTROL_KEYS['follow'], 'new', 'hot', 'dur'),
+    'releases': (*FILTER_CONTROL_KEYS['releases'], 'release_date', 'source_score', 'duration', 'code', 'taste'),
+    'discover': (*FILTER_CONTROL_KEYS['discover'], 'taste', 'release_date', 'source_score', 'duration', 'code'),
+    'javOnline': (*FILTER_CONTROL_KEYS['javOnline'], 'release', 'dur', 'code'),
 }
 
 
@@ -122,7 +136,11 @@ def normalise_sort_controls(raw):
             entries = saved.get(field)
             entries = entries if isinstance(entries, list) else []
             fields[field] = list(dict.fromkeys(key for key in entries if isinstance(key, str) and key in defaults))
+        facets = FILTER_CONTROL_KEYS[group]
+        if not any(key in facets for key in fields['order']):
+            fields['order'][:0] = facets
         fields['order'] = list(dict.fromkeys(fields['order'] + list(defaults)))
+        fields['hidden'] = [key for key in fields['hidden'] if key not in facets]
         result[group] = fields
     return result
 
@@ -162,6 +180,55 @@ def navigation_orders_patch(raw):
                                                for key in entries) for group, entries in raw.items()):
         raise UserValueError('api.settings.navigationOrderUnknownEntry')
     return normalise_navigation_orders(raw)
+
+
+_TABLE_LAYOUT_KEY = re.compile(r"[a-zA-Z0-9_-]{1,80}")
+
+
+def _layout_key(value) -> bool:
+    return isinstance(value, str) and _TABLE_LAYOUT_KEY.fullmatch(value) is not None
+
+
+def _valid_table_layout(layout) -> bool:
+    if not isinstance(layout, dict) or set(layout) - {"widths", "visibility", "order"}:
+        return False
+    widths, visibility, order = (layout.get("widths", {}), layout.get("visibility", {}), layout.get("order", []))
+    return (
+        isinstance(widths, dict) and len(widths) <= 64
+        and all(_layout_key(key) and type(value) in (int, float) and 0 < value <= 10000 for key, value in widths.items())
+        and isinstance(visibility, dict) and len(visibility) <= 64
+        and all(_layout_key(key) and isinstance(value, bool) for key, value in visibility.items())
+        and isinstance(order, list) and len(order) <= 64
+        and all(_layout_key(key) for key in order) and len(set(order)) == len(order)
+    )
+
+
+def _stored_table_layouts(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {key: layout for key, layout in value.items() if _layout_key(key) and _valid_table_layout(layout)}
+
+
+def _table_layout_patch(value) -> dict:
+    if not isinstance(value, dict) or not 0 < len(value) <= 64:
+        raise UserValueError("api.settings.tableLayoutsInvalid")
+    for key, change in value.items():
+        if (not _layout_key(key) or not isinstance(change, dict) or not change
+                or not _valid_table_layout({field: data for field, data in change.items() if field != "legacy"})
+                or not _valid_table_layout(change.get("legacy", {}))):
+            raise UserValueError("api.settings.tableLayoutsInvalid")
+    return value
+
+
+def _merge_table_layouts(current, patch) -> dict:
+    layouts = _stored_table_layouts(current)
+    for key, change in patch.items():
+        # 浏览器旧偏好只填从未设置过的项。空值容器记录显式重置，也优先于旧偏好。
+        layouts[key] = {**change.get("legacy", {}), **layouts.get(key, {}),
+                        **{field: data for field, data in change.items() if field != "legacy"}}
+    if len(layouts) > 128:
+        raise UserValueError("api.settings.tableLayoutsInvalid")
+    return layouts
 
 
 def normalise_manage_order(raw):
@@ -295,12 +362,17 @@ def q_settings(contract: SettingsContract, _args=None) -> dict:
     """读取跟人走的那部分设置。缺省时返回默认值，不返回空。"""
     from .library_processing import source_budget_settings
     payload = _stored(contract)
+    sidebar_order = payload.get("sidebarOrder")
+    if sidebar_order == list(_SIDEBAR_ORDER_BEFORE_AI) and payload.get("sidebarAiHidden") is not True:
+        sidebar_order = None
     cadence = wants.cadence_from(payload)
     return {
-        "sidebarOrder": normalise_sidebar_order(payload.get("sidebarOrder")),
+        "sidebarOrder": normalise_sidebar_order(sidebar_order),
         **({"manageOrder": normalise_manage_order(payload["manageOrder"])} if "manageOrder" in payload else {}),
         **({"navigationOrders": normalise_navigation_orders(payload["navigationOrders"])} if "navigationOrders" in payload else {}),
         **({"sortControls": normalise_sort_controls(payload["sortControls"])} if "sortControls" in payload else {}),
+        "tableLayouts": _stored_table_layouts(payload.get("tableLayouts")),
+        "browsePreferences": view_preferences.stored(payload.get("browsePreferences")),
         **({"libraryOrder": payload["libraryOrder"]} if isinstance(payload.get("libraryOrder"), list) else {}),
         "avatarRefreshDays": AVATAR_REFRESH_SECONDS // 86400,
         "faviconRefreshDays": FAVICON_REFRESH_SECONDS // 86400,
@@ -355,6 +427,8 @@ def _navigation_patch(body):
         patch["navigationOrders"] = navigation_orders_patch(body["navigationOrders"])
     if "sortControls" in body:
         patch["sortControls"] = sort_controls_patch(body["sortControls"])
+    if "tableLayouts" in body:
+        patch["tableLayouts"] = _table_layout_patch(body["tableLayouts"])
     if "libraryOrder" in body:
         order = body["libraryOrder"]
         if (not isinstance(order, list) or len(order) > 1000
@@ -380,6 +454,8 @@ def w_settings(contract: SettingsContract, body) -> dict:
         raise UserValueError("api.settings.empty")
 
     merged = _stored(contract)
+    if "browsePreferences" in body:
+        merged["browsePreferences"] = view_preferences.patch(body["browsePreferences"])
     merged.update(_navigation_patch(body))
     merged.update(_want_cadence_patch(body))
     merged.update(_source_budget_patch(body))
@@ -418,7 +494,11 @@ def w_settings(contract: SettingsContract, body) -> dict:
             if not isinstance(body[key], bool):
                 raise UserValueError("api.settings.switchNotBoolean", {"key": key})
             merged[key] = body[key]
-    _write_settings(contract, {key: merged[key] for key in body})
+    patch = {key: merged[key] for key in body}
+    if patch.get("sidebarOrder") == list(_SIDEBAR_ORDER_BEFORE_AI):
+        # 用户在新版明确保存了相同的布局，后续读取应保留这一选择。
+        patch["sidebarAiHidden"] = True
+    _write_settings(contract, patch)
     return {"ok": True, **q_settings(contract)}
 
 
@@ -437,6 +517,10 @@ def _write_settings(contract: SettingsContract, patch: dict) -> None:
                                          **patch["navigationOrders"]}
         if "sortControls" in patch:
             patch["sortControls"] = {**normalise_sort_controls(current.get("sortControls")), **patch["sortControls"]}
+        if "tableLayouts" in patch:
+            patch["tableLayouts"] = _merge_table_layouts(current.get("tableLayouts"), patch["tableLayouts"])
+        if "browsePreferences" in patch:
+            patch["browsePreferences"] = view_preferences.merge(current.get("browsePreferences"), patch["browsePreferences"])
         current.update(patch)
         updated = connection.execute(
             "UPDATE profile SET settings_json=?, updated_at=? WHERE id=?",

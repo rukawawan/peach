@@ -9,11 +9,12 @@ import { SelectionActions, type SelectionAction } from './selection-actions';
 import { t } from '../../i18n';
 
 /** 多选弹层的选项靠近触发器，操作区随实际展开方向放在远端。 */
-export function SelectionPopover({ label, triggerLabel, leadingIcon, items, onChange, actions,
+export function SelectionPopover({ label, triggerLabel, leadingIcon, items, onChange, actions, triggerSize,
   actionLayout = 'inline', empty = t('shell:selectionPopover.empty') }: {
   label: string;
   triggerLabel: string;
   leadingIcon?: ButtonProps['leadingIcon'];
+  triggerSize?: ButtonProps['size'];
   items: readonly { id: string; label: ReactNode; selected: boolean; disabled?: boolean }[];
   onChange(id: string, selected: boolean): void;
   actions: readonly SelectionAction[];
@@ -30,7 +31,7 @@ export function SelectionPopover({ label, triggerLabel, leadingIcon, items, onCh
       : <span className="text-caption-1-regular text-text-secondary">{empty}</span>}
   </div>;
   return <>
-    <Button ref={trigger} variant="secondary" leadingIcon={leadingIcon}
+    <Button ref={trigger} variant="secondary" leadingIcon={leadingIcon} size={triggerSize}
       aria-haspopup="dialog" aria-expanded={open} aria-label={triggerLabel}
       onClick={() => setOpen(true)}>{triggerLabel}</Button>
     <Popover triggerRef={trigger} isOpen={open} onOpenChange={setOpen} placement="bottom end" offset={4}

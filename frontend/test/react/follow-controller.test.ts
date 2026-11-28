@@ -7,7 +7,7 @@ import { createFollowDetailActions } from '../../src/react/follow-detail/follow-
 import { followWorkMark } from '../../src/react/follow-feed/follow-helpers';
 
 const view = (patch: Partial<FollowView> = {}): FollowView => ({ status: '', media: 'videos', author: '', provider: '',
-  work: '', tags: [], durMin: 0, durMax: 0, sort: 'new', dir: 'desc', seed: 7, ...patch });
+  work: '', tags: [], durMin: 0, durMax: 0, q: '', sort: 'new', dir: 'desc', seed: 7, ...patch });
 const helpers: FollowFeedHelpers = { workMark: () => '', tagLabel: tag => tag, wireDrag: vi.fn(), wireScroller: vi.fn(),
   listSkeletonHtml: () => '', jobProgress: vi.fn() };
 const delegated: Omit<FollowFeedActions, 'route' | 'shuffle'> = { loaded: vi.fn(), openDetail: vi.fn(), openAuthor: vi.fn(),

@@ -24,7 +24,9 @@ function hostIn(parent: HTMLElement): HTMLElement {
 export function overlayHost(node: Element | null | undefined): HTMLElement {
   const document = node?.ownerDocument ?? globalThis.document;
   const modal = node?.closest('dialog[open], [data-settings-panel]:not([hidden])');
-  return hostIn((modal as HTMLElement | null) ?? document.body);
+  const fullscreen = document.fullscreenElement;
+  const screen = fullscreen instanceof HTMLElement && fullscreen.contains(node ?? null) ? fullscreen : null;
+  return hostIn(modal instanceof HTMLElement && (!screen || screen.contains(modal)) ? modal : screen ?? document.body);
 }
 
 const LAYER = '[role="dialog"],[role="listbox"],[role="menu"]';

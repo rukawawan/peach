@@ -1931,7 +1931,8 @@ class WebDataTests(unittest.TestCase):
             "/api/post-setup-tutorial",
             "/api/tutorial-progress", "/api/performer/delete-candidates", "/api/performer/delete-plan",
             "/api/entity-batch/plan",
-            "/api/library-shortcuts", "/api/folders",
+            "/api/library-shortcuts", "/api/library-shortcuts/queue", "/api/folders",
+            "/api/media-directory", "/api/media-directory/trash",
             "/api/custom-metadata",
             "/api/follow", "/api/follow/credentials", "/api/follow/schedule",
             "/api/follow/check", "/api/follow/resolve", "/api/follow/suggest",
@@ -1940,11 +1941,11 @@ class WebDataTests(unittest.TestCase):
             "/api/follow/tags", "/api/follow/authors",
             "/api/taste", "/api/settings", "/api/links", "/api/organize", "/api/organize/example", "/api/orphan-records",
             "/api/feeds", "/api/feeds/check", "/api/feeds/discoveries", "/api/feeds/lookup",
-            "/api/feeds/schedule",
+            "/api/feeds/schedule", "/api/feeds/suggest",
             "/api/downloads", "/api/resources/search",
             "/api/wants", "/api/wants/magnets",
             "/api/jav/detail", "/api/jav/reviews", "/api/jav/resources", "/api/jav/discoveries", "/api/jav/releases",
-            "/api/jav/discoveries/metadata",
+            "/api/jav/discoveries/metadata", "/api/jav/catalog",
             "/api/result-updates",
             "/api/taste/signals",
             "/api/western-scrape", "/api/jasna", "/api/ai-subtitles", "/api/junk-rules",
@@ -1960,7 +1961,7 @@ class WebDataTests(unittest.TestCase):
             "/api/activity", "/api/play", "/api/feedback", "/api/watch-later",
             "/api/playlist",
             "/api/tutorial-progress", "/api/performer/delete", "/api/entity-batch",
-            "/api/library-shortcuts", "/api/folders/preview", "/api/folders/rule",
+            "/api/library-shortcuts", "/api/folders/preview", "/api/folders/rule", "/api/media-directory",
             "/api/custom-metadata",
             "/api/preference", "/api/quality-goal", "/api/item-tag", "/api/item-edit", "/api/batch",
             "/api/ads/dispose-all", "/api/ads/restore-all", "/api/search-history", "/api/trash/empty",
@@ -2718,6 +2719,13 @@ class WebDataTests(unittest.TestCase):
         self.assertEqual(queue["items"][0]["library_id"], "lib-a")
         self.assertNotIn("path", queue["items"][0])
         self.assertFalse(queue["has_more"])
+        with mock.patch.object(web_stats.settings_file, "active", return_value=object()), \
+                mock.patch("peach.media_identity.ownership", return_value={"library_id": "lib-a"}):
+            name = queue["items"][0]["name"]
+            hit = rm_web.q_quality_goals(self.contract, {"limit": "20", "q": f"  {name[:3].upper()}  "})
+            miss = rm_web.q_quality_goals(self.contract, {"limit": "20", "q": "不存在的番号"})
+        self.assertEqual([item["id"] for item in hit["items"]], [1])
+        self.assertEqual((miss["total"], miss["items"]), (0, []))
         rm_web.w_batch(self.contract, {"ids": [1, 2], "operation": "dispose"})
         self.assertEqual(self.row(1)["disposal"], "trash")
         with self.assertRaises(ValueError):
@@ -4286,6 +4294,20 @@ class DuplicateDetectionTests(unittest.TestCase):
 
     def groups(self):
         return rm_web.q_duplicates(self.contract, {"limit": "50"})
+
+    def test_duplicate_groups_can_be_found_by_code_or_file_name(self):
+        self.add("ABW-232", 7200, 5_000_000_000)
+        self.add("ABW-232", 7200, 3_000_000_000)
+        self.add("SSIS-950", 7200, 5_000_000_000, name="first.mp4")
+        self.add("SSIS-950", 7200, 3_000_000_000, name="Second Copy.mp4")
+        by_code = rm_web.q_duplicates(self.contract, {"limit": "50", "q": " abw-2 "})
+        self.assertEqual(by_code["total"], 1)
+        self.assertEqual({item["code"] for item in by_code["groups"][0]["files"]}, {"ABW-232"})
+        by_name = rm_web.q_duplicates(self.contract, {"limit": "50", "q": "second copy"})
+        self.assertEqual({item["code"] for item in by_name["groups"][0]["files"]}, {"SSIS-950"})
+        self.assertEqual(len(by_name["groups"][0]["files"]), 2)
+        self.assertEqual(rm_web.q_duplicates(self.contract, {"limit": "50", "q": "没有这一部"})["total"], 0)
+        self.assertEqual(self.groups()["total"], 2)
 
     def test_same_duration_rips_are_a_duplicate_cluster(self):
         self.add("ABW-232", 7200, 5_000_000_000)

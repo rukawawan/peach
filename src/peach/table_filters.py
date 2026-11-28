@@ -18,7 +18,8 @@ def _range_bound(value, kind):
         except ValueError:
             return False
     return (type(value) in (int, float) and -(2**53 - 1) <= value <= 2**53 - 1
-            and kind != "date" and (kind == "timestamp" or value >= 0))
+            and kind != "date" and (kind == "timestamp" or value >= 0)
+            and (kind != "taste" or value <= 1))
 
 
 def _read_range(selection, kind):
@@ -83,6 +84,13 @@ def filter_rows(rows, raw, columns, *, ranges=None):
     """按原始字节或秒数筛选后再分页，未取得的体积和时长保留为空。"""
     ranges = ranges or {}
     selected = column_filters(raw, columns, dict.fromkeys(ranges, "number"))
+    return filter_selected_rows(rows, selected, columns, ranges=ranges)
+
+
+def filter_selected_rows(rows, selected, columns, *, ranges=None, range_kinds=None):
+    """在分页前执行已校验的列筛选，并按同一范围计算分面。"""
+    ranges = ranges or {}
+    range_kinds = range_kinds or {}
     values = [{key: set(read(row)) or {"none"} for key, read in columns.items()} for row in rows]
 
     def matches(row, value, except_column=None):
@@ -90,7 +98,7 @@ def filter_rows(rows, raw, columns, *, ranges=None):
             if key == except_column:
                 continue
             if key in ranges:
-                if not in_range(ranges[key](row), selection["range"]):
+                if not in_range(ranges[key](row), selection["range"], range_kinds.get(key, "number")):
                     return False
                 continue
             exclude = isinstance(selection, dict)

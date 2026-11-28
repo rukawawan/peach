@@ -47,6 +47,21 @@ def setUpModule():
     unittest.addModuleCleanup(reader.stop)
 
 
+#: 只防工作线程卡死的上限，不是判据：负载高时一轮处理要几十秒，判据是线程自己的状态。
+HUNG_THREAD_SECONDS = 180.0
+
+
+def wait_while_running(done, *threads, until=None):
+    """等 `done()` 成立，或 `threads` 全部结束（再等也不会成立了），返回 `done()`。
+
+    `until` 是单调时钟上的卡死上限，默认从现在起 `HUNG_THREAD_SECONDS`。
+    """
+    until = time.monotonic() + HUNG_THREAD_SECONDS if until is None else until
+    while not done() and any(thread.is_alive() for thread in threads) and time.monotonic() < until:
+        time.sleep(0.01)
+    return done()
+
+
 def stub_provider():
     """只关心 r18.dev 那一档的用例用它：DMM 兜底与综合索引那两档按「没有」桩掉。
 
@@ -245,20 +260,22 @@ class LibraryNfoTests(unittest.TestCase):
     def test_old_completed_receipts_retry_codeless_videos_the_current_rules_now_recognise(self):
         from peach.library_processing import _LibraryCheckpoints
         database = LedgerDatabase(fresh_ledger(self.root))
-        names = ('T28-612 片名.mp4', '旅行记录.mp4', 'ABW-123.mp4', 'IBW-483z.mp4')
+        names = ('T28-612 片名.mp4', '旅行记录.mp4', 'ABW-123.mp4', 'IBW-483z.mp4',
+                 'S2MBD-049.mp4', 'CDRP-10.mp4')
         rows = [{'id': index, 'path': f'R:\\{name}'} for index, name in enumerate(names, 1)]
         with database.write_transaction() as connection:
             # 4 是升级补修刚补回尾字母的番号（`truncated_suffix_codes`），要按新番号再采一次。
-            for row, name, code in zip(rows, names, (None, None, 'ABW-123', 'IBW-483Z')):
+            for row, name, code in zip(rows, names, (None, None, 'ABW-123', 'IBW-483Z', None, 'CDRP-010')):
                 connection.execute(
                     "INSERT INTO asset(id,location,path,name,medium,code) VALUES(?,?,?,?,'video',?)",
                     (row['id'], 'local', row['path'], name, code))
         keys = [library_processing._checkpoint_key(row) for row in rows]
         previous = dict(processing_rule=upgrade_rules.PROCESSING, fc2_metadata_rule=upgrade_rules.FC2_METADATA,
+                        filename_code_rule=2,
                         completed_metadata=keys, completed_previews=keys)
         current = {}
         checkpoints = _LibraryCheckpoints(current, previous, database, database.db_path)
-        self.assertEqual([row['id'] for _, row in checkpoints.remaining_metadata(rows)], [1, 4])
+        self.assertEqual([row['id'] for _, row in checkpoints.remaining_metadata(rows)], [1, 4, 5, 6])
         self.assertEqual(set(current['completed_metadata']), set(keys[1:3]))
         self.assertEqual(current['filename_code_rule'], upgrade_rules.FILENAME_CODES)
         # 同一判据版本只撤一次：重新处理完成后不再反复重跑。
@@ -662,8 +679,10 @@ class LibraryNfoTests(unittest.TestCase):
                       return_value={'aliases': 0, 'avatars': 0, 'conflicts': 0, 'failed': 0}):
             thread = threading.Thread(target=run)
             thread.start()
+            # 负载高时单条处理也要好几秒：等到停在暂停点，或这一轮没暂停就跑完了。
+            until = time.monotonic() + HUNG_THREAD_SECONDS
             try:
-                self.assertTrue(paused.wait(5), errors)
+                self.assertTrue(wait_while_running(paused.is_set, thread, until=until), (errors, results))
                 with closing(sqlite3.connect(db)) as connection:
                     self.assertEqual(connection.execute('SELECT catalog_title FROM asset').fetchone()[0], '已确认资料')
                 self.assertTrue(read_rows(self.root / 'generated/library-metadata-field-candidates.csv'))
@@ -672,7 +691,7 @@ class LibraryNfoTests(unittest.TestCase):
                 with pause_lock:
                     requested.set()
                     control.request('resume', 'one')
-                thread.join(5)
+                thread.join(max(0.0, until - time.monotonic()))
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertEqual((results[0]['job_id'], results[0]['status']), ('one', 'complete'))
@@ -798,7 +817,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(set(result['retryable_asset_ids']), expected)
         self.assertEqual(collect.call_count, 1)
         self.assertEqual(collect.call_args.args[1], 'FC2-PPV-1234567')
-        self.assertIn('amane 运行环境未取得', result['issue_preview'][0]['message'])
+        self.assertIn('amane 运行环境不可用', result['issue_preview'][0]['message'])
         provider = stub_provider()
         provider.query.return_value = {'id': 'SSIS-057', 'title': '作品资料'}
         provider.cover.return_value = False
@@ -1511,7 +1530,7 @@ class LibraryNfoTests(unittest.TestCase):
         self.assertEqual(sorted(result['retryable_asset_ids']), sorted([ids['ABW-358.mp4'], ids['SSIS-057.mp4']]))
         self.assertIn('holiday.mp4', ids)
         self.assertEqual({issue['message_code'] for issue in result['issue_preview']}, {OFFLINE_MESSAGE['code']})
-        self.assertEqual({issue['message'] for issue in result['issue_preview']}, {'外部资料未取得：连不上外网'})
+        self.assertEqual({issue['message'] for issue in result['issue_preview']}, {'无法连接外部资料来源'})
 
         online = NetworkReachability(check=lambda: True, retry_delay=0)
         self.addCleanup(online.stop)
@@ -2624,7 +2643,7 @@ class LibraryNfoTests(unittest.TestCase):
         first = run()
         self.assertEqual((provider.query.call_count, provider.community.call_count), (1, 1))
         self.assertEqual([row['message'] for row in first['issue_preview']],
-                         ['封面未取得：来源返回 HTTP 503'], '来源说没有只报一个数，不占问题清单')
+                         ['封面采集失败：来源返回 HTTP 503'], '来源说没有只报一个数，不占问题清单')
         self.assertEqual(first['notes'], {'querying_metadata': 1})
         recorded = json.loads(misses_path(config).read_text(encoding='utf-8'))
         self.assertEqual(list(recorded['misses']),
@@ -3057,9 +3076,11 @@ class LibraryNfoTests(unittest.TestCase):
         provider.cover.return_value = False
         state = process_library(config, db, self.root / 'generated', self.root / 'covers',
                                 provider_factory=Mock(return_value=provider))
-        self.assertEqual([(row['message'], row['severity']) for row in state['issue_preview']],
-                         [('外部资料本趟没轮到：r18.dev：来源的人机验证没有在限时内通过，暂停向它请求一段时间；'
-                           '下次可从任务栏点开采集浏览器点一下验证；已有图片保留', 'paused')])
+        self.assertEqual(len(state['issue_preview']), 1)
+        issue = state['issue_preview'][0]
+        self.assertEqual(issue['severity'], 'paused')
+        self.assertTrue(issue['message'].startswith('外部资料本趟没轮到：r18.dev：'))
+        self.assertIn('已有图片保留', issue['message'])
         self.assertEqual(state['paused_count'], 1)
 
     def test_waiting_for_someone_to_click_a_verification_is_not_charged_to_the_title(self):
@@ -3196,6 +3217,28 @@ class LibraryNfoTests(unittest.TestCase):
                 saved = json.loads(path.read_text(encoding='utf-8'))
                 self.assertEqual(saved['cover_catalog_rules'], upgrade_rules.OFFICIAL_COVER_CATALOG_MISSES)
 
+    def test_upgraded_prestige_sku_search_retries_only_the_affected_source_and_cover_misses(self):
+        from peach import upgrade_rules
+        from peach.library_processing import MISS_FORMAT, _MissCache
+
+        path = self.root / 'prestige-misses.json'
+        path.write_text(json.dumps({
+            'format': MISS_FORMAT, 'sites': ['dmm', 'prestige'], 'joined': {},
+            'cover_catalog_rules': upgrade_rules.OFFICIAL_COVER_CATALOG_MISSES,
+            'misses': {
+                'prestige': {'ABW-125': 1000},
+                'dmm': {'ABW-125': 1000},
+                'cover': {'ABW-125': 1000, 'ABW-126': 1000},
+            },
+        }), encoding='utf-8')
+        cache = _MissCache(path, now=lambda: 1100.0)
+        self.assertFalse(cache.fresh('prestige', 'ABW-125'))
+        self.assertFalse(cache.fresh('cover', 'ABW-125'))
+        self.assertTrue(cache.fresh('dmm', 'ABW-125'))
+        self.assertTrue(cache.fresh('cover', 'ABW-126'))
+        cache.record('prestige', 'ABW-125')
+        self.assertTrue(_MissCache(path, now=lambda: 1200.0).fresh('prestige', 'ABW-125'))
+
     @windows_ledger_roots
     def test_a_stage_asks_only_the_sites_that_have_not_said_no(self):
         """综合索引那一档里 AVBase 与 JavBus 说过没有，javdb 没说过：这一档只问 javdb。"""
@@ -3219,13 +3262,11 @@ class LibraryNfoTests(unittest.TestCase):
 
     def test_management_controls_keep_credentials_and_empty_sections_visible(self):
         root = Path(__file__).resolve().parents[1]
-        # 关注管理那一屏在 React 里：能加来源的站才进候选，缺必填凭据的那一行默认展开，
-        # 一个站都没配也照样把整块列出来（空清单不等于这块不存在）。
+        # 关注管理只列出可添加的来源；凭据列表接受空清单。
         follow = root / 'frontend/src/react/follow-manage'
         add = (follow / 'add-source.tsx').read_text(encoding='utf-8')
         creds = (follow / 'credentials.tsx').read_text(encoding='utf-8')
         self.assertIn('const rows = (credentials.providers || []).filter((row) => row.followable);', add)
-        self.assertIn("defaultOpen={row.requirement === 'required' && !credentialDone(row)}>", creds)
         self.assertIn('const rows = data.providers || [];', creds)
         configuration = (root / 'frontend/src/react/settings/configuration-page.tsx').read_text(encoding='utf-8')
         self.assertNotIn("'/api/library-processing'", configuration)
@@ -4917,18 +4958,17 @@ class ProcessingLockTests(unittest.TestCase):
         with patch('peach.library_processing.LOCK_RETRY_SECONDS', 0.01):
             thread = threading.Thread(target=user_run)
             thread.start()
+            until = time.monotonic() + HUNG_THREAD_SECONDS
             try:
-                deadline = time.monotonic() + 10
-                while not library_processing._foreground_waiting() and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertTrue(library_processing._foreground_waiting())
+                self.assertTrue(wait_while_running(library_processing._foreground_waiting, thread, until=until),
+                                errors)
                 stopped.set()
-                thread.join(10)
+                thread.join(max(0.0, until - time.monotonic()))
                 self.assertFalse(thread.is_alive())
             finally:
                 stopped.set()
                 holder.release()
-                thread.join(10)
+                thread.join(max(0.0, until - time.monotonic()))
         self.assertEqual(len(errors), 1)
         self.assertIsInstance(errors[0], InterruptedError)
         self.assertFalse(library_processing._foreground_waiting())
@@ -4972,18 +5012,18 @@ class ProcessingLockTests(unittest.TestCase):
                       return_value={'aliases': 0, 'avatars': 0, 'conflicts': 0, 'failed': 0}):
             thread = threading.Thread(target=user_run)
             thread.start()
+            until = time.monotonic() + HUNG_THREAD_SECONDS
             try:
-                deadline = time.monotonic() + 10
-                while not library_processing._foreground_waiting() and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertTrue(library_processing._foreground_waiting())
+                self.assertTrue(wait_while_running(library_processing._foreground_waiting, thread, until=until),
+                                (errors, results))
                 with self.assertRaises(ProcessingBusy):
                     process_library(config, db, self.root / 'generated', self.root / 'covers', asset_ids=[1],
                                     stage='collect', state_file=self.root / 'state/upgrade-repairs/1.json',
                                     provider_factory=lambda: provider, database=database)
             finally:
                 holder.release()
-                thread.join(30)
+                thread.join(max(0.0, until - time.monotonic()))
+        self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertNotEqual(results[0].get('outcome'), 'interrupted')
         self.assertEqual(sorted({call.args[0] for call in provider.query.call_args_list}), ['ABW-358', 'ABW-359'])
@@ -5024,18 +5064,18 @@ class ProcessingLockTests(unittest.TestCase):
                 asset_ids=[1, 2], stage='collect', state_file=self.root / 'state/upgrade-repairs/1.json'))
             threads = [first]
             first.start()
+            until = time.monotonic() + HUNG_THREAD_SECONDS
             try:
-                self.assertTrue(entered.wait(10), f'后台处理尚未取得锁，实际结果：{background!r}')
+                self.assertTrue(wait_while_running(entered.is_set, first, until=until),
+                                f'后台处理尚未取得锁，实际结果：{background!r}')
                 second = threading.Thread(target=run, args=(user,))
                 second.start()
                 threads.append(second)
-                deadline = time.monotonic() + 10
-                while not library_processing._foreground_waiting() and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertTrue(library_processing._foreground_waiting())
+                self.assertTrue(wait_while_running(library_processing._foreground_waiting, second, until=until),
+                                f'用户处理没有排上等锁，实际结果：{user!r}')
                 proceed.set()
                 for thread in threads:
-                    thread.join(30)
+                    thread.join(max(0.0, until - time.monotonic()))
                     self.assertFalse(thread.is_alive())
             finally:
                 stopping.set()

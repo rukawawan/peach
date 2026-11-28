@@ -367,7 +367,8 @@ describe('关注页岛', () => {
       await searchIs(page, '?author=name%3Amira');
       await page.locator('button[data-follow-work="zelda"]').click();
       await searchIs(page, '?author=name%3Amira&work=zelda');
-      await page.locator('button[data-follow-tag="loop"]').click();
+      await page.locator('[data-table-column-filter="follow-tags"]').click();
+      await page.locator('[data-filter-option="loop"]').click();
       await searchIs(page, '?author=name%3Amira&tag=loop&work=zelda');
       const drops = await page.locator('[data-follow-drop]').evaluateAll((buttons) =>
         buttons.map((button) => (button as HTMLElement).dataset.followDropKind));

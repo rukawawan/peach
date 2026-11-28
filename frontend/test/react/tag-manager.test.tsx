@@ -5,7 +5,7 @@ import { confirmModal } from '@peach/legacy/ui';
 import { TagManager, type ManagedTag } from '../../src/react/index/tag-manager';
 import { TagEditor } from '../../src/react/index/tag-operations';
 import { queryClient } from '../../src/react/query';
-import { buttonNamed, click, mount, mountRoot, settle, submit, type } from './render';
+import { buttonNamed, chooseFilter, click, mount, mountRoot, settle, submit, type } from './render';
 
 vi.mock('@peach/legacy/ui', async original => ({
   ...await original<typeof import('@peach/legacy/ui')>(),
@@ -120,7 +120,7 @@ describe('标签管理', () => {
     await click(buttonNamed('上一页', host)); await settle();
     expect(host.querySelector('[data-tag-chip][data-k="tag-0"]')?.getAttribute('aria-pressed')).toBe('true');
     await click(buttonNamed('下一页', host)); await settle();
-    await click(buttonNamed('角色设定', host)); await settle();
+    await chooseFilter(host.querySelector('[data-table-column-filter="index-tag-category"]'), 'role'); await settle();
     expect(host.querySelector('[data-tag-chip][data-k="tag-120"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="标签管理操作"]')).toBeNull();
     const last = pages().at(-1)!;

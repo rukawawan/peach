@@ -25,6 +25,7 @@ from .fsutil import atomic_path
 from .coded_text import Said
 from .jobs import DiskSpaceDenied
 from .media_io import file_stat, resolve_case_insensitive
+from .migrations import readonly_uri
 
 #: 两档密度，值就是秒数。名字进接口也进设置页，改这里就是改契约。
 INTERVALS = {"precise": 10, "coarse": 30}
@@ -202,7 +203,7 @@ def pending(db_path: Path | str, interval: int, *, limit: int = 0) -> list[tuple
     if limit:
         sql += " LIMIT ?"
         parameters += (int(limit),)
-    connection = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    connection = sqlite3.connect(readonly_uri(db_path), uri=True)
     try:
         return connection.execute(sql, parameters).fetchall()
     finally:

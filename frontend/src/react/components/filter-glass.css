@@ -4,6 +4,97 @@
   --strand-cycle: 2.2s;
 }
 .peach-react [data-filter-glass] > [data-filter-row="bottom"] {
-  /* 横滚行不接管纵向滚动，避免多出垂直边缘遮罩，把整块玻璃切成两层。 */
+  position: relative;
+  overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-inline: contain;
 }
+.peach-react [data-filter-glass] > [data-filter-row] > :is(button, a, [role="button"], [role="combobox"]) {
+  flex-shrink: 0;
+}
+.peach-react [data-filter-tag-strip] {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 7px;
+  overflow: auto hidden;
+  scrollbar-width: none;
+}
+@media (max-width: 760px) {
+  .peach-react [data-catalog-scroll] > [data-filter-tag-strip],
+  .peach-react [data-entity-tags] > [data-filter-tag-strip] { flex: none; overflow: visible; }
+}
+/* 下排的查找（`FilterSearch`）：平时是一层淡玻璃面加一圈亮边，看得出是个框又不像被按下；
+ * 聚焦或框里有词时升到浮层选中态那块高亮玻璃（同按下的视图键）。 */
+.peach-react [data-filter-search] {
+  display: flex;
+  flex: 0 1 176px;
+  align-items: center;
+  gap: 6px;
+  min-width: 112px;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--glass-pick-fill) 42%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--glass-rim) 46%, transparent);
+  color: var(--glass-text);
+  cursor: text;
+  transition: background-color .12s ease, box-shadow .12s ease, flex-basis .26s cubic-bezier(.22, 1, .36, 1),
+    min-width .26s cubic-bezier(.22, 1, .36, 1), padding .26s cubic-bezier(.22, 1, .36, 1);
+}
+/* 点进去变长：聚焦时放到 248px，下排挤的时候也至少撑到 176px，离开且没词再收回去。`data-open` 比失焦晚
+   0.2s 摘掉：点旁边的键时框在按下那一刻就失焦，立刻收会把那枚键从指针下挪走，这一下点空。 */
+.peach-react [data-filter-search]:is(:focus-within, [data-open]) { flex-basis: 248px; min-width: 176px; }
+.peach-react [data-filter-search]:hover { background: color-mix(in srgb, var(--glass-pick-fill) 70%, transparent); }
+.peach-react [data-filter-search]:is(:focus-within, [data-filled]) {
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 62%), var(--glass-pick-fill);
+  box-shadow: inset 0 0 0 1px var(--glass-rim), var(--glass-pick-shadow);
+}
+.peach-react [data-filter-search]:focus-within { outline: 2px solid var(--color-border-focus-ring); outline-offset: 1px; }
+.peach-react [data-filter-search] > svg { color: var(--ink-2); }
+.peach-react [data-filter-search] > input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+/* 收起的那一档：只剩放大镜，框本身不占地方但仍可聚焦，点这枚键或 Tab 到它就展开。 */
+.peach-react [data-filter-search][data-compact]:not(:focus-within, [data-open], [data-filled]) {
+  flex-basis: 32px;
+  justify-content: center;
+  gap: 0;
+  min-width: 32px;
+  padding: 0;
+  cursor: pointer;
+}
+.peach-react [data-filter-search][data-compact]:not(:focus-within, [data-open], [data-filled]) > input { flex: 0 0 0; width: 0; opacity: 0; }
+.peach-react [data-filter-search] > input::placeholder { color: var(--ink-2); opacity: 1; }
+.peach-react [data-filter-search] > input::-webkit-search-cancel-button { display: none; }
+.peach-react [data-filter-search-clear] {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.peach-react [data-filter-search-clear]:hover { background: var(--hover); color: inherit; }
+@media (width < 761px) {
+  /* 小于 16px 的输入框聚焦时手机浏览器会把整页放大。 */
+  .peach-react [data-filter-search] { flex-basis: 148px; }
+  .peach-react [data-filter-search]:is(:focus-within, [data-open]) { flex-basis: 200px; min-width: 148px; }
+  .peach-react [data-filter-search] > input { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .peach-react [data-filter-search] { transition: none; } }

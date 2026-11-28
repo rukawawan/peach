@@ -45,6 +45,13 @@ describe('任务页云下载布局', () => {
         assert.equal(normalBackground, await tokenColor(page, 'body', `--color-status-${color}-background`));
         assert.equal(highBackground, await tokenColor(page, 'body', `--color-status-${color}-text`));
         assert.notEqual(highBackground, normalBackground);
+        for (const chip of [normal, high]) {
+          const gap = await chip.evaluate(node => {
+            const [label, reading] = node.firstElementChild!.children;
+            return reading!.getBoundingClientRect().left - label!.getBoundingClientRect().right;
+          });
+          assert.ok(Math.abs(gap - 4) <= 1, `${metric} 标签与读数间距为 ${gap}px，预期 4px`);
+        }
         backgrounds.push(highBackground);
       }
       assert.equal(new Set(backgrounds).size, 3);

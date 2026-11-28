@@ -70,14 +70,15 @@ export function BoardTabs<V extends string>(
     measure();
   }, [value]);
 
-  /* 左右键在同一排里挪，Home／End 到两头，挪到哪一枚就是选了哪一枚：这一排每一枚都是一个
-     地址，焦点停在哪儿、页面就摆哪儿，和侧栏导航同一个说法。 */
+  /* 沿页签排列方向移动，另一轴留给页面滚动。焦点移动时同步切换对应地址。 */
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (disabled || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (!tabs.length || disabled || event.altKey || event.ctrlKey || event.metaKey) return;
     const focused = (event.target as HTMLElement).closest<HTMLElement>('[data-tab]')?.dataset.tab ?? value;
     const at = tabs.findIndex((tab) => tab.value === focused);
-    const next = ['ArrowDown', 'ArrowRight'].includes(event.key) ? at + 1
-      : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? at - 1
+    const forward = orientation === 'vertical' ? 'ArrowDown' : 'ArrowRight';
+    const backward = orientation === 'vertical' ? 'ArrowUp' : 'ArrowLeft';
+    const next = event.key === forward ? at + 1
+      : event.key === backward ? at - 1
       : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -2;
     if (next === -2) return;
     event.preventDefault();

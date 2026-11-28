@@ -619,7 +619,7 @@ describe('作品卡', () => {
     await act(async () => { img.dispatchEvent(new Event('error')) });
     await settle();
     expect(host.querySelector('[data-media-art] img')).toBeNull();
-    expect(host.querySelector('[data-media-nopic]')?.textContent).toBe('预览未取得');
+    expect(host.querySelector('[data-media-nopic]')?.textContent).toBe('预览无法显示');
     expect(host.querySelector('[data-artwork-gap]')?.textContent).toContain('预览帧文件缺失');
     expect(buttonNamed('补全预览', host)).not.toBeNull();
   });

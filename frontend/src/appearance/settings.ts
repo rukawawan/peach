@@ -18,6 +18,7 @@ import { normalizeSortControls, type SortControls } from '../sort-controls';
 import { DEFAULT_ACCENT, DEFAULT_HOME_GLOW, normalizeAccent, normalizeHomeGlow, type HomeGlow } from './home-glow';
 import { NAME_LANGUAGES, type NameLanguage } from '../core/entity-names';
 import { configureGestureSettings, normalizeGestures, type GestureSettings } from '../player/gesture-settings';
+import { instancePreferences, type BrowsePreferences } from './instance-preferences';
 
 export { SETTINGS_KEY };
 /* 主题三档，键名与 <html> 上的 data-theme 同一套写法：web/css/01-base.css 的色板
@@ -38,11 +39,11 @@ export const AFTER_PLAYBACK_CHOICES = ['stop', 'next', 'repeat-all', 'shuffle', 
 export type AfterPlayback = typeof AFTER_PLAYBACK_CHOICES[number];
 
 /** 归一化之后一定在的那几项。对象上还有别的字段（壳与各岛按需写入），这里不一一列出。 */
-export interface AppSettings {
+export interface AppSettings extends BrowsePreferences {
   [key: string]: unknown;
   batchSize: number;
   defaultSort: string;
-  defaultSortDirection?: string;
+  defaultSortDirection: string;
   sortDefaultsVersion: number;
   hoverDelaySeconds: number;
   /** 卡片悬停时播放视频预览；关掉后悬停只显示静态图（#170）。 */
@@ -69,7 +70,7 @@ export interface AppSettings {
   followLayout: string;
   peopleLayout: string;
   photoSize: string;
-  photoLayout?: string;
+  photoLayout: string;
   followImagesOnly?: boolean;
   ambientMode: boolean;
   miniplayer: boolean;
@@ -92,12 +93,14 @@ export interface AppSettings {
   homeTiers: boolean;
   /** 首页默认只显示有预览图的作品；首页读数旁的「显示全部」临时看全部。 */
   homePreviewOnly: boolean;
+  containHomeScroll: boolean;
   /** 网格、列表与详情里的缺图补全提示条；条上的关闭钮把它写成 false。 */
   completionPrompt: boolean;
   /** 聚焦空搜索框时的推荐栏、推荐词与轮换的占位字。 */
   searchRecommendations: boolean;
   /** 新文件入库、下载完成时的 toast。 */
   ingestNotices: boolean;
+  showFeedbackButton: boolean;
   feedHideGroupCompilations: boolean;
   feedHideSoloCompilations: boolean;
   feedHideExcerpts: boolean;
@@ -109,17 +112,20 @@ export interface AppSettings {
   libraryOrder: string[];
   homeGlow: HomeGlow;
   accent: string;
+  localAppearance: boolean;
 }
 
 export const DEFAULT_SETTINGS = {
-  batchSize: 60, defaultSort: 'seed', sortDefaultsVersion: 3, hoverDelaySeconds: 5, seekSeconds: 10, longSeekSeconds: 30,
+  batchSize: 60, defaultSort: 'seed', defaultSortDirection: '', sortDefaultsVersion: 3, hoverDelaySeconds: 5, seekSeconds: 10, longSeekSeconds: 30,
   searchHistoryLimit: 10, relatedLimit: 20, feedLimit: 12, javLayout: 'big', homeLayout: 'small', javImage: 'cover',
-  followLayout: 'default', peopleLayout: 'big', photoSize: 'small', ambientMode: true, miniplayer: true,
+  followLayout: 'default', followPageSize: 20, peopleLayout: 'big', photoSize: 'small', photoLayout: 'masonry', ambientMode: true, miniplayer: true,
   theaterMode: false, theme: 'system', groupCollapse: true, sidebarOrder: [...DEFAULT_SIDEBAR_ORDER], manageOrder: [...MANAGE_MENU_SECTIONS],
   homeGlow: DEFAULT_HOME_GLOW, accent: DEFAULT_ACCENT, performerNameLanguage: 'zh-CN', interfaceLanguage: 'auto', systemLanguage: null,
   navigationOrders: {},
   sortControls: {},
   libraryOrder: [],
+  catalogView: 'cards', recentTags: [] as string[], queueSort: {}, pageSizes: {}, localAppearance: false,
+  feedNewRows: true, homeShortsLimit: HOME_SHORTS_DEFAULT, homeTiers: true, homePreviewOnly: false, autoChineseSubtitles: false,
 } as const;
 
 /** 白名单里的值原样给回，否则给 `fallback`。 */
@@ -143,6 +149,7 @@ export function normalizeAppSettings(raw: unknown): { settings: AppSettings; mig
   settings.sortDefaultsVersion = 3;
   settings.batchSize = boundedPreference(+(settings.batchSize as number), 1, 200, 60);
   settings.defaultSort = allowedSetting(settings.defaultSort, SORT_KEYS, 'seed');
+  settings.defaultSortDirection = allowedSetting(settings.defaultSortDirection, ['', 'asc', 'desc'], '');
   settings.hoverDelaySeconds = boundedPreference(+(settings.hoverDelaySeconds as number), 0, 60, 5);
   settings.hoverPreview = settings.hoverPreview !== false;
   const gestures = normalizeGestures(settings as Partial<GestureSettings>);
@@ -170,9 +177,11 @@ export function normalizeAppSettings(raw: unknown): { settings: AppSettings; mig
     : boundedPreference(+(settings.homeShortsLimit as number), HOME_SHORTS_MIN, HOME_SHORTS_MAX, HOME_SHORTS_DEFAULT);
   settings.homeTiers = settings.homeTiers !== false;
   settings.homePreviewOnly = settings.homePreviewOnly === true;
+  settings.containHomeScroll = settings.containHomeScroll === true;
   settings.completionPrompt = settings.completionPrompt !== false;
   settings.searchRecommendations = settings.searchRecommendations !== false;
   settings.ingestNotices = settings.ingestNotices !== false;
+  settings.showFeedbackButton = settings.showFeedbackButton !== false;
   settings.feedHideGroupCompilations = settings.feedHideGroupCompilations !== false;
   settings.feedHideSoloCompilations = settings.feedHideSoloCompilations === true;
   settings.feedHideExcerpts = settings.feedHideExcerpts !== false;
@@ -181,6 +190,21 @@ export function normalizeAppSettings(raw: unknown): { settings: AppSettings; mig
   settings.feedLimit = boundedPreference(+(settings.feedLimit as number), 1, 100, 12);
   Object.assign(settings, normalizeJavPreferences(settings));
   settings.theme = allowedSetting(settings.theme, THEME_CHOICES, 'system');
+  settings.localAppearance = settings.localAppearance === true;
+  settings.catalogView = settings.catalogView === 'list' ? 'list' : 'cards';
+  settings.followLayout = settings.followLayout === 'table' ? 'table' : 'default';
+  settings.photoLayout = settings.photoLayout === 'fixed' ? 'fixed' : 'masonry';
+  settings.followPageSize = boundedPreference(+(settings.followPageSize as number), 1, 200, 20);
+  settings.recentTags = Array.isArray(settings.recentTags) ? settings.recentTags.filter(tag =>
+    typeof tag === 'string' && tag.trim() && tag.length <= 512).slice(0, 12) : [];
+  const sortKeys: Record<string, string[]> = { 'junk-files': ['size', 'new'], 'quality-goals': ['size', 'dur', 'new'], duplicates: ['size'] };
+  settings.queueSort = Object.fromEntries(Object.entries(sortKeys).flatMap(([page, keys]) => {
+    const choice = (settings.queueSort as BrowsePreferences['queueSort'] | null)?.[page];
+    return choice === null || (choice && keys.includes(choice.sort) && ['', 'asc', 'desc'].includes(choice.dir))
+      ? [[page, choice]] : [];
+  }));
+  settings.pageSizes = Object.fromEntries(Object.entries(settings.pageSizes ?? {}).filter(([key, value]) =>
+    /^[a-zA-Z0-9_-]{1,80}$/.test(key) && Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 200));
   settings.performerNameLanguage = allowedSetting(settings.performerNameLanguage, NAME_LANGUAGES, 'zh-CN');
   settings.interfaceLanguage = isInterfaceLanguageChoice(settings.interfaceLanguage) ? settings.interfaceLanguage : 'auto';
   settings.systemLanguage = matchInterfaceLanguage(settings.systemLanguage);
@@ -198,16 +222,27 @@ export function normalizeAppSettings(raw: unknown): { settings: AppSettings; mig
 export function readAppSettings(storage: Pick<Storage, 'getItem'>): { settings: AppSettings; migrated: boolean } {
   let raw: unknown = {};
   try { raw = JSON.parse(storage.getItem(SETTINGS_KEY) || '{}') } catch { /* 坏掉的存量按空的算 */ }
-  return normalizeAppSettings(raw);
+  const saved = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  try { saved.catalogView ??= storage.getItem('peach.catalog-view.v1') } catch { /* 按默认视图。 */ }
+  try { saved.queueSort ??= JSON.parse(storage.getItem('peach.queue-sort.v1') || '{}') } catch { /* 按默认顺序。 */ }
+  try { saved.recentTags ??= JSON.parse(storage.getItem('peach.recentTags') || '[]') } catch { /* 当前浏览器没有可导入的标签。 */ }
+  return normalizeAppSettings(saved);
 }
 
 let store: SettingsStore<AppSettings> | null = null;
+const instanceViews = new WeakMap<SettingsStore<AppSettings>, ReturnType<typeof instancePreferences>>();
+function instanceView(target: SettingsStore<AppSettings>) {
+  let view = instanceViews.get(target);
+  if (!view) { view = instancePreferences(target, DEFAULT_SETTINGS); instanceViews.set(target, view) }
+  return view;
+}
 
 /** 整页那一份偏好 store。第一次调用时读回、归一化；改写过旧键就当场落一次盘。 */
 export function appSettingsStore(): SettingsStore<AppSettings> {
   if (store) return store;
   const { settings, migrated } = readAppSettings(localStorage);
   store = createSettingsStore(SETTINGS_KEY, settings);
+  instanceView(store);
   if (migrated) store.save();
   return store;
 }
@@ -219,7 +254,7 @@ export function wireGestureSettings(target: SettingsStore<AppSettings> = appSett
 }
 
 /** 数据库那一份要求某个壳侧效果跟着做时报的名字（同设置面板的效果名）。 */
-export type SyncedEffect = 'searchHistoryLimit' | 'performerNameLanguage' | 'interfaceLanguage';
+export type SyncedEffect = 'searchHistoryLimit' | 'performerNameLanguage' | 'interfaceLanguage' | 'browsePreferences';
 
 /** 搜索记录条数在 `/api/settings` 上的形状：还没定过时是 null。 */
 export interface SyncedSettings {
@@ -236,16 +271,18 @@ export interface SyncedSettings {
   navigationOrders?: unknown;
   sortControls?: unknown;
   libraryOrder?: unknown;
+  browsePreferences?: Partial<BrowsePreferences>;
 }
 
 /* 数据库那一份落进本地缓存。启动时壳取一次、设置面板每次打开再取一次，都交到这里；开着的面板与
    侧栏经 store 通知跟上：侧栏顺序变了，它当场按新顺序重排。搜索记录条数变了要推给搜索岛，那一下
    由 `changed` 交回壳。 */
 export function applySyncedSettings(
-  remote: SyncedSettings | null | undefined, changed: (effect: SyncedEffect) => void,
+  remote: SyncedSettings | null | undefined, changed: (effect: SyncedEffect, keys?: (keyof BrowsePreferences)[]) => void,
   target: SettingsStore<AppSettings> = appSettingsStore(),
 ): void {
   const settings = target.value;
+  if (remote?.browsePreferences) instanceView(target)(remote.browsePreferences, keys => changed('browsePreferences', keys));
   const language = remote?.performerNameLanguage;
   if (NAME_LANGUAGES.includes(language as NameLanguage) && language !== settings.performerNameLanguage) {
     settings.performerNameLanguage = language as NameLanguage;

@@ -321,7 +321,7 @@ it('过期索引在重新打开弹层时读取当前候选', async () => {
       : listing([choice()], { index_refreshing: false }),
   })));
   const { host } = await openPicker();
-  expect(dialog()?.textContent).toContain('图库索引未取得');
+  expect(dialog()?.textContent).toContain('图库索引读取失败');
   await click(dialog()?.querySelector('button[aria-label="关闭"]'));
   await settle();
   await click(host.querySelector('button'));
@@ -461,7 +461,7 @@ it('候选图未取得时显示重试，重试成功后才进入框选', async (
   expect(second?.querySelector('[data-choice-lost]')).not.toBeNull();
   expect(second?.querySelector('.reveal-skeleton')?.hasAttribute('data-revealed')).toBe(true);
   expect(second?.textContent).toContain('twitter');
-  expect(second?.textContent).toContain('图片未取得，点击重试');
+  expect(second?.textContent).toContain('图片加载失败，点击重试');
   await click(second);
   expect(calls).toHaveLength(1);
   expect(second?.querySelector('img')).not.toBeNull();

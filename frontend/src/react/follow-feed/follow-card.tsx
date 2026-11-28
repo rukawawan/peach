@@ -12,6 +12,7 @@
  * 一叠（`isMix`）悬停时逐张翻过组里彼此不同的画面，时序与门槛同 Mix 卡（`../components/use-stack-flip.ts`）。
  * 翻的是卡片渲染时就在手上的缩略图，悬停不为动画再发请求；第一张是静止封面本身。 */
 import { memo, useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type MouseEvent } from 'react';
+import { hasSelectionModifier } from '../../selection';
 import { esc, fmtDur, icon, entityPath } from '@peach/legacy/core';
 import { tagLabel } from '@peach/legacy/tags';
 import { CardDate, CardTags, WhoLabel } from '../components/card-meta';
@@ -170,7 +171,7 @@ function FollowCardView(props: FollowCardProps) {
     const target = event.target as HTMLElement;
     /* 标签在这张卡上只是读的，点它什么都不做，多选里也不算点了这张卡。 */
     if (target.closest('[data-media-tag]')) return;
-    if (actions.toggleSelection && (selectMode || event.shiftKey || event.ctrlKey || event.metaKey)) {
+    if (actions.toggleSelection && (selectMode || hasSelectionModifier(event))) {
       event.preventDefault();
       actions.toggleSelection(item.id, event.shiftKey);
       return;
@@ -180,7 +181,7 @@ function FollowCardView(props: FollowCardProps) {
   const act = (event: MouseEvent, run: () => void) => { event.stopPropagation(); run() };
 
   return (
-    <article ref={attach} data-media-card="" data-variant={props.variant || 'grid'} data-follow-item={item.id} data-status={item.status}
+    <article ref={attach} data-media-card="" data-variant={props.variant || 'grid'} data-follow-item={item.id} data-rectangle-key={item.id} data-status={item.status}
       data-follow-image={imageView ? '' : undefined} data-collection={stack.isMix ? '' : undefined}
       data-selected={selected ? '' : undefined} onClick={click} onMouseDown={suppressShiftTextSelection}
       onContextMenu={event => menu.onContextMenu(event, menuContext)} onKeyDown={event => menu.onKeyDown(event, menuContext)}

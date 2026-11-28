@@ -123,6 +123,11 @@ def target():
     return destination
 
 
+def sharing_scope():
+    return {"fields": [_text(code) for code in FIELD_CODES], "field_codes": list(FIELD_CODES),
+            "notice": _text(NOTICE_CODE), "notice_code": NOTICE_CODE}
+
+
 def snapshot(config):
     from .research_participation import snapshot as participation_snapshot
     attempt = remote_reporting._read(config.directory("state") / "library-sharing-attempt.json")
@@ -131,8 +136,7 @@ def snapshot(config):
             and attempt.get('period') == _period()):
         last_attempt = {'period': attempt['period'], 'status': 'unknown', 'attempted': True}
     return {"enabled": bool(consent(config)), 'consent_state': consent_state(config), "available": bool(target()),
-            "schema": SCHEMA, "fields": [_text(code) for code in FIELD_CODES], "field_codes": list(FIELD_CODES),
-            "notice": _text(NOTICE_CODE), "notice_code": NOTICE_CODE,
+            "schema": SCHEMA, **sharing_scope(),
             'participation': participation_snapshot(config),
             'last_sent_at': attempt.get('last_sent_at'),
             "last_attempt": last_attempt}
@@ -207,16 +211,22 @@ class Service:
             self._preview = token, time.monotonic() + 600
         return {"data": payload, "bytes": len(data), "compressed_bytes": size, "token": token, "schema": SCHEMA}
 
-    def save(self, body):
+    def validate_choice(self, body):
         if type(body.get("enabled")) is not bool:
             raise UserValueError("errors.librarySharing.choiceNotBoolean")
+        if body["enabled"] and (not self._preview or body.get("preview_token") != self._preview[0]
+                or time.monotonic() > self._preview[1]
+                or body.get("consent") is not True or body.get("schema") != SCHEMA):
+            raise UserValueError("errors.librarySharing.previewFirst")
+
+    def save(self, body):
         with self._lock:
-            if body["enabled"] and (not self._preview or body.get("preview_token") != self._preview[0]
-                    or time.monotonic() > self._preview[1]
-                    or body.get("consent") is not True or body.get("schema") != SCHEMA):
-                raise UserValueError("errors.librarySharing.previewFirst")
-            save_choice(self.config, body["enabled"])
-            self._preview = None
+            self.validate_choice(body)
+            return self._save_valid_choice(body["enabled"])
+
+    def _save_valid_choice(self, enabled):
+        save_choice(self.config, enabled)
+        self._preview = None
         self._wake.set()
         return snapshot(self.config)
 

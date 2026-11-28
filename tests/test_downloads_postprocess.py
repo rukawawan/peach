@@ -70,6 +70,15 @@ class DownloadPostprocessTests(unittest.TestCase):
     def run_task(self):
         return post.run(self.contract, post.followup_key(self.task.id), self.handle)
 
+    def test_qbittorrent_keeps_seeding_files_even_with_local_organize_templates(self):
+        self.task.provider = 'qbittorrent'
+        self.contract.download_organize_templates = lambda: {'local': {'file': '{code}'}}
+        result = post._organize(self.contract, self.task, self.asset_id)
+        self.assertEqual(result['moved'], 0)
+        self.assertTrue(result['skipped'])
+        self.assertEqual(self.source.read_bytes(), b'main video')
+        self.assertFalse(self.target.exists())
+
     def queued_run(self):
         self.contract.task_runs = TaskRunStore(self.database)
         self.contract.followups = FollowupRunner(self.contract)

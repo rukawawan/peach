@@ -2,12 +2,24 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Browser, Locator, Page } from 'playwright-core';
+import type { MediaItem } from '../src/react/catalog-grid/types.ts';
 import { expectBody, settle, visit } from './harness.ts';
 import {
   DESKTOP, MOBILE, tokenColor, openReview, REVIEW_ROW, lightness, WIDE, JUNK_COUNT, openJunk, junkItem, openJunkWith,
-  openCatalog, openCatalogFixture, openFollowManage, stubFollowManage, holdApi, controlFaces, disabledTokens,
-  waitingActionFaces, assertDisabledFace, installDesignBrowser, PIXEL,
+  openCatalog, openCatalogBars, openCatalogFixture, catalogVideo, openFollowManage, stubFollowManage, holdApi, controlFaces, disabledTokens,
+  waitingActionFaces, assertDisabledFace, installDesignBrowser,
 } from './design-fixture.ts';
+
+function catalogVideos(count: number, firstId = 91_100): MediaItem[] {
+  return Array.from({ length: count }, (_, index) => catalogVideo(firstId + index));
+}
+
+function catalogParts() {
+  const [first, second, ...rest] = catalogVideos(14);
+  const part_group = { key: 'DEMO-PART', title: 'DEMO-PART', count: 2, seed_id: first!.id,
+    item_ids: [first!.id, second!.id], total_duration: 1200, total_size: 1 };
+  return [{ ...first!, part_group }, { ...second!, part_group }, ...rest];
+}
 
 /** 每个视口从未阅读的进度开始；账本跨设备持久化由 API 回归验证。 */
 async function freshTutorial(page: Page) {
@@ -126,23 +138,15 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('馆藏卡片的字取页面正文那一档，角标、悬停控件、进度条、竖屏带、Mix 与回收站卡面按定下的样子画', { timeout: 90_000 }, async () => {
-    /* 演示库凑不出回收站里的非视频资源：回收站那一页把第二条换成一个压缩包。
-       目录那一页给前三条挂半程观看进度，量进度条的颜色。 */
-    const opened = await openCatalogFixture(browser, (payload, url) => {
-      if (url.searchParams.get('state') !== 'trash') {
-        if (!url.searchParams.has('orient')) assert.ok(payload.items.length >= 8, 'Mix 外观夹具至少提供八张作品');
-        for (const item of payload.items.slice(0, 3)) Object.assign(item, { duration: 600, play_seconds: 300 });
-        return;
-      }
-      const item = payload.items[1];
-      if (!item) throw new Error('演示目录不够两条');
-      Object.assign(item, { medium: 'archive', name: '演示资料.zip', disposal: 'trash' });
-      Object.assign(payload.items[0], { disposal: 'trash', is_jav: false, has_cover: false, has_thumb: true });
-    }, { completeFirstPage: true });
+    const opened = await openCatalogFixture(browser, {
+      items: catalogVideos(14).map((item, index) => index < 3 ? { ...item, play_seconds: 300 } : item),
+      portrait: catalogVideos(3, 91_200).map(item => ({ ...item, width: 900, height: 1600 })),
+      trash: [
+        { ...catalogVideos(1, 91_300)[0]!, disposal: 'trash', disposal_reason: 'manual' },
+        { id: 91_301, medium: 'archive', name: '演示资料.zip', disposal: 'trash', disposal_reason: 'manual' },
+      ],
+    });
     const { page } = opened;
-    await page.route('**/poster**', (route) => route.fulfill({
-      status: 200, contentType: 'image/png', body: Buffer.from(PIXEL, 'base64'),
-    }));
     /* 岛根是 `line-height:1.5`，卡里没写行高的格子会继承它；旧卡读的是页面正文 14px/20px。
        取值用同一个岛根下的空元素量 token，不在断言里抄像素。 */
     const readStyles = (selectors: Record<string, string>) => page.evaluate((wanted) => {
@@ -175,7 +179,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
     try {
       await page.locator('#grid [data-shorts-strip]').first().waitFor({ timeout: 10_000 });
       await page.locator('#grid [data-media-grid] > [data-media-card] [data-media-progress]').first().waitFor({ timeout: 10_000 });
-      // 本例检查外观，夹具提供完整首页，Mix 按累计八张的真实规则插入。
+      // Mix 由页面按累计作品数插入。
       await page.locator('#grid [data-mix-glyph]').first().waitFor({ state: 'attached' });
       const catalog = await readStyles({
         card: '[data-media-grid] > [data-media-card]',
@@ -320,12 +324,9 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('回收站的骨架和落地同一副几何，筛选浮层在两种主题下都和页面底色分得开', { timeout: 90_000 }, async () => {
-    /* 回收站多是图片与压缩包，骨架照资源卡排：夹具把回收站那一页全换成图片。 */
-    const opened = await openCatalogFixture(browser, (payload, url) => {
-      if (url.searchParams.get('state') !== 'trash') return;
-      for (const [at, item] of payload.items.entries()) {
-        Object.assign(item, { medium: 'image', name: `演示图片-${at}.jpg`, disposal: 'trash' });
-      }
+    const opened = await openCatalogFixture(browser, {
+      items: catalogVideos(2),
+      trash: [{ id: 91_300, medium: 'image', name: '演示图片.jpg', disposal: 'trash' }],
     });
     const { page } = opened;
     const measure = () => page.evaluate(() => {
@@ -413,9 +414,9 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('批量条的键是行内字形、计数是 --ink-2；批量条与清空回收站两颗危险键读同一组红', { timeout: 90_000 }, async () => {
-    const opened = await openCatalogFixture(browser, (payload, url) => {
-      if (url.searchParams.get('state') !== 'trash') return;
-      for (const item of payload.items) Object.assign(item, { disposal: 'trash' });
+    const opened = await openCatalogFixture(browser, {
+      items: catalogVideos(2),
+      trash: catalogVideos(2, 91_300).map(item => ({ ...item, disposal: 'trash' })),
     });
     const { page } = opened;
     try {
@@ -512,13 +513,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('分卷卡不翻卡、悬停走分段预览，叠层纸边和封面同一档圆角', { timeout: 60_000 }, async () => {
-    /* 各卷共用同一个番号的封套，翻过去还是那张图。演示库没有分卷，给首张卡挂一个。 */
-    const opened = await openCatalogFixture(browser, (payload) => {
-      const [first, second] = payload.items;
-      payload.items[0] = { ...first, part_group: {
-        key: 'DEMO-PART', title: 'DEMO-PART', count: 2, seed_id: first.id,
-        item_ids: [first.id, second.id], total_duration: 120, total_size: 1 } };
-    });
+    const opened = await openCatalogFixture(browser, { items: catalogParts() });
     try {
       const shapeOf = (selector: string) => opened.page.locator(selector).first().evaluate((element) => {
         const stack = element.querySelector('[data-media-stack],[data-mix-stack]')!;
@@ -540,10 +535,8 @@ describe('设计决定：作品卡、管理页与复核', () => {
       assert.notEqual(part.ground, 'rgba(0, 0, 0, 0)', '叠层卡的封面格是透明的，纸边会透进封面');
       assert.equal(part.faces, 0, '分卷卡仍挂着翻卡面板');
       assert.ok(part.preview, '分卷卡悬停没有分段预览入口');
-      if (await opened.page.locator('#grid [data-mix-card]').count()) {
-        const mix = await shapeOf('#grid [data-mix-card]');
-        assert.deepEqual(mix.layers, [mix.cover, mix.cover], 'Mix 卡的叠层纸边和封面不是同一档圆角');
-      }
+      const mix = await shapeOf('#grid [data-mix-card]');
+      assert.deepEqual(mix.layers, [mix.cover, mix.cover], 'Mix 卡的叠层纸边和封面不是同一档圆角');
       assert.deepEqual(opened.problems, []);
     } finally {
       await opened.close();
@@ -551,12 +544,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('分卷计数在悬停与键盘聚焦时淡出，右上角让给倒计时圈', { timeout: 60_000 }, async () => {
-    const opened = await openCatalogFixture(browser, (payload) => {
-      const [first, second] = payload.items;
-      payload.items[0] = { ...first, part_group: {
-        key: 'DEMO-PART', title: 'DEMO-PART', count: 2, seed_id: first.id,
-        item_ids: [first.id, second.id], total_duration: 120, total_size: 1 } };
-    });
+    const opened = await openCatalogFixture(browser, { items: catalogParts() });
     try {
       const page = opened.page;
       const card = page.locator('[data-media-card][data-part-seed]').first();
@@ -593,12 +581,12 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('抬起与推开只属于作品卡的共演头像', { timeout: 60_000 }, async () => {
-    const opened = await openCatalog(browser);
+    const opened = await openCatalogBars(browser);
     try {
       await opened.page.emulateMedia({ reducedMotion: 'no-preference' });
       for (const selector of ['[data-tier-performer]', '[data-tier-studio]']) {
         const entry = opened.page.locator(selector).first();
-        if (!await entry.count()) continue;
+        await entry.waitFor();
         await entry.hover();
         await opened.page.waitForTimeout(320);
         assert.equal(await entry.evaluate((element) => getComputedStyle(element).transform), 'none',
@@ -610,9 +598,9 @@ describe('设计决定：作品卡、管理页与复核', () => {
   });
 
   it('视频卡整块是入口且内部链接保持独立', { timeout: 60_000 }, async () => {
-    const opened = await openCatalogFixture(browser, (payload) => {
-      payload.items[0] = { ...payload.items[0], tags: ['演示标签'] };
-    });
+    const items = catalogVideos(1);
+    items[0]!.tags = ['演示标签'];
+    const opened = await openCatalogFixture(browser, { items });
     try {
       const card = opened.page.locator('#grid [data-media-card][data-id]').first();
       const opener = card.locator('[data-media-open]');
@@ -644,7 +632,12 @@ describe('设计决定：作品卡、管理页与复核', () => {
 
   for (const [label, viewport] of [['390px', MOBILE], ['宽屏', DESKTOP]] as const) {
     it(`${label} 下教程中心可阅读、关闭与重开，不提交业务写入`, { timeout: 60_000 }, async () => {
-      const opened = await visit(browser, '/', viewport, freshTutorial);
+      const opened = await visit(browser, '/', viewport, async page => {
+        await freshTutorial(page);
+        await page.addInitScript(() => {
+          navigator.mediaDevices.getDisplayMedia = () => Promise.reject(new DOMException('Cancelled', 'NotAllowedError'));
+        });
+      });
       try {
         const page = opened.page;
         await expectBody(page, '/', [page.locator('#grid')]);
@@ -659,8 +652,18 @@ describe('设计决定：作品卡、管理页与复核', () => {
           }
         });
         const opener = page.locator('#tutorialBtn');
-        await page.locator('.peach-guide-popover').getByRole('heading', { name: '从这里打开新手教程' }).waitFor();
+        const invitation = page.locator('.peach-guide-popover').getByRole('heading', { name: '从这里打开新手教程' });
+        await invitation.waitFor();
         assert.ok(await opener.evaluate(node => node.classList.contains('driver-active-element')));
+        await page.getByRole('button', { name: '反馈', exact: true }).click();
+        const feedback = page.getByRole('dialog', { name: '发送反馈' });
+        const title = feedback.getByRole('textbox', { name: '标题' });
+        await title.click();
+        await title.pressSequentially('Keyboard input');
+        assert.equal(await title.inputValue(), 'Keyboard input');
+        await page.keyboard.press('Escape');
+        await feedback.waitFor({ state: 'hidden' });
+        await invitation.waitFor();
         await opener.click();
         const dialog = page.getByRole('dialog', { name: '新手教程', exact: true });
         await dialog.waitFor();
@@ -735,7 +738,7 @@ describe('设计决定：作品卡、管理页与复核', () => {
         assert.equal(await page.locator('#stage .vjs-peach-settings-toggle').getAttribute('aria-expanded'), 'true', '点击说明关闭了正在讲解的菜单');
         await page.waitForFunction(() => {
           const panel = document.querySelector('.peach-guide-popover')?.getBoundingClientRect();
-          return document.querySelector('.driver-overlay')?.parentElement?.id === 'stage'
+          return document.querySelector('.driver-overlay')?.closest('#stage[open]')
             && panel && panel.left >= 0 && panel.right <= innerWidth && panel.top >= 0 && panel.bottom <= innerHeight;
         });
         await playbackGuide.getByRole('button', { name: '下一步', exact: true }).click();
@@ -785,7 +788,8 @@ describe('设计决定：作品卡、管理页与复核', () => {
         await dialog.getByRole('searchbox', { name: '搜索教程' }).fill('媒体库');
         await dialog.getByRole('button', { name: /媒体库与入库 媒体库/ }).click();
         await guide.waitFor();
-        for (let step = 0; step < 8; step += 1) await guide.getByRole('button', { name: '下一步', exact: true }).click();
+        for (let step = 0; step < 9; step += 1) await guide.getByRole('button', { name: '下一步', exact: true }).click();
+        await page.locator('[data-guide-target="transcode"].driver-active-element').waitFor();
         await guide.getByRole('button', { name: '完成本章', exact: true }).click();
         await dialog.waitFor();
         assert.equal(new URL(page.url()).pathname, '/', '页面导览完成后未返回开始前的页面');
@@ -825,10 +829,36 @@ describe('设计决定：作品卡、管理页与复核', () => {
       assert.ok(heights.length >= 2, `筛选条上只量到 ${heights.length} 颗控件`);
       assert.deepEqual([...new Set(heights)], [heights[0]],
         `筛选条上的控件高度不齐：${heights.join(' / ')}`);
+      await opened.page.setViewportSize({ width: 320, height: 844 });
+      const bottom = opened.page.locator('[data-review-filter] [data-filter-row="bottom"]');
+      const mobile = await bottom.evaluate((row) => {
+        const buttons = [...row.querySelectorAll('button')].map(button => button.getBoundingClientRect());
+        return { aligned: buttons.every(button => Math.abs(button.top - buttons[0]!.top) < 1),
+          overflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.equal(mobile.aligned, true, '窄屏下分组和批量按钮保留同一滚动行');
+      assert.equal(mobile.overflow, false);
       assert.deepEqual(opened.problems, []);
     } finally {
       await opened.close();
     }
+  });
+
+  it('复核卡可以从卡片区外侧起拖', async () => {
+    const opened = await openReview(browser);
+    try {
+      const { page } = opened;
+      const card = page.locator('section[data-review-key]').first();
+      await page.locator('#selectMode').click();
+      await card.evaluate(node => node.scrollIntoView({ block: 'center' }));
+      const box = (await card.boundingBox())!;
+      await page.mouse.move(box.x - 15, box.y + 40);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 40, box.y + 72, { steps: 4 });
+      await page.locator('section[data-review-key][data-rectangle-hit]').waitFor();
+      await page.mouse.up();
+      assert.equal(await card.getByRole('checkbox').first().isChecked(), true);
+    } finally { await opened.close(); }
   });
 
   it('复核卡的勾选框和标题共用一条中线', { timeout: 60_000 }, async () => {

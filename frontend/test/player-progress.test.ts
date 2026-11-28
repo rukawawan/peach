@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { playbackKey, playbackPosition, stopPlaybackPosition, trackPlaybackPosition } from '../src/player/progress';
+import { playbackKey, playbackPosition, resolvePlaybackPosition, stopPlaybackPosition, trackPlaybackPosition } from '../src/player/progress';
 import { disposePlayer } from '../src/player/dispose';
 import { stopTelemetry, wireFollowTelemetry } from '../src/player/telemetry';
 import type { VjsPlayer } from '../src/player/types';
@@ -17,6 +17,13 @@ beforeEach(() => { localStorage.clear(); video = document.createElement('video')
 afterEach(() => { stopPlaybackPosition(video); stopTelemetry(video); vi.useRealTimers(); vi.unstubAllGlobals() });
 
 describe('视频续播位置', () => {
+  it('读取实例位置后清除浏览器的旧记录', async () => {
+    localStorage.setItem(`peach.playback-position.v1:${key}`, '32');
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ position: { seconds: 91, updated_at: 12000 } })));
+    expect(await resolvePlaybackPosition(key, item)).toBe(91);
+    expect(localStorage.getItem(`peach.playback-position.v1:${key}`)).toBeNull();
+  });
+
   it('关注片段的实际时长独立于帖子时长，恢复到该片段的保存位置', async () => {
     configurePlayer({ settings: () => ({ ambientMode: false, theaterMode: false, seekSeconds: 10,
       miniplayer: true, detailAutoplay: false, javImage: 'cover' }), saveSettings: () => {}, toast: () => {},
@@ -48,6 +55,7 @@ describe('视频续播位置', () => {
   it('暂停、关闭和页面退出保留当前秒数，存储读取独立于条目的旧比例', () => {
     trackPlaybackPosition(key, video);
     video.dispatchEvent(new Event('loadedmetadata'));
+    video.dispatchEvent(new Event('play'));
     video.currentTime = 53.25;
     video.dispatchEvent(new Event('seeked'));
     expect(playbackPosition(key, item)).toBe(53.25);
@@ -75,6 +83,7 @@ describe('视频续播位置', () => {
   it('未加载元数据与换源时的零位置不会覆盖已保存秒数', () => {
     trackPlaybackPosition(key, video);
     video.dispatchEvent(new Event('loadedmetadata'));
+    video.dispatchEvent(new Event('play'));
     video.currentTime = 91;
     video.dispatchEvent(new Event('pause'));
     video.dispatchEvent(new Event('emptied'));
@@ -93,6 +102,7 @@ describe('视频续播位置', () => {
     expect(playbackPosition(key, { ...item, leave_ratio: 1 })).toBe(0);
     trackPlaybackPosition(key, video);
     video.dispatchEvent(new Event('loadedmetadata'));
+    video.dispatchEvent(new Event('play'));
     video.currentTime = 300;
     Object.defineProperty(video, 'ended', { value: true });
     video.dispatchEvent(new Event('ended'));

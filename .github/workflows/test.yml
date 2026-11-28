@@ -34,6 +34,10 @@ jobs:
     needs: workflow-lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 主线合并提交核对同内容的 PR 运行及其证明制品，需要读取 Actions。
+    permissions:
+      contents: read
+      actions: read
     outputs:
       base: ${{ steps.plan.outputs.base }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -45,6 +49,7 @@ jobs:
       vendor: ${{ steps.plan.outputs.vendor }}
       wheel: ${{ steps.plan.outputs.wheel }}
       required_jobs: ${{ steps.plan.outputs.required_jobs }}
+      reused: ${{ steps.plan.outputs.reused }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -55,7 +60,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/check_pr_identity.py --base "$BASE_SHA" --head "$HEAD_SHA"
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -86,11 +91,12 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           REQUIRED_JOBS: ${{ needs.plan.outputs.required_jobs }}
+          REUSED: ${{ needs.plan.outputs.reused }}
         run: python scripts/ci_plan.py --verify-results --phase frontend
 
   wheel-build:
     needs: [plan, frontend-ready]
-    if: ${{ !cancelled() && needs.frontend-ready.result == 'success' && needs.plan.outputs.wheel == 'true' }}
+    if: ${{ !cancelled() && needs.frontend-ready.result == 'success' && needs.plan.outputs.reused == '' && needs.plan.outputs.wheel == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -98,7 +104,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -140,7 +146,7 @@ jobs:
   python:
     name: ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.scope }} / ${{ matrix.shard_index }}
     needs: [plan, frontend-ready]
-    if: ${{ !cancelled() && needs.frontend-ready.result == 'success' }}
+    if: ${{ !cancelled() && needs.frontend-ready.result == 'success' && needs.plan.outputs.reused == '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -156,7 +162,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           check-latest: true
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -175,7 +181,7 @@ jobs:
         uses: ./.github/actions/setup-ffmpeg
         if: runner.os == 'Windows' && matrix.runtime_tools
         with:
-          ffmpeg-version: "9.0.1"
+          ffmpeg-version: "9.1"
       - name: 安装 macOS FFmpeg
         if: runner.os == 'macOS' && matrix.runtime_tools
         run: brew install ffmpeg
@@ -228,7 +234,7 @@ jobs:
     name: island 产物与前端测试
     runs-on: ubuntu-latest
     needs: plan
-    if: needs.plan.outputs.frontend == 'true'
+    if: needs.plan.outputs.reused == '' && needs.plan.outputs.frontend == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -264,7 +270,7 @@ jobs:
   web-e2e:
     name: 浏览器回归 / ${{ matrix.index }}
     needs: [plan, frontend-ready]
-    if: ${{ !cancelled() && needs.frontend-ready.result == 'success' && needs.plan.outputs.browser == 'true' }}
+    if: ${{ !cancelled() && needs.frontend-ready.result == 'success' && needs.plan.outputs.reused == '' && needs.plan.outputs.browser == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
@@ -277,7 +283,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -290,7 +296,7 @@ jobs:
       - name: 安装固定版本 FFmpeg
         uses: ./.github/actions/setup-ffmpeg
         with:
-          ffmpeg-version: "9.0.1"
+          ffmpeg-version: "9.1"
       - name: 指定 e2e 用的 Chrome
         shell: pwsh
         run: |
@@ -326,7 +332,7 @@ jobs:
     name: 固定前端依赖
     runs-on: ubuntu-latest
     needs: plan
-    if: needs.plan.outputs.vendor == 'true'
+    if: needs.plan.outputs.reused == '' && needs.plan.outputs.vendor == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -351,4 +357,5 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           REQUIRED_JOBS: ${{ needs.plan.outputs.required_jobs }}
+          REUSED: ${{ needs.plan.outputs.reused }}
         run: python scripts/ci_plan.py --verify-results

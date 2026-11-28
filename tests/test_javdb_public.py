@@ -1048,7 +1048,7 @@ class DetailProjectionTests(unittest.TestCase):
             again = q_jav_detail(self.contract, {'code': 'SSIS-001'})
         self.assertEqual((result['state'], result['title'], result['studio']), ('partial', '官方标题', 'エスワン'))
         self.assertEqual(result['tags'], ['単体作品'])
-        self.assertEqual(result['message'], '作品资料未取得，请稍后重试')
+        self.assertEqual(result['message'], 'JavDB 作品资料查询失败，请稍后重试')
         # 第二次直接用边车里的那份，不再问官方目录。
         self.assertEqual(again['title'], '官方标题')
         self.official.assert_called_once()
@@ -1058,7 +1058,7 @@ class DetailProjectionTests(unittest.TestCase):
             result = q_jav_detail(self.contract, {'code': 'EXM-001'})
         self.assertEqual(result['code'], 'EXM-001')
         self.assertEqual(result['state'], 'partial')
-        self.assertEqual(result['message'], '作品资料未取得，请稍后重试')
+        self.assertEqual(result['message'], 'JavDB 作品资料查询失败，请稍后重试')
         with patch('peach.web_jav_detail.PUBLIC_API.reviews', side_effect=PublicSourceUnavailable('errors.javdbPublic.unavailable')):
             self.assertFalse(q_jav_reviews(self.contract, {'code': 'EXM-001'})['ok'])
 
@@ -1133,7 +1133,7 @@ class DetailProjectionTests(unittest.TestCase):
                 patch('peach.web_jav_detail.PUBLIC_API.reviews', side_effect=PublicSourceUnavailable('errors.javdbPublic.sourcePaused')):
             result = PUBLIC_API.resources('EXM-001')
         self.assertEqual(len(result['items']), 1)
-        self.assertEqual(result['warnings'], ['JavDB 评论区查询未完成：作品资料来源暂时不可用，请稍后重试'])
+        self.assertEqual(result['warnings'], ['JavDB 评论区查询失败：作品资料来源暂时不可用，请稍后重试'])
 
     def test_comment_resource_scan_has_a_page_limit(self):
         with patch('peach.web_jav_detail.PUBLIC_API.movie', return_value={'id': 'Exact'}), \
@@ -1151,7 +1151,7 @@ class DetailProjectionTests(unittest.TestCase):
             result = PUBLIC_API.resources('EXM-001')
         self.assertTrue(result['magnet_failed'])
         self.assertEqual([item['protocol'] for item in result['items']], ['ed2k'])
-        self.assertEqual(result['warnings'], ['JavDB 磁链区查询未完成：作品资料未取得，请稍后重试'])
+        self.assertEqual(result['warnings'], ['JavDB 磁链区查询失败：JavDB 作品资料查询失败，请稍后重试'])
 
     def test_source_avatars_and_studio_logos_preserve_each_identity(self):
         movie = {'id': 'Exact', 'actors': [

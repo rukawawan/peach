@@ -58,12 +58,20 @@ const PLACEHOLDERS: Record<string, () => string> = {
   // 旧地址 /resource-sync 打开后转到资源同步二级页，占位先画成那一页，转过去时同一个键不重画。
   '/resource-sync': () => cleanupToolSkeletonHtml('resource-sync'),
   '/review': () => reviewSkeletonHtml(),
-  /* 来源目录与正文保持同一分栏，来源名称等数据到齐后替换占位。 */
-  '/sources': () => `<div class="scraping-page"><p>${esc(t('manage:scrapingSources.proxyHint'))}</p>
-    <div data-section-page><div data-section-toc aria-hidden="true">
-      ${Array.from({ length: 12 }, () => '<div class="skeleton" style="height:36px;margin-bottom:4px;border-radius:8px"></div>').join('')}
-    </div><div>${pageSkeletonHtml(t('manage:scrapingSources.loading'), { cards: true, count: 4, fill: false, className: 'cleanup-skeleton' })}</div></div></div>`,
+  '/sources': () => sourcesSkeletonHtml(),
 };
+
+/* 采集来源照 `ScrapingPage` 排：`Page` 的那一列、说明行、左边目录与右边按分组纵排的来源行（收起的
+   `SettingsCard`，一行 44px）。分组名与来源要等数据，目录按内置的六组画，每组几行取常见的数。 */
+function sourcesSkeletonHtml(): string {
+  const entry = '<span class="skeleton" style="height:36px;border-radius:8px"></span>';
+  const row = '<div class="skeleton rounded-2xl" style="height:44px"></div>';
+  const group = (rows: number) => `<section class="flex min-w-0 flex-col gap-3"><h3 class="px-3 text-title-3-medium"><span class="skeleton skeleton-text" style="width:5em"></span></h3><div class="flex flex-col gap-2">${row.repeat(rows)}</div></section>`;
+  return `<div data-skeleton="sources" role="status" aria-label="${esc(t('manage:scrapingSources.loading'))}"><div class="peach-react" aria-hidden="true" inert>
+    <div class="mx-auto flex w-full max-w-board flex-col gap-8"><p class="text-body-2-regular text-text-secondary">${esc(t('manage:scrapingSources.proxyHint'))}</p>
+      <div data-section-page><div data-section-toc><div data-section-toc-items>${entry.repeat(6)}</div></div>
+        <div data-toc-content class="flex min-w-0 flex-col gap-8">${group(3)}${group(7)}${group(3)}</div></div></div></div></div>`;
+}
 
 /** 关注管理的骨架照这台浏览器上次选的视图画，排序框与方向键照地址栏上的那一档画：等数据的这段时间画成
  *  卡片、数据到了换成表格的话，同一次进入里版式会整个翻一遍。 */
@@ -71,11 +79,13 @@ export interface FollowSkeletonState {
   followLayout: string;
   followSort: string;
   followDir: string;
+  /** 地址里的页签：添加关注那一页不是列表的版式，骨架照它画。 */
+  followTab?: string;
 }
 
 /** 这一页的加载态 HTML。 */
-export function managementSkeletonHtml(path: string, { followLayout, followSort, followDir }: FollowSkeletonState): string {
-  return boardPageSkeleton(path, { followLayout, ...(path === '/subscriptions' ? { followSort, followDir } : {}) })
+export function managementSkeletonHtml(path: string, { followLayout, followSort, followDir, followTab }: FollowSkeletonState): string {
+  return boardPageSkeleton(path, { followLayout, ...(path === '/subscriptions' ? { followSort, followDir, followTab } : {}) })
     || (PLACEHOLDERS[path] ?? (() => pageSkeletonHtml(t('manage:manageSkeleton.loadingPage'))))();
 }
 

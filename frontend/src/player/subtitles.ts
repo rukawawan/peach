@@ -3,7 +3,7 @@ import { api, esc, icon } from '@peach/legacy/core';
 import { setActionBusy, spinnerHtml } from '@peach/legacy/ui';
 import { CAPTION_OPTIONS, mountCaptionStyle, type CaptionKey } from './subtitle-style';
 import type { VjsPlayer } from './types';
-import { SubtitleSession } from './subtitle-memory';
+import { MAX_SUBTITLE_OFFSET_MS, SubtitleSession } from './subtitle-memory';
 import { playerMemory } from './memory';
 import { interfaceLanguage, t } from '../i18n';
 import { serverText } from '../core/server-text';
@@ -105,8 +105,9 @@ export class SubtitleControls {
       `<div class="vjs-peach-panel-menu">${choices.map((track, index) => {
         const selected = track ? track.mode === 'showing' : tracks.every(row => row.mode !== 'showing');
         return `<button type="button" class="vjs-peach-menu-option" role="menuitemradio" aria-checked="${selected}" data-subtitle-track="${index}"><span class="vjs-peach-option-check">${selected ? icon('check') : ''}</span><span class="vjs-peach-option-label">${esc(track?.label || track?.language || (track ? t('catalog:playerControls.subtitles') : t('catalog:subtitles.off')))}</span></button>`;
-      }).join('')}<button type="button" class="vjs-peach-caption-action" data-subtitle-file>${t('catalog:subtitles.loadFile')}</button><button type="button" class="vjs-peach-caption-action" data-subtitle-search>${t('catalog:subtitles.searchOnline')}</button></div><p class="vjs-peach-subtitle-status" data-subtitle-status role="status" hidden></p>`, () => { this.page = ''; this.panels.back() }, direction);
+      }).join('')}${tracks.some(track => track.mode === 'showing') ? `<button type="button" class="vjs-peach-caption-action" data-subtitle-timing>${t('catalog:subtitles.timing')}</button>` : ''}<button type="button" class="vjs-peach-caption-action" data-subtitle-file>${t('catalog:subtitles.loadFile')}</button><button type="button" class="vjs-peach-caption-action" data-subtitle-search>${t('catalog:subtitles.searchOnline')}</button></div><p class="vjs-peach-subtitle-status" data-subtitle-status role="status" hidden></p>`, () => { this.page = ''; this.panels.back() }, direction);
     panel.querySelector<HTMLButtonElement>('[data-subtitle-options]')!.onclick = () => this.options();
+    panel.querySelector('[data-subtitle-timing]')?.addEventListener('click', () => this.timing());
     panel.querySelector<HTMLButtonElement>('[data-subtitle-file]')!.onclick = () => this.input.click();
     panel.querySelector<HTMLButtonElement>('[data-subtitle-search]')!.onclick = () => { void this.searchPanel() };
     panel.querySelectorAll<HTMLButtonElement>('[data-subtitle-track]').forEach(button => {
@@ -117,6 +118,52 @@ export class SubtitleControls {
       panel.querySelector('[data-subtitle-status]')!.insertAdjacentHTML('beforeend', `<button type="button" class="vjs-peach-caption-action" data-subtitle-memory-retry>${t('catalog:shared.retryNow')}</button>`);
       panel.querySelector<HTMLButtonElement>('[data-subtitle-memory-retry]')!.onclick = () => { void this.session.retry() };
     }
+  }
+
+  private timing() {
+    const track = this.tracks().find(row => row.mode === 'showing');
+    if (!track) { this.show(0); return }
+    this.page = 'timing';
+    const limit = MAX_SUBTITLE_OFFSET_MS;
+    const panel = this.panel(this.header(t('catalog:subtitles.timing')) +
+      `<div class="vjs-peach-speed-panel"><div class="vjs-peach-speed-display"><output data-offset-value></output></div>
+        <div class="vjs-peach-speed-slider"><button type="button" class="vjs-peach-speed-button" data-offset-action="earlier" aria-label="${t('catalog:subtitles.timingEarlier')}">${icon('minus')}</button>
+        <input class="vjs-peach-speed-range" type="range" min="${-limit}" max="${limit}" step="100" data-offset-range aria-label="${t('catalog:subtitles.timing')}">
+        <button type="button" class="vjs-peach-speed-button" data-offset-action="later" aria-label="${t('catalog:subtitles.timingLater')}">${icon('plus')}</button></div>
+        <div class="vjs-peach-speed-chips"><span class="vjs-peach-speed-preset"><button type="button" class="vjs-peach-speed-button" data-offset-action="reset" aria-label="${t('catalog:subtitles.timingReset')}">${t('catalog:subtitles.timingValue', { seconds: '0' })}</button>
+        <span class="vjs-peach-speed-preset-label">${t('catalog:subtitles.timingReset')}</span></span></div></div>
+        <p class="vjs-peach-subtitle-status" data-subtitle-status role="status" hidden></p>`, () => this.show(-1));
+    const value = panel.querySelector<HTMLOutputElement>('[data-offset-value]')!;
+    const range = panel.querySelector<HTMLInputElement>('[data-offset-range]')!;
+    const reset = panel.querySelector<HTMLButtonElement>('[data-offset-action="reset"]')!;
+    const format = new Intl.NumberFormat(interfaceLanguage, { signDisplay: 'exceptZero', maximumFractionDigits: 1 });
+    const sync = () => {
+      const offset = this.session.offset(track);
+      value.value = t('catalog:subtitles.timingValue', { seconds: format.format(offset / 1000) });
+      range.value = String(offset);
+      range.setAttribute('aria-valuetext', value.value);
+      range.style.setProperty('--peach-speed-percent', `${(offset + limit) / (2 * limit) * 100}%`);
+      reset.setAttribute('aria-pressed', String(offset === 0));
+    };
+    const save = async (offset: number) => {
+      if (track.mode !== 'showing') { this.show(0); return }
+      const saved = this.session.setOffset(track, Math.min(limit, Math.max(-limit, offset)));
+      sync();
+      try {
+        await saved;
+        panel.querySelector<HTMLElement>('[data-subtitle-status]')!.hidden = true;
+      } catch (error) {
+        if (this.page === 'timing' && panel.isConnected && !panel.inert) {
+          this.status(error instanceof Error ? error.message : t('catalog:subtitleMemory.saveFailed'), true);
+        }
+      }
+    };
+    range.oninput = () => { this.session.previewOffset(track, Number(range.value)); sync() };
+    range.onchange = () => void save(Number(range.value));
+    panel.querySelector<HTMLButtonElement>('[data-offset-action="earlier"]')!.onclick = () => void save(this.session.offset(track) - 500);
+    panel.querySelector<HTMLButtonElement>('[data-offset-action="later"]')!.onclick = () => void save(this.session.offset(track) + 500);
+    reset.onclick = () => void save(0);
+    sync();
   }
 
   private options(direction = 1) {

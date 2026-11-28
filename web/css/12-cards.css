@@ -6,7 +6,7 @@ main{position:relative;z-index:1;padding:14px 16px 90px}
 /* 搜索结果的标题带着搜索词，长词只占一行：词那一段由 `fitTitleWords` 截到放得下，收尾的「」」
    留在末尾；全文在悬停与搜索框里。 */
 #catalogPageHeading h2{overflow:hidden;white-space:nowrap}
-h2[data-page-title]{margin:0;font:var(--board-title);letter-spacing:0}
+h2[data-page-title]{margin:0;font:var(--board-title)}
 @media(max-width:760px){#catalogPageHeading h2,h2[data-page-title]{font:var(--board-figure)}}
 .count{position:sticky;top:calc(var(--topH) + var(--filterH));z-index:60;
   min-height:var(--sortH);color:var(--ink-2);margin:0 -16px 16px;padding:8px 16px;
@@ -244,6 +244,7 @@ body[data-density="dense"] .card:not(.feednewcard) .meta .size{flex:none;white-s
  * 这里只定宽度、淡出已读那一档，以及那两颗悬浮动作键——其余形态跟着资产卡走，
  * 两种卡长得不一样的地方只应该是它们真的不一样的地方。 */
 .feednew{margin:0 0 18px}
+.feednew:not([hidden]){display:flow-root}
 /* RSS 自己的橙：只给人物页「订阅新作」开关订上时用。新作卡等封面时的微光与全站等待态
    同一种灰，骨架不另起一种颜色。 */
 :root{--feed-mark:#F78422}
@@ -253,9 +254,9 @@ body[data-density="dense"] .card:not(.feednewcard) .meta .size{flex:none;white-s
 /* 往右翻时卡片从侧栏底下穿过去，和首页那几排头像（`catalog-filter.css` 的 `[data-catalog-tier]`）同一个
    理由、同一种写法：让出轨道宽度加 `main` 的 16px 内边距，再原样加回内边距，第一张
    仍站在这一屏的左对齐线上。首页与人物页的这一行都直接住在 `main` 里，所以让出的是
-   同一个数；窄屏的抽屉盖在内容上面，没有这条常驻的边，那一档不让。 */
+   同一个数。窄屏或开启「限制首页横滑范围」的首页新作行使用原有的 8px 悬停留白。 */
 @media(min-width:761px){
-  .feednewrow{margin-left:calc(-1 * (var(--railW) + 16px));padding-left:calc(var(--railW) + 16px)}
+  .feednewrow:not(:where([data-contain-home-scroll] #feedNew *)){margin-left:calc(-1 * (var(--railW) + 16px));padding-left:calc(var(--railW) + 16px)}
 }
 /* 连不上图片主机那条 Note 与下面一行隔 12px：横排自己往上收了 8px，这里先垫回来。 */
 .feednetwork{margin-bottom:20px}
@@ -280,6 +281,12 @@ body[data-density="dense"] .card:not(.feednewcard) .meta .size{flex:none;white-s
 .feednewall svg{width:var(--icon-inline);height:var(--icon-inline);stroke:currentColor;fill:none;stroke-width:2}
 /* 已看过的不移走，只退到背景里：已读是标记，不是关掉。 */
 .feednewcard.isread{opacity:.55}
+/* 上方框选区延伸到筛选栏下缘，外边距抵消内边距。 */
+[data-feed-selection][data-rectangle-area]{display:block;margin:-36px -16px -18px;padding:36px 16px 18px}
+[data-feed-selection][data-rectangle-select] :is(.feednewtools,.feedcoverstate button){visibility:hidden}
+[data-feed-selection] [data-media-check]{pointer-events:none}
+[data-feed-selection][data-rectangle-select] .feednewcard.isread{opacity:1}
+[data-feed-selection][data-rectangle-select] .feednewcard.isread>:is(.pic,.meta){opacity:.55}
 /* 通向作品页的点击区，铺满整张卡，是一条外链。
    资产卡的 `.pic` 与 `.meta` 压在点击区上面（z-index 2），那边的点击由卡片自己的脚本
    接；这张卡只有这条外链，所以两块放行指针，落到下面的链接上，悬浮键自己再收回来。 */

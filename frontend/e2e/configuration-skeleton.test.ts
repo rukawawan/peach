@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser, Page } from 'playwright-core';
-import { configurationBody, expectBody, launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
+import { CONFIGURATION_ROUTE, configurationBody, expectBody, launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
 
 const measure = (page: Page, names = ['媒体库与目录']) => page.locator('.ui-configpage').evaluate((root, names) => {
   const rect = (el: Element) => {
@@ -28,7 +28,7 @@ async function openEditableConfiguration(browser: Browser, viewport: (typeof VIE
     const response = await opened.page.request.get(new URL('/api/configuration', opened.page.url()).href);
     assert.equal(response.status(), 200);
     const configuration = await response.json();
-    await opened.page.route('**/api/configuration', async route => {
+    await opened.page.route(CONFIGURATION_ROUTE, async route => {
       if (route.request().method() !== 'GET') return route.continue();
       await route.fulfill({ json: { ...configuration, editable: true } });
     });
@@ -63,7 +63,7 @@ describe('配置页等待态', () => {
         await input.fill('example.invalid');
         const general = nav.getByRole('tab', { name: '媒体库与入库', exact: true });
         await general.click();
-        await page.keyboard.press('ArrowRight');
+        await page.keyboard.press(viewport.mobile ? 'ArrowRight' : 'ArrowDown');
         assert.equal(await nav.getByRole('tab', { name: '来源与订阅', exact: true }).getAttribute('aria-selected'), 'true');
         await page.keyboard.press('End');
         assert.equal(await nav.getByRole('tab', { name: '系统诊断' }).getAttribute('aria-selected'), 'true');
@@ -87,7 +87,7 @@ describe('配置页等待态', () => {
         await expectBody(opened.page, '/settings/library', configurationBody(opened.page));
         await settle(opened.page);
         const pending = new Promise<void>(resolve => { release = resolve });
-        await opened.page.route('**/api/configuration', async route => {
+        await opened.page.route(CONFIGURATION_ROUTE, async route => {
           if (route.request().method() !== 'GET') return route.continue();
           await pending;
           await route.fulfill({ json: { ...opened.configuration, editable: true, startup: {
@@ -142,7 +142,7 @@ describe('配置页等待态', () => {
       /* 两道门：配置读回之前是整页骨架；配置放行、分区自己的数据还压着时是分区骨架。 */
       const configuration = new Promise<void>((resolve) => { mount = resolve });
       const held = new Promise<void>((resolve) => { release = resolve });
-      await page.route('**/api/configuration', async (route) => { await configuration; await route.continue() });
+      await page.route(CONFIGURATION_ROUTE, async (route) => { await configuration; await route.continue() });
       for (const url of ['**/api/follow/credentials', '**/api/configuration/indexers', '**/api/follow/schedule', '**/api/feeds/schedule']) {
         await page.route(url, async (route) => { await held; await route.continue() });
       }

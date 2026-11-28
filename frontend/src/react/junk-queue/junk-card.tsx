@@ -10,6 +10,7 @@
  * 标题照遗留层写成转义后的 HTML：`data-middle-truncate` 由中段截断（`src/ui-kit/middle-truncate.ts`）按宽度
  * 从中间截断，它直接改写这一格的文字，交给 React 管的话下一次重画会和它互相覆盖。 */
 import { memo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { hasSelectionModifier } from '../../selection';
 import { RiCheckboxLine, RiDeleteBinLine, RiFolderOpenLine, RiPlayLine, RiRestartLine } from '@remixicon/react';
 import { esc, fmtSize } from '@peach/legacy/core';
 import { Button } from '@/components/base/buttons/button';
@@ -40,7 +41,7 @@ export interface JunkCardProps {
 
 type Busy = '' | 'reveal' | JunkOperation;
 
-const picking = (selectMode: boolean, event: MouseEvent) => selectMode || event.shiftKey || event.ctrlKey || event.metaKey;
+const picking = (selectMode: boolean, event: MouseEvent) => selectMode || hasSelectionModifier(event);
 
 /** 卡片与列表行共用的那三颗键与状态行：打开位置、判断（不是垃圾／重新判断）、移入回收站。
  *  写 ledger 的两颗成功后壳重读队列，这一条随之离开；失败由壳报，键恢复成可点。 */

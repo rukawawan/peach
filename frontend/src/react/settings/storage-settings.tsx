@@ -2,16 +2,19 @@
  * 或把整个数据目录迁到别的磁盘。
  *
  * 统计结果单独圈在一块面里：上面两张图（各类占比、磁盘占用），下面逐类一行。能清理的那几类
- * 行首有勾选框，勾几类一起清，或者「全部清理」；不能清理的勾选框禁用，行里写明为什么。
+ * 行首有勾选框，勾几类一起清，或者「全部清理」；其他行说明保留原因或提供专项清理入口。
  *
  * 统计与清理在服务端后台线程里跑，进行中每 1.5 秒问一次状态。统计时按上次的文件数估进度，
  * 没统计过就只报走过多少文件。迁移请求被接受后服务会退出，
  * 页面只留一句回执：托盘完成迁移后会自己重新打开 Peach。 */
 import { useEffect, useRef, useState } from 'react';
+import { RiArrowRightLine } from '@remixicon/react';
+import { REPAIR_CENTER_PATH } from '@peach/history';
 import { confirmModal } from '@peach/legacy/ui';
 import { fmtSize } from '@peach/legacy/core';
 
 import { Button } from '@/components/base/buttons/button';
+import { LinkButton } from '@/components/base/buttons/link-button';
 import { Checkbox } from '@/components/base/checkbox/checkbox';
 
 import { ApiError, apiGet, apiSend, errorMessage } from '../../api';
@@ -84,27 +87,37 @@ function Measuring({ job }: { job: StorageState['job'] }) {
   );
 }
 
-/** 一类数据一行：勾选框、色块、名字与说明、大小。不能清理的勾选框禁用，说明里写原因。 */
+const OPTIONAL_CATEGORIES = new Set(['follow_snapshots', 'source_snapshots', 'project_archives']);
+
 function CategoryRow(
   { category, selected, disabled, onToggle }:
   { category: StorageCategory; selected: boolean; disabled: boolean; onToggle(next: boolean): void },
 ) {
   const able = cleanable(category);
+  const followSnapshots = category.key === 'follow_snapshots';
+  const managedElsewhere = followSnapshots || category.key === 'project_archives';
   const reason = category.cleanable
     ? category.reclaimable > 0 ? t('settings:storageSpace.afterCleanup', { effect: category.note }) : t('settings:storageSpace.nothingToClean')
-    : t('settings:storageSpace.cannotClean', { reason: category.note });
+    : managedElsewhere ? category.note : t('settings:storageSpace.cannotClean', { reason: category.note });
   return (
     <div data-category={category.key}
       className="flex min-h-13 w-full items-start gap-3 border-b border-separator-border py-2.5 pr-3 last:border-b-0">
-      <Checkbox aria-label={t('settings:storageSpace.cleanCategory', { category: category.label })} isSelected={selected} isDisabled={!able || disabled}
-        onChange={onToggle} className="mt-0.5" />
+      {category.cleanable
+        ? <Checkbox aria-label={t('settings:storageSpace.cleanCategory', { category: category.label })} isSelected={selected} isDisabled={!able || disabled}
+            onChange={onToggle} className="mt-0.5" />
+        : <span aria-hidden className="w-4 shrink-0" />}
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="flex items-center gap-2 text-body-regular text-text-primary">
           <i aria-hidden className={`size-2.5 shrink-0 rounded-xs ${CATEGORY_SWATCH[category.key] || REST_SWATCH}`} />
-          {category.label}
+          <span data-copy-key={`storage.category.${category.key}.label`}>{category.label}</span>
         </p>
-        <p className="text-body-2-regular text-text-secondary">{category.description}</p>
-        <p className="text-caption-1-regular text-text-tertiary">{reason}</p>
+        <p data-copy-key={`storage.category.${category.key}.description`} className="text-body-2-regular text-text-secondary">{category.description}</p>
+        <p data-copy-key={`storage.category.${category.key}.${category.cleanable && !able ? 'empty' : 'note'}`}
+          className="text-caption-1-regular text-text-tertiary">{reason}</p>
+        {followSnapshots ? <LinkButton href={`${REPAIR_CENTER_PATH}#repair-item-follow-evidence`} size="xs"
+          trailingIcon={RiArrowRightLine} className="mt-1 self-start whitespace-normal">
+          <span data-copy-key="storageSpace.reviewFollowSnapshots">{t('settings:storageSpace.reviewFollowSnapshots')}</span>
+        </LinkButton> : null}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
         <AnimatedNumber value={category.bytes} format={fmtSize} className="text-body-regular text-text-primary" />
@@ -224,7 +237,7 @@ export function StorageSettings({ initial, receipt, active = true }: { initial: 
           ? <div data-storage-result="" className={cardClass({ variant: 'outlined', padding: 'none', className: 'flex flex-col' })}>
               <div className="border-b border-separator-border p-4"><StorageOverview storage={usage ? { ...storage, usage } : storage} /></div>
               <div className="flex flex-col pl-4">
-                {usage.categories.map((category) => (
+                {usage.categories.filter((category) => category.files > 0 || !OPTIONAL_CATEGORIES.has(category.key)).map((category) => (
                   <CategoryRow key={category.key} category={category} selected={picked.has(category.key)}
                     disabled={locked} onToggle={toggle(category.key)} />
                 ))}

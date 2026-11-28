@@ -67,7 +67,8 @@ def focus_needs_slot(selectors: list[str]) -> bool:
     parts = {part.strip() for value in selectors for part in value.split(",") if part.strip()}
     if any(part.startswith("frontend/e2e/") for part in parts):
         return True
-    files = {part if part.startswith("frontend/") else part.removeprefix("tests/").removesuffix(".py").split(".")[0]
+    files = {part if part.startswith("frontend/")
+             else part.removeprefix("tests/").removeprefix("tests.").removesuffix(".py").split(".")[0]
              for part in parts}
     return len(files) > FOCUS_FREE_FILES
 

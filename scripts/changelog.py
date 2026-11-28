@@ -15,15 +15,18 @@ Semantic Versioning 2.0.0（https://semver.org/lang/zh-CN/spec/v2.0.0.html）：
 `### Added / 新增`、`- **Playback**: English (#1). / **播放**：中文（#1）。`。Release 正文与
 应用内的更新说明都按第一个 ` / ` 拆成两种语言，英文是正文，中文进折叠的「简体中文」段。
 
-    python scripts/changelog.py                                # 起草未发布区间
+    python scripts/changelog.py                                # 查看未发布节，空时列提交候选
     python scripts/changelog.py --range v0.16.0..v0.27.1       # 起草任意区间
     python scripts/changelog.py --release 0.30.0 --apply       # 把未发布节定版为 0.30.0
     python scripts/changelog.py --notes 0.30.0 --to NOTES.md   # 生成这一版的 Release 正文
+    python scripts/changelog.py --review 0.63.0                # 列出定版内容与历史对照
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
+import json
 import re
 import sys
 import time
@@ -42,6 +45,7 @@ from . import version_bump
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = "CHANGELOG.md"
+CHANGELOG_REVIEW = Path("build/changelog-review.json")
 
 #: 未发布节的标题。Keep a Changelog 要求它常驻，让人随时知道主线上攒了什么。
 UNRELEASED = "Unreleased"
@@ -263,18 +267,26 @@ def section_of(document: str, version: str) -> str:
 
 #: 条目句末带来源编号：issue 或 PR，跨仓库写 `owner/repo#编号`。
 REFERENCE = re.compile(r"(?:^|[\s(,（、，])(?:[\w.-]+/[\w.-]+)?#\d+(?!\w)")
-#: 0.58.0 及更早的版本不补编号；之后每一版与「未发布」段的条目都要带。
+#: 0.58.0 及更早的版本不补编号；之后每一版的条目都要带。「未发布」段可以先不写：PR 编号
+#: 开了 PR 才有，为它再推一次会打断正在跑的 CI，定版时按引入条目的合并提交补上。
 REFERENCES_SINCE = (0, 58, 0)
 
 
 def needs_references(version: str) -> bool:
     if version == UNRELEASED:
-        return True
+        return False
     return tuple(int(part) for part in version.split(".")) > REFERENCES_SINCE
+
+
+def cited(text: str) -> set[str]:
+    return {found.strip(" (,（、，") for found in REFERENCE.findall(text)}
 
 
 #: 一条条目：`- **英文标签**: 英文 / **中文标签**：中文`。
 ENTRY = re.compile(r"^- \*\*(?P<english_area>[^*]+)\*\*: (?P<english>.+?) / \*\*(?P<area>[^*]+)\*\*：(?P<chinese>.+)$")
+
+REFERENCE_ID = r"(?:[\w.-]+/[\w.-]+)?#\d+"
+REFERENCE_SUFFIX = re.compile(rf"\s*[(（]{REFERENCE_ID}(?:[,、，]\s*{REFERENCE_ID})*[)）][.。]?$")
 
 
 def visible(text: str) -> str:
@@ -310,13 +322,11 @@ def require_labeled_entries(document: str, version: str) -> None:
             + [line for line in paragraphs if SEPARATOR not in line]
             + [line for line, found in matched if found["english"].strip() in ("", "TODO")],
             width=60, version=version)
-    if needs_references(version):
-        def cited(text: str) -> set[str]:
-            return {found.strip(" (,（、，") for found in REFERENCE.findall(text)}
-        _refuse("changelog.entriesWithoutReference",
-                [line for line, found in matched
-                 if not cited(found["english"]) or cited(found["english"]) != cited(found["chinese"])],
-                width=40, version=version)
+    required = needs_references(version)
+    _refuse("changelog.entriesWithoutReference",
+            [line for line, found in matched
+             if (required and not cited(found["english"])) or cited(found["english"]) != cited(found["chinese"])],
+            width=40, version=version)
     _refuse("changelog.entriesTooLong", _long_entries(document), limit=ENTRY_LIMIT, english_limit=ENGLISH_LIMIT)
 
 
@@ -331,6 +341,98 @@ def _long_entries(document: str) -> list[str]:
             for released in re.findall(r"^## \[(\d+\.\d+\.\d+)\]", document, re.M)
             for line in section_of(document, released).splitlines()
             if line.startswith("- ") and _too_long(line)]
+
+
+def review_candidate(root: Path, version: str, revision: str = "HEAD") -> str:
+    """定版提交只写版本与日志，审阅绑定到它之前的候选内容。"""
+    text = version_bump.git(root, "show", f"{revision}:{version_bump.VERSION_FILE}")
+    match = version_bump.VERSION_PATTERN.search(text)
+    if match is None:
+        raise version_bump.VersionError(t("release_tag.noVersion"))
+    committed = ".".join(match.group(index) for index in (2, 3, 4))
+    if committed == version:
+        parent = f"{revision}^"
+        changed = version_bump.git(root, "diff", "--name-only", parent, revision).splitlines()
+        if set(changed) == {version_bump.VERSION_FILE, CHANGELOG}:
+            revision = parent
+    return version_bump.git(root, "rev-parse", f"{revision}^{{commit}}")
+
+
+def review_key(document: str, version: str, candidate: str) -> dict:
+    """把审阅绑定到上一版发布标签和实际发行说明，不依赖本地历史措辞的修改。"""
+    version_link = re.search(rf"^\[{re.escape(version)}\]:\s*(\S+)$", document, re.M)
+    if not version_link:
+        raise version_bump.VersionError(t("changelog.noLinkForNotes", file=CHANGELOG, version=version))
+    baseline = re.search(r"/compare/(v\d+\.\d+\.\d+)\.\.\.", version_link[1])
+    section = section_of(document, version)
+    if not section:
+        raise version_bump.VersionError(t("changelog.noSectionForNotes", file=CHANGELOG, version=version))
+    return {"version": version, "baseline": baseline[1] if baseline else None, "candidate": candidate,
+            "digest": hashlib.sha256(f"{version_link[1]}\n{section}".encode("utf-8")).hexdigest()}
+
+
+def review_entries(document: str, version: str) -> list[str]:
+    """同一段发布说明的同一语言重复时拒收，不把共用 issue 或 PR 当成重复。"""
+    entries = [line for line in section_of(document, version).splitlines() if line.startswith("- ")]
+    seen = [set(), set()]
+    repeated = []
+    for line in entries:
+        keys = review_words(line)
+        if any(key in language for key, language in zip(keys, seen, strict=True)):
+            repeated.append(line)
+        for key, language in zip(keys, seen, strict=True):
+            language.add(key)
+    _refuse("changelog.duplicateReviewEntries", repeated, width=70, version=version)
+    return entries
+
+
+def review_words(line: str) -> tuple[str, str]:
+    return tuple(REFERENCE_SUFFIX.sub("", visible(part)).rstrip(".。").strip().casefold() for part in split(line))
+
+
+def review_checklist(root: Path, document: str, version: str, repo: str, *, candidate: str) -> dict:
+    """带上发布标签的旧日志和同来源的历史条目，供逐条核对最终行为。"""
+    require_labeled_entries(document, version)
+    key = review_key(document, version, candidate)
+    baseline = key["baseline"]
+    history = version_bump.git(root, "show", f"{baseline}:{CHANGELOG}") if baseline else ""
+    history_versions = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", history, re.M)
+    related = []
+    for previous in history_versions:
+        for line in section_of(history, previous).splitlines():
+            if line.startswith("- "):
+                related.append((previous, line, cited(line), review_words(line)))
+    entries = []
+    for entry in review_entries(document, version):
+        references, current_words = cited(entry), review_words(entry)
+        matches = [{"version": previous, "text": line}
+                   for previous, line, refs, words in related
+                   if refs & references or any(a == b for a, b in zip(words, current_words, strict=True))]
+        entries.append({"text": entry, "change": "", "related": matches})
+    return {
+        **key,
+        "compare": compare_link(repo, baseline, candidate),
+        "previous": section_of(history, baseline[1:]) if baseline else "",
+        "entries": entries,
+    }
+
+
+def require_review(root: Path, document: str, version: str, *, revision: str = "HEAD") -> None:
+    key = review_key(document, version, review_candidate(root, version, revision))
+    expected = review_entries(document, version)
+    path = root / CHANGELOG_REVIEW
+    if not path.is_file():
+        raise version_bump.VersionError(t("changelog.reviewMissing", version=version, path=CHANGELOG_REVIEW.as_posix()))
+    review = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(review, dict) or any(review.get(field) != value for field, value in key.items()):
+        raise version_bump.VersionError(t("changelog.reviewStale", version=version))
+    items = review.get("entries")
+    changes = [
+        item.get("text") for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict) and isinstance(item.get("change"), str) and item["change"].strip()
+    ]
+    missing = [line for line in expected if line not in changes]
+    _refuse("changelog.reviewIncomplete", missing, width=70, version=version)
 
 
 def bilingual(section: str) -> tuple[str, str]:
@@ -408,11 +510,79 @@ def notes(document: str, version: str, downloads: tuple[str, str] | None = None)
     return f"{english}\n\n{fold(CHINESE_SUMMARY, chinese)}\n\n[Full Changelog]({link[1]})\n"
 
 
+def regroup(body: str) -> str:
+    """同一分组标题出现多次时并成一组，按 `GROUP_ORDER` 排；没有重复时原样返回。
+
+    几个分支各自往未发布节加同一个分组，合并后标题会重复（`CHANGELOG.md` 按并集合并，
+    两边的行都留下）。条目保持出现的先后，分组外的段落留在最前面。
+    """
+    lines = body.splitlines()
+    headings = [line for line in lines if line.startswith("### ")]
+    if len(headings) == len(set(headings)):
+        return body
+    order = {f"### {name}{SEPARATOR}{chinese}": index for index, (name, chinese) in enumerate(GROUPS.items())}
+    lead: list[str] = []
+    groups: dict[str, list[str]] = {}
+    current = lead
+    for line in lines:
+        if line.startswith("### "):
+            current = groups.setdefault(line, [])
+        elif line.strip():
+            current.append(line)
+    parts = list(lead) + ([""] if lead else [])
+    for heading in sorted(groups, key=lambda item: order.get(item, len(order))):
+        parts.extend((heading, "", *groups[heading], ""))
+    return "\n".join(parts).rstrip("\n")
+
+
+def with_reference(line: str, number: str) -> str:
+    """给一条没有来源编号的条目两半句末补上 `#编号`，放在句号之前。"""
+    found = ENTRY.match(line)
+    if found is None:
+        return line
+    english, chinese = found["english"].rstrip(), found["chinese"].rstrip()
+    english = f"{english[:-1]} (#{number})." if english.endswith(".") else f"{english} (#{number})"
+    chinese = f"{chinese[:-1]}（#{number}）。" if chinese.endswith("。") else f"{chinese}（#{number}）"
+    return f"- **{found['english_area']}**: {english}{SEPARATOR}**{found['area']}**：{chinese}"
+
+
+def merged_reference(root: Path, line: str) -> str | None:
+    """引入这条条目的主线合并提交带的 PR 编号；找不到时返回 None。
+
+    集成把 PR 编号写进合并提交主题（`Merge branch '…' (#编号)`）。沿主线第一父链找最早让
+    这行文字出现的提交：条目随哪个 PR 合入，编号就是哪个。
+    """
+    subjects = version_bump.git(root, "log", "--first-parent", "--format=%s", f"-S{line}", "--", CHANGELOG)
+    for subject in reversed(subjects.splitlines()):
+        found = re.search(r"\(#(\d+)\)\s*$", subject)
+        if found:
+            return found[1]
+    return None
+
+
+def cite_entries(body: str, reference) -> str:
+    """定版时给没写来源编号的条目补编号；补不出的拒收，交人写。"""
+    lines = body.splitlines()
+    missing = []
+    for index, line in enumerate(lines):
+        found = ENTRY.match(line)
+        if found is None or cited(found["english"]) or cited(found["chinese"]):
+            continue
+        number = reference(line) if reference else None
+        if number is None:
+            missing.append(line)
+        else:
+            lines[index] = with_reference(line, number)
+    _refuse("changelog.entriesWithoutReference", missing, width=40, version=UNRELEASED)
+    return "\n".join(lines)
+
+
 def promote(document: str, version: str, *, date: str, repo: str, previous: str | None,
-            fallback: str = "") -> str:
+            fallback: str = "", reference=None) -> str:
     """把未发布节定版成 `version` 一节，并在它上面留一个空的未发布节。
 
     人在未发布节里润色过的措辞整段搬下去；那一节没有条目时才用 `fallback` 兜底。
+    重复的分组标题并成一组；需要来源编号的版本里，没写编号的条目由 `reference` 给出。
     """
     if has_section(document, version):
         raise version_bump.VersionError(t("changelog.sectionExists", file=CHANGELOG, version=version))
@@ -424,6 +594,9 @@ def promote(document: str, version: str, *, date: str, repo: str, previous: str 
         body = fallback.strip("\n")
     if not body.strip():
         raise version_bump.VersionError(t("changelog.unreleasedEmpty", unreleased=UNRELEASED))
+    body = regroup(body)
+    if needs_references(version):
+        body = cite_entries(body, reference)
     block = f"## [{UNRELEASED}]\n\n## [{version}] - {date}\n\n{body}\n\n"
     updated = document[:match.start()] + block + document[match.end():]
     return _relink(updated, repo=repo, version=version, previous=previous)
@@ -445,7 +618,8 @@ def release(root: Path, version: str, *, repo: str, spec: str, today: str | None
     previous = spec.split("..")[0] if ".." in spec else version_bump.last_tag(root)
     updated = promote(path.read_text(encoding="utf-8"), version,
                       date=today or dt.date.today().isoformat(), repo=repo,
-                      previous=previous, fallback=draft(root, spec))
+                      previous=previous, fallback=draft(root, spec),
+                      reference=lambda line: merged_reference(root, line))
     path.write_bytes(updated.encode("utf-8"))
 
 
@@ -457,9 +631,24 @@ def main(argv=None) -> int:
     parser.add_argument("--release", help=t("changelog.helpRelease", unreleased=UNRELEASED))
     parser.add_argument("--apply", action="store_true", help=t("changelog.helpApply", file=CHANGELOG))
     parser.add_argument("--notes", metavar="VERSION", help=t("changelog.helpNotes"))
+    parser.add_argument("--review", metavar="VERSION", help=t("changelog.helpReview"))
+    parser.add_argument("--review-ref", metavar="SHA", help=t("changelog.helpReviewRef"))
     parser.add_argument("--to", metavar="PATH", help=t("changelog.helpTo"))
     args = parser.parse_args(argv)
     try:
+        if args.review:
+            document = (version_bump.git(ROOT, "show", f"{args.review_ref}:{CHANGELOG}") if args.review_ref
+                        else (ROOT / CHANGELOG).read_text(encoding="utf-8"))
+            candidate = review_candidate(ROOT, args.review, args.review_ref or "HEAD")
+            result = review_checklist(ROOT, document, args.review, args.repo, candidate=candidate)
+            text = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+            if args.to:
+                path = Path(args.to)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            else:
+                print(text, end="")
+            return 0
         if args.notes:
             # Release 正文带下载段：发布工作流都出轻量安装包。
             from .package_windows_release import download_sections
@@ -473,7 +662,8 @@ def main(argv=None) -> int:
         spec = args.spec or version_bump.release_range(ROOT)
         if not args.apply:
             heading = args.release or UNRELEASED
-            body = draft(ROOT, spec) or t("changelog.noUserFacingChanges")
+            curated = section_of((ROOT / CHANGELOG).read_text(encoding="utf-8"), UNRELEASED) if not args.spec else ""
+            body = curated or draft(ROOT, spec) or t("changelog.noUserFacingChanges")
             print(f"## [{heading}]\n\n{body}")
             return 0
         if not args.release:

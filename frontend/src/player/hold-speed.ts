@@ -14,7 +14,7 @@ export function installHoldSpeed(options: {
   };
   let hold: Hold | null = null;
   const blocked = (event: Event) => event.composedPath().some(node => node instanceof HTMLElement
-    && (node.isContentEditable || node.matches('input,textarea,select,[role="textbox"],[role="menu"],.vjs-peach-settings-menu,media-volume-slider')
+    && (node.isContentEditable || node.matches('input,textarea,select,[role="textbox"],[role="menu"],.vjs-peach-settings-menu,media-volume-slider,[data-player-stats]')
       || (node.getAttribute('role') === 'slider' && !node.closest('media-time-slider'))));
   const consume = (event: Event) => { event.preventDefault(); event.stopImmediatePropagation() };
   const reset = () => {

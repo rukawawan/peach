@@ -1,11 +1,12 @@
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
+import { act } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { queryClient } from '../../src/react/query';
 import { DiagnosticsPage } from '../../src/react/diagnostics/diagnostics-page';
 import { DIAGNOSTICS_KEY, type DiagnosticReport } from '../../src/react/diagnostics/diagnostics';
 import { ScrapingExport } from '../../src/react/diagnostics/scraping-export';
 import { publishLibraries } from '../../src/library-catalog';
-import { buttonNamed, click, fetchMock, linkNamed, mount, settle, type } from './render';
+import { buttonNamed, click, fetchMock, linkNamed, mount, pending, settle, type } from './render';
 
 notifyManager.setScheduler(notify => notify());
 afterEach(() => queryClient.clear());
@@ -28,9 +29,12 @@ it('刮削导出按番号启动任务并保留服务端失败原因', async () =
 });
 
 it('刮削记录显示后台进度并支持取消', async () => {
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/cancel')
-    ? { status: 'cancelled', job_id: 'export', kind: 'scraping' }
-    : { status: 'running', job_id: 'export', kind: 'scraping', stage: '整理来源快照', done: 2, total: 8 })));
+  const running = { status: 'running', job_id: 'export', kind: 'scraping', stage: '整理来源快照', done: 2, total: 8 };
+  const cancelled = pending<Response>();
+  let current = running;
+  const fetch = vi.fn(async (url: string) => url.endsWith('/cancel')
+    ? cancelled.answer
+    : new Response(JSON.stringify(current)));
   vi.stubGlobal('fetch', fetch);
   const host = await mount(<QueryClientProvider client={queryClient}><ScrapingExport /></QueryClientProvider>);
   await settle();
@@ -38,10 +42,51 @@ it('刮削记录显示后台进度并支持取消', async () => {
   expect(host.querySelector('[data-task-progress]')?.getAttribute('data-task-progress')).toBe('embedded');
   expect((buttonNamed('导出刮削记录', host) as HTMLButtonElement).disabled).toBe(true);
   await click(buttonNamed('取消导出', host));
-  await settle();
-  expect(host.textContent).toContain('导出已取消');
+  expect(buttonNamed('取消导出', host)?.getAttribute('aria-busy')).toBe('true');
+  expect(buttonNamed('取消导出', host)?.querySelector('.ui-geist-spinner')).not.toBeNull();
+  await cancelled.release(new Response(JSON.stringify({ ...running, status: 'cancelling', stage_code: 'diagnostics.cancelling' })));
+  expect(host.textContent).toContain('正在取消导出');
   expect(host.querySelector('[role="progressbar"]')).toBeNull();
+  expect((buttonNamed('取消导出', host) as HTMLButtonElement).disabled).toBe(true);
+  current = { ...running, status: 'cancelled' };
+  await act(async () => { await queryClient.refetchQueries() });
+  expect(host.textContent).toContain('导出已取消');
+  expect(host.querySelector('[data-task-progress]')).toBeNull();
   expect(fetch).toHaveBeenCalledWith('/api/diagnostics/exports/export/cancel', expect.objectContaining({ method: 'POST' }));
+});
+
+it('再次导出在启动期间隐藏旧回执，完成后只提供本次文件', async () => {
+  const old = { status: 'complete', kind: 'scraping', job_id: 'old', bytes: 65536,
+    download_url: '/api/diagnostics/exports/old/download' };
+  const next = { ...old, job_id: 'new', bytes: 131072, download_url: '/api/diagnostics/exports/new/download' };
+  const running = { status: 'running', kind: 'scraping', job_id: 'new' };
+  let current = old;
+  const started = pending<Response>();
+  const fetch = vi.fn(async (_url: string, options?: RequestInit) => options?.method === 'POST'
+    ? started.answer
+    : new Response(JSON.stringify(current)));
+  vi.stubGlobal('fetch', fetch);
+  const host = await mount(<QueryClientProvider client={queryClient}><ScrapingExport /></QueryClientProvider>);
+  await settle();
+  expect(linkNamed('下载已生成的文件', host)?.getAttribute('href')).toBe(old.download_url);
+  const button = buttonNamed('导出刮削记录', host) as HTMLButtonElement;
+  button.focus();
+  await click(button);
+  await click(button);
+  expect(document.activeElement).toBe(button);
+  expect(button.disabled).toBe(false);
+  expect(button.getAttribute('aria-busy')).toBe('true');
+  expect(button.querySelector('.ui-geist-spinner')).not.toBeNull();
+  expect(linkNamed('下载已生成的文件', host)).toBeNull();
+  expect(host.textContent).not.toContain('导出已完成');
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
+  await started.release(new Response(JSON.stringify(running)));
+  expect(button.hasAttribute('aria-busy')).toBe(false);
+  expect(host.querySelector('[data-activity="blocks"]')).not.toBeNull();
+  current = next;
+  await act(async () => { await queryClient.refetchQueries() });
+  expect(linkNamed('下载已生成的文件', host)?.getAttribute('href')).toBe(next.download_url);
+  expect(host.textContent).toContain('导出已完成 · 0.13 MiB');
 });
 const data = (): DiagnosticReport => ({ version: 'test', status: 'warning', checks: {
   media_mounts: { label: '媒体挂载', status: 'warning', reason: '来源不存在', action: '检查媒体目录', target: '/settings/library', details: {} },
@@ -102,6 +147,25 @@ it('请求失败保留原因和重试入口', async () => {
   expect(host.textContent).toContain('请在运行 Peach 的电脑上打开系统诊断');
   expect(buttonNamed('重新检查', host)).not.toBeNull();
 });
+
+it('重新检查等待响应时显示转圈、保留焦点且只发一次请求', async () => {
+  const refresh = pending<Response>();
+  const fetch = vi.fn(async (url: string) => url === '/api/diagnostics'
+    ? refresh.answer : new Response(JSON.stringify({ status: 'idle' })));
+  vi.stubGlobal('fetch', fetch);
+  const { host } = await open();
+  const button = buttonNamed('重新检查', host) as HTMLButtonElement;
+  button.focus();
+  await click(button);
+  await click(button);
+  expect(document.activeElement).toBe(button);
+  expect(button.disabled).toBe(false);
+  expect(button.getAttribute('aria-busy')).toBe('true');
+  expect(button.querySelector('.ui-geist-spinner')).not.toBeNull();
+  expect(fetch.mock.calls.filter(([url]) => url === '/api/diagnostics')).toHaveLength(1);
+  await refresh.release(new Response(JSON.stringify(data())));
+  expect(button.querySelector('.ui-geist-spinner')).toBeNull();
+});
 it('异常检查位于首区，其他检查可展开且没有重复条目', async () => {
   const report = data();
   report.checks.database = { label: '数据库', status: 'ok', reason: '可读取', action: '', target: null, details: {} };
@@ -117,6 +181,20 @@ it('异常检查位于首区，其他检查可展开且没有重复条目', asyn
   await click(summary!);
   expect(summary?.getAttribute('aria-expanded')).toBe('true');
   expect(summary?.parentElement?.textContent).toContain('数据库');
+});
+it('浏览器展开诊断正文后，同步摘要的展开状态', async () => {
+  const report = data();
+  report.checks.database = { label: '数据库', status: 'ok', reason: '可读取', action: '', target: null, details: {} };
+  const { host } = await open(report);
+  const summary = [...host.querySelectorAll('summary')].find(node => node.textContent === '其他检查 · 1 项');
+  const details = summary?.closest('details');
+  expect(summary?.getAttribute('aria-expanded')).toBe('false');
+  expect(details?.querySelector('[inert]')).toBeNull();
+  await act(async () => {
+    details!.open = true;
+    details!.dispatchEvent(new Event('toggle'));
+  });
+  expect(summary?.getAttribute('aria-expanded')).toBe('true');
 });
 it('恢复动作的名称与实际目标一致', async () => {
   const report = data();

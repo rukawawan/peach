@@ -68,6 +68,54 @@ class JavDBResourceTests(unittest.TestCase):
         with patch.object(source, '_page', side_effect=[Page('https://javdb.com/search', (card * 2).encode()), detail]):
             self.assertEqual(source.fetch('MIKR-023', session=None).url, detail.url)
 
+    def test_javdb_page_fallback_checks_both_editions_and_collects_the_regular_release(self):
+        self._check_fanza_page_fallback()
+
+    def test_javdb_page_fallback_keeps_conflicting_details_ambiguous(self):
+        for overrides in ({'code': 'EXM-002'}, {'actor': 'Different'}, {'runtime': 90},
+                          {'series': 'Other Series'}, {'title': 'Unrelated title'}):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(SourceFailure) as caught:
+                    self._check_fanza_page_fallback(overrides)
+                self.assertEqual(caught.exception.detail, 'identity_ambiguous')
+
+    def _check_fanza_page_fallback(self, overrides=None):
+        from urllib.parse import urlsplit
+
+        from peach.javdb_public import PUBLIC_API, PublicSourceUnavailable
+        from peach.sources.javdb import JavDBPublicSource
+
+        code, title = 'EXM-001', 'サンプル作品'
+        special_title = f'【FANZA限定】{title} 生写真3枚付き'
+        editions = [('Special', special_title), ('Regular', title)]
+        card = '<a href="/v/{}" class="box" title="{}"><strong>EXM-001</strong></a>'
+
+        def detail(title, code=code, actor='SampleActor', runtime=120, series='Sample Series'):
+            fields = [('番號', code), ('時長', f'{runtime} 分鍾'), ('系列', series),
+                      ('演員', f'<a href="/actors/{actor}" class="actor-female">演員甲</a>')]
+            return (f'<span class="origin-title">{title}</span>' + ''.join(
+                f'<div class="panel-block"><strong>{label}:</strong><span class="value">{value}</span></div>'
+                for label, value in fields)).encode()
+
+        for cards in (editions, editions[::-1]):
+            paths = []
+            bodies = {'/search': ''.join(card.format(*edition) for edition in cards).encode(),
+                      '/v/Special': detail(special_title),
+                      '/v/Regular': detail(**{'title': title, **(overrides or {})})}
+
+            def transport(request, timeout, max_bytes, *, paths=paths, bodies=bodies):
+                path = urlsplit(request.url).path
+                paths.append(path)
+                return HttpResponse(200, {}, bodies[path])
+
+            with patch.object(PUBLIC_API, 'movie', side_effect=PublicSourceUnavailable('errors.javdbPublic.unavailable')), \
+                    patch('peach.sources.javdb.SEARCH_LIMITER.wait'):
+                record = JavDBPublicSource().query(code, session=Session(transport))
+            self.assertEqual(paths, ['/search', *(f'/v/{identity}' for identity, _ in cards)])
+            self.assertEqual((record.title, record.source_url, record.provenance),
+                             (title, 'https://javdb.com/v/Regular', 'javdb-page'))
+
+
     def test_categories_keep_raw_words_and_deduplicate_links_after_identity_check(self):
         from peach.sources.javdb import JavDBSource
         from peach.metadata import extract_peach_fields

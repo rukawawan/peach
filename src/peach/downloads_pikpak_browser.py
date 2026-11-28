@@ -22,30 +22,23 @@ token 去刷新，Peach 也不会把旧 token 当成新登录读回来。只有 
 """
 from __future__ import annotations
 
-import atexit
 import json
 import logging
-import threading
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from .browser_transport import BrowserLaunchFailed, BrowserUnavailable, _Browser, find_browser
+from .attended_browser_login import AttendedBrowserLogin, WAIT_SECONDS
+from .attended_browser_login import CANCELLED as CANCELLED, DONE as DONE, FAILED as FAILED, IDLE as IDLE, TIMEOUT as TIMEOUT, WAITING as WAITING
+from .browser_transport import BrowserLaunchFailed, _Browser, find_browser
 from .downloads_pikpak import SESSION_LOCK, new_device_id
-from .user_messages import UserValueError, message_fields, nested_message
 
 LOGGER = logging.getLogger(__name__)
 
 PROFILE_DIRNAME = "browser-pikpak"
 LOGIN_URL = "https://mypikpak.com/drive/"
-#: 等用户登录的上限。到点关窗口，记为超时。
-WAIT_SECONDS = 600.0
-POLL_SECONDS = 1.0
 CREDENTIALS_PREFIX = "credentials_"
-
-IDLE, WAITING, DONE, CANCELLED, TIMEOUT, FAILED = "idle", "waiting", "done", "cancelled", "timeout", "failed"
 
 #: 每个新文档里先于网页脚本运行。同一个标签页里只在 mypikpak.com 系的第一个文档删一次 `credentials_*`：
 #: 标记放在 sessionStorage，登录后跳回来的文档不再删，刚登录写下的凭据才留得住。
@@ -118,132 +111,37 @@ def _attended_browser(executable: str, profile: Path) -> _Browser:
     return _Browser(executable, profile, flags, attended=True)
 
 
-class BrowserLogin:
-    """一次浏览器登录的状态与后台线程。同一时间只开一个登录窗口。
+class BrowserLogin(AttendedBrowserLogin):
+    """复用专用登录窗口，读取 PikPak 网页的本机凭据。"""
 
-    `status()` 回 `state` 与 `message`（按 zh-CN 渲染的一句，配 `message_code`、`message_params` 给页面取译文）：
-    `idle`、`waiting`、`done`、`cancelled`、`timeout`、`failed`。
-    状态带本轮 id，被取消顶掉的线程不再改状态。不用 `jobs.BackgroundJob`：那一套带任务中心与活动页的
-    记账，登录等待不是馆藏任务。
-    """
+    login_url = LOGIN_URL
+    message_namespace = "labels.downloadsPikpakBrowser"
+    browser_missing_code = "errors.downloadsPikpakBrowser.browserMissing"
+    thread_name = "PeachPikPakLogin"
+    logger = LOGGER
 
     def __init__(self, profile: Path, persist: Callable[[dict], None], *,
                  find: Callable[[], str | None] = find_browser,
                  browser: Callable[[str, Path], _Browser] = _attended_browser,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
                  wait_seconds: float = WAIT_SECONDS, on_done: Callable[[], None] | None = None):
-        self.profile = Path(profile)
-        self.persist = persist
-        self._find, self._browser = find, browser
-        self._clock, self._sleep = clock, sleep
-        self.wait_seconds = wait_seconds
-        self.on_done = on_done
-        self._lock = threading.Lock()
-        self._state = {"id": "", "state": IDLE, "message": ""}
-        self._cancel = threading.Event()
-        self._thread: threading.Thread | None = None
-        atexit.register(self.close)
+        super().__init__(profile, persist, find=find, browser=browser, clock=clock, sleep=sleep,
+                         wait_seconds=wait_seconds, on_done=on_done)
 
-    def available(self) -> bool:
-        return self._find() is not None
+    def _prepare_browser(self, browser: _Browser) -> None:
+        assert browser.socket is not None
+        browser.socket.call("Page.addScriptToEvaluateOnNewDocument", source=_FORGET_ON_FIRST_DOCUMENT)
 
-    def status(self) -> dict:
-        with self._lock:
-            return self._snapshot()
+    def _read_capture(self, browser: _Browser) -> dict | None:
+        raw = browser.evaluate(_READ_SCRIPT, timeout=10)
+        return parse_capture(json.loads(raw)) if raw else None
 
-    def start(self) -> dict:
-        """拉起登录窗口。已经在等就回当前状态，不开第二个。没有浏览器时抛 ValueError。"""
-        executable = self._find()
-        if executable is None:
-            raise UserValueError("errors.downloadsPikpakBrowser.browserMissing")
-        with self._lock:
-            if self._state["state"] == WAITING:
-                return self._snapshot()
-            run_id = uuid.uuid4().hex
-            self._state = {"id": run_id, "state": WAITING, **message_fields("labels.downloadsPikpakBrowser.waiting")}
-            self._cancel = threading.Event()
-            cancel = self._cancel
-            self._thread = threading.Thread(target=self._run, args=(run_id, executable, cancel),
-                                            name="PeachPikPakLogin", daemon=True)
-            thread = self._thread
-            result = self._snapshot()
-        thread.start()
-        return result
-
-    def _snapshot(self) -> dict:
-        return {key: value for key, value in self._state.items() if key != "id"}
-
-    def cancel(self) -> dict:
-        """关掉在等的登录窗口。没有在等就原样回状态。"""
-        with self._lock:
-            if self._state["state"] == WAITING:
-                self._cancel.set()
-                self._state = {"id": self._state["id"], "state": CANCELLED, **message_fields("labels.downloadsPikpakBrowser.cancelled")}
-            return self._snapshot()
-
-    def close(self) -> None:
-        self.cancel()
-        thread = self._thread
-        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=10)
-
-    def _finish(self, run_id: str, state: str, code: str, params: dict | None = None) -> None:
-        with self._lock:
-            if self._state["id"] == run_id and self._state["state"] == WAITING:
-                self._state = {"id": run_id, "state": state, **message_fields(code, params)}
-
-    def _run(self, run_id: str, executable: str, cancel: threading.Event) -> None:
-        browser = None
-        try:
-            browser = self._browser(executable, self.profile)
-            browser.start()
-            assert browser.socket is not None
-            browser.socket.call("Page.addScriptToEvaluateOnNewDocument", source=_FORGET_ON_FIRST_DOCUMENT)
-            browser.navigate(LOGIN_URL)
-            browser.place(visible=True)
-            self._finish(run_id, *self._wait(browser, cancel))
-        except BrowserUnavailable as error:
-            self._finish(run_id, FAILED, "labels.downloadsPikpakBrowser.notOpened", {"error": nested_message(error)})
-        except Exception as error:  # noqa: BLE001 —— 线程里的任何异常都要变成可轮询的状态，否则页面一直等
-            LOGGER.error("PikPak browser login error: %s", type(error).__name__)
-            self._finish(run_id, FAILED, "labels.downloadsPikpakBrowser.failed", {"type": type(error).__name__})
-        finally:
-            if browser is not None:
-                browser.close()
-        if self.status()["state"] == DONE and self.on_done is not None:
-            self.on_done()
-
-    def _wait(self, browser: _Browser, cancel: threading.Event) -> tuple[str, str, dict]:
-        """等到登录完成、取消、窗口关掉或超时，回 (状态, 说明的 code, 参数)。"""
-        deadline = self._clock() + self.wait_seconds
-        while True:
-            if cancel.is_set():
-                return CANCELLED, "labels.downloadsPikpakBrowser.cancelled", {}
-            if not browser.alive():
-                return CANCELLED, "labels.downloadsPikpakBrowser.windowClosed", {}
-            try:
-                raw = browser.evaluate(_READ_SCRIPT, timeout=10)
-            except TimeoutError:
-                raw = None
-            except RuntimeError:
-                # 页面跳转的那一瞬执行环境被销毁，脚本会报错；这是还在加载，不是窗口关了。
-                raw = None
-            except (OSError, ValueError):
-                return CANCELLED, "labels.downloadsPikpakBrowser.windowClosed", {}
-            if raw:
-                values = parse_capture(json.loads(raw))
-                if values is not None:
-                    self._take(browser, values)
-                    return DONE, "labels.downloadsPikpakBrowser.done", {}
-            if self._clock() >= deadline:
-                minutes = int(self.wait_seconds // 60)
-                return TIMEOUT, "labels.downloadsPikpakBrowser.timeout", {"minutes": minutes}
-            self._sleep(POLL_SECONDS)
-
-    def _take(self, browser: _Browser, values: dict) -> None:
-        """先存，再从页面里删掉凭据。删失败只记键名级别的日志：浏览器随后就关，页面不会再刷新它。"""
+    def _store_capture(self, values: dict) -> bool:
         with SESSION_LOCK:
-            self.persist(values)
+            return super()._store_capture(values)
+
+    def _after_capture(self, browser: _Browser) -> None:
+        """刷新凭据只由 Peach 持有，持久浏览器 profile 里清掉网页的副本。"""
         try:
             browser.evaluate(_FORGET_SCRIPT, timeout=10)
         except (OSError, RuntimeError, ValueError):

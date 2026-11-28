@@ -2,8 +2,7 @@
  *
  * 两张图回答的是不同的整体，所以分开画、各有各的总数。各类占比用 EvilCharts 的环形图，
  * 中间写总量；磁盘用 EvilCharts 的横向百分比堆叠柱，一根柱子三段：Peach、磁盘上的其他文件、可用。
- * 颜色跟着类别走，不跟着排名走：某一类清理后变小，它的颜色不变。图表色只有九档，
- * 日志、登录状态与「其他」通常最小，图上并进灰色的「其余」，列表里仍逐项列出。
+ * 颜色跟着类别走，不跟着排名走。未分配图表色的类别合并为「其余」，列表里仍逐项列出。
  * 差异登记在 `../evilcharts/ORIGIN.md`。 */
 import { fmtSize } from '@peach/legacy/core';
 
@@ -20,15 +19,15 @@ import { t } from '../../i18n';
 const CATEGORY_COLORS: Record<string, string> = {
   database: 'var(--color-chart-1)', backups: 'var(--color-chart-2)', playback: 'var(--color-chart-3)',
   thumbnails: 'var(--color-chart-4)', previews: 'var(--color-chart-5)', downloads: 'var(--color-chart-6)',
-  sources: 'var(--color-chart-7)', records: 'var(--color-chart-8)', tools: 'var(--color-chart-9)',
+  follow_snapshots: 'var(--color-chart-7)', records: 'var(--color-chart-8)', project_archives: 'var(--color-chart-9)',
 };
 const REST_COLOR = 'var(--color-text-tertiary)';
 
 /** 列表里那一格色块的类名，与图上同色。类名写成整串，Tailwind 扫得到。 */
 export const CATEGORY_SWATCH: Record<string, string> = {
   database: 'bg-chart-1', backups: 'bg-chart-2', playback: 'bg-chart-3', thumbnails: 'bg-chart-4',
-  previews: 'bg-chart-5', downloads: 'bg-chart-6', sources: 'bg-chart-7', records: 'bg-chart-8',
-  tools: 'bg-chart-9',
+  previews: 'bg-chart-5', downloads: 'bg-chart-6', follow_snapshots: 'bg-chart-7', records: 'bg-chart-8',
+  project_archives: 'bg-chart-9',
 };
 export const REST_SWATCH = 'bg-text-tertiary';
 

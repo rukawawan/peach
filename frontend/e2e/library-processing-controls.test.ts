@@ -41,9 +41,14 @@ describe('扫描与采集控制', () => {
       const picker = page.getByRole('dialog', { name: '只扫描此目录', exact: true });
       const confirm = picker.getByRole('button', { name: '只扫描此目录', exact: true });
       assert.equal(await confirm.isEnabled(), false);
-      await picker.getByRole('button', { name: /^R:\\Media/ }).click();
-      await picker.getByRole('button', { name: 'Nested', exact: true }).click();
-      await picker.getByText(child, { exact: true }).waitFor();
+      const tree = picker.getByRole('treegrid');
+      const rootFolder = tree.getByRole('row').filter({ hasText: root });
+      await rootFolder.click();
+      const nested = tree.getByRole('row').filter({ hasText: 'Nested' });
+      await nested.click();
+      await page.waitForFunction(path => document.querySelector('[data-scan-directory]')?.textContent === path, child);
+      assert.equal(await rootFolder.getAttribute('aria-expanded'), 'true');
+      assert.equal(await nested.getAttribute('aria-selected'), 'true');
       assert.deepEqual(writes, []);
       await confirm.click();
       await picker.waitFor({ state: 'hidden' });
@@ -241,8 +246,8 @@ describe('扫描与采集控制', () => {
         assert.equal(await menu.locator('svg').count(), 0);
         assert.equal(await menu.getByRole('button').count(), 9);
         assert.equal(await menu.getByRole('group', { name: '日常同步', exact: true }).getByRole('button').count(), 3);
-        assert.equal(await menu.getByRole('group', { name: '全库维护', exact: true }).getByRole('button').count(), 6);
-        for (const label of ['仅发现新增文件', '只扫描此目录', '补全待处理影片', '同步所有媒体库', '仅扫描文件', '补全资料与预览', '仅补全影片资料', '仅补全封面', '仅补全预览图']) {
+        assert.equal(await menu.getByRole('group', { name: '媒体库维护', exact: true }).getByRole('button').count(), 6);
+        for (const label of ['仅发现新增文件', '只扫描此目录', '补全待处理影片', '同步所有媒体库', '扫描全部文件', '补全资料与预览', '仅补全影片资料', '仅补全封面', '仅补全预览图']) {
           await menu.getByText(label, { exact: true }).waitFor();
         }
         await menu.getByText('为已入库的视频生成九宫格，跳过流量保护目录', { exact: true }).waitFor();
@@ -513,14 +518,14 @@ describe('扫描与采集控制', () => {
         assert.ok(writes.some(body => body.action === 'set_speed' && body.speed_mode === 'high'));
         assert.match(await speed.innerText(), /最慢[\s\S]*最快[\s\S]*占用少[\s\S]*占用多/);
         await page.locator('[data-effort-flow]').waitFor();
-        const flow = page.locator('.processing-flow-outer');
-        const blue = await flow.evaluate(el => getComputedStyle(el).fill);
+        const flow = speed.locator('[data-effort-flow] linearGradient').first().locator('stop').last();
+        const blue = await flow.evaluate(el => getComputedStyle(el).stopColor);
         const highColor = await highSpeed.evaluate(el => getComputedStyle(el).color);
         assert.equal(await scale.locator(':scope > span[data-selected]').evaluate(el => getComputedStyle(el).color), highColor);
         const readFeedback = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--feedback-success').trim());
         const feedbackBlue = await readFeedback();
         await page.evaluate(() => { document.documentElement.dataset.accent = 'emerald' });
-        const emerald = await flow.evaluate(el => getComputedStyle(el).fill);
+        const emerald = await flow.evaluate(el => getComputedStyle(el).stopColor);
         assert.notEqual(emerald, blue, '最高档流光跟随站点强调色');
         assert.notEqual(await highSpeed.evaluate(el => getComputedStyle(el).color), highColor, '全速入口跟随站点强调色');
         assert.equal(await scale.locator(':scope > span[data-selected]').evaluate(el => getComputedStyle(el).color),

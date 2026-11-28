@@ -14,7 +14,9 @@ import { Checkbox } from '@/components/base/checkbox/checkbox';
 import { AsyncText } from '../components/async-text';
 import { TabCount } from '../components/board-tabs';
 import { cardClass } from '../components/card';
-import { FilterGlassRows, FilterPill } from '../components/filter-glass';
+import { FilterGlassRows, FilterPill, FilterSearch, FilterToolbarControls } from '../components/filter-glass';
+import { SUGGEST_KIND_OF, librarySuggest } from '../search/library-suggest';
+import { FilterDropdown } from '../components/filter-dropdown';
 import { SEGMENTED_GLASS_TRACK, SEGMENT_GLASS } from '../components/segmented';
 import { SelectionDock } from '../components/selection-dock';
 import { spriteGlyph } from '../components/sprite-glyph';
@@ -24,6 +26,7 @@ import type { Favorite } from '../library-shortcuts/library-shortcuts';
 import { tagColorKey, type IndexTag, type TagView } from './index-data';
 import { t } from '../../i18n';
 import { useWorkContextMenu, type WorkContextOperation } from '../components/work-context-menu';
+import { useRectangleSelection, type RectangleCommit } from '../components/rectangle-selection';
 
 export interface TagEntry extends IndexTag {
   label: string;
@@ -36,6 +39,8 @@ export interface TagActions {
   edit?(tag: string): void;
   picked: ReadonlySet<string>;
   press(tag: string): void;
+  selecting?: boolean;
+  rectangle?: RectangleCommit | undefined;
 }
 
 const Dot = () => <span aria-hidden data-tag-dot="" className="size-1.75 flex-none rounded-full" />;
@@ -70,9 +75,9 @@ function AlphaTag({ tag, actions }: { tag: TagEntry; actions: TagActions }) {
   const context = useTagContext();
   const pressed = actions.picked.has(tag.k);
   return (
-    <div className="flex min-w-0 items-center gap-1" {...context.events(tag, actions)}>
+    <div data-rectangle-key={tag.k} className="flex min-w-0 items-center gap-1" {...context.events(tag, actions)}>
     {context.menu}
-    <button type="button" data-alpha-tag="" data-k={tag.k} data-tag-cat={tagColorKey(actions.online, tag.cat)}
+    <button type="button" data-alpha-tag="" data-rectangle-trigger="" data-k={tag.k} data-tag-cat={tagColorKey(actions.online, tag.cat)}
       aria-pressed={pressed} title={tag.label} onClick={() => actions.press(tag.k)}
       className="flex h-9 min-w-0 flex-1 cursor-pointer items-center gap-2.25 rounded-lg px-2.5 text-left text-body-regular text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-border-focus-ring">
       <Dot />
@@ -88,8 +93,9 @@ function AlphaTag({ tag, actions }: { tag: TagEntry; actions: TagActions }) {
 /** 字母表：每个首字一张卡，字头是卡的标题，右边挂这一组有几个。`data-alpha-group` 是浮层
  *  下排那排跳转键的落点，卡顶给吸顶的浮层让出位置。 */
 export function TagAlphabet({ groups, actions }: { groups: [string, TagEntry[]][]; actions: TagActions }) {
+  const rectangle = useRectangleSelection(actions.rectangle, { selecting: Boolean(actions.selecting), start: '[data-alpha-group]' });
   return (
-    <div data-alphabet="" className="flex flex-col gap-4">
+    <div data-alphabet="" className="flex flex-col gap-4" {...rectangle}>
       {groups.map(([letter, tags], at) => (
         <section key={letter} data-alpha-group={at}
           className={cardClass({ radius: 'plain', padding: 'none', className: 'px-5 pt-4 pb-3' })}>
@@ -112,13 +118,14 @@ const NBSP = String.fromCharCode(0xa0);
  *  所以用不断行的那一个。 */
 export function TagCloud({ tags, actions }: { tags: TagEntry[]; actions: TagActions }) {
   const context = useTagContext();
+  const rectangle = useRectangleSelection(actions.rectangle, { selecting: Boolean(actions.selecting) });
   return (
-    <div data-tag-cloud="" className="flex flex-wrap gap-1.75">
+    <div data-tag-cloud="" className="flex flex-wrap gap-1.75" {...rectangle}>
       {context.menu}
       {tags.map((tag) => (
-        <span key={tag.k} data-tag-token="" data-tag-cat={tagColorKey(actions.online, tag.cat)} {...context.events(tag, actions)}
+        <span key={tag.k} data-tag-token="" data-rectangle-key={tag.k} data-tag-cat={tagColorKey(actions.online, tag.cat)} {...context.events(tag, actions)}
           className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-lg border p-1">
-        <button type="button" data-tag-chip="" data-k={tag.k}
+        <button type="button" data-tag-chip="" data-rectangle-trigger="" data-k={tag.k}
           data-tag-cat={tagColorKey(actions.online, tag.cat)} aria-pressed={actions.picked.has(tag.k)}
           onClick={() => actions.press(tag.k)}
           className="inline-flex max-w-full min-w-0 cursor-pointer items-center rounded-lg px-2 py-0.5 text-body-2-regular text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-border-focus-ring">
@@ -146,9 +153,13 @@ function statusLabel(name: string, count: number | null | undefined, counted: (c
   return counted(count);
 }
 
-/** 筛选浮层：上排类型药丸，下排读数、按首字跳转与视图切换。只摆数得到的那几类。 */
+const TAG_SUGGEST = { key: 'tags', load: librarySuggest([SUGGEST_KIND_OF.tags!]) };
+
+/** 筛选浮层：上排类型药丸，下排读数、查找、按首字跳转与视图切换。只摆数得到的那几类。 */
 export function TagFilters(
-  { categories, category, online, readout, letters, view, onCategory, onJump, onView, status, actions }: {
+  { categories, category, online, readout, letters, view, onCategory, onJump, onView, status, actions, search }: {
+    /** 下排的查找：标签名里含这个词的才留下。 */
+    search?: { value: string; onQuery(q: string): void };
     categories: readonly (readonly [string, string])[];
     category: string;
     online: boolean;
@@ -168,9 +179,8 @@ export function TagFilters(
 ) {
   const alphaScroll = useHorizontalScroller<HTMLElement>();
   return (
-    <FilterGlassRows label={t('catalog:tagFilters.label')} topLabel={t('catalog:tagFilters.tagType')}
-      top={<>
-        {status ? <div role="group" aria-label={t('catalog:tagFilters.tagStatus')} className="flex flex-none items-center gap-1.75 border-r border-(--glass-low) pr-3">
+    <FilterGlassRows label={t('catalog:tagFilters.label')} topLabel={t('catalog:tagFilters.tagStatus')}
+      top={status ? <div className="flex flex-none items-center gap-1.75">
           {([[false, t('catalog:tagFilters.inUse')], [true, statusLabel(t('catalog:tagFilters.hidden'), status.hiddenCount,
             (count) => t('catalog:tagFilters.hiddenCount', { count }))]] as const).map(([hidden, label]) => <FilterPill key={String(hidden)}
             data-tag-pill="" data-tag-cat="all" pressed={!status.blocked && status.hidden === hidden} onPress={() => status.onChange(Boolean(hidden))}>{label}</FilterPill>)}
@@ -178,17 +188,13 @@ export function TagFilters(
             onPress={status.onBlocked}>{statusLabel(t('catalog:tagFilters.blockedContent'), status.blockedCount,
               (count) => t('catalog:tagFilters.blockedCount', { count }))}</FilterPill> : null}
         </div> : null}
-        {categories.map(([key, label]) => (
-        <FilterPill key={key} data-tag-pill="" data-tag-cat={key === 'all' ? 'all' : tagColorKey(online, key)}
-          pressed={category === key} onPress={() => onCategory(key)}>
-          <Dot />{label}
-        </FilterPill>
-      ))}</>}
       bottom={<>
         <span data-index-readout="" className="flex-none text-caption-1-regular leading-5 whitespace-nowrap text-text-secondary tabular-nums">
           <AsyncText text={readout} busy={readout === undefined}
             placeholder={<span aria-hidden className="skeleton-sheen inline-block h-3.5 w-20 rounded-md" />} />
         </span>
+        {search ? <FilterSearch label={t('catalog:tagManager.filterTags')} value={search.value} onQuery={search.onQuery}
+          suggest={online ? undefined : TAG_SUGGEST} /> : null}
         {actions}
         {letters.length > 1 ? (
           <nav ref={alphaScroll} aria-label={t('catalog:tagFilters.jumpToLetter')} data-alpha-jump=""
@@ -201,8 +207,8 @@ export function TagFilters(
             ))}
           </nav>
         ) : null}
-        <RadioGroup aria-label={t('catalog:tagFilters.tagView')} orientation="horizontal" value={view}
-          onChange={(next) => onView(next as TagView)} className={`ml-auto ${SEGMENTED_GLASS_TRACK}`}>
+        <FilterToolbarControls tools={<RadioGroup aria-label={t('catalog:tagFilters.tagView')} orientation="horizontal" value={view}
+          onChange={(next) => onView(next as TagView)} className={SEGMENTED_GLASS_TRACK}>
           {VIEWS.map(([value, label, symbol]) => {
             const Glyph = spriteGlyph(symbol);
             return (
@@ -211,7 +217,11 @@ export function TagFilters(
               </Radio>
             );
           })}
-        </RadioGroup>
+        </RadioGroup>} fields={<FilterDropdown id="index-tag-category" label={t('catalog:tagFilters.tagType')}
+          active={category !== 'all'} searchable={false}
+          choices={categories.map(([id, label]) => ({ id, label, selected: category === id,
+            leading: <span className="flex shrink-0 items-center" data-tag-cat={id === 'all' ? 'all' : tagColorKey(online, id)}><Dot /></span> }))}
+          onSelect={onCategory} onClear={category === 'all' ? undefined : () => onCategory('all')} />} sorts={null} />
       </>}
     />
   );

@@ -26,6 +26,7 @@
 @import "./catalog-filter/catalog-filter.css";
 @import "./catalog-folders/catalog-folders.css";
 @import "./search/search.css";
+@import "./search/assistant-options.css";
 @import "./entity-body/entity-body.css";
 @import "./follow-feed/follow-feed.css";
 @import "./jav/jav.css";
@@ -33,7 +34,6 @@
 @import "./item-detail/item-detail.css";
 @import "./item-detail/item-edit.css";
 @import "./jav-detail/jav-detail.css";
-@import "./photo-lightbox/photo-lightbox.css";
 @import "./index/index-people.css";
 @import "../player/player.css";
 @import "../player/subtitles.css";
@@ -331,7 +331,8 @@
  * 旧版两处都是首页 `.board-filter-frame` 那一副，几何与饱和度都一样。 */
 .peach-react :is([data-review-filter], [data-filter-glass]) {
   top: calc(var(--topH) + 8px);
-  border-radius: 22px;
+  /* 与里面的键同心：键圆角 8px、离浮层上沿 8px，浮层圆角取 8 + 8。 */
+  border-radius: 16px;
   backdrop-filter: var(--glass-optic, blur(22px)) saturate(160%) var(--glass-lume);
   -webkit-backdrop-filter: var(--glass-optic, blur(22px)) saturate(160%) var(--glass-lume);
   isolation: isolate;
@@ -520,7 +521,7 @@ html:has([data-selection-dock]) { scroll-padding-bottom: var(--selection-dock-sp
 }
 .peach-react [data-mix-avatars] > * + * { margin-left: -22px; }
 /* 没有图的一枚只有居中的首字母，叠到 -22px 时字被左边那枚盖掉大半：这一枚只让出 8px，字整个露出来。 */
-.peach-react [data-mix-avatars] > * + :not(:has(img)) { margin-left: -8px; }
+.peach-react [data-mix-avatars] > * + :not(:has(img:not([hidden]))) { margin-left: -8px; }
 .peach-react [data-mix-avatars] > :nth-child(1) { z-index: 5; }
 .peach-react [data-mix-avatars] > :nth-child(2) { z-index: 4; }
 .peach-react [data-mix-avatars] > :nth-child(3) { z-index: 3; }
@@ -846,4 +847,14 @@ html:has([data-selection-dock]) { scroll-padding-bottom: var(--selection-dock-sp
 .bui-table.bui-table-sm th,
 .bui-table.bui-table-sm td {
   @apply px-2.5 py-1.5 text-body-2-medium;
+}
+
+@utility modal-drawer-width {
+  max-width: min(20rem, calc(100vw - 2rem));
+}
+@utility assistant-message-width {
+  max-width: 88%;
+}
+@utility assistant-library-width {
+  max-width: 55%;
 }

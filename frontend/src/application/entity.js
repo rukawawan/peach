@@ -21,7 +21,7 @@ import { JAV_LAYOUTS, PHOTO_LAYOUTS, javLayout, photoLayout, photoSize, storePho
 import { dropBars } from './../catalog-bars';
 import { indexState, openFollowAuthorFromIndex } from './index.js';
 import { followState, pushFollowFeed } from './follow.js';
-import { toggleFollowSelection } from './selection.js';
+import { selectCardRectangle, toggleFollowSelection } from './selection.js';
 import { applyDensity, paintPhotoSizeButton } from './../appearance/density';
 import { applicationEffects } from './effects';
 import { entitySkeletonHtml } from './../entity-skeleton';
@@ -240,7 +240,7 @@ entityState.entityPageHelpers = {
 };
 /* 在线视图的多选认关注条目：和关注页同一份选择集（`followSelected`），和作品区的选择分开。 */
 entityState.entityFollowActions = {...followState.followFeedActions,
-  route:()=>{},shuffle:()=>{},loaded:()=>{},toggleSelection:(id,range)=>toggleFollowSelection(id,range)};
+  route:()=>{},shuffle:()=>{},loaded:()=>{},toggleSelection:(id,range)=>toggleFollowSelection(id,range),selectRectangle:selectCardRectangle};
 entityState.SOURCE_HINTS = {
   'source offline':t('shell:sourceTools.libraryOffline'),
   'source not mapped':t('shell:sourceTools.notMapped'),

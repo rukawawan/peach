@@ -27,6 +27,29 @@ class SystemLanguageTests(unittest.TestCase):
         with mock.patch.object(module, "_candidates", return_value=iter(["ja_JP", "de_DE"])):
             self.assertIsNone(module.system_language())
 
+    def test_macos_uses_its_preferred_languages_before_the_posix_locale(self):
+        foundation = mock.Mock()
+        cases = [
+            (["zh-Hans-CN", "en-US"], "en_US.UTF-8", "zh-CN"),
+            (["en-US", "zh-Hans-CN"], "zh_CN.UTF-8", "en"),
+            (["de-DE", "zh-Hant-TW", "en-US"], "en_US.UTF-8", "zh-CN"),
+            (["de-DE"], "zh_CN.UTF-8", None),
+        ]
+        with mock.patch.object(module.sys, "platform", "darwin"), \
+                mock.patch.dict(module.sys.modules, {"Foundation": foundation}):
+            for preferred, posix, expected in cases:
+                with self.subTest(preferred=preferred, posix=posix), \
+                        mock.patch.dict(module.os.environ, {"LANG": posix}, clear=True):
+                    module.system_language.cache_clear()
+                    foundation.NSLocale.preferredLanguages.return_value = preferred
+                    self.assertEqual(module.system_language(), expected)
+
+    def test_macos_falls_back_to_the_posix_locale_without_foundation(self):
+        with mock.patch.object(module.sys, "platform", "darwin"), \
+                mock.patch.dict(module.sys.modules, {"Foundation": None}), \
+                mock.patch.dict(module.os.environ, {"LANG": "zh_CN.UTF-8"}, clear=True):
+            self.assertEqual(module.system_language(), "zh-CN")
+
     def test_environment_locales_are_read_and_the_c_locale_is_ignored(self):
         environment = {"LC_ALL": "C", "LANGUAGE": "fr:en_GB", "LANG": "zh_CN.UTF-8"}
         with mock.patch.object(module.sys, "platform", "linux"), mock.patch.dict(module.os.environ, environment, clear=True), \

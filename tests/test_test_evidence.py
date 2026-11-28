@@ -50,22 +50,26 @@ class ParallelShardTests(unittest.TestCase):
         for _, plan, jobs in batches[1:-1]:
             self.assertEqual((len(plan), len(plan[0]), jobs), (1, 1, 1))
 
-    def test_failed_gate_stops_serial_and_parallel_behavior_tests(self):
-        names = [Path('test_frontend_preflight.py'), Path('test_web_e2e.py')]
+    def test_failed_gate_still_reports_frontend_failures_before_stopping_later_tests(self):
+        names = [Path('test_frontend_preflight.py'), Path('test_frontend_build.py'),
+                 Path('test_web_e2e.py'), Path('test_web_ui.py')]
+        expected = [['test_frontend_preflight.py'], ['test_frontend_build.py']]
         for jobs in (1, 4):
+            results = [(False, 2, []), (False, 3, [])]
             with self.subTest(jobs=jobs), mock.patch.object(runner, 'selected_files', return_value=names), \
-                    mock.patch.object(runner, 'run_shards', return_value=(False, 2, [])) as execute, \
-                    mock.patch.object(runner, 'run_serial_suite', return_value=(False, 2, [])) as serial, \
-                    mock.patch.object(runner, 'save_file_seconds'), mock.patch.object(runner.test_history, 'append'), \
+                    mock.patch.object(runner, 'run_shards', side_effect=results) as execute, \
+                    mock.patch.object(runner, 'run_serial_suite', side_effect=results) as serial, \
+                    mock.patch.object(runner, 'save_file_seconds'), \
+                    mock.patch.object(runner.test_history, 'append') as history, \
                     redirect_stdout(io.StringIO()):
-                self.assertEqual(runner.run_local_suite(('web',), jobs), (False, 2, []))
+                self.assertEqual(runner.run_local_suite(('web',), jobs), (False, 5, []))
+            self.assertEqual(history.call_args.kwargs['files'], ['test_frontend_build', 'test_frontend_preflight'])
             if jobs == 1:
-                serial.assert_called_once()
-                self.assertEqual(serial.call_args.args[1], {Path('test_frontend_preflight.py')})
+                self.assertEqual([call.args[1] for call in serial.call_args_list],
+                                 [{Path(file) for file in stage} for stage in expected])
                 execute.assert_not_called()
             else:
-                execute.assert_called_once()
-                self.assertEqual(execute.call_args.kwargs['plan'], [['test_frontend_preflight.py']])
+                self.assertEqual([call.kwargs['plan'][0] for call in execute.call_args_list], expected)
 
     def test_phase_timings_include_failed_work(self):
         timings = {}
@@ -328,6 +332,83 @@ class ReceiptFixture:
 
 
 class ReceiptTests(ReceiptFixture, unittest.TestCase):
+    def locale_fixture(self):
+        name = 'resources/locales/zh-CN/server.json'
+        repo = seed_repository(self.root / 'locale-repo', {
+            name: '{"release": {"notice": "通知文本", "unrelated": "正常文字"}, "error": {"query": "查询失败"}}\n',
+            'tests/test_tray.py': 'KEY = "server:release.notice"\n',
+            'tests/test_metadata_seesaa.py': 'EXPECTED = "上一次查询失败"\n',
+            'tests/test_metadata_library_extra.py': 'KEY = "server:release.unrelated"\n',
+            'tests/test_cli.py': 'VALUE = 1\n',
+            'tests/test_web_ui.py': 'VALUE = 1\n',
+        }, 'seed locale records')
+        return repo, name
+
+    def locale_coverage(self, repo, records, manifest):
+        context = {**self.context, 'manifest': manifest}
+        units = {path.name for path in runner.selected_files('full', root=repo)}
+        return test_resume.combine(repo, records, context, units,
+                                   lambda paths, **kwargs: runner.scopes_for_changes(paths, root=repo, **kwargs),
+                                   lambda scope: runner.selected_files(scope, root=repo))
+
+    def test_locale_resume_compares_the_distinct_entries_in_each_baseline(self):
+        repo, name = self.locale_fixture()
+        current = evidence.manifest(repo)
+        locale = repo / name
+        proof = {path.name: self.unit() for path in runner.selected_files('full', root=repo)}
+        locale.write_text('{"release": {"unrelated": "正常文字"}, "error": {"query": "查询失败"}}\n',
+                          encoding='utf-8')
+        older = self.record(proof, manifest=evidence.manifest(repo))
+        locale.write_text('{"release": {"notice": "通知文本", "unrelated": "正常文字"}, '
+                          '"error": {"query": "上一次查询失败{{name}}"}}\n', encoding='utf-8')
+        newer = self.record({name: self.unit(offset=1) for name in proof}, manifest=evidence.manifest(repo))
+        locale.write_text(current['locale_sources'][name], encoding='utf-8', newline='')
+
+        kept = self.locale_coverage(repo, [older, newer], current)
+        self.assertEqual(kept, {
+            'test_tray.py': newer['units']['test_tray.py'],
+            'test_metadata_seesaa.py': older['units']['test_metadata_seesaa.py'],
+            'test_metadata_library_extra.py': newer['units']['test_metadata_library_extra.py'],
+        })
+        self.assertEqual(self.locale_coverage(repo, [newer, older], current), kept)
+
+    def test_locale_resume_uses_all_readers_of_an_added_or_deleted_file(self):
+        repo, name = self.locale_fixture()
+        present = evidence.manifest(repo)
+        (repo / name).unlink()
+        absent = evidence.manifest(repo)
+        proof = {path.name: self.unit() for path in runner.selected_files('full', root=repo)}
+        for before, after in ((present, absent), (absent, present)):
+            with self.subTest(before_exists=name in before['files']):
+                kept = self.locale_coverage(repo, [self.record(proof, manifest=before)], after)
+                self.assertEqual(kept, {'test_metadata_seesaa.py': proof['test_metadata_seesaa.py']})
+
+    def test_locale_resume_rejects_lost_or_invalid_contents_and_mode_changes(self):
+        repo, name = self.locale_fixture()
+        locale = repo / name
+        before = evidence.manifest(repo)
+        locale.write_text('{"release": {"notice": "新通知"}}\n', encoding='utf-8')
+        after = evidence.manifest(repo)
+        locale.write_text('{"release": {"notice": false}}\n', encoding='utf-8')
+        malformed = evidence.manifest(repo)
+        locale.write_text(before['locale_sources'][name], encoding='utf-8', newline='')
+        evidence.git(repo, 'update-index', '--chmod=+x', name)
+        executable = evidence.manifest(repo)
+        tampered = {**before, 'locale_sources': {name: after['locale_sources'][name]}}
+        legacy = {key: value for key, value in before.items() if key != 'locale_sources'}
+        proof = {path.name: self.unit() for path in runner.selected_files('full', root=repo)}
+
+        state = evidence.digest([evidence.digest(legacy), self.context['environment']])
+        evidence.write(repo, state, (), success=True, elapsed=1, slowest=[], count=5,
+                       context={**self.context, 'manifest': legacy}, units=proof)
+        legacy_record = evidence.read(repo, state)
+        self.assertEqual(self.locale_coverage(repo, [legacy_record], before), proof)
+        for old, new in ((legacy_record, after), (self.record(proof, manifest=tampered), after),
+                         (self.record(proof, manifest=before), malformed),
+                         (self.record(proof, manifest=before), executable)):
+            with self.subTest(old_state=old.get('state'), new_locale=new['files'][name]):
+                self.assertEqual(self.locale_coverage(repo, [old], new), {})
+
     def test_history_planning_parses_each_test_once_and_rebuilds_for_new_inputs(self):
         tests = self.root / 'tests'
         tests.mkdir()
@@ -1486,6 +1567,34 @@ class VerificationTests(unittest.TestCase):
         for path in ("pyproject.toml", "scripts/test_runner.py", "scripts/test_evidence.py", 'scripts/test_focus.py',
                      "scripts/test_slots.py", "uv.lock", "src/peach/unknown.py"):
             self.assertEqual(runner.scopes_for_changes([path])[0], ("full",))
+
+    def test_auto_executes_and_records_an_exact_locale_reader_outside_default_scopes(self):
+        name = 'resources/locales/zh-CN/server.json'
+        locale = self.repo / name
+        locale.parent.mkdir(parents=True)
+        locale.write_text('{"release": {"notice": "Initial release notice"}}', encoding='utf-8')
+        tests = self.repo / 'tests'
+        tests.mkdir()
+        (tests / 'test_tray.py').write_text('KEY = "server:release.notice"\n', encoding='utf-8')
+        (tests / 'test_cli.py').write_text('VALUE = 1\n', encoding='utf-8')
+        (tests / 'test_web_ui.py').write_text('VALUE = 1\n', encoding='utf-8')
+        self.git('add', '--', name, 'tests/test_tray.py', 'tests/test_cli.py', 'tests/test_web_ui.py')
+        self.git('commit', '-m', 'test: seed locale readers')
+        locale.write_text('{"release": {"notice": "Updated release notice"}}', encoding='utf-8')
+
+        selected = runner.selected_files
+        with redirect_stdout(io.StringIO()), mock.patch.object(runner, 'ROOT', self.repo), \
+                mock.patch.object(runner, 'selected_files', side_effect=lambda scope, **_: selected(scope, root=self.repo)), \
+                mock.patch.object(runner, 'environment_preflight'), \
+                mock.patch.object(runner, 'run_local_suite', return_value=(True, 3, [])) as run:
+            args = ['--scope', 'auto', '--base', 'HEAD']
+            self.assertEqual(runner.main(args), 0)
+            self.assertEqual(run.call_args.args[0], ('tooling', 'web', 'test_tray.py'))
+            self.assertIn('test_tray.py', run.call_args.kwargs['progress'].modules)
+            self.assertEqual(runner.main(args), 0)
+        run.assert_called_once()
+        record = evidence.read(self.repo, evidence.key(self.repo))
+        self.assertTrue(evidence.covers(record, ('tooling', 'web', 'test_tray.py')))
 
     def test_runner_reuses_success_and_fresh_failure_invalidates_it(self):
         with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()), \

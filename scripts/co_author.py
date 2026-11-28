@@ -17,10 +17,13 @@ from .check_readme_impact import git, trailers, unpublished
 VENDORS = {
     "Claude Code": "noreply@anthropic.com",
     "Codex": "noreply@openai.com",
-    "opencode": "noreply@opencode.ai",
+    "opencode": "219766164+opencode-agent[bot]@users.noreply.github.com",
     "ZCode": "noreply@z.ai",
     "MiMo": "noreply@xiaomi.com",
 }
+
+#: 采纳社区提交时保留当时有效的共同署名。
+LEGACY_COMMUNITY_MAILS = {"opencode": "noreply@opencode.ai"}
 
 #: 维护者本人的提交邮箱（小写）。fork 来的 PR 里出现这些身份，说明贡献者照 `git log`
 #: 配成了维护者，`scripts/check_pr_identity.py` 据此拒收。
@@ -77,7 +80,8 @@ def problems(label: str, found: list[str], *, own: bool = True) -> list[str]:
         human = HUMAN_FORM.fullmatch(value)
         if (parsed is None and human is not None and human["name"].strip()
                 and human["name"].strip().casefold() not in {tool.casefold() for tool in VENDORS}
-                and human["mail"].casefold() not in VENDORS.values()):
+                and human["mail"].casefold() not in VENDORS.values()
+                and human["mail"].casefold() not in LEGACY_COMMUNITY_MAILS.values()):
             continue
         if parsed is None:
             problems.append(t("co_author.badForm", label=label, value=value, example=EXAMPLE))
@@ -85,7 +89,8 @@ def problems(label: str, found: list[str], *, own: bool = True) -> list[str]:
             if own:
                 problems.append(t("co_author.unknownTool", label=label, tool=parsed['tool'],
                                   tools=list(VENDORS)))
-        elif parsed["mail"] != VENDORS[parsed["tool"]]:
+        elif (parsed["mail"] != VENDORS[parsed["tool"]]
+              and (own or parsed["mail"] != LEGACY_COMMUNITY_MAILS.get(parsed["tool"]))):
             problems.append(t("co_author.wrongMail", label=label, tool=parsed['tool'],
                               expected=VENDORS[parsed['tool']], actual=parsed['mail']))
         else:

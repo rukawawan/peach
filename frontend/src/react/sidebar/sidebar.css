@@ -83,7 +83,7 @@ html>body{padding-left:var(--railW)}
 /* ── Board UI：玻璃与面板 ── */
 /* 换主题时整页先截一张快照，玻璃在快照里画成实底，免得模糊层闪一下。 */
 html[data-theme-snapshot] :is([data-sidebar-drawer],[data-sidebar-glide]){backdrop-filter:none!important;background-color:var(--ground)!important;transition:none!important}
-[data-sidebar-drawer][data-sidebar-drawer],[data-sidebar-drawer][data-sidebar-drawer][class~=open]{background:var(--glass-drift-a),var(--glass-drift-b),linear-gradient(125deg,var(--glass-sheen),transparent 42%,var(--glass-low)),var(--glass-fill);background-size:200% 200%,200% 200%,auto;background-repeat:no-repeat,no-repeat,repeat;background-position:50% 20%,80% 70%,0 0;animation:glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-drift-play);backdrop-filter:var(--glass-optic,blur(22px)) saturate(160%) var(--glass-lume);border:0;box-shadow:inset 0 1px 0 var(--glass-rim),inset 1px 0 0 var(--glass-low),inset -1px 0 0 var(--glass-low),inset 0 -1px 0 var(--glass-low),var(--glass-shadow)}
+[data-sidebar-drawer][data-sidebar-drawer],[data-sidebar-drawer][data-sidebar-drawer][class~=open]{background:var(--glass-drift-a),var(--glass-drift-b),linear-gradient(125deg,var(--glass-sheen),transparent 42%,var(--glass-low)),var(--glass-fill);background-size:200% 200%,200% 200%,auto;background-repeat:no-repeat,no-repeat,repeat;background-position:50% 20%,80% 70%,0 0;animation:glassdriftx calc(41s * var(--glow-drift-scale)) linear infinite,glassdrifty calc(67s * var(--glow-drift-scale)) linear infinite;animation-play-state:var(--glow-idle-play,var(--glow-drift-play));backdrop-filter:var(--glass-optic,blur(22px)) saturate(160%) var(--glass-lume);border:0;box-shadow:inset 0 1px 0 var(--glass-rim),inset 1px 0 0 var(--glass-low),inset -1px 0 0 var(--glass-low),inset 0 -1px 0 var(--glass-low),var(--glass-shadow)}
 /* 抽屉这块玻璃上的反光归 `.glowlayer`：用户配得了色的三枚光晕按同一套 drift 在这里漂，自带那两团留着
    就是两套光斑叠着走，亮的那一档会把配好的颜色冲淡成灰。「玻璃原色」那一档（根上挂 `data-glow-native`）
    光晕整层算作 0，抽屉把自己那两团拿回来，否则它会是全场唯一一块不反光的玻璃。 */
@@ -285,3 +285,12 @@ body :is([data-sidebar-range] input)::-moz-range-thumb{width:18px;height:18px;bo
 
 [data-sidebar-range] input { z-index: 1; }
 [data-sidebar-range] input[data-active] { z-index: 2; }
+
+/* 分组工具独立于折叠触发器，收起来源列表时仍可浏览文件。 */
+[data-sidebar-tool-group]{position:relative}
+[data-sidebar-tool-group] [data-sidebar-toggle]>span{padding-right:32px}
+[data-sidebar-drawer] button[data-sidebar-directory]{position:absolute;top:2px;right:34px;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
+[data-sidebar-drawer] button[data-sidebar-directory]:hover{background:var(--hover);color:var(--ink)}
+[data-sidebar-drawer] button[data-sidebar-directory]:focus-visible{outline:2px solid var(--tungsten);outline-offset:1px}
+[data-sidebar-directory] svg{width:var(--icon-inline);height:var(--icon-inline);fill:currentColor;stroke:none}
+@media (min-width:768px){[data-sidebar-drawer]:not([class~=open]) [data-sidebar-tool-group]{display:none}}

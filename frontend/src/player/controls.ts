@@ -12,7 +12,7 @@ import { SubtitleControls, languageName, subtitleIcon } from './subtitles';
 import { createSeekPreview } from './seek-preview';
 import { mountPlayerRotation } from './rotation';
 import { mountPlayerPipControl } from './pip';
-import { mountPlaybackRate, playerMemory } from './memory';
+import { mountPlaybackRate, playerMemory, qualityPixels as resolution, setAdaptiveQuality } from './memory';
 import { t } from '../i18n';
 
 type TooltipSync = (label?: string, aria?: string) => void;
@@ -150,10 +150,7 @@ export function mountPlayerQualityControl(
   const levels = typeof player.qualityLevels === 'function' ? player.qualityLevels() : null;
   let sourceQualities = initialSourceQualities;
   let selectedQuality = 'auto';
-  const resolution = (width: unknown, height: unknown) => {
-    const values = [Number(width), Number(height)].filter((value) => value > 0);
-    return values.length ? Math.min(...values) : 0;
-  };
+  let preferredPixels: number | undefined, qualityTouched = false;
   interface Row { key: string; label: string; pixels: number }
   const rows = (): Row[] => {
     const result: Row[] = [];
@@ -168,7 +165,8 @@ export function mountPlayerQualityControl(
       return result;
     }
     if (sourceQualities?.length) {
-      return sourceQualities.map((quality) => ({ key: `h${quality.height}`, label: quality.label || `${quality.height}p`, pixels: quality.height }));
+      const choices = sourceQualities.map((quality) => ({ key: `h${quality.height}`, label: quality.label || `${quality.height}p`, pixels: quality.height }));
+      return choices.length > 1 ? [{ key: 'auto', label: t('catalog:playerQuality.auto'), pixels: 0 }, ...choices] : choices;
     }
     const pixels = resolution(video.videoWidth, video.videoHeight) || resolution(fallbackSize.width, fallbackSize.height);
     return [{ key: 'original', label: pixels ? `${pixels}p` : t('catalog:playerQuality.original'), pixels }];
@@ -309,6 +307,33 @@ export function mountPlayerQualityControl(
     return options.map((option) =>
       `<button type="button" class="vjs-peach-menu-option" role="menuitemradio" data-player-quality-option="${esc(option.key)}" aria-checked="${option.key === active.key}"><span class="vjs-peach-option-check">${option.key === active.key ? icon('player-option-check') : ''}</span><span class="vjs-peach-option-label">${esc(option.label)}</span></button>`).join('');
   };
+  const applyQuality = (key: string) => {
+    selectedQuality = key;
+    if (levels?.length) {
+      setAdaptiveQuality(levels, key === 'auto' ? -1 : Number(key));
+      return;
+    }
+    if (!sourceQualities?.length || (key !== 'auto' && !key.startsWith('h'))) return;
+    const src = player.currentSrc() || video.getAttribute('src');
+    if (!src) return;
+    const next = new URL(src, location.origin);
+    const height = key === 'auto' ? null : key.slice(1);
+    if (next.searchParams.get('quality') === height) return;
+    if (height) next.searchParams.set('quality', height); else next.searchParams.delete('quality');
+    // 独立 MP4 档位换源时，载入后接回同一时间点和播放状态。
+    const at = player.currentTime() || 0, wasPlaying = !player.paused();
+    player.one('loadedmetadata', () => {
+      if (at > 0) player.currentTime(at);
+      if (wasPlaying) player.play()?.catch(() => {});
+    });
+    player.src({ src: next.pathname + next.search, type: 'video/mp4' });
+  };
+  const restoreQuality = () => {
+    if (preferredPixels === undefined || (!levels?.length && !sourceQualities?.length)) return;
+    const choices = rows().filter(row => row.pixels === preferredPixels);
+    const choice = choices.find(row => row.key === selectedQuality) ?? choices[0];
+    if (choice) applyQuality(choice.key);
+  };
   /** 轨道增减或自动档换轨时原地重画这一列，焦点留在同一档上。 */
   const fillQualityOptions = (list: HTMLElement) => {
     const focused = list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.playerQualityOption : undefined;
@@ -320,22 +345,15 @@ export function mountPlayerQualityControl(
   const bindQualityOptions = (list: HTMLElement) => {
     list.querySelectorAll<HTMLElement>('[data-player-quality-option]').forEach((option) => {
       option.onclick = () => {
-        selectedQuality = option.dataset.playerQualityOption || 'auto';
-        if (levels?.length) {
-          for (let index = 0; index < levels.length; index++) levels[index]!.enabled = selectedQuality === 'auto' || selectedQuality === String(index);
-        }
-        /* 来源档位是四个各自独立的 mp4，不是同一条流的多个轨道，所以只能换 src。
-           记住当前进度和播放状态再换：换源会重新加载，不接回去就等于从头开始。 */
-        if (sourceQualities?.length && selectedQuality.startsWith('h')) {
-          const height = selectedQuality.slice(1);
-          const at = player.currentTime() || 0, wasPlaying = !player.paused();
-          const next = new URL(player.currentSrc() || video.src, location.origin);
-          next.searchParams.set('quality', height);
-          player.src({ src: next.pathname + next.search, type: 'video/mp4' });
-          player.one('loadedmetadata', () => {
-            if (at > 0) player.currentTime(at);
-            if (wasPlaying) player.play()?.catch(() => {});
-          });
+        const choice = rows().find(row => row.key === option.dataset.playerQualityOption);
+        if (!choice) return;
+        qualityTouched = true;
+        applyQuality(choice.key);
+        if (choice.key === 'auto' || choice.pixels > 0) {
+          preferredPixels = choice.pixels;
+          void memory.save({ quality_pixels: choice.pixels }).catch(() => {});
+        } else {
+          preferredPixels = undefined;
         }
         showMain(-1);
       };
@@ -350,6 +368,7 @@ export function mountPlayerQualityControl(
   /* HLS 自动码率起播时轨道陆续登记、码率随网速换档，视频尺寸也跟着变：这些事件只更新角标和
      正在看的那一面。退回主菜单的话，正在清晰度面板里挑档的人会被一次换轨踢出去。 */
   const refreshPanel = () => {
+    restoreQuality();
     if (!isOpen()) { qualityRows(); return }
     const panel = menu.lastElementChild as HTMLElement | null;
     if (view === 'quality' && panel) { fillQualityOptions(button(panel, '.vjs-peach-panel-menu')); return }
@@ -362,7 +381,10 @@ export function mountPlayerQualityControl(
     if (speed) speed.textContent = rememberRate.current() === 1 ? t('catalog:playerQuality.normalSpeed') : `${rememberRate.current()}×`;
   };
   toggle.onclick = (event) => { event.stopPropagation(); const open = !isOpen(); if (open) showMain(); setOpen(open) };
-  const outside = (event: Event) => { if (!root.contains(event.target as Node)) close() };
+  const outside = (event: Event) => {
+    const target = event.target;
+    if (target instanceof Element && !target.closest('[data-peach-feedback]') && !root.contains(target)) close();
+  };
   document.addEventListener('pointerdown', outside);
   root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && isOpen()) { event.preventDefault(); event.stopPropagation(); close(); toggle.focus() }
@@ -378,6 +400,11 @@ export function mountPlayerQualityControl(
   video.addEventListener('ratechange', refreshPanel);
   levels?.on?.(['addqualitylevel', 'removequalitylevel', 'change'], refreshPanel);
   const unsubscribeMemory = memory.subscribe(() => { syncMemoryError(); refreshPanel() });
+  memory.restore(saved => {
+    if (qualityTouched || saved.quality_pixels === undefined) return;
+    preferredPixels = saved.quality_pixels;
+    refreshPanel();
+  });
   player.on('dispose', () => {
     unsubscribeMemory();
     video.removeEventListener('loadedmetadata', refreshPanel);

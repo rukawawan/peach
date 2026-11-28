@@ -31,6 +31,7 @@ export interface ActiveQueue {
   kind: string;
   seedId?: number;
   playlistId?: number;
+  filterId?: string;
 }
 
 /** 详情岛交回来的那一条作品；壳只认 `id`，其余字段原样留着。 */

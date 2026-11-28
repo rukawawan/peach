@@ -184,7 +184,7 @@ describe('取数', () => {
     const host = await mount(<QueryClientProvider client={queryClient}><FollowDetailPage {...props} /></QueryClientProvider>);
     await settle();
     expect(fetcher.mock.calls.map(([url]) => url)).toContain('/api/follow?item=8');
-    expect(host.querySelector('[data-follow-detail-name]')?.textContent).toBe('更新 8');
+    expect(host.querySelector('[data-follow-detail] [data-detail-title]')?.textContent).toBe('更新 8');
 
     queryClient.clear();
     serve({ page: { groups: [], sources: [], author_aliases: [] } });
@@ -216,7 +216,7 @@ describe('侧栏', () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it('自上而下：正文、操作、状态一行、标签；标签按 rule34 的类型顺序', async () => {
+  it('标签在反馈操作前显示，反馈状态紧随操作；标签按 rule34 的类型顺序', async () => {
     const { host } = await show(data(item(1, {
       summary: '正文', detail_tags: ['solo', 'kou', 'ow', 'animated', 'odd', 'tracer'],
       tag_types: { ow: 'copyright', tracer: 'character', kou: 'artist', solo: 'general', animated: 'metadata' },
@@ -224,26 +224,29 @@ describe('侧栏', () => {
     const [summary, actionsBar, state, tags] = ['[data-follow-detail-summary]', '[data-follow-detail-actions]',
       '[data-follow-state]', '[data-follow-detail-tags]'].map((selector) => host.querySelector(selector)!);
     const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect([follows(summary!, actionsBar!), follows(actionsBar!, state!), follows(state!, tags!)]).toEqual([true, true, true]);
+    expect([follows(tags!, summary!), follows(summary!, actionsBar!), follows(actionsBar!, state!)]).toEqual([true, true, true]);
     expect([...host.querySelectorAll<HTMLElement>('[data-follow-tag]')].map((tag) => [tag.dataset.followTag, tag.closest('[data-detail-tag]')?.getAttribute('data-tag-cat')]))
       .toEqual([['ow', 'r34-copyright'], ['tracer', 'r34-character'], ['kou', 'r34-artist'], ['solo', 'r34-general'],
         ['animated', 'r34-metadata'], ['odd', 'r34-unknown']]);
   });
 
-  it('标签平时只读，行尾「编辑标签」切到增删，「完成」收回', async () => {
+  it('标题工具里的「编辑标签」切换标签增删', async () => {
     const { host } = await show(data(item(3, { detail_tags: ['solo', 'kou'] })));
     const tags = host.querySelector('[data-follow-detail-tags]')!;
     expect(tags.querySelectorAll('[data-remove-tag]').length).toBe(0);
     expect(tags.querySelector('#tagPlus')).toBeNull();
-    const toggle = tags.querySelector<HTMLButtonElement>('[data-follow-tags-edit]')!;
-    expect(toggle.closest('[data-detail-tags]'), '编辑键和标签不在同一行').not.toBeNull();
-    expect(toggle.textContent).toBe('编辑标签');
+    const toggle = host.querySelector<HTMLButtonElement>('[data-title-tools] [data-follow-tags-edit]')!;
+    expect(toggle.getAttribute('aria-controls')).toBe(tags.id);
+    expect(toggle.getAttribute('aria-label')).toBe('编辑标签');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
     await click(toggle);
     expect(tags.querySelectorAll('[data-remove-tag]').length).toBe(2);
     expect(tags.querySelector('#tagPlus')).not.toBeNull();
-    expect(toggle.textContent).toBe('完成');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
     await click(toggle);
     expect(tags.querySelectorAll('[data-remove-tag]').length).toBe(0);
+    expect(tags.querySelector('#tagPlus')).toBeNull();
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('来源外链、网盘链接与下载键；发布者与署名作者不同才写', async () => {
@@ -252,11 +255,13 @@ describe('侧栏', () => {
       resource_urls: ['https://gofile.io/d/a', 'https://mega.nz/folder/b', 'https://files.example.org/c'],
     })), sources: [{ id: 1, provider: 'kemono', author_name: '作者' }] });
     const origin = host.querySelector('[data-follow-origin]')!;
+    expect(origin.closest('[data-title-tools]')).not.toBeNull();
     expect([origin.getAttribute('title'), origin.getAttribute('aria-label'), origin.getAttribute('href')])
       .toEqual(['打开来源页面', '打开来源页面', 'https://example.invalid/post/2']);
     expect([...host.querySelectorAll('[data-follow-resources] a')].map((link) => link.textContent))
       .toEqual(['Gofile', 'MEGA', 'files.example.org']);
     const download = host.querySelector('[data-follow-download]')!;
+    expect(download.closest('[data-follow-detail-actions]')).not.toBeNull();
     expect(download.hasAttribute('download')).toBe(true);
     expect(download.getAttribute('href')).toBe('/follow-stream?id=2&download=1');
     expect(host.querySelector('[data-follow-detail-identity] [data-id-name]')?.textContent).toBe('作者');
@@ -267,7 +272,7 @@ describe('侧栏', () => {
     const { host } = await show(data(item(5, { title: '', media_items: [
       { index: 0, media_kind: 'video', name: 'a.mp4', resource_group: 'g1' }, { ...image(1), resource_group: 'g1' },
     ] })));
-    expect(host.querySelector('[data-follow-detail-name]')?.textContent).toBe('未命名内容');
+    expect(host.querySelector('[data-follow-detail] [data-detail-title]')?.textContent).toBe('未命名内容');
     expect(host.querySelector('[data-follow-queue]')?.textContent).toContain('未命名内容 · 2 个媒体');
   });
 
@@ -293,7 +298,7 @@ describe('侧栏', () => {
 
   it('媒体没取回来的原因画在侧栏里', async () => {
     const { host } = await show(data(item(3, { playable: false, media_kind: 'external', media_error: '附件要登录' })));
-    expect(host.querySelector('[data-follow-media-issue]:not([hidden])')?.textContent).toBe('媒体未取得：附件要登录');
+    expect(host.querySelector('[data-follow-media-issue]:not([hidden])')?.textContent).toBe('媒体加载失败：附件要登录');
   });
 });
 

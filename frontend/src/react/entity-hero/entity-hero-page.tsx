@@ -16,7 +16,8 @@ import { textLang } from '../../core/text-lang';
 import { entityDisplayName, nameScript } from '../../core/entity-names';
 import { useEntityNames } from '../use-entity-names';
 
-import { Button } from '@/components/base/buttons/button';
+import { Button, ButtonLink } from '@/components/base/buttons/button';
+import { javSubscriptionPath } from '../follow-manage/jav-subscription-path';
 
 import { AvatarPicker } from '../avatar-picker/avatar-picker-page';
 import { Note } from '../components/note';
@@ -61,6 +62,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, feedErro
   const facts = people ? factRows(entity.profile) : company ? companyFactRows(entity.company_profile) : [];
   const links = heroLinks(entity, kind);
   const marks = entryMarks(entity);
+  const findFeed = !entity.feed && entity.identity_categories?.includes('japanese_av');
   const costars = kind === 'agency' ? [] : (entity.related_performers || []);
   const linkRow = useRef<HTMLDivElement>(null);
   const costarRow = useRef<HTMLDivElement>(null);
@@ -111,7 +113,7 @@ export function EntityHeroPage({ kind, name, entity, feedNew, feedHost, feedErro
             {links.length ? (
               <div ref={linkRow} data-entity-links="">{links.map((link, at) => <HeroLinkView key={at} link={link} />)}</div>
             ) : null}
-            {marks.length || entity.feed ? <EntryMarks entity={entity} actions={actions} helpers={helpers} /> : null}
+            {marks.length || entity.feed || findFeed ? <EntryMarks entity={entity} actions={actions} helpers={helpers} findFeed={findFeed} /> : null}
             {entity.follow?.held.length ? <HeldAuthors follow={entity.follow} displayName={displayName} actions={actions} /> : null}
           </div>
           {facts.length ? (
@@ -391,8 +393,8 @@ function HeroLinkView({ link }: { link: LinkView }) {
  *
  *  MISSAV 站上没有图形标识，它的标题就是排出来的字：Halant 500、`MISS` 跟页面墨色、`AV` 用
  *  它的粉。一位女优在 javdb 有两个演员页是常事，第二枚在标识后面缀服务端编好的序号。 */
-function EntryMarks({ entity, actions, helpers }: {
-  entity: EntityHeroData; actions: EntityHeroActions; helpers: EntityHeroHelpers;
+function EntryMarks({ entity, actions, helpers, findFeed }: {
+  entity: EntityHeroData; actions: EntityHeroActions; helpers: EntityHeroHelpers; findFeed?: boolean;
 }) {
   const [following, setFollowing] = useState(!!entity.feed?.following);
   const [busy, setBusy] = useState(false);
@@ -428,6 +430,9 @@ function EntryMarks({ entity, actions, helpers }: {
       ))}
       {entity.feed ? <FeedSwitch following={following} busy={busy} onToggle={(on) => { void toggle(on) }}
         tip={entityFeedTip(following)} /> : null}
+      {findFeed ? <ButtonLink variant="secondary" size="small" href={javSubscriptionPath(entity.canonical_name)}>
+        {t('catalog:entityHero.subscribeNewReleases')}
+      </ButtonLink> : null}
     </div>
   );
 }

@@ -94,3 +94,12 @@ def readiness(settings: PeachSettings, *, background_ready: bool | None = None, 
     if background_ready is not None:
         checks["background"] = background_ready
     return {"ready": all(checks.values()), "checks": checks}
+
+
+def app_readiness(app, settings: PeachSettings) -> dict:
+    """从正在运行的服务读取与 /healthz?ready=1 相同的就绪状态。"""
+    state = app.state
+    deferred = getattr(state, 'ledger_background_deferred', False)
+    result = readiness(settings, background_ready=None if deferred else getattr(state, "ledger_background_ready", None),
+                       migrating=state.ledger_migration.running, known_corruption=state.database.corrupted)
+    return {**result, "background_deferred": deferred}

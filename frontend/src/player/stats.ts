@@ -105,7 +105,34 @@ export function playerStatsPlot(samples: number[], kind: 'speed' | 'activity' | 
 export function playerStatsOverlayHtml(): string {
   return `<button data-player-stats-button="" id="playerStatsBtn" aria-label="${t('catalog:playerMenu.stats')}" title="${t('catalog:playerMenu.stats')}" aria-pressed="false" hidden>${icon('chart')}</button>
        <div data-player-net="" id="playerNet" role="status" aria-live="polite" hidden></div>
-       <div data-player-stats="" id="playerStats" role="status" hidden></div>`;
+       <div data-player-stats="" id="playerStats" role="region" aria-label="${esc(t('catalog:playerMenu.stats'))}" tabindex="0" hidden>
+         <div data-player-stats-values></div>
+         <section data-player-waterfall aria-labelledby="playerWaterfallHeading">
+           <h3 id="playerWaterfallHeading">${esc(t('catalog:playerStats.requestWaterfall'))}</h3>
+           <div data-player-waterfall-rows></div>
+         </section>
+       </div>`;
+}
+
+export function playerRequestWaterfall(entries: PerformanceResourceTiming[]): string {
+  const recent = entries.filter(entry => Number.isFinite(entry.startTime) && Number.isFinite(entry.duration)
+    && entry.startTime >= 0 && entry.duration >= 0 && new URL(entry.name).origin === location.origin)
+    .sort((left, right) => left.startTime - right.startTime).slice(-8);
+  const start = recent[0]?.startTime;
+  if (start === undefined) return `<p>${esc(t('catalog:playerStats.noCompletedRequests'))}</p>`;
+  const span = Math.max(1, ...recent.map(entry => entry.startTime + entry.duration - start));
+  const millis = (ms: number) => Number(ms.toFixed(1));
+  return `<ol>${recent.map(entry => {
+    const pathname = new URL(entry.name).pathname;
+    const name = pathname.split('/').pop() || pathname;
+    const offset = entry.startTime - start;
+    const status = entry.responseStatus > 0 ? ` · HTTP ${entry.responseStatus}` : '';
+    return `<li>
+      <span title="${esc(pathname)}">${esc(name)}${status}</span>
+      <span data-request-track aria-hidden="true"><i style="inset-inline-start:${100 * offset / span}%;width:${100 * entry.duration / span}%"></i></span>
+      <span>${esc(t('catalog:playerStats.requestTiming', { start: millis(offset), duration: millis(entry.duration) }))}</span>
+    </li>`;
+  }).join('')}</ol>`;
 }
 
 export function streamEntries(id: number, session = ''): PerformanceResourceTiming[] {

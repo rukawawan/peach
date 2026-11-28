@@ -8,7 +8,7 @@ import os
 import re
 import zipfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import islice
 from pathlib import Path
 
@@ -181,6 +181,66 @@ def _log_candidates(directory: Path, entries: list) -> list[Path]:
     return candidates + _recent(directory, 'errors-*.log', 8, entries) + _recent(directory, 'crash-*.log', 4, entries)
 
 
+def _log_tail(stream, size: int) -> str:
+    stream.seek(max(0, size - TAIL_BYTES))
+    text = stream.read(TAIL_BYTES).decode('utf-8', errors='replace')
+    return text.partition('\n')[2] if size > TAIL_BYTES else text
+
+
+def _feedback_error_site(frames) -> str:
+    """只保留最内层代码的文件名与行号。"""
+    if not isinstance(frames, list) or not frames or not isinstance(frames[-1], dict):
+        return ""
+    file, number = frames[-1].get("file"), frames[-1].get("line")
+    if (isinstance(file, str) and re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,47}\.py", file)
+            and type(number) is int and 0 < number < 100_000):
+        return f" · {file}:{number}"
+    return ""
+
+
+def feedback_error_summary(directory: Path) -> str | None:
+    """最近 30 分钟至多三条错误的技术摘要，排除错误原文、日志上下文和路径。"""
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(minutes=30)
+    reports = []
+    unavailable = []
+    for path in _recent(directory, 'errors-*.log', 4, unavailable):
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()) or not path.is_file():
+                continue
+            with path.open('rb') as stream:
+                lines = _log_tail(stream, stream.seek(0, os.SEEK_END)).splitlines()
+        except OSError:
+            unavailable.append(path)
+            continue
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            stamp = entry.get("at")
+            stage = entry.get("stage")
+            if not isinstance(stamp, str) or not isinstance(stage, str) or not re.fullmatch(r"[a-zA-Z][\w.-]{0,35}", stage, re.ASCII):
+                continue
+            try:
+                at = datetime.fromisoformat(stamp)
+            except ValueError:
+                continue
+            if at.tzinfo is None or not since <= at <= now:
+                continue
+            errors = entry.get("exception")
+            error = errors[0].get("type") if isinstance(errors, list) and errors and isinstance(errors[0], dict) else entry.get("level")
+            if not isinstance(error, str) or not re.fullmatch(r"(?:ERROR|CRITICAL|[a-zA-Z_]\w{0,47}(?:Error|Exception))", error, re.ASCII):
+                continue
+            location = _feedback_error_site(entry.get("frames"))
+            reports.append((at, f"{at.astimezone(timezone.utc):%H:%M:%S} UTC · {stage} · {error}{location}"))
+    if unavailable and not reports:
+        return None
+    return "\n".join(line for _, line in sorted(set(reports), reverse=True)[:3])
+
+
 def _archive_files(archive, directory, candidates, prefix, entries, *, structured=False):
     for path in dict.fromkeys(candidates):
         try:
@@ -196,12 +256,7 @@ def _archive_files(archive, directory, candidates, prefix, entries, *, structure
                     content, details = (_structured_jsonl(stream, size) if path.suffix == '.jsonl'
                                         else _structured_json(stream))
                 else:
-                    stream.seek(max(0, size - TAIL_BYTES))
-                    raw = stream.read(TAIL_BYTES)
-                    text = raw.decode('utf-8', errors='replace')
-                    if size > TAIL_BYTES:
-                        text = text.partition('\n')[2]
-                    content = redact_log(text)
+                    content = redact_log(_log_tail(stream, size))
                     details = {'status': 'included', 'truncated': size > TAIL_BYTES}
             name = path.relative_to(directory).as_posix()
             if not structured or content:

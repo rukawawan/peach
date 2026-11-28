@@ -40,6 +40,7 @@ from .follow_identity import (
 from .follow_secrets import (
     CREDENTIAL_GUIDE, CredentialError, CredentialStore, credential_store_for,
 )
+from .fsutil import atomic_write_text
 from .follow_stream import proxyable
 from .follow_sources import (
     CONNECTORS, KemonoConnector, Rule34VideoConnector, build_connector,
@@ -49,6 +50,7 @@ from .follow_sources import (
 from .follow_store import (
     FollowStore, ReleaseGroup, normalized_author_name,
 )
+from .source_browser_login import FOLLOW_BROWSER_LOGIN_SOURCES, cancel_source_browser_login
 from .entities import canonicalize_entity_name, normalize_entity_name, prefer_entity_name
 from .taste_history import read_creator_candidates
 from .web_state import path_version
@@ -1497,27 +1499,18 @@ def _online_tag_rows(contract, include_types: bool) -> list[dict]:
     要把全部关注条目（生产约 1.8 万条）过一遍再算筛选条，一次 3 秒上下，带类型的 4.5 秒；
     原先每次搜索、翻页、「载入更多」都重算一遍。账本相关的表与题材头像目录不变就一直用同一份。
     """
+    if not include_types:
+        facets = _browse_facets(contract, None)
+        return [{"k": tag, "n": count, "cat": "general"} for tag, count in facets["tags"]]
+
     def build():
+        from .library_favorites import online_tag_ids
         with contract.database.read_connection() as connection:
-            store = _store(contract, connection)
-            tag_policy = OnlineTagPolicy(connection)
-            source_rows = store.sources()
-            alias_map, _aliases = store.author_aliases()
-            enabled = {int(row["id"]) for row in source_rows if row["enabled"]}
-            by_source = {int(row["id"]): row for row in source_rows}
-            items = tuple(tag_policy.with_custom_tags(item) for item in store.items(limit=_ALL_ITEMS)
-                          if item.source_id in enabled and not _excluded_item(item))
-            items = _unblocked_items(store, items, tag_policy, group_authors(source_rows, alias_map))
-            if include_types:
-                from .library_favorites import online_tag_ids
-                favorites = online_tag_ids(connection)
-                return [{**row, 'favorite': row['id'] in favorites}
-                        for row in _visible_online_tag_rows(store, items, tag_policy)]
-            facets = _follow_facets(store, items, by_source, alias_map, icon_root, tag_policy)
-            return [{"k": tag, "n": count, "cat": "general"} for tag, count in facets["tags"]]
-    icon_root = work_icon_root(contract)
-    return contract.cached_until_changed(f"follow-tags:{'typed' if include_types else 'plain'}", build,
-                                         path_version(icon_root / "works"), tables=FOLLOW_GROUP_TABLES)
+            items = _browsable_items(contract, None)
+            favorites = online_tag_ids(connection)
+            return [{**row, 'favorite': row['id'] in favorites}
+                    for row in _visible_online_tag_rows(_store(contract, connection), items, OnlineTagPolicy(connection))]
+    return contract.cached_until_changed("follow-tags:typed", build, tables=FOLLOW_GROUP_TABLES)
 
 
 def _visible_online_tag_rows(store, items, policy):
@@ -1575,12 +1568,8 @@ def _follow_author_rows(contract) -> list[dict]:
         alias_map, aliases = store.author_aliases()
         canonical = {f"name:{row['canonical_key']}": str(row["canonical_name"] or "")
                      for row in aliases}
-        enabled = {int(row["id"]) for row in source_rows if row["enabled"]}
         by_source = {int(row["id"]): row for row in source_rows}
-        policy = OnlineTagPolicy(connection)
-        items = tuple(policy.with_custom_tags(item) for item in store.items(limit=_ALL_ITEMS)
-                      if item.source_id in enabled and not _excluded_item(item))
-        items = _unblocked_items(store, items, policy, group_authors(source_rows, alias_map))
+        items = _browsable_items(contract, None)
         counts: dict[str, int] = {}
         latest: dict[str, str] = {}
         for item in items:
@@ -1784,14 +1773,24 @@ def q_follow_suggest(contract, q: str, limit: int = MAX_SUGGESTIONS,
     with contract.database.read_connection() as connection:
         store = _store(contract, connection)
         _alias_map, alias_groups = store.author_aliases()
-        known = _followed_names(store.sources(), alias_groups)
+        sources = store.sources()
+        known = _followed_names(sources, alias_groups)
+        avatars = {}
+        for row in sources:
+            url = official_avatar_url(row) or _avatar_url(row["provider"], row["ref"])
+            if url:
+                for name in (row["entity_name"], author_display_name(row)):
+                    if name:
+                        avatars.setdefault(name.casefold(), url)
     followed = [text for key, text in sorted(
         ((key, text) for key, text in known.items() if folded in key),
         key=lambda pair: (not pair[0].startswith(folded), len(pair[1]), pair[0]),
     )][:per_group]
     buckets = {
-        "followed": [{"value": text, "n": 0, "matched": ""} for text in followed],
-        "archive": [{"value": row.value, "n": 0, "matched": row.matched}
+        "followed": [{"value": text, "n": 0, "matched": "", "avatar_url": avatars.get(text.casefold())}
+                     for text in followed],
+        "archive": [{"value": row.value, "n": 0, "matched": row.matched,
+                     "avatar_url": _avatar_url(row.provider, row.ref)}
                     for row in archive_suggestions(
                         query, state_root=contract.follow_state_root, limit=per_group)
                     # 已经关注的人不在这一组里再出现一次。
@@ -1917,6 +1916,11 @@ def _page_facets(contract, args, scope, offset) -> dict:
     if offset:
         return {}
     source_id, summary = scope
+    facets = {} if summary else _browse_facets(contract, source_id)
+    return {"facets": facets, "author_facets": _author_facets(contract, scope, args)}
+
+
+def _browse_facets(contract, source_id) -> dict:
     # 题材圆标的有无与取景读题材图目录。图与 `.face.json` 落在 `works/` 子目录
     # （`follow_assets.cache_path`），子目录里新增文件不改上一级的修改时间，所以进键的是它。
     icon_root = work_icon_root(contract)
@@ -1926,9 +1930,8 @@ def _page_facets(contract, args, scope, offset) -> dict:
             by_own_source = {int(row["id"]): row for row in own.sources}
             return _follow_facets(own.store, _browsable_items(contract, source_id), by_own_source,
                                   own.alias_map, icon_root, own.tag_policy)
-    facets = {} if summary else contract.cached_until_changed(
+    return contract.cached_until_changed(
         f"follow-facets:{source_id}", build, path_version(icon_root / "works"), tables=FOLLOW_GROUP_TABLES)
-    return {"facets": facets, "author_facets": _author_facets(contract, scope, args)}
 
 
 def _page_groups(contract, everything, counted, by_author, *, source_id, statuses, order, window, summary, cache_key):
@@ -1968,7 +1971,21 @@ def _duration_arg(raw) -> float:
 
 
 #: `_follow_matcher` 读的筛选参数。带了任一个，列表就是全库的一个子集。
-FOLLOW_FILTER_ARGS = ("author", "provider", "tag", "work", "dur_min", "dur_max")
+FOLLOW_FILTER_ARGS = ("author", "provider", "tag", "work", "dur_min", "dur_max", "q")
+
+
+def _word_matcher(q):
+    """查找词落到一条条目上：按空白拆开，每个词都要出现在标题、来源名或来源标签里，不分大小写。
+    没有词时每一条都算命中。"""
+    words = str(q or "").casefold().split()
+
+    def has_words(item) -> bool:
+        if not words:
+            return True
+        text = " ".join((item.title or "", item.source_label or "", *_item_all_tags(item))).casefold()
+        return all(word in text for word in words)
+
+    return has_words
 
 
 def _follow_matcher(args, by_source, alias_map, tag_policy=None):
@@ -1976,7 +1993,8 @@ def _follow_matcher(args, by_source, alias_map, tag_policy=None):
 
     作者、来源、标签、题材都接受逗号分隔的多个值。作者、来源在同一维度内是「任一」：
     选两个作者就看两个人的更新；标签是「同时具备」。时长两端是秒，同首页的
-    `dur_min`／`dur_max`，缺省或 0 是这一端不限。
+    `dur_min`／`dur_max`，缺省或 0 是这一端不限。`q` 是浮层查找框的词，
+    判据见 `_word_matcher`。
     """
     authors = frozenset(_csv_values(args.get("author")))
     providers = frozenset(_csv_values(args.get("provider")))
@@ -1986,6 +2004,7 @@ def _follow_matcher(args, by_source, alias_map, tag_policy=None):
     # 点第二枚就清空列表。
     wanted_works = frozenset(_work_root(value) for value in _csv_values(args.get("work")))
     dur_min, dur_max = _duration_arg(args.get("dur_min")), _duration_arg(args.get("dur_max"))
+    has_words = _word_matcher(args.get("q"))
 
     def _in_duration(item) -> bool:
         # 任一端生效时，没有时长读数的条目（图片、外链帖）不算落在区间里。
@@ -1993,6 +2012,8 @@ def _follow_matcher(args, by_source, alias_map, tag_policy=None):
         return seconds > 0 and seconds >= dur_min and not (dur_max and seconds > dur_max)
 
     def _matches(item) -> bool:
+        if not has_words(item):
+            return False
         row = by_source.get(item.source_id)
         if authors and (row is None or author_key(row, alias_map) not in authors):
             return False
@@ -2821,9 +2842,12 @@ def _phrase_fields(key: str, text: object, phrase: dict | None) -> dict:
 
 
 def _candidate_payload(candidate, *, author: str = "") -> dict:
+    ref = canonical_source_ref(candidate.provider, candidate.ref)
+    avatar = _avatar_url(candidate.provider, ref)
     return {"provider": candidate.provider,
             "provider_label": PROVIDER_LABELS.get(candidate.provider, candidate.provider),
-            "ref": canonical_source_ref(candidate.provider, candidate.ref),
+            "ref": ref,
+            **({"avatar_url": avatar} if avatar else {}),
             "url": candidate.url, **_phrase_fields("label", candidate.label, getattr(candidate, "label_phrase", None)),
             "author": author, "aliases": list(getattr(candidate, "aliases", ())),
             "semantics": candidate.semantics,
@@ -2972,7 +2996,7 @@ def w_follow_credential(contract, body) -> dict:
     cleaned = {name: str(values[name]).strip() for name in guide["fields"]
                if str(values.get(name) or "").strip()}
     store = _credential_store(contract)
-    path = store.path_for(provider)
+    cancel_source_browser_login(contract, provider)
     if not cleaned:
         # 全部留空 = 撤掉这份凭据。**本机和共享副本一起撤**：只删本机的话，
         # `load()` 会从共享副本把 key 重新拼回来，而共享副本还会跟着 peach-sync
@@ -2983,7 +3007,7 @@ def w_follow_credential(contract, body) -> dict:
                 "shared_cleared": outcome["shared"],
                 "note": interface_text.text(f"server:{note}") if note else "", "note_code": note or "",
                 "saved": store.describe(provider)}
-    _write_secret(path, cleaned)
+    store.save(provider, cleaned)
     shared_written = _write_shared(store, provider, cleaned)
     # 返回的是 describe()，只有字段名，没有值。
     return {"ok": True, "provider": provider, "cleared": False,
@@ -2998,16 +3022,6 @@ def w_follow_credential(contract, body) -> dict:
 CLEAR_NOTES = {
     "offline": "labels.webFollow.sharedOfflineNote",
 }
-
-
-def _write_secret(path, values: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n",
-                         encoding="utf-8")
-    if os.name != "nt":
-        os.chmod(temporary, 0o600)
-    temporary.replace(path)
 
 
 def _write_shared(store, provider: str, values: dict) -> bool:
@@ -3027,7 +3041,7 @@ def _write_shared(store, provider: str, values: dict) -> bool:
     try:
         if not store.shared_online():
             return False
-        _write_secret(shared, payload)
+        atomic_write_text(shared, json.dumps(payload, ensure_ascii=False, indent=2) + "\n", mode=0o600)
     except OSError:
         return False
     return True
@@ -3050,6 +3064,7 @@ def q_follow_credentials(contract, _args) -> dict:
             **described,
             "provider_label": PROVIDER_LABELS.get(provider, provider),
             "followable": provider in CONNECTORS,
+            "browser_login": provider in FOLLOW_BROWSER_LOGIN_SOURCES,
             "requirement": guide["requirement"],
             "needs": fields,
             "missing": [name for name in fields if name not in described["fields"]],

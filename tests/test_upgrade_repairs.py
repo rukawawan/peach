@@ -26,6 +26,121 @@ BAD_PATH = {'code': 'errors.upgradeRepairs.malformedPath', 'params': {'path': 'b
 
 
 class UpgradeRepairTests(unittest.TestCase):
+    def test_upgrade_enqueues_only_stock_repairs_with_matching_old_evidence(self):
+        from PIL import Image
+        from peach import artifact_rules, library_processing, upgrade_stock_repair, western_artwork
+
+        self.service.prepare()
+        receipt = upgrade_repairs._read(self.service.receipt)
+        receipt.pop(upgrade_stock_repair.RECEIPT)
+        receipt['dispatch_complete'] = True
+        self.seed_receipt(receipt)
+        for asset_id in range(1, 12):
+            self.asset(asset_id, code=f'SSIS-{100 + asset_id}', duration=90)
+        with self.database.write_transaction() as connection:
+            connection.execute("UPDATE asset SET name='S2MBD-049.mp4',code=NULL WHERE id=4")
+            connection.execute("UPDATE asset SET name='CDRP-10.mp4',code='CDRP-010' WHERE id IN (5,6)")
+            connection.execute("UPDATE asset SET field_owners=? WHERE id=6",
+                               (json.dumps({'code': 'user:manual'}),))
+            connection.execute("UPDATE asset SET name='Vixen.26.01.31.Sample.Scene.mp4',code=NULL WHERE id=10")
+            scene = western_artwork.scene_identity(dict(connection.execute('SELECT * FROM asset WHERE id=10').fetchone()))
+        model_failure = {
+            'failed_action': 'fetching_cover', 'message_code': 'errors.libraryProcessing.coverUnfetched',
+            'diagnostics': {'frames': [{'function': 'install_cover'}, {'file': 'body_parts.py'}],
+                            'exception': [{'message': 'ONNXImporter: cannot read model'}]},
+        }
+        ambiguous = {'failed_action': 'querying_metadata', 'message_code': 'errors.javdb.identityAmbiguous'}
+        qr_failure = {'failed_action': 'generating_preview', 'message_code': 'errors.junkVisual.ocrUnavailable',
+                      'message_params': {'reason': 'OpenCV checkQRInputImage failed'}}
+        state = self.service.config.directory('state')
+        logs = library_processing.issues_path(self.service.config, 'legacy')
+        issues = [(1, model_failure), (2, model_failure), (7, qr_failure),
+                  (11, {'failed_action': 'fetching_cover',
+                        'message_code': 'errors.libraryProcessing.coverDeadline'})]
+        logs.write_text(''.join(json.dumps({'asset_id': asset_id, 'path': rf'R:\media\{asset_id}.mp4', **issue})
+                                + '\n' for asset_id, issue in issues), encoding='utf-8')
+        (self.service.root / '3.issues.jsonl').write_text(
+            json.dumps({'asset_id': 3, 'path': r'R:\media\3.mp4', **ambiguous}) + '\n', encoding='utf-8')
+        self.contract.cover_root.mkdir()
+        Image.new('RGB', (16, 16)).save(self.contract.cover_root / 'SSIS-102.jpg')
+        previews = self.contract.snapshot_root
+        previews.mkdir()
+        sheet = previews / '7.jpg'
+        Image.new('RGB', (90, 90)).save(sheet)
+        artifact_rules.remember(sheet)
+        with self.database.write_transaction() as connection:
+            connection.execute('UPDATE asset SET snapshot_path=? WHERE id=7', (str(sheet),))
+        nfo = state / 'library-processing-items'
+        nfo.mkdir()
+        (nfo / 'index.json').write_text(json.dumps({'entries': {r'8:R:\media\8.mp4': ['', '8.json']}}),
+                                        encoding='utf-8')
+        (nfo / '8.json').write_text(json.dumps({'local': ['SSIS-108', True, {}]}), encoding='utf-8')
+        library_processing.misses_path(self.service.config).write_text(json.dumps({
+            'misses': {'prestige': {'SSIS-109': 1}, western_artwork.SCENE_SOURCE: {scene.cache_key: 1}},
+        }), encoding='utf-8')
+
+        self.service.prepare()
+        self.service.tick()
+        keys = upgrade_repairs._read(self.service.receipt)['queued']
+        expected = {f'upgrade-library:{rule}:{asset_id}' for rule, ids in (
+            (upgrade_stock_repair.COVER, [1]), (upgrade_stock_repair.METADATA, [3, 4, 5, 8, 9, 10]),
+            (upgrade_stock_repair.VISUAL, [7]))
+                    for asset_id in ids}
+        self.assertEqual({key for key in keys if upgrade_repairs.item_of(key)}, expected)
+        self.service.prepare()
+        self.service.tick()
+        self.assertEqual(upgrade_repairs._read(self.service.receipt)['queued'], keys)
+        covered = f'upgrade-library:{upgrade_stock_repair.COVER}:1'
+        self.store.finish(keys[covered], 'succeeded')
+        self.service.prepare()
+        self.service.tick()
+        self.assertNotIn(covered, upgrade_repairs._read(self.service.receipt)['queued'])
+        with self.database.read_connection() as connection:
+            self.assertEqual(connection.execute('SELECT code FROM asset WHERE id=6').fetchone()[0], 'CDRP-010')
+
+    def test_stock_repairs_settle_per_item_and_use_only_the_required_stage(self):
+        from peach import upgrade_stock_repair
+
+        self.contract.upgrade_config = self.service.config
+        self.asset(1, duration=90)
+        self.asset(2, duration=90)
+        key = f'upgrade-library:batch:{upgrade_stock_repair.COVER}:1,2'
+        with patch('peach.library_processing.process_library', return_value={
+            'status': 'failed', 'outcome': 'partial', 'retryable_asset_ids': [2],
+        }) as process:
+            result = upgrade_repairs._media_run(self.contract, key, Mock(run_id=None))
+        self.assertEqual((result['done'], result['failed']), (1, 1))
+        self.assertEqual(process.call_args.kwargs['stage'], 'covers')
+        self.assertEqual(process.call_args.kwargs['protected_ids'], [1, 2])
+        self.assertFalse(process.call_args.kwargs['recheck_existing'])
+        with self.database.read_connection() as connection:
+            states = {row['asset_id']: row['state'] for row in connection.execute(
+                'SELECT asset_id,state FROM ledger_upgrade_item WHERE rule=?',
+                (f'media:{upgrade_stock_repair.COVER}',))}
+        self.assertEqual(states, {1: 'done', 2: 'failed'})
+
+    def test_stock_visual_repair_analyzes_the_saved_preview_without_regenerating_it(self):
+        from PIL import Image
+        from peach import artifact_rules, junk_visual, upgrade_stock_repair
+
+        self.contract.upgrade_config = self.service.config
+        self.asset(1, duration=90)
+        sheet = self.contract.snapshot_root / '1.jpg'
+        sheet.parent.mkdir()
+        Image.new('RGB', (90, 90)).save(sheet)
+        artifact_rules.remember(sheet)
+        content = sheet.read_bytes()
+        with self.database.write_transaction() as connection:
+            connection.execute('UPDATE asset SET size=1000,snapshot_path=? WHERE id=1', (str(sheet),))
+        key = f'upgrade-library:batch:{upgrade_stock_repair.VISUAL}:1'
+        with (patch('peach.image_ocr.ImageReader.read', return_value=[''] * 9),
+              patch('peach.library_processing.process_library') as process):
+            result = upgrade_repairs._media_run(self.contract, key, Mock(run_id=None))
+        process.assert_not_called()
+        self.assertEqual(result['done'], 1)
+        self.assertEqual(sheet.read_bytes(), content)
+        self.assertEqual(junk_visual.read(self.database, 1)[1]['verdict'], 'no_candidate')
+
     def test_auto_repair_speed_survives_dispatch_batches_without_changing_other_tasks(self):
         from peach import task_control
         from peach.followups import Followup
@@ -411,7 +526,7 @@ class UpgradeRepairTests(unittest.TestCase):
         from peach import artifact_rules
         from peach.jobs import DiskSpaceDenied
         sheet = self.display_sample()
-        with self.assertRaisesRegex(ValueError, '未取得'):
+        with self.assertRaisesRegex(ValueError, '无法测量显示尺寸，已保留原有记录'):
             self.run_display_probe((-1, 0, 0, None, 0, 0, None, None, None, 1))
         with self.assertRaises(DiskSpaceDenied):
             self.run_display_probe((60, 1440, 1280, None, 0, 0, None, 'landscape', '1080P', 1),

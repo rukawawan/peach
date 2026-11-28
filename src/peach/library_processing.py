@@ -410,10 +410,10 @@ class SourceBudget:
     bytes: int = MAX_SOURCE_BYTES
     seconds: float = MAX_SOURCE_SECONDS
 
-    def transport(self, secrets_root):
+    def transport(self, secrets_root, *, javdb_account_fallback=False):
         from .scraping_access import SourceTransport
         return SourceTransport(secrets_root, max_requests=self.requests, max_bytes=self.bytes,
-                               max_seconds=self.seconds)
+                               max_seconds=self.seconds, javdb_account_fallback=javdb_account_fallback)
 
 
 def source_budget_settings(settings):
@@ -423,23 +423,25 @@ def source_budget_settings(settings):
             else SOURCE_BUDGET_DEFAULTS[key] for key, choices in SOURCE_BUDGET_CHOICES.items()}
 
 
-def source_budget(database):
-    """按账本设置算出本趟的采集预算；`database` 是 `LedgerDatabase` 或账本路径。"""
+def _processing_settings(database):
     if database is None:
-        return SourceBudget()
+        return {}
     try:
         if hasattr(database, 'read_connection'):
             with database.read_connection() as connection:
-                settings = read_settings(connection)
-        elif Path(database).is_file():
+                return read_settings(connection)
+        if Path(database).is_file():
             with closing(sqlite3.connect(database, timeout=30)) as connection:
-                settings = read_settings(connection)
-        else:
-            settings = {}
+                return read_settings(connection)
     except sqlite3.Error:
-        # 读不出设置只是按默认档跑，不让整趟任务因此失败。
-        settings = {}
-    chosen = source_budget_settings(settings)
+        # 账本设置暂不可读时使用默认值，保留任务的独立错误检查。
+        pass
+    return {}
+
+
+def source_budget(database):
+    """按账本设置算出本趟的采集预算；`database` 是 `LedgerDatabase` 或账本路径。"""
+    chosen = source_budget_settings(_processing_settings(database))
     return SourceBudget(requests=chosen['sourceBudgetRequests'], bytes=chosen['sourceBudgetGigabytes'] * 1024 ** 3,
                         seconds=chosen['sourceBudgetHours'] * 3600)
 
@@ -564,7 +566,7 @@ class LibraryMetadataProvider:
         self.wiki_root = (Path(wiki_root) if wiki_root is not None
                           else self.secrets_root.parent / 'sources' / 'library-metadata' / 'seesaa-pages')
         #: 本趟采集预算（`SourceBudget`）；不给按默认档。
-        self.transport = HostLimitedTransport((budget or SourceBudget()).transport(secrets_root),
+        self.transport = HostLimitedTransport((budget or SourceBudget()).transport(secrets_root, javdb_account_fallback=True),
                                               2.0, limiter=SOURCE_LIMITER)
 
     #: 匿名 JavDB 资料的快照目录；没有时只在进程内存里复用。
@@ -585,7 +587,7 @@ class LibraryMetadataProvider:
         if SOURCES.get(source, {}).get('browser') and spent > BROWSER_REQUEST_TIMEOUT:
             self.excused += spent - BROWSER_REQUEST_TIMEOUT
 
-    def amane(self, code, *, deadline=None, route=()):
+    def amane(self, code, *, deadline=None, route=(), studio=None):
         """经 amane 桥问 `route` 里那几站，一次子进程并发问完，返回 `[(来源, 资料)]`。
 
         桥与映射在 `metadata_amane`（ADR-0043）。正在冷却的站不带进子进程；桥报的限流与
@@ -596,7 +598,7 @@ class LibraryMetadataProvider:
         from . import metadata_amane
         from .scraping_access import SourcePaused, paused_until
         cache = self.__dict__.setdefault('_amane', {})
-        key = (code, tuple(route))
+        key = (code, tuple(route), studio)
         if key not in cache:
             sites = [site for site in route if site in metadata_amane.SITES]
             open_sites = [site for site in sites if not paused_until(self.secrets_root, site)]
@@ -605,12 +607,12 @@ class LibraryMetadataProvider:
             elif not open_sites:
                 cache[key] = SourcePaused('errors.scrapingAccess.coolingDown')
             else:
-                cache[key] = self._amane_query(code, open_sites, deadline)
+                cache[key] = self._amane_query(code, open_sites, deadline, studio=studio)
         if isinstance(cache[key], Exception):
             raise _again(cache[key])
         return cache[key]
 
-    def _amane_query(self, code, sites, deadline):
+    def _amane_query(self, code, sites, deadline, *, studio=None):
         """起一次桥子进程并把报告翻成这一档的结果或异常（异常作为返回值，由调用方缓存后再抛）。"""
         from . import metadata_amane, peach_proxy
         from .config import TOOLS_DIR
@@ -653,7 +655,7 @@ class LibraryMetadataProvider:
         reports = {site: raw_sites[site] if isinstance(raw_sites.get(site), dict) else {
             'status': 'failed', 'reason': 'parse_error', 'detail': 'bridge returned no record for this site',
         } for site in sites}
-        found, failures = metadata_amane.split_report(code, {**report, 'sites': reports})
+        found, failures = metadata_amane.split_report(code, {**report, 'sites': reports}, studio=studio)
         for site, result in reports.items():
             error = failures.get(site)
             record_source_check(self.secrets_root, site, 'metadata', {
@@ -1494,6 +1496,9 @@ def _merge_candidates(groups, row, code, source, document, evidence_path, genre_
     NFO 核查保留不同来源的取值；已有值的差异标记为覆盖复核。相同取值不重复生成候选。
     """
     local = source == 'local_nfo'
+    from .metadata_amane import date_identity_confirmed, needs_date_identity
+    date_checked = needs_date_identity(source, code) and date_identity_confirmed(
+        source, code, document, _dated_studio(_studio_evidence(row)))
     for field, value in _fields(document, genre_decisions).items():
         key = f"asset:{row['id']}:{field}"
         if field == 'performers':
@@ -1507,6 +1512,8 @@ def _merge_candidates(groups, row, code, source, document, evidence_path, genre_
                 and not _confirmed_cast(database, value['value'])):
             mode = 'identity-review'
         candidate = _source_candidate(source, document, value, evidence_path, mode)
+        if date_checked:
+            candidate['date_identity_checked'] = True
         group = groups.get(key, dict(item_key=key, code=code or '', query=code or row['name'],
             asset_id=row['id'], asset_path=row['path'], field=field,
             field_label=LABELS[field], current_value=row.get(COLUMN_OF.get(field, field)) or '',
@@ -1618,6 +1625,14 @@ def _scrapes_as_jav(row, code):
                           ('performer',) if row.get('performers') else (), row.get('region'))
 
 
+def _configured_code_patterns(raw):
+    try:
+        return compile_code_patterns(raw)
+    except ValueError:
+        # 设置保存前已校验，手工改坏的规则退回内置识别。
+        return ()
+
+
 def _filename_code(row, patterns=()):
     """从文件名认出的番号；目录身份说明它分不清时是 None（#572）。
 
@@ -1633,6 +1648,12 @@ def _filename_code(row, patterns=()):
 def _studio_evidence(row):
     """判片商时本机手上有的证据：文件路径、文件名和账本里已记的厂牌。"""
     return (row.get('path'), row.get('name'), row.get('studio'))
+
+
+def _dated_studio(evidence):
+    from .sources.onepondo import names_this_studio
+    path, name, studio = evidence
+    return studio or ('1pondo' if names_this_studio(path, name) else None)
 
 
 def _missing_fields(row, local_fields=()):
@@ -1660,12 +1681,13 @@ def _answered_sources(groups, target_key, fields):
     2026-09-25 实测 410 条 FC2 演员候选待批时，这一行被当成「演员已有着落」，
     FC2PPV-DB 一次都没被问到；按来源判就只跳过给过候选的那一家。
     """
+    from .metadata_amane import current_date_candidate
     answered = set()
     for field in fields:
         group = groups.get(f'{target_key}:{field}')
         if group:
             answered.update(entry.get('source') for entry in json.loads(group.get('candidates_json') or '[]')
-                            if candidate_text_is_valid(entry))
+                            if candidate_text_is_valid(entry) and current_date_candidate(group.get('code') or '', entry))
     return answered
 
 
@@ -1828,6 +1850,10 @@ class _MissCache:
 
         if loaded.get('western_scene_rules') != upgrade_rules.WESTERN_SCENE_MISSES:
             self._entries.pop(western_artwork.SCENE_SOURCE, None)
+        if loaded.get('prestige_sku_rules') != upgrade_rules.PRESTIGE_SKU_MISSES:
+            cover_misses = self._entries.get('cover', {})
+            for code in self._entries.pop('prestige', {}):
+                cover_misses.pop(code, None)
 
     def fresh(self, source, code, lineup=()):
         """`source` 对 `code` 说过「没有」且还在期内。`lineup` 是这条记忆当时应当问过的几站：
@@ -1843,6 +1869,7 @@ class _MissCache:
             'format': MISS_FORMAT, 'sites': self._sites,
             'cover_catalog_rules': upgrade_rules.OFFICIAL_COVER_CATALOG_MISSES,
             'western_scene_rules': upgrade_rules.WESTERN_SCENE_MISSES,
+            'prestige_sku_rules': upgrade_rules.PRESTIGE_SKU_MISSES,
             'joined': {site: stamp for site, stamp in self._joined.items() if now - stamp < self._ttl},
             'misses': {name: {key: stamp for key, stamp in codes.items() if now - stamp < self._ttl}
                        for name, codes in self._entries.items()}})
@@ -1953,7 +1980,8 @@ class _RemoteSession:
                 continue
             answered = () if verify or cover else _answered_sources(groups or {}, f"asset:{row['id']}", missing)
             members = self._askable([name for name in chain if name in metadata_amane.SITES], code, answered)
-            cached = {name for name, *_ in self._cached_evidence(members, code)}
+            cached = {name for name, *_ in self._cached_evidence(
+                members, code, studio=_dated_studio(_studio_evidence(row)))}
             if any(name not in cached and not paused_until(self._config.directory('secrets'), name)
                    for name in members):
                 required.append(row['id'])
@@ -1989,7 +2017,7 @@ class _RemoteSession:
             entries = self._metadata(row, code, missing, update=update, issue=issue, answered=answered,
                                      received=received)
         if fetch_cover and _asks_cover(code, *_studio_evidence(row)) and not cover_settled(cover_root / (code + '.jpg')):
-            snapshots, absent = self._cover_inputs(code, chain, entries)
+            snapshots, absent = self._cover_inputs(code, chain, entries, studio=_dated_studio(_studio_evidence(row)))
             covers = self._cover(row, code, cover_root, update=update, issue=issue,
                                  snapshots=snapshots, absent=absent)
         return entries, covers
@@ -2151,7 +2179,7 @@ class _RemoteSession:
         return bool(missing and chain and (self._askable(chain, code, answered)
                                            or not set(answered).intersection(chain)))
 
-    def _cover_inputs(self, code, chain, entries):
+    def _cover_inputs(self, code, chain, entries, *, studio=None):
         """封面那一步不必再问的：手上已有的快照 `[(来源, 资料)]`，与说过没有或不在链上的站。
 
         快照是资料那一步这一趟取到的，加上链上其余几站磁盘缓存里还新鲜的那份（给过候选而
@@ -2160,7 +2188,7 @@ class _RemoteSession:
         """
         known = {name: payload for name, payload, _ in entries if name in SOURCE_SPECS}
         known.update((name, payload) for name, payload, _ in
-                     self._cached_evidence([name for name in chain if name not in known], code))
+                     self._cached_evidence([name for name in chain if name not in known], code, studio=studio))
         absent = {name for name in chain if self._fresh_miss(name, code)}
         return list(known.items()), absent | ({'r18dev'} - set(chain))
 
@@ -2174,7 +2202,7 @@ class _RemoteSession:
     def _evidence_path(self, code, source):
         return self._config.directory('sources') / 'library-metadata' / f'{code}-{source}.json'
 
-    def _cached_evidence(self, names, code):
+    def _cached_evidence(self, names, code, *, studio=None):
         """这一档上次答过的原始快照；命中就不发请求。
 
         有效期与「说过没有」的记忆同一个（`MISS_TTL_SECONDS`，7 天）：来源会补录、
@@ -2206,7 +2234,8 @@ class _RemoteSession:
                 found.append(entry)
             except (OSError, ValueError):
                 continue
-        return found
+        from .metadata_amane import date_identity_confirmed
+        return [entry for entry in found if date_identity_confirmed(entry[0], code, entry[1], studio)]
 
     def _fresh_miss(self, source, code, lineup=()):
         return ((source, code, tuple(lineup)) in self._task_absent
@@ -2258,7 +2287,8 @@ class _RemoteSession:
         if source == '1pondo':
             return provider.one_pondo(code, deadline=deadline)
         if source in ('amane', 'amane_official'):
-            return provider.amane(code, deadline=deadline, route=members)
+            studio = _dated_studio(evidence) if 'avsox' in members else None
+            return provider.amane(code, deadline=deadline, route=members, studio=studio)
         if source in metadata_routes.WIKI_STAGE:
             return provider.wiki(source, code, deadline=deadline)
         route = metadata_routes.community_route(code, *evidence, overrides=self._routes)
@@ -2293,6 +2323,7 @@ class _RemoteSession:
         deadline = deadline_after(budget)
         mark = _excused(self._provider)
         evidence = _studio_evidence(row)
+        studio = _dated_studio(evidence)
         chain = self._chain(code, *evidence)
         required = metadata_routes.required_scalars(missing, code=code)
         wants_tags = 'tags' in missing
@@ -2317,7 +2348,7 @@ class _RemoteSession:
             if not members:
                 continue
             attempted.update(members)
-            cached = self._cached_evidence(members, code)
+            cached = self._cached_evidence(members, code, studio=studio)
             if cached:
                 results.cached(cached)
                 if source in metadata_routes.WIKI_STAGE and any(entry[1].get('actresses') for entry in cached):
@@ -3307,20 +3338,22 @@ def _checkpoint_key(row):
 
 
 def _newly_coded_assets(database, db_path) -> set[str]:
-    """按现行内置规则才有了番号的影片 id，处理时补上番号再采资料。
+    """按现行番号判据需要重新采集的影片 id。
 
     两类：账本里没番号、现在能从文件名认出的；番号带登记尾字母的（`IBW-483Z`）。后者是升级补修
     刚从旧版截掉尾字母的写法改回来的（`upgrade_repairs.truncated_suffix_codes`），按旧写法采集时
-    来源返回都被身份闸拒掉，得按现番号再采一次。
+    来源返回都被身份闸拒掉，得按现番号再采一次。旧 CDRP 序号按现行位数重问。
     """
     from .catalog_rules import without_label_suffix
     from .repository import LedgerDatabase
+    from .upgrade_stock_repair import needs_filename_code
     ledger = database if database is not None else LedgerDatabase(db_path)
     with ledger.read_connection() as connection:
         rows = connection.execute(
-            "SELECT id,name,code FROM asset WHERE medium='video'").fetchall()
+            "SELECT id,name,code,field_owners FROM asset WHERE medium='video'").fetchall()
     return {str(row[0]) for row in rows
-            if (release_code_from_filename(row[1] or '') if not row[2] else without_label_suffix(row[2]))}
+            if (release_code_from_filename(row[1] or '') if not row[2]
+                else without_label_suffix(row[2]) or needs_filename_code(row))}
 
 
 class _LibraryCheckpoints:
@@ -3630,11 +3663,7 @@ class _LocalEvidenceCache:
         prune_local_evidence(path, state.get('local_metadata'))
         with closing(sqlite3.connect(db_path, timeout=30)) as connection:
             stored = read_settings(connection).get('codePatterns')
-        try:
-            self.code_patterns = compile_code_patterns(stored)
-        except ValueError:
-            # 保存时已经校验过；被手改坏的规则当没设置过，不让整轮处理失败。
-            self.code_patterns = ()
+        self.code_patterns = _configured_code_patterns(stored)
         self.items_root = path.parent / (path.stem + '-items')
         self.index_path = self.items_root / 'index.json'
         # 番号识别规则或处理规则变了，旧的读法可能认出别的番号：整份不用。
@@ -3663,6 +3692,13 @@ class _LocalEvidenceCache:
         return hashlib.sha256(json.dumps([directory, video.name, str(ledger_code or '')],
                                          ensure_ascii=False).encode('utf-8')).hexdigest()
 
+    def _current_parser(self, row, cached, has_nfo):
+        from .upgrade_stock_repair import needs_filename_code
+        if has_nfo and cached.get('nfo_parser') != NFO_PARSER_VERSION:
+            return False
+        return (cached.get('filename_code_rule') == upgrade_rules.FILENAME_CODES
+                or not needs_filename_code(row, self.code_patterns))
+
     def _reuse(self, row, issue, poster_jobs):
         """跨任务复用：指纹对得上就返回上次读出的本地证据，海报按当下重排；对不上返回 None。"""
         key = _checkpoint_key(row)
@@ -3679,7 +3715,7 @@ class _LocalEvidenceCache:
             code, verify, payload, entries = cached['local']
         except (OSError, ValueError, KeyError, TypeError):
             return None
-        if verify and cached.get('nfo_parser') != NFO_PARSER_VERSION:
+        if not self._current_parser(row, cached, verify):
             return None
         entries = [(source, document, translate_ledger_path(path)) for source, document, path in entries]
         if not all(Path(path).is_file() for _, _, path in entries):
@@ -3700,8 +3736,7 @@ class _LocalEvidenceCache:
             cached = json.loads(Path(cached_path).read_text(encoding='utf-8')) if cached_path else None
         except (OSError, ValueError):
             cached = None
-        if cached is not None and (not cached['local'][1]
-                                   or cached.get('nfo_parser') == NFO_PARSER_VERSION):
+        if cached is not None and self._current_parser(row, cached, cached['local'][1]):
             code, verify, payload, entries = cached['local']
             poster_jobs.extend((row, translate_ledger_path(source), name, Path(target))
                                for source, name, target in cached['posters'])
@@ -3714,7 +3749,7 @@ class _LocalEvidenceCache:
                                      self.state, update, issue, poster_jobs, self.code_patterns)
         if local is not None and self.state['issue_count'] == issues_before:
             code, verify, payload, entries = local
-            record = dict(nfo_parser=NFO_PARSER_VERSION,
+            record = dict(nfo_parser=NFO_PARSER_VERSION, filename_code_rule=upgrade_rules.FILENAME_CODES,
                           local=[code, verify, payload, [(source, document, str(path)) for source, document, path in entries]],
                           posters=[(str(source), name, str(target)) for _, source, name, target in poster_jobs[offset:]])
             encoded = json.dumps(record, ensure_ascii=False)

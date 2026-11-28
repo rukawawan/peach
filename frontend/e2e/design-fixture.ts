@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach } from 'node:test';
 import type { Browser, Locator, Page } from 'playwright-core';
+import type { MediaItem } from '../src/react/catalog-grid/types.ts';
 import {
   configurationBody, expectBody, launch, settle, visit, VIEWPORTS, type Viewport, type Visit,
 } from './harness.ts';
@@ -359,71 +360,84 @@ export async function openCatalog(browser: Browser): Promise<Visit> {
 }
 
 /** 打开目录，两排头像与标签条用桩数据铺满：演示库那十几部作品凑不出一排标签。 */
-export async function openCatalogBars(browser: Browser, viewport: Viewport = DESKTOP): Promise<Visit> {
-  const opened = await visit(browser, '/', viewport);
+export async function openCatalogBars(browser: Browser, viewport: Viewport = DESKTOP, tagCount = 8): Promise<Visit> {
   const performers = Array.from({ length: 6 }, (_, at) => ({
     id: 96_000 + at, k: `演示女优${at + 1}`, n: 30 - at, has_image: false, has_avatar: false, avatar_focus: null, rep: null,
   }));
   const studios = Array.from({ length: 3 }, (_, at) => ({ k: `演示厂牌${at + 1}`, n: 20 - at, has_logo: false }));
-  const tags = Array.from({ length: 8 }, (_, at) => ({ k: `演示标签${at + 1}`, n: 90 - at }));
-  await opened.page.route((url) => url.pathname === '/api/tops', (route) =>
-    route.fulfill({ json: Number(new URL(route.request().url()).searchParams.get('page') || 0)
-      ? { performers: [], studios: [] } : { performers, studios } }));
-  await opened.page.route((url) => url.pathname === '/api/facets', async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ json: { ...await response.json(), tags } });
-  });
-  await opened.page.reload({ waitUntil: 'load' });
-  await opened.page.locator('[data-catalog-filter] [data-catalog-tag]').first().waitFor({ timeout: 15_000 });
-  await opened.page.locator('[data-catalog-filter] [data-tier-studio]').first().waitFor({ timeout: 15_000 });
-  await settle(opened.page);
-  return opened;
-}
-
-export interface CatalogFixture {
-  total: number;
-  items: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-}
-
-/** 从演示库取一份能完整渲染的真实目录响应，只替换当前判据需要的字段。 */
-export async function openCatalogFixture(
-  browser: Browser,
-  change: (payload: CatalogFixture, url: URL) => void,
-  { completeFirstPage = false }: { completeFirstPage?: boolean } = {},
-): Promise<Visit> {
-  const opened = await visit(browser, '/', DESKTOP);
-  const baselines = new Map<string, CatalogFixture>();
-  await opened.page.route(/\/api\/items\?/, async (route) => {
-    const url = new URL(route.request().url());
-    /* `visit()` 返回时，首屏还可能在后台续取下一页。路由接管之后若先撞上 offset>0，
-       那份响应本来就可能没有卡片，不能拿它当首屏基线；让旧请求原样完成，reload 后
-       再以 offset=0 的响应建立夹具。 */
-    if (url.searchParams.get('offset') !== '0') {
-      await route.continue();
-      return;
-    }
-    const key = url.searchParams.get('orient') || '';
-    let baseline = baselines.get(key);
-    if (!baseline) {
-      const fixtureUrl = new URL(url);
-      if (completeFirstPage && !fixtureUrl.searchParams.has('orient')) fixtureUrl.searchParams.set('limit', '60');
-      const response = await route.fetch({ url: fixtureUrl.href });
-      baseline = await response.json() as CatalogFixture;
-      baselines.set(key, baseline);
-    }
-    const payload = structuredClone(baseline);
-    change(payload, url);
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(payload),
+  const tags = Array.from({ length: tagCount }, (_, at) => ({ k: `演示标签${at + 1}`, n: 90 - at }));
+  const opened = await visit(browser, '/', viewport, async page => {
+    await page.route((url) => url.pathname === '/api/tops', (route) =>
+      route.fulfill({ json: Number(new URL(route.request().url()).searchParams.get('page') || 0)
+        ? { performers: [], studios: [] } : { performers, studios } }));
+    await page.route((url) => url.pathname === '/api/facets', async (route) => {
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      return route.fulfill({ response, json: { ...await response.json(), tags } });
     });
   });
-  await opened.page.reload({ waitUntil: 'load' });
-  await opened.page.locator('[data-catalog-filter] [data-count-readout]').waitFor({ timeout: 15_000 });
-  await settle(opened.page);
-  return opened;
+  try {
+    await opened.page.reload({ waitUntil: 'load' });
+    await expectBody(opened.page, '/', [
+      opened.page.locator('[data-catalog-filter] [data-table-column-filter="home-tags"]').first(),
+      opened.page.locator('[data-catalog-filter] [data-tier-studio]').first(),
+    ], opened.problems);
+    await settle(opened.page);
+    return opened;
+  } catch (error) {
+    await opened.close();
+    throw error;
+  }
+}
+
+/** 目录用例用的普通视频，按场景补字段。 */
+export function catalogVideo(id: number, fields: Partial<MediaItem> = {}): MediaItem {
+  return {
+    id, name: `演示作品 ${id}.mp4`, medium: 'video', creator: '演示创作者',
+    location: 'local', width: 1600, height: 900, duration: 600, has_thumb: true, ...fields,
+  };
+}
+
+/** 设计用例自己提供馆藏、竖屏作品、搜索和回收站数据，让各组查询独立分页。 */
+export async function openCatalogFixture(
+  browser: Browser,
+  { items, portrait = [], trash = [], search = items }: {
+    items: MediaItem[]; portrait?: MediaItem[]; trash?: MediaItem[]; search?: MediaItem[];
+  },
+): Promise<Visit> {
+  const all = [...items, ...portrait, ...trash, ...search];
+  const ids = new Set(all.map(item => String(item.id)));
+  const codes = new Set(all.map(item => item.cover_key || item.code).filter(Boolean));
+  const opened = await visit(browser, '/', DESKTOP, async page => {
+    await page.route((url) => url.pathname === '/api/items', (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      let rows = items;
+      if (params.get('state') === 'trash') rows = trash;
+      else if (params.get('orient') === 'portrait') rows = portrait;
+      else if (params.has('q')) rows = search;
+      const total = rows.length;
+      if (params.get('summary_only') === '1') {
+        return route.fulfill({ json: { items: [], total, work_total: total } });
+      }
+      const offset = Number(params.get('offset') || 0);
+      const limit = Number(params.get('limit') || total);
+      return route.fulfill({ json: {
+        items: rows.slice(offset, offset + limit), has_more: offset + limit < total,
+        ...(params.get('count') === '0' ? {} : { total, work_total: total }),
+      } });
+    });
+    await page.route((url) => (url.pathname === '/poster' && ids.has(url.searchParams.get('id') ?? ''))
+      || (url.pathname === '/cover' && codes.has(url.searchParams.get('code') ?? '')),
+      (route) => route.fulfill({ contentType: 'image/png', body: Buffer.from(PIXEL, 'base64') }));
+  });
+  try {
+    await expectBody(opened.page, '/', [opened.page.locator('[data-catalog-filter] [data-count-readout]')], opened.problems);
+    await settle(opened.page);
+    return opened;
+  } catch (error) {
+    await opened.close();
+    throw error;
+  }
 }
 
 /** 一趟跑到一半的扫描与采集。 */
@@ -457,12 +471,15 @@ export const followCredential = (provider: string, requirement: string, present:
 /** 关注管理页按一份造好的来源与凭据打开：演示库没有关注来源，也凑不齐四种凭据处境。
  *  站标同 `openScraping`：造出来的来源取不到图标，给一张能加载完的图。 */
 export async function openFollowManage(browser: Browser, viewport = DESKTOP, data: FollowManageData = {}): Promise<Visit> {
-  const opened = await visit(browser, '/subscriptions', viewport);
-  await stubFollowManage(opened.page, data);
-  await opened.page.reload({ waitUntil: 'load' });
-  await opened.page.locator('section[aria-label="kou 的关注来源"]').waitFor({ timeout: 15_000 });
-  await settle(opened.page);
-  return opened;
+  const opened = await visit(browser, '/subscriptions', viewport, page => stubFollowManage(page, data));
+  try {
+    await expectBody(opened.page, '关注来源', [opened.page.getByRole('region', { name: 'kou 的关注来源' })], opened.problems);
+    await settle(opened.page);
+    return opened;
+  } catch (error) {
+    await opened.close();
+    throw error;
+  }
 }
 
 /** 换掉计数、在三条来源之后再加几条：量极端内容时用。 */

@@ -10,9 +10,10 @@ import { serverLabel } from '../../core/server-text';
 import { schemePlayers, type SchemePlayer } from '../../player/external-schemes';
 
 const TARGET_KEY = 'peach.playback-target.v1';
-/** 本机播放器：`label` 是播放器名或服务端按 zh-CN 渲染的「系统默认播放器」，后者带 `label_code`。 */
 type LocalPlayer = { id: string; label: string; label_code?: string };
 const NETWORK_TARGETS = [['m3u', t('catalog:externalPlayback.m3uPlaylist')], ['url', t('catalog:externalPlayback.streamUrlVr')]] as const;
+const localTarget = (item: LocalPlayer) =>
+  [`local:${item.id}`, serverLabel(item.label_code ?? '', item.label)] as const;
 const schemeLabel = (player: SchemePlayer) => player.label || t('catalog:externalPlayback.androidChooser');
 /** 链接调起的播放器按客户端平台给；本机已检测到的同名播放器走服务端打开，不重复列。 */
 const schemeTargets = (players: LocalPlayer[] | null) =>
@@ -52,13 +53,16 @@ export function ExternalPlayback({ id, onOpened }: { id: number; onOpened?(): vo
   }, [epoch]);
   const open = () => void action.run('open', async signal => {
     if (player.startsWith('local:')) {
-      await apiSend(`/api/local-playback?id=${id}&player=${encodeURIComponent(player.slice(6))}`, {}, 'POST', signal);
-      return null;
+      const { opened } = await apiSend<{ opened: boolean }>(
+        `/api/local-playback?id=${id}&player=${encodeURIComponent(player.slice(6))}`, {}, 'POST', signal,
+      );
+      return { opened };
     }
     const result = await apiSend<{ url: string; playlist: string }>(`/api/external-playback?id=${id}`, {}, 'POST', signal);
     return { url: new URL(result.url, location.origin).href, playlist: new URL(result.playlist, location.origin).href };
   }, result => {
-    if (!result) {
+    if ('opened' in result) {
+      if (!result.opened) return;
       document.querySelector<HTMLVideoElement>('#stage video')?.pause();
       onOpened?.();
       return;
@@ -73,11 +77,13 @@ export function ExternalPlayback({ id, onOpened }: { id: number; onOpened?(): vo
     link.click();
     link.remove();
   });
+  const custom = players?.find(item => item.id === 'custom');
   return <div data-local-playback="">
     <div data-local-playback-row="">
       <SelectField id={`external-player-${id}`} label={t('catalog:externalPlayback.externalPlayer')}
-        options={[...(players || []).map(item => [`local:${item.id}`, serverLabel(item.label_code ?? '', item.label)] as const),
-          ...schemeTargets(players).map(([key, item]) => [key, schemeLabel(item)] as const), ...NETWORK_TARGETS]}
+        options={[...(players || []).filter(item => item.id !== 'custom').map(localTarget),
+          ...schemeTargets(players).map(([key, item]) => [key, schemeLabel(item)] as const),
+          ...NETWORK_TARGETS, ...(custom ? [localTarget(custom)] : [])]}
         value={player} disabled={players === null || !!action.busy} epoch={epoch * 2 + Number(players !== null)} onPick={value => {
           setPlayer(value);
           setLinks(null);

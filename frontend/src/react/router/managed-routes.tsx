@@ -96,6 +96,7 @@ async function withPage(chunk: RouteChunk<unknown>, data: Promise<void>): Promis
 }
 
 const javPage = routeChunk(() => import('../jav/jav-page'));
+const aiSearchPage = routeChunk(() => import('../search/library-assistant'));
 const statsPage = routeChunk(() => import('../stats/stats-page'));
 const tastePage = routeChunk(() => import('../taste/taste-page'));
 const reviewPage = routeChunk(() => import('../review/review-page'));
@@ -154,6 +155,14 @@ const cleanupRoutes = CLEANUP_TOOLS.reduce((routes, tool) => {
 
 export const MANAGED_ROUTES: ManagedRouteTable = {
   ...cleanupRoutes,
+  '/ai': {
+    element: <ManagedMatch path="/ai" />,
+    prefetch: async () => { await aiSearchPage.preload(); },
+    page: () => {
+      const { LibraryAssistant } = aiSearchPage.get();
+      return <LibraryAssistant />;
+    },
+  },
   '/jav': {
     element: <ManagedMatch path="/jav" />,
     prefetch: (open, signal) => withPage(javPage, prefetchJav(open.tab, signal)),
@@ -231,6 +240,7 @@ export const MANAGED_ROUTES: ManagedRouteTable = {
   },
   '/settings/library': configurationRoute('/settings/library'),
   '/settings/subscriptions': configurationRoute('/settings/subscriptions'),
+  '/settings/ai': configurationRoute('/settings/ai'),
   '/settings/downloads': configurationRoute('/settings/downloads'),
   '/settings/network': configurationRoute('/settings/network'),
   '/settings/maintenance': configurationRoute('/settings/maintenance'),

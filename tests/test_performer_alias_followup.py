@@ -552,7 +552,7 @@ class Fc2cmadbTests(Case):
         her = self.nicknamed()
         self.fc2cmadb.status = 403
         summary = self.run_followup(her)
-        self.assertEqual(told(summary)["outcome"], "未取得")
+        self.assertEqual(told(summary)["outcome"], "采集失败")
         self.assertTrue(paused_until(self.cooldown, alias.FC2CMADB))
         asked = len(self.fc2cmadb.calls)
         self.run_followup(her, run_id=8)
@@ -676,13 +676,13 @@ class RepeatTests(Case):
         self.minnano.pages[minnano_av.search_url("神山ももか")] = (429, b"")
         self.av_neme.pages[wiki_search_url("神山ももか")] = (429, b"")
         summary = self.run_followup(momoka)
-        self.assertEqual(told(summary)["outcome"], "未取得")
+        self.assertEqual(told(summary)["outcome"], "采集失败")
         self.assertIn("429", summary["sites"][alias.MINNANO])
         self.assertIn("429", summary["sites"][alias.AV_NEME])
         self.assertTrue(paused_until(self.cooldown, alias.MINNANO))
         self.assertTrue(paused_until(self.cooldown, alias.AV_NEME))
         requests = len(self.minnano.calls) + len(self.av_neme.calls)
-        self.assertEqual(told(self.run_followup(momoka, run_id=8))["outcome"], "未取得")
+        self.assertEqual(told(self.run_followup(momoka, run_id=8))["outcome"], "采集失败")
         self.assertEqual(len(self.minnano.calls) + len(self.av_neme.calls), requests)
         self.assertEqual(self.aliases(momoka), {})
 
@@ -695,7 +695,7 @@ class RepeatTests(Case):
         self.assertEqual(told(self.run_followup(settled))["outcome"], "两个来源均未找到与该人物相符的资料页")
         self.minnano.pages[minnano_av.search_url("神山ももか")] = (429, b"")
         self.av_neme.pages[wiki_url("神山ももか")] = (429, b"")
-        self.assertEqual(told(self.run_followup(momoka))["outcome"], "未取得")
+        self.assertEqual(told(self.run_followup(momoka))["outcome"], "采集失败")
         now = time.time()
 
         def planned(clock):
@@ -712,7 +712,7 @@ class RepeatTests(Case):
         self.minnano.pages[minnano_av.search_url("神山ももか")] = (
             200, b"<title>Just a moment...</title>")
         summary = self.run_followup(momoka)
-        self.assertIn("未取得", summary["sites"][alias.MINNANO])
+        self.assertIn("查询失败", summary["sites"][alias.MINNANO])
         self.assertFalse(list((self.generated / "provider-cache" / "minnano").glob("*.json")))
 
     def test_the_cloudflare_beacon_on_a_normal_page_is_not_a_challenge(self):

@@ -98,7 +98,7 @@ describe('创作者', () => {
     expect(plain.author).toBe('kou');
     expect(plain.avatar).toContain('src="/kou.png"');
     expect(followIdentity(item(6, { author: '帖子作者' }), [], context()).author).toBe('帖子作者');
-    expect(followIdentity(item(7), [], context()).author).toBe('创作者未取得');
+    expect(followIdentity(item(7), [], context()).author).toBe('创作者未知');
   });
 });
 
@@ -129,15 +129,15 @@ describe('标题前后的字样', () => {
   });
 
   it('媒体未取得说清原因；缺 F95 会话时分「部分」与「全部」', () => {
-    expect(followMediaIssue(item(1, { media_error: '404' }), context())).toBe('媒体未取得：404');
+    expect(followMediaIssue(item(1, { media_error: '404' }), context())).toBe('媒体加载失败：404');
     const needs = item(2, { provider: 'f95zone', media_needs_credential: true });
-    expect(followMediaIssue(needs, context())).toBe('媒体未取得：需要 F95 登录会话解析');
-    expect(followMediaIssue({ ...needs, playable: true }, context())).toBe('部分媒体未取得：需要 F95 登录会话解析');
+    expect(followMediaIssue(needs, context())).toBe('访问媒体需要 F95 登录会话');
+    expect(followMediaIssue({ ...needs, playable: true }, context())).toBe('部分媒体需要 F95 登录会话才能访问');
     expect(followMediaIssue(needs, context({ credentials: new Set(['f95zone']) }))).toBe('');
   });
 
   it('时间按本机时区写，没给就明说，不加「约」', () => {
-    expect(followWhen(item(1))).toBe('时间未取得');
+    expect(followWhen(item(1))).toBe('时间未知');
     const when = followWhen(item(2, { published_at: '2026-09-04T00:00:00Z' }));
     expect(when).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d$/);
     expect(when).not.toContain('约');
@@ -165,7 +165,7 @@ describe('标题前后的字样', () => {
     const now = Date.parse('2026-10-08T12:00:00Z');
     expect(followCompactWhen(item(1, { published_at: '2026-09-04T12:00:00Z' }), now)).toBe('09-04');
     expect(followCompactWhen(item(2, { published_at: '2024-09-04T12:00:00Z' }), now)).toBe('2024-09-04');
-    expect(followCompactWhen(item(3), now)).toBe('时间未取得');
+    expect(followCompactWhen(item(3), now)).toBe('时间未知');
   });
 
   it('标题为空或只有空白时写同一句「未命名内容」', () => {

@@ -348,17 +348,26 @@ def dmm_actress_pages(connection: sqlite3.Connection, entity_id: int) -> list[st
     return [dmm_actress_url(value) for value in dmm_actress_ids(connection, entity_id)]
 
 
+def set_manual_pages(connection: sqlite3.Connection, entity_id: int, enabled: bool) -> None:
+    """从结果按页订阅时，定时检查按用户选择取源。"""
+    connection.execute(
+        "UPDATE entity SET metadata_json=json_set(metadata_json,'$.user_feed_page_selection',?)"
+        " WHERE id=? AND coalesce(json_extract(metadata_json,'$.user_feed_page_selection'),0)<>?",
+        (int(enabled), entity_id, int(enabled)))
+
+
 def sync_dmm_sources(connection: sqlite3.Connection) -> list[int]:
     """给已在订阅的人补上 DMM 片单源，返回新建的源 id。
 
     订阅是按人开的（人物页那枚开关），DMM 编号却常常是开关打开之后才由刮削写进账本的，所以每轮
     拉取前对一遍。只补地址还没登记过的：用户在设置页单独停掉的那一条不会被重新打开，没有 DMM
-    编号的人一条也不建，也就不为她发请求。
+    编号的人一条也不建。按页订阅过的人保持手动选择，定时检查只拉已启用的源。
     """
     created: list[int] = []
     followed = [int(row[0]) for row in connection.execute(
-        "SELECT DISTINCT entity_id FROM feed_source WHERE enabled=1 AND entity_id IS NOT NULL"
-        " ORDER BY entity_id")]
+        "SELECT DISTINCT s.entity_id FROM feed_source s JOIN entity e ON e.id=s.entity_id"
+        " WHERE s.enabled=1 AND coalesce(json_extract(e.metadata_json,'$.user_feed_page_selection'),0)=0"
+        " ORDER BY s.entity_id")]
     for entity_id in followed:
         for url in dmm_actress_pages(connection, entity_id):
             if connection.execute("SELECT 1 FROM feed_source WHERE url=?", (url,)).fetchone():

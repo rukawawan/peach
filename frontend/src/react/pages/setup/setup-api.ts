@@ -39,6 +39,10 @@ export interface SetupQuestions {
   /** 容器启动时已按 `PEACH_ACCESS_PASSWORD` 写下访问密码，访问那一项不再出题。 */
   access_preset?: boolean;
   remote_reporting?: import('../../settings/remote-reporting-settings').RemoteReportingState;
+  library_sharing?: {
+    available: boolean; consent_schema: number;
+    fields: string[]; field_codes: string[]; notice: string; notice_code: string;
+  };
   windows: boolean;
   standalone: boolean;
   questions: SetupQuestion[];
@@ -55,6 +59,7 @@ export interface SetupFact { term: string; value: string; download_url?: string;
 
 export interface SetupDone {
   restored?: boolean;
+  sharing_save_failed?: boolean;
   skip_media?: boolean;
   url: string;
   scan_requested: boolean;
@@ -88,6 +93,7 @@ export interface SetupSubmission {
   scan_now: boolean;
   history_guide?: boolean;
   interface_language?: import('../../../i18n').InterfaceLanguageChoice;
+  library_sharing?: { consent: true; consent_schema: number };
   [key: string]: unknown;
 }
 

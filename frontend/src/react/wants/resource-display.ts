@@ -4,6 +4,11 @@ import { t } from '../../i18n';
 export const resourceSourceKey = (source: string) =>
   source === 'manko.fun' ? 'manko' : source === 'javdb-comments' ? 'javdb' : source.toLowerCase();
 
+export const sourceDisplayName = (source: string) =>
+  ({ manko: 'manko.fun', javdb: 'JavDB', javbus: 'JavBus' } as Record<string, string>)[source] || source;
+
+export const sourceConnectionPath = (source: string) => '/sources#source-' + encodeURIComponent(source);
+
 /** 来源的字节数按馆藏容量口径展示，其他来源单位保留；来源没给大小时显示未知。 */
 export function resourceSize(value: string | null | undefined): string {
   const text = (value ?? '').trim();

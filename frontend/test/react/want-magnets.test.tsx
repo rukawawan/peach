@@ -89,11 +89,24 @@ it('来源查询失败显示红色回执和站标，并保留其他来源取得�
     warnings: ['JavDB：未取得'], warning_codes: ['labels.magnetChain.sourceUnfetched'],
     warning_params: [{ source: 'JavDB' }],
   });
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain('JavDB：查询未完成');
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('JavDB：搜索失败');
   expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
   expect(host.querySelector('[role="alert"] img')?.getAttribute('src')).toBe('/site-mark?source=javdb');
   expect(host.querySelector('[data-resource-title]')?.textContent).toBe(candidate.name);
   expect(buttonNamed('重新查询', host)).not.toBeNull();
+});
+
+it('将检查连接放进对应来源提示，限流提示保留无需操作的状态', async () => {
+  const { host } = await open([], false, true, {
+    warnings: ['sukebei：无法访问', 'JavDB：请求被限流（HTTP 429）'],
+    warning_sources: ['sukebei', 'javdb'], connection_checks: ['sukebei'],
+  });
+  const [network, limited] = host.querySelectorAll('[role="alert"]');
+  const link = network.querySelector('[data-note-action] a');
+  expect(network.textContent).toContain('sukebei：无法访问');
+  expect(link?.getAttribute('href')).toBe('/sources#source-sukebei');
+  expect(host.querySelectorAll('a[href="/sources#source-sukebei"]')).toHaveLength(1);
+  expect(limited.querySelector('[data-note-action]')).toBeNull();
 });
 
 it('取得的来源页按地址去重，显示站名及对应 favicon', async () => {

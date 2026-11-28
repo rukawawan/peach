@@ -16,7 +16,7 @@ import { FollowFeedPage } from '../../src/react/follow-feed/follow-feed-page';
 import { FollowCard } from '../../src/react/follow-feed/follow-card';
 import { learnFollowDims } from '../../src/react/follow-feed/follow-marks';
 import { queryClient } from '../../src/react/query';
-import { click, mount, mountRoot, settle } from './render';
+import { chooseFilter, click, mount, mountRoot, settle } from './render';
 
 /* 回写尺寸那一批由 `follow-marks.test.ts` 量；这里只看卡片在什么时候报。 */
 vi.mock(import('../../src/react/follow-feed/follow-marks'), async (importOriginal) => ({
@@ -27,7 +27,7 @@ afterEach(() => { queryClient.clear() });
 notifyManager.setScheduler((notify) => notify());
 
 const VIEW: FollowView = {
-  status: '', media: 'videos', author: '', provider: '', work: '', tags: [], durMin: 0, durMax: 0, sort: 'new', dir: 'desc', seed: 7,
+  status: '', media: 'videos', author: '', provider: '', work: '', tags: [], durMin: 0, durMax: 0, q: '', sort: 'new', dir: 'desc', seed: 7,
 };
 const view = (patch: Partial<FollowView> = {}): FollowView => ({ ...VIEW, ...patch });
 
@@ -93,6 +93,13 @@ describe('请求地址', () => {
     expect(params({ durMin: 600, durMax: 1800 })).toMatchObject({ dur_min: '600', dur_max: '1800' });
     expect(params({ durMin: 600 })).not.toHaveProperty('dur_max');
     expect(params({ durMax: 1800 })).not.toHaveProperty('dur_min');
+  });
+
+  it('查找词交给服务端，空词不写', () => {
+    const params = (patch: Partial<FollowView>) =>
+      Object.fromEntries(new URL(followPageUrl(view(patch), 0), 'http://peach.test').searchParams);
+    expect(params({ q: '泳装 4k' })).toMatchObject({ q: '泳装 4k' });
+    expect(params({ q: '' })).not.toHaveProperty('q');
   });
 });
 
@@ -334,13 +341,13 @@ describe('页面', () => {
     const route = given.actions.route as ReturnType<typeof vi.fn>;
     await click(host.querySelector('button[data-follow-author="name:mira"]'));
     expect(route).toHaveBeenLastCalledWith({ ...given.view, author: 'name:mira' });
-    await click(host.querySelector('button[data-follow-tag="3d"]'));
+    await click(host.querySelector('button[data-filter-tag="3d"]'));
     expect(route).toHaveBeenLastCalledWith({ ...given.view, tags: ['loop', '3d'] });
-    await click(host.querySelector('button[data-follow-tag="loop"]'));
+    await click(host.querySelector('button[data-filter-tag="loop"]'));
     expect(route).toHaveBeenLastCalledWith({ ...given.view, tags: [] });
     await click(host.querySelector('[data-follow-filter="saved"]'));
     expect(route).toHaveBeenLastCalledWith({ ...given.view, status: 'saved' });
-    await click(host.querySelector('[data-follow-sort="new"]'));
+    await chooseFilter(host.querySelector('[data-follow-sort="new"]'), 'asc');
     expect(route).toHaveBeenLastCalledWith({ ...given.view, dir: 'asc' });
     await click(host.querySelector('[data-media-view="images"]'));
     expect(route).toHaveBeenLastCalledWith({ ...given.view, media: 'images' });
@@ -402,7 +409,7 @@ describe('页面', () => {
     const host = await open(props());
     expect(authorOrder(host)).toHaveLength(many.length);
     expect(authorOrder(host)).toContain('name:a29');
-    expect(host.querySelector('input[type="search"]')).toBeNull();
+    expect(host.querySelector('[data-follow-authors-bar] input[type="search"]')).toBeNull();
   });
 
   it(`摆满 ${FOLLOW_AUTO_LOAD_LIMIT} 组以后「加载更多」要点一下才接下一页`, async () => {

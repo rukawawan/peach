@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from . import interface_text
 from .fsutil import atomic_write_text
 from .platform import root_online
 from .user_messages import UserFacingError
+
+_WRITE_LOCK = threading.RLock()
 
 
 class CredentialError(UserFacingError, RuntimeError):
@@ -147,8 +150,23 @@ class CredentialStore:
         先写同目录的临时文件再替换，写到一半断电不会留下半截 JSON；POSIX 上收紧到 0600。
         """
         payload = {str(key): str(value) for key, value in values.items() if value not in (None, "")}
-        atomic_write_text(self.path_for(provider),
-                          json.dumps(payload, ensure_ascii=False, indent=2) + "\n", mode=0o600)
+        with _WRITE_LOCK:
+            atomic_write_text(self.path_for(provider),
+                              json.dumps(payload, ensure_ascii=False, indent=2) + "\n", mode=0o600)
+
+    def revision(self, provider: str) -> tuple[int, int, int] | None:
+        try:
+            info = self.path_for(provider).stat()
+        except FileNotFoundError:
+            return None
+        return info.st_ino, info.st_mtime_ns, info.st_size
+
+    def save_if_unchanged(self, provider: str, values: dict[str, str], revision: tuple[int, int, int] | None) -> bool:
+        with _WRITE_LOCK:
+            if self.revision(provider) != revision:
+                return False
+            self.save(provider, values)
+            return True
 
     def clear(self, provider: str) -> dict[str, object]:
         """撤销一份凭据：本机和共享副本一起删。
@@ -161,8 +179,9 @@ class CredentialStore:
         其实没撤，等盘回来还会把 key 回填回来。
         """
         path = self.path_for(provider)
-        local_removed = path.is_file()
-        path.unlink(missing_ok=True)
+        with _WRITE_LOCK:
+            local_removed = path.is_file()
+            path.unlink(missing_ok=True)
         shared_path = self.shared_path_for(provider)
         if shared_path is None:
             return {"local_removed": local_removed, "shared": "none"}

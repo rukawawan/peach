@@ -6,7 +6,7 @@ import { RiCloseLine, RiDeleteBinLine, RiEditLine, RiMergeCellsHorizontal, RiUse
 import { useMutation } from '@tanstack/react-query';
 import {
   createColumnHelper, createPaginatedRowModel, createSortedRowModel, flexRender,
-  rowPaginationFeature, rowSelectionFeature, rowSortingFeature, columnVisibilityFeature, tableFeatures, useTable,
+  rowPaginationFeature, rowSelectionFeature, rowSortingFeature, columnOrderingFeature, columnVisibilityFeature, tableFeatures, useTable,
   type RowSelectionState, type SortingState,
 } from '@tanstack/react-table';
 import { confirmModal } from '@peach/legacy/ui';
@@ -22,6 +22,7 @@ import { errorMessage } from '../../api';
 import { cardClass } from '../components/card';
 import { DataTableFrame } from '../components/data-table-frame';
 import { useTablePreferences } from '../components/table-column-preferences';
+import { useRememberedPagination } from '../components/page-size-preferences';
 import { TableColumnControls, TableColumnResizer } from '../components/table-column-controls';
 import { DataTableFooter, DataTableSort } from '../components/table-controls';
 import { runBulkAction, type BulkAction, type Receipt } from '../components/bulk-action';
@@ -45,7 +46,7 @@ import { joinList, quoted, t } from '../../i18n';
 import { useTableFilters } from '../components/use-table-filters';
 
 const REMOVE_BODY = (alias: string) => t('follow:creatorAliases.removeBody', { alias });
-const suggestionFeatures = tableFeatures({ rowSelectionFeature, rowSortingFeature, rowPaginationFeature, columnVisibilityFeature,
+const suggestionFeatures = tableFeatures({ rowSelectionFeature, rowSortingFeature, rowPaginationFeature, columnVisibilityFeature, columnOrderingFeature,
   sortedRowModel: createSortedRowModel(), paginatedRowModel: createPaginatedRowModel() });
 const savedFeatures = suggestionFeatures;
 const selectColumn = { id: 'select', label: t('follow:shared.select'), width: 48, min: 48, max: 48, required: true };
@@ -90,7 +91,7 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
   const [renaming, setRenaming] = useState<AliasGroup | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [savedSelection, setSavedSelection] = useState<RowSelectionState>({});
-  usePageSelection(() => { setRowSelection({}); setSavedSelection({}) });
+  const selecting = usePageSelection(() => { setRowSelection({}); setSavedSelection({}) });
   useEffect(() => {
     if (Object.values(rowSelection).some(Boolean) || Object.values(savedSelection).some(Boolean)) enterPageSelection();
   }, [rowSelection, savedSelection]);
@@ -98,8 +99,10 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
   const activateSaved = useTableSelection(() => setSavedSelection({}));
   const [sorting, setSorting] = useState<SortingState>([]);
   const [savedSorting, setSavedSorting] = useState<SortingState>([]);
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 20 });
-  const [savedPagination, setSavedPagination] = useState({ pageIndex: 0, pageSize: 20 });
+  const [pagination, setPagination] = useRememberedPagination('alias-suggestions');
+  const [savedPagination, setSavedPagination] = useRememberedPagination('alias-saved');
+  const suggestionTop = useRef<HTMLDivElement>(null);
+  const savedTop = useRef<HTMLDivElement>(null);
   const filteredSuggestions = useTableFilters(suggestions, {
     canonical: { values: item => item.canonical, option: name => ({
       leading: () => <AuthorAvatar group={authorSources(sources, name)} name={name} small /> }) },
@@ -298,7 +301,8 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
     data: filteredSuggestions.items,
     columns: suggestionColumns,
     getRowId: suggestionKey,
-    state: { rowSelection, sorting, pagination: suggestionPage, columnVisibility: suggestionView.visibility },
+    state: { rowSelection, sorting, pagination: suggestionPage,
+      columnOrder: suggestionView.columnOrder, columnVisibility: suggestionView.visibility },
     onColumnVisibilityChange: suggestionView.change,
     onRowSelectionChange: (next) => { activateSuggestion(); setRowSelection(next); },
     onSortingChange: (next) => { setSorting(next); setPagination((now) => ({ ...now, pageIndex: 0 })); },
@@ -310,7 +314,8 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
     data: filteredGroups.items,
     columns: savedColumns,
     getRowId: (group) => group.canonical_key,
-    state: { rowSelection: savedSelection, sorting: savedSorting, pagination: savedPage, columnVisibility: savedView.visibility },
+    state: { rowSelection: savedSelection, sorting: savedSorting, pagination: savedPage,
+      columnOrder: savedView.columnOrder, columnVisibility: savedView.visibility },
     onColumnVisibilityChange: savedView.change,
     onRowSelectionChange: (next) => { activateSaved(); setSavedSelection(next); }, enableRowSelection: true,
     onSortingChange: (next) => { setSavedSorting(next); setSavedPagination((now) => ({ ...now, pageIndex: 0 })); },
@@ -385,7 +390,10 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
             actions={[{ action: mergeAction(false, chosen.length), items: chosen, host, disabled: readOnly || merge.isPending }]}>
             <Button variant="ghost" size="small" onClick={exitPageSelection}>{t('follow:shared.clearSelection')}</Button>
           </SelectionDock>
-          <DataTableFrame follow preferences={suggestionView} onRowClick={id => suggestionTable.getRow(id)?.toggleSelected()}>
+          <DataTableFrame ref={suggestionTop} follow preferences={suggestionView} onRowClick={id => suggestionTable.getRow(id)?.toggleSelected()}
+            rectangleSelecting={selecting} onRectangle={!merge.isPending ? (keys, add) => suggestionTable.setRowSelection({
+              ...(add ? rowSelection : {}), ...Object.fromEntries(keys.map(key => [key, true])),
+            }) : undefined}>
             <Table aria-label={t('follow:creatorAliases.pendingTable')} size="sm"
               sortDescriptor={sorting[0] ? { column: sorting[0].id, direction: sorting[0].desc ? 'descending' : 'ascending' } : undefined}
               onSortChange={(sort) => suggestionTable.getColumn(String(sort.column))?.toggleSorting(sort.direction === 'descending')}>
@@ -413,7 +421,8 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
             </TableBody>
             </Table>
           </DataTableFrame>
-          <DataTableFooter label={t('follow:creatorAliases.pendingTable')} unit={t('follow:creatorAliases.groupUnit')} total={filteredSuggestions.items.length} pagination={suggestionPage} onChange={setPagination} />
+          <DataTableFooter label={t('follow:creatorAliases.pendingTable')} unit={t('follow:creatorAliases.groupUnit')}
+            total={filteredSuggestions.items.length} pagination={suggestionPage} onChange={setPagination} scrollTarget={suggestionTop} />
         </div>
       ) : null}
 
@@ -438,7 +447,10 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
         </SelectionDock>
         {groups.length ? (
           <>
-          <DataTableFrame follow preferences={savedView} onRowClick={id => savedTable.getRow(id)?.toggleSelected()}>
+          <DataTableFrame ref={savedTop} follow preferences={savedView} onRowClick={id => savedTable.getRow(id)?.toggleSelected()}
+            rectangleSelecting={selecting} onRectangle={!drop.isPending ? (keys, add) => savedTable.setRowSelection({
+              ...(add ? savedSelection : {}), ...Object.fromEntries(keys.map(key => [key, true])),
+            }) : undefined}>
             <Table aria-label={t('follow:creatorAliases.saved')} size="sm"
               sortDescriptor={savedSorting[0] ? { column: savedSorting[0].id, direction: savedSorting[0].desc ? 'descending' : 'ascending' } : undefined}
               onSortChange={(sort) => savedTable.getColumn(String(sort.column))?.toggleSorting(sort.direction === 'descending')}>
@@ -466,7 +478,8 @@ export function AliasManager({ groups, suggestions, sources = [], readOnly, toas
             </TableBody>
             </Table>
           </DataTableFrame>
-          <DataTableFooter label={t('follow:creatorAliases.saved')} unit={t('follow:creatorAliases.groupUnit')} total={filteredGroups.items.length} pagination={savedPage} onChange={setSavedPagination} />
+          <DataTableFooter label={t('follow:creatorAliases.saved')} unit={t('follow:creatorAliases.groupUnit')}
+            total={filteredGroups.items.length} pagination={savedPage} onChange={setSavedPagination} scrollTarget={savedTop} />
           </>
         ) : (
           <EmptyState size="compact" icon={RiUserLine} title={t('follow:creatorAliases.emptyTitle')}

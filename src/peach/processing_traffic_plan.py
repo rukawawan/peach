@@ -53,10 +53,11 @@ def typical_size(directory, pattern, fallback):
 
 
 class TrafficPlan:
-    def __init__(self, config, stage, media_key, *, allow_metered=False):
+    def __init__(self, config, stage, media_key, *, code_patterns, allow_metered=False):
         from .library_processing import _MissCache, _RemoteSession, misses_path
         from .library_processing import MAX_SOURCE_BYTES
         self.config, self.stage, self.media_key = config, stage, media_key
+        self.code_patterns = code_patterns
         #: 本趟采集预算里的下载字节上限；`ProcessingTraffic` 按账本设置换掉默认档。
         self.budget_bytes = MAX_SOURCE_BYTES
         self.allow_metered = allow_metered
@@ -120,8 +121,7 @@ class TrafficPlan:
         self.extend(rows)
 
     def extend(self, rows):
-        from .library_processing import _provider_code, _scrapes_as_jav, _missing_fields, preview_readable
-        from .catalog_rules import release_code_from_filename
+        from .library_processing import _filename_code, _provider_code, _scrapes_as_jav, _missing_fields, preview_readable
         changed = set()
         for row in rows:
             self.assets.append(row)
@@ -130,7 +130,7 @@ class TrafficPlan:
             key = self.media_key(row['path'], row['location'])
             if key is None:
                 continue
-            code = _provider_code(row.get('code')) or release_code_from_filename(row.get('name') or '')
+            code = _provider_code(row.get('code')) or _filename_code(row, self.code_patterns)
             eligible = bool(code and _scrapes_as_jav(row, code))
             counts = self.counts.setdefault(key, dict(video_files=0, jav_files=0, titles=set()))
             counts['video_files'] += 1
@@ -178,12 +178,13 @@ class TrafficPlan:
             self._add('media:' + path, key, min(size, 9 * self.history.average(key + ':frame', 8 * MIB)))
 
     def _downloads(self, code, title):
-        from .library_processing import _studio_evidence
+        from .library_processing import _dated_studio, _studio_evidence
         from .metadata_routes import stage_name
-        chain = self.remote._chain(code, *_studio_evidence(title['row']))
+        evidence = _studio_evidence(title['row'])
+        chain = self.remote._chain(code, *evidence)
         askable = self.remote._askable(chain, code)
         names = [source for source in askable if f'{code}-{source}.json'.casefold() in self.evidence_names]
-        cached = {source for source, _, _ in self.remote._cached_evidence(names, code)}
+        cached = {source for source, _, _ in self.remote._cached_evidence(names, code, studio=_dated_studio(evidence))}
         pending = [source for source in askable if source not in cached]
         token = 'metadata:' + code
         wants_cover = (not self._ready(code) and chain

@@ -10,8 +10,8 @@ import { state } from '../shell/index';
 import { feedNewSkeletonHtml } from '../feed-new-skeleton';
 import { managedTaken, openManagedRoute, releaseManagedRoute, updateManagedRoute } from './../history/managed';
 import { appSettingsStore } from './../appearance/settings';
-import { noteHtml, stopAutoScroll, wireAutoScroll } from '../ui-kit';
-import { preferencesState, wireDrag } from './preferences.js';
+import { noteHtml, stopAutoScroll, wireAutoScroll, wireHorizontalScroller } from '../ui-kit';
+import { preferencesState } from './preferences.js';
 import { pushEntityPage } from './entity.js';
 import { applicationEffects } from './effects';
 import { t } from '../i18n';
@@ -39,9 +39,9 @@ export function feedNewCardHtml(item){
     ?javTitleHtml({is_jav:true,code:item.code,name:item.code,display_title:item.title||''})
     :esc(name);
   const open=item.code
-    ?`<a class="feednewopen" href="/works/${encodeURIComponent(item.code)}" aria-label="${esc(t('shell:feedNew.openDetails', { name }))}"></a>`:'';
+    ?`<a class="feednewopen" data-rectangle-trigger href="/works/${encodeURIComponent(item.code)}" aria-label="${esc(t('shell:feedNew.openDetails', { name }))}"></a>`:'';
   return `<article class="card feednewcard${item.read?' isread':''}" data-feed-id="${item.id}">
-    ${open}<div class="pic" style="--card-ratio:${COVER_FRONT_RATIO}">${cover}
+    ${open}<span data-media-check aria-hidden="true">${icon('check')}</span><div class="pic" style="--card-ratio:${COVER_FRONT_RATIO}">${cover}
       <div class="hovertools feednewtools">
         <button type="button" data-feed-action="${item.wanted?'unwant':'want'}" aria-pressed="${!!item.wanted}" title="${esc(item.wanted?t('catalog:javWant.remove'):t('catalog:javWant.want'))}" aria-label="${esc(t('shell:feedNew.wantNamed', { name }))}">${icon('star')}</button>
         <button type="button" data-feed-action="ignore" title="${esc(t('shell:feedNew.ignore'))}" aria-label="${esc(t('shell:feedNew.ignoreNamed', { name }))}">${icon('x')}</button>
@@ -112,8 +112,9 @@ export function feedRowHtml(data,allHref=''){
 
 export function wireFeedNewRow(row){
   if(!row)return;
-  wireDrag(row);
-  if(preferencesState.appSettings.feedAutoScroll)wireAutoScroll(row);
+  wireHorizontalScroller(row,{drag:true,dragIgnore:'[data-rectangle-select] .feednewrow',
+    selectionScope:'[data-rectangle-area] .feednewrow'});
+  syncFeedRowAutoScroll(row);
 }
 
 /* 首页这一行在不在场：设置里关掉「在首页显示新作」就哪条目录路径上都没有它，骨架也不铺。人物页那一行另走资料页。 */
@@ -154,9 +155,13 @@ export function refreshFeedRows(){
   pushEntityPage({feedRevision: feedState.feedRevision});
 }
 
+function syncFeedRowAutoScroll(row){
+  if(preferencesState.appSettings.feedAutoScroll&&!row.closest('[data-rectangle-select]'))wireAutoScroll(row);
+  else stopAutoScroll(row);
+}
+
 export function syncFeedAutoScroll(){
-  document.querySelectorAll('.feednewrow').forEach(row=>
-    preferencesState.appSettings.feedAutoScroll?wireAutoScroll(row):stopAutoScroll(row));
+  document.querySelectorAll('.feednewrow').forEach(syncFeedRowAutoScroll);
 }
 
 /* 开关挪到下一帧写：它一翻，资料卡换栏、页面变高，而整页那条覆盖滚动条正观察着 `<body>`。在尺寸观察

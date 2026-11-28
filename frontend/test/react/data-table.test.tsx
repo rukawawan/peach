@@ -1,20 +1,22 @@
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '../../src/react/query';
 import { DataTable, type DataColumn } from '../../src/react/components/data-table';
+import { rememberPageSize } from '../../src/react/components/page-size-preferences';
 import { buttonNamed, choose, click, mountRoot } from './render';
 
 type Item = { id: number; name: string };
 const columns: DataColumn<Item>[] = [{ id: 'name', label: '名字', value: (item) => item.name, render: (item) => item.name }];
 const items = Array.from({ length: 23 }, (_, index) => ({ id: index + 1, name: `作品 ${23 - index}` }));
 const checkbox = (host: ParentNode, name: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`);
+beforeEach(() => rememberPageSize('test-works', 20));
 
 function Fixture({ data = items, run, label = '测试作品', tableColumns = columns }: {
   data?: Item[]; run(ids: number[]): void; label?: string; tableColumns?: DataColumn<Item>[];
 }) {
   const [selected, setSelected] = useState<string[]>([]);
-  return <DataTable label={label} items={data} columns={tableColumns} rowId={(item) => String(item.id)}
+  return <DataTable preferenceId="test-works" label={label} items={data} columns={tableColumns} rowId={(item) => String(item.id)}
     rowLabel={(item) => item.name} selected={selected} onSelected={setSelected}
     actions={() => []} controls={(chosen) => <button onClick={() => run(chosen.map((item) => item.id))}>处理所选</button>} />;
 }

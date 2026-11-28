@@ -19,16 +19,19 @@ const release: ReleaseState = {
 const uninstall = { available: true, full_available: true, message: '', data_root: 'fixture', directories: ['fixture', 'fixture/cache'] };
 
 function mountMaintenance(data: ConfigurationData, receipt = vi.fn(), otherRequest = fetchMock(503, {})) {
-  const seedState = fetchMock(200, { enabled: false, available: false, schema: 1, last_attempt: {} });
+  const communityState = fetchMock(200, {
+    library: { enabled: false, available: false, schema: 6, fields: [], notice: '' },
+    metadata: { enabled: false, available: false, schema: 1, last_attempt: {} },
+  });
   const unavailable = fetchMock(503, {});
   vi.stubGlobal('fetch', (url: string, init?: RequestInit) =>
-    (url === '/api/configuration/seed-sharing' ? seedState : url === '/api/configuration/media-tools' ? otherRequest : unavailable)(url, init));
+    (url === '/api/configuration/community-sharing' ? communityState : url === '/api/configuration/media-tools' ? otherRequest : unavailable)(url, init));
   return mount(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MaintenanceSettings data={data} receipt={receipt} reopenTutorial={vi.fn()} active />
   </QueryClientProvider>);
 }
 
-it('运行信息和公共资料贡献分组，卸载在末尾，缺依赖时有下载链接', async () => {
+it('运行信息和数据与隐私分组，卸载在末尾，缺依赖时有下载链接', async () => {
   const data: ConfigurationData = {
     editable: true, notice: '', revision: 'r', media_dirs: [], library_count: 0, port: 9123,
     automatic_updates: automatic, updates: release, uninstall,
@@ -41,7 +44,9 @@ it('运行信息和公共资料贡献分组，卸载在末尾，缺依赖时有�
   expect([...host.querySelectorAll('nav a')].map(node => node.textContent))
     .toEqual(['更新与修复', '运行与存储', '数据与隐私', '卸载 Peach']);
   expect(section(host, '运行信息')?.closest('#maintenance-runtime')).not.toBeNull();
-  expect(section(host, '公共资料贡献')?.closest('#maintenance-privacy')).not.toBeNull();
+  const community = section(host, 'Peach 共建计划')!;
+  expect(community.closest('#maintenance-privacy')).not.toBeNull();
+  expect(switches(community)).toHaveLength(1);
   expect(host.querySelector('[data-toc-content]')?.lastElementChild?.getAttribute('aria-label')).toBe('卸载 Peach');
   const facts = section(host, '运行信息')!;
   expect([...facts.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['版本', 'FFmpeg']);

@@ -418,7 +418,7 @@ class TunnelManagerTests(unittest.TestCase):
         )
         snapshot = tunnel.saved_snapshot(state_dir)
         self.assertEqual(snapshot.state, "stopped")
-        self.assertIn("上一次", snapshot.error)
+        self.assertEqual(snapshot.error, "上次 Tunnel 运行意外中断，结果无法确认")
 
     def test_missing_state_file_is_a_clean_stopped_snapshot(self):
         snapshot = tunnel.saved_snapshot(self.root / "state")

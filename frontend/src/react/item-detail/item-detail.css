@@ -115,10 +115,10 @@
 /* ── 标题 ──
    默认折成两行：番号在前、正文在后，两行够认出是哪一部；正文动辄五六行，整段摊开会把评分、标签
    和动作全推到折叠线以下。真溢出时标题下面那排键最前面多一枚展开键，没溢出就不画它（判定在
-   `DetailTitle` 的 ResizeObserver 里）。来源徽标是行内块、站在第一行开头，随文字一起被折。那排键
+   `useFoldedTitle` 的 ResizeObserver 里）。来源徽标是行内块、站在第一行开头，随文字一起被折。那排键
    自成一行排在标题下面：夹在被折的文字末尾会一起被裁掉。徽标盒与一行等高、贴行顶，字形居中
    就落在这一行的正中；`middle` 对的是基线上方半个 x 高，番号的大写和汉字看着都比徽标高。 */
-.peach-react [data-item-detail] [data-item-title] { display: block; margin-bottom: 10px; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-item-title] { display: block; margin-bottom: 10px; }
 .peach-react [data-item-detail] [data-item-title] [class~="srcbig"] {
   display: inline-grid;
   vertical-align: top;
@@ -127,25 +127,25 @@
   margin: 0 8px 0 0;
   place-items: center;
 }
-.peach-react [data-item-detail] [data-item-title] [data-title-line] { min-width: 0; margin: 0; line-height: 1.75; }
-.peach-react [data-item-detail] [data-detail-title] {
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-item-title] [data-title-line] { min-width: 0; margin: 0; line-height: 1.75; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-detail-title] {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   overflow: hidden;
 }
-.peach-react [data-item-detail] [data-detail-title][data-expanded] { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-detail-title][data-expanded] { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
 /* 番号段同卡片标题（media-card.css）：拆成行内的几枚，放不下的整枚折到下一行。整块不折时，
    窄屏下它会整段掉到第二行，第一行只剩来源徽标，标题被两行上限挤得一个字不剩。 */
 .peach-react [data-item-detail] [data-detail-title] [class~="ui-javidentity"] { display: inline; white-space: normal; }
 .peach-react [data-item-detail] [data-detail-title] [class~="javedition"] { margin-left: 5px; }
-.peach-react [data-item-detail] [data-detail-title][data-foldable] { cursor: pointer; }
-/* 标题的展开、取景、文件、编辑与回收操作共用行内档的图标方键。Lucide 使用描边路径，
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-detail-title][data-foldable] { cursor: pointer; }
+/* 标题下方的操作共用行内档的图标方键。Lucide 使用描边路径，
    显式设置 stroke/fill，保持图标轮廓。 */
-.peach-react [data-item-detail] [data-title-tools] { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; flex-wrap: nowrap; }
-.peach-react [data-item-detail] [data-title-tools]:not(:has(button:not([hidden]))) { display: none; }
-.peach-react [data-item-detail] [data-title-tools] button {
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; flex-wrap: nowrap; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools]:not(:has(:is(button, [data-title-tool-link]):not([hidden]))) { display: none; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] :is(button, a:where([data-title-tool-link])) {
   width: var(--control-h-inline);
   height: var(--control-h-inline);
   display: inline-grid;
@@ -159,20 +159,20 @@
   line-height: 1;
   cursor: pointer;
 }
-.peach-react [data-item-detail] [data-title-tools] button[hidden] { display: none; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] button[hidden] { display: none; }
 /* 取景键包在一层 24px 行高的块级宿主里，按钮按 inline-grid 落在行框基线上，这一排高 26.5px，
    同排的键居中后下移 0.25px，侧栏下方各块的纵向位置都以这一排为准。 */
 .peach-react [data-item-detail] [data-title-tools] [data-cover-crop-host] { display: contents; }
-.peach-react [data-item-detail] [data-title-tools] button svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
-.peach-react [data-item-detail] [data-title-tools] button > svg {
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] :is(button, a:where([data-title-tool-link])) svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] :is(button, a:where([data-title-tool-link])) > svg {
   display: block;
   margin: 0;
   flex-shrink: 0;
   align-self: center;
   justify-self: center;
 }
-.peach-react [data-item-detail] [data-title-tools] button:hover { background: var(--hover); color: var(--ink); }
-.peach-react [data-item-detail] [data-title-tools] button:disabled {
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] :is(button, a:where([data-title-tool-link])):hover { background: var(--hover); color: var(--ink); }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-title-tools] button:disabled {
   background: var(--sunk);
   border-color: var(--line-soft);
   color: var(--muted);
@@ -206,8 +206,8 @@
 /* ── 规格行 ──
    产地那一条是能点开的集合，其余几条是读数。按钮只脱掉浏览器默认外观，位置、字号和颜色与读数
    同一套，两者在同一行上不能高低不齐。 */
-.peach-react [data-item-detail] [data-spec-item] { display: inline-flex; align-items: center; gap: 5px; }
-.peach-react [data-item-detail] [data-spec-item] svg {
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-spec-item] { display: inline-flex; align-items: center; gap: 5px; }
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-spec-item] svg {
   width: var(--icon-inline);
   height: var(--icon-inline);
   flex: none;
@@ -274,7 +274,7 @@
   font-size: var(--fs-md);
 }
 /* 没有图的头像（BoardUI avatar 的首字盘）：底照上面那块占位底，首字用次文字色。 */
-.peach-react :is([data-item-detail], [data-follow-detail]) [data-id-face]:not(:has(img)) {
+.peach-react :is([data-item-detail], [data-follow-detail]) [data-id-face]:not(:has(img:not([hidden]))) {
   color: var(--color-text-secondary);
 }
 /* 厂牌标识文件是自带边距的不透明方图，图片那条 cover 铺满整格，不再另给 logo 格加 padding 和

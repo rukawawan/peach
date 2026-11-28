@@ -1,0 +1,35 @@
+@keyframes peach-ai-search-reveal {
+  from { opacity: 0; transform: scale(.98); filter: blur(2px); }
+  to { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-ai-search-reveal] { animation: peach-ai-search-reveal 230ms cubic-bezier(.22, 1, .36, 1) both; }
+  [data-ai-search-reveal][data-ai-search-reveal-order="second"] { animation-delay: 55ms; }
+  [data-ai-search-reveal][data-ai-search-reveal-order="third"] { animation-delay: 110ms; }
+}
+
+[data-ai-search-composer-motion="idle"] .bui-composer-loader-rect { animation-play-state: paused !important; }
+
+[data-ai-search-work] {
+  --ai-work-hover: color-mix(in srgb, var(--color-text-primary) 7%, var(--color-background-primary-default));
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+[data-ai-search-work]:has(:focus-visible) {
+  background-color: var(--ai-work-hover);
+  border-color: var(--color-border-button-hover);
+}
+
+@media (hover: hover) {
+  [data-ai-search-work]:hover {
+    background-color: var(--ai-work-hover);
+    border-color: var(--color-border-button-hover);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ai-search-work] { transition: none; }
+  .agent-progress-loading-text { color: inherit; background-image: none; animation: none; }
+  [data-ai-search-composer-motion] > div > span:has(.bui-composer-loader-rect) { transition: none !important; }
+}

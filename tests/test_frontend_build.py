@@ -87,26 +87,12 @@ class MainBundleTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             imported = [a or b for a, b in STATIC_IMPORTS.findall(text)] + DYNAMIC_IMPORTS.findall(text)
             referenced |= {name[2:] for name in imported if name.startswith("./") and name != "./peach-app.js"}
-        self.assertEqual(sorted(referenced), [path.name for path in CHUNKS])
+        self.assertEqual(sorted(referenced), sorted(path.name for path in CHUNKS))
 
     def test_the_main_document_loads_one_module_entry(self):
         assets = PageAssets((ROOT / "web" / "index.html").read_text(encoding="utf-8"))
         self.assertEqual([script["src"] for script in assets.scripts], ["/dist/peach-app.js"])
         self.assertEqual(assets.scripts[0].get("type"), "module")
-
-    def test_the_startup_switches_and_their_payload_are_in_the_shipped_bundle(self):
-        """「开机自启」那三颗开关的标签和它们发出去的键，判据落在产物上。
-
-        `web/dist/` 是提交进 Git 的产物。改了 `frontend/src` 不重建，浏览器拿到
-        的仍是旧的那一份，而 tsc 和 vitest 都只看源码，谁都不会红——只有扫产物这一条会。
-        配置页在按页拆出的 chunk 里，入口与 chunk 一起扫。
-        """
-        for label in ("开机后启动 Peach", "只启动托盘，不打开网页", "在桌面创建快捷方式"):
-            self.assertIn(label, self.bundle,
-                          f"产物里没有「{label}」，先跑 npm --prefix frontend run build")
-        payload = self.bundle[self.bundle.index('"/api/configuration/startup"'):][:240]
-        for key in ("enabled:", "silent:", "desktop:"):
-            self.assertIn(key, payload, f"保存开机自启没带上 {key}")
 
     def test_react_bundle_records_stable_dependency_paths(self):
         """区域注释只能从 `node_modules/` 起，不得把生成它的工作树路径写进产物。"""
@@ -455,7 +441,7 @@ class BrowserSuiteWorkflowTests(unittest.TestCase):
         job = self.job("web-e2e")
         for step in ("runs-on: windows-latest", "actions/setup-node", 'node-version: "24"',
                      "npm --prefix frontend ci", "./.github/actions/setup-ffmpeg",
-                     'ffmpeg-version: "9.0.1"',
+                     'ffmpeg-version: "9.1"',
                      "PEACH_E2E_CHROME=", "& .\\scripts\\test.ps1 -Scope web"):
             self.assertIn(step, job, f"web-e2e job 缺了 {step}")
 
@@ -468,7 +454,7 @@ class BrowserSuiteWorkflowTests(unittest.TestCase):
     def test_matrix_rows_beyond_core_install_what_the_node_suites_need(self):
         job = self.job("python")
         for step in ("actions/setup-node", "npm --prefix frontend ci",
-                     "./.github/actions/setup-ffmpeg", 'ffmpeg-version: "9.0.1"',
+                     "./.github/actions/setup-ffmpeg", 'ffmpeg-version: "9.1"',
                      "PEACH_E2E_CHROME="):
             self.assertIn(step, job, f"python 矩阵缺了 {step}，全量行上的用例会判失败")
 

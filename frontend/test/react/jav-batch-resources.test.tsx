@@ -33,7 +33,7 @@ it('下载配置失败显示原因，资源查询仍独立返回', async () => {
       : { state: 'ready', items: [], error: '', checked_at: null } })));
   await mount(<QueryClientProvider client={queryClient}><JavBatchResources items={[works[0]!]} close={vi.fn()} readOnly={false} receipt={vi.fn()} /></QueryClientProvider>);
   await settle();
-  expect(document.body.textContent).toContain('下载配置未取得');
+  expect(document.body.textContent).toContain('下载设置读取失败');
   expect(document.body.textContent).toContain('服务暂不可用');
   expect(buttonNamed('添加下载')).toBeNull();
 });

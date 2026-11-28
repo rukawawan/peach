@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {after,before,describe,it} from 'node:test';
 import type {Browser,Route} from 'playwright-core';
-import {launch,layout,requiredEnv,VIEWPORTS} from './harness.ts';
+import {isolateBrowseSettings,launch,layout,requiredEnv,VIEWPORTS} from './harness.ts';
 
 describe('新作封面显示时机',()=>{
  let browser:Browser;
@@ -218,6 +218,7 @@ describe('新作封面显示时机',()=>{
    try{
     await context.addInitScript(()=>localStorage.setItem('peach.settings.v1',JSON.stringify({detailAutoplay:false,homeLayout:'big',javLayout:'big'})));
     const page=await context.newPage();
+    await isolateBrowseSettings(page, {catalogView:'cards',homeLayout:'big',javLayout:'big'});
     await page.goto(requiredEnv('PEACH_E2E_ORIGIN')+'/');
     await page.locator('#grid [data-media-card]').first().waitFor({state:'visible'});
     if(viewport.name==='mobile')await page.locator('#filterBtn').click();

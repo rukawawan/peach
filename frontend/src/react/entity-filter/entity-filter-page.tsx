@@ -7,11 +7,12 @@
  * 两排「你在哪儿」各有一块滑动玻璃（视图键那块是圆的），由 `use-view-glide.ts` 挪；它们是浮层根上
  * 的常驻节点，换筛选、换视图都只挪不重建。源文件那两枚键仍由遗留层拼（照片详情里复用的是同一对），
  * 那一格用 `dangerouslySetInnerHTML`，React 不拥有里面的节点。 */
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Radio } from 'react-aria-components';
 import { icon } from '@peach/legacy/core';
 
-import { FilterGlassRows, FilterIconButton, FilterPill } from '../components/filter-glass';
+import { FilterGlassRows, FilterIconButton, FilterSearch, FilterTagStrip, FilterToolbarControls } from '../components/filter-glass';
+import { FilterDropdown } from '../components/filter-dropdown';
 import { LibraryShortcuts } from '../library-shortcuts/shortcut-controls';
 import { AsyncText } from '../components/async-text';
 import { FolderBrowseToggle } from '../catalog-folders/catalog-folders-page';
@@ -39,6 +40,13 @@ export function EntityFilterPage(props: EntityFilterProps) {
   /* 在线视图也有自己的状态、来源与标签（关注页那一套），只是数的是关注里的条目。 */
   const online = view === 'online' ? props.online : null;
   const filtered = onVideos || !!online;
+  const tagChoices = (onVideos ? tags : online?.tags || []).map(tag => ({ id: tag.k, label: tag.label, count: tag.n, selected: tag.selected }));
+  const toggleTag = online ? actions.onlineTag : actions.toggleTag;
+  const fields = online?.providers.length || tagChoices.length ? <>
+    {online?.providers.length ? <OnlineSourceFilter orderKey="source" label={t('follow:searchResults.source')} head={online} onSelect={actions.onlineProvider} /> : null}
+    {tagChoices.length ? <FilterDropdown id={online ? 'entity-online-tags' : 'entity-tags'} orderKey="tags" label={t('catalog:shared.tags')}
+      choices={tagChoices} onSelect={toggleTag} /> : null}
+  </> : null;
   const stateNow = online ? online.status : state;
   const stateOptions = online ? online.statuses.map(([k, label]) => ({ k, label })) : states;
   const statePane = useRef<HTMLSpanElement>(null);
@@ -103,20 +111,15 @@ export function EntityFilterPage(props: EntityFilterProps) {
                   {option.label}
                 </button>
               ))}
-              {!online || online.providers.length || online.tags.length ? <Sep /> : null}
+              {tagChoices.length ? <Sep /> : null}
             </div>
             {/* 标签只在作品视图出：计数数的是作品，摆到名册或照片上对不上号，点一下还会把视图拨回作品。 */}
             <div ref={tagRow} data-entity-tags="">
-              {onVideos ? tags.map((tag) => (
-                <FilterPill key={tag.k} data-entity-tag={tag.k} data-entity-press="" pressed={tag.selected}
-                  onPress={() => actions.toggleTag(tag.k)}>
-                  {tag.label}<span data-count-badge={tag.k}>{tag.n.toLocaleString()}</span>
-                </FilterPill>
-              )) : online ? <OnlineFilters head={online} actions={actions} /> : null}
+              <FilterTagStrip choices={tagChoices} onSelect={toggleTag} />
             </div>
           </div>
         </>}
-        bottom={<Head {...props} />}
+        bottom={<Head {...props} fields={fields} />}
       />
     </>
   );
@@ -146,24 +149,12 @@ function OnlineMediaKeys({ head, row, glide, onMedia }: {
   );
 }
 
-/** 在线视图的来源站标与标签药丸，同关注页那条浮层：站标按下是只看这个来源，标签是交集。 */
-function OnlineFilters({ head, actions }: { head: EntityOnlineHead; actions: EntityFilterActions }) {
-  return (
-    <>
-      {head.providers.map(([key, label]) => (
-        <button key={key} type="button" data-follow-provider={key} data-entity-press=""
-          aria-pressed={head.provider === key} title={label} aria-label={t('catalog:entityFilter.sourceName', { source: label })}
-          onClick={() => actions.onlineProvider(key)} dangerouslySetInnerHTML={{ __html: sourceIcon(key) }} />
-      ))}
-      {head.providers.length && head.tags.length ? <Sep /> : null}
-      {head.tags.map((tag) => (
-        <FilterPill key={tag.k} data-follow-tag={tag.k} data-entity-press="" data-tag-cat={`r34-${tag.cat}`}
-          pressed={tag.selected} onPress={() => actions.onlineTag(tag.k)}>
-          {tag.label}{tag.n ? <span data-count-badge={tag.k}>{tag.n.toLocaleString()}</span> : null}
-        </FilterPill>
-      ))}
-    </>
-  );
+function OnlineSourceFilter({ head, onSelect, label }: { head: EntityOnlineHead; label: string; orderKey: string; onSelect(id: string): void }) {
+  return <FilterDropdown id="entity-online-source" label={label}
+    choices={head.providers.map(([id, label]) => ({ id, label, selected: head.provider === id,
+      leading: <span aria-hidden className="size-4 shrink-0 [&>img]:size-full"
+        dangerouslySetInnerHTML={{ __html: sourceIcon(id) }} /> }))}
+    onSelect={onSelect} onClear={head.provider ? () => onSelect('') : undefined} />;
 }
 
 /** 名册、视频、照片与在线是互斥视图，共用一组圆键：它们回答的是同一个问题。键名带上数目，悬停读得到。
@@ -220,7 +211,7 @@ export function Combo({ items, hidden, actions }: {
 }
 
 /** 下排：读数，加这一种视图自己的那几枚控件。名册只有读数。 */
-function Head(props: EntityFilterProps) {
+function Head(props: EntityFilterProps & { fields: ReactNode }) {
   const { view, readout, busy, video, photo, actions, helpers } = props;
   return (
     <>
@@ -231,9 +222,14 @@ function Head(props: EntityFilterProps) {
       ) : null}
       <Readout text={readout} busy={busy} />
       <LibraryShortcuts currentHref={() => location.pathname + location.search} />
-      {view === 'videos' && video ? <VideoControls head={video} actions={actions} /> : null}
+      {/* 查找框不跟着排序键走：筛到一部不剩时那一排收起，框还得留着改词。 */}
+      {view === 'videos' ? (
+        <FilterSearch label={t('catalog:entityFilter.search')} value={props.query}
+          onQuery={(q) => { if (q !== props.query) actions.setQuery(q) }} />
+      ) : null}
+      {view === 'videos' && video ? <VideoControls head={video} actions={actions} fields={props.fields} /> : null}
       {view === 'photos' && photo ? <PhotoControls head={photo} actions={actions} helpers={helpers} /> : null}
-      {view === 'online' && props.online ? <OnlineControls head={props.online} actions={actions} /> : null}
+      {view === 'online' && props.online ? <OnlineControls head={props.online} actions={actions} fields={props.fields} /> : null}
     </>
   );
 }
@@ -275,25 +271,24 @@ export function Shuffle({ onPress, busy = false }: { onPress(): void; busy?: boo
 }
 
 /** 作品视图：换一批、JAV 语境下的卡片版式，排序键一律排在最末，挨着它说明的那批内容。 */
-function VideoControls({ head, actions }: { head: EntityVideoHead; actions: EntityFilterActions }) {
+function VideoControls({ head, actions, fields }: { head: EntityVideoHead; actions: EntityFilterActions; fields: ReactNode }) {
   const view = useCatalogView();
   return (
-    <span data-entity-sorts="">
+    <FilterToolbarControls tools={<>
       <Shuffle onPress={() => void actions.reshuffle()} />
       {head.jav && view === 'cards' ? (
         <Segments label={t('catalog:entityFilter.javCardLayout')} value={head.jav.layout} options={head.jav.options} onChange={actions.setJavLayout} />
       ) : null}
       <CatalogViewToggle />
       <FolderBrowseToggle />
-      <SortKeys group={head.jav ? 'jav' : 'catalog'} sorts={head.sorts} onSort={actions.setSort} />
-    </span>
+    </>} fields={fields} sorts={<SortKeys group={head.jav ? 'jav' : 'catalog'} sorts={head.sorts} onSort={actions.setSort} />} />
   );
 }
 
 /** 在线视图的下排，同关注页：换一批，图片墙上多图片布局与「仅显示图片」，排序键排在最末。 */
-function OnlineControls({ head, actions }: { head: EntityOnlineHead; actions: EntityFilterActions }) {
+function OnlineControls({ head, actions, fields }: { head: EntityOnlineHead; actions: EntityFilterActions; fields: ReactNode }) {
   return (
-    <span data-entity-sorts="">
+    <FilterToolbarControls tools={<>
       <Shuffle onPress={actions.onlineShuffle} />
       {head.media === 'images' ? (
         <>
@@ -305,8 +300,7 @@ function OnlineControls({ head, actions }: { head: EntityOnlineHead; actions: En
           </button>
         </>
       ) : null}
-      <SortKeys group="follow" sorts={head.sorts} onSort={actions.onlineSort} />
-    </span>
+    </>} fields={fields} sorts={<SortKeys group="follow" sorts={head.sorts} onSort={actions.onlineSort} />} />
   );
 }
 

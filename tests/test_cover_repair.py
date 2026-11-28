@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
 
-from peach import cover_repair, jav_poster_crop, repair_center
+from peach import cover_artwork, cover_repair, jav_poster_crop, repair_center
 from peach.jav_poster_crop import FOLD, MANUAL
 
 
@@ -78,6 +80,40 @@ class CoverRepairTests(unittest.TestCase):
         self.assertEqual([path.stem for path in plan["face"]], [no_face.stem])
         self.assertNotIn(current.stem, {path.stem for path, _ in plan["crop"]})
         self.assertNotIn(manual.stem, {path.stem for path, _ in plan["crop"]}, "手工框只有用户自己能换")
+
+    def test_cover_face_spine_and_crossing_text_read_the_same_image_under_unicode_path(self):
+        reference = self.cover("SSIS-001")
+        directory = self.covers / "中文封面"
+        directory.mkdir()
+        cover = directory / reference.name
+        cover.write_bytes(reference.read_bytes())
+        detector = SimpleNamespace(detect=lambda image: [])
+        reader = SimpleNamespace(code_box=lambda image, code, anchor: (420, 424),
+                                 text_across=lambda image, cut: 3)
+        with patch("peach.spine_label.default_reader", return_value=reader):
+            for path in (reference, cover):
+                with self.subTest(path=path):
+                    self.assertEqual(cover_repair.face_of(path, detector)["px"], [800, 538])
+                    self.assertEqual(cover_repair.crop_inputs(path, 800, 538)["spine"], (420, 424))
+                    self.assertEqual(cover_artwork.text_across_file(path)(420), 3)
+
+    @unittest.skipUnless(os.name == "nt", "Windows path decoding")
+    def test_unicode_paths_repair_old_automatic_crops_once_and_keep_manual_crops(self):
+        reference = self.cover("SSIS-001", record={"rules": 3}, rules=False)
+        if str(reference.absolute()).isascii():
+            self.assertFalse(cover_repair.crop_stale(reference, (800, 538)))
+        self.covers = self.covers / "中文封面"
+        self.covers.mkdir()
+        old = self.cover("SSIS-002", record={"rules": 3}, rules=False)
+        manual_record = jav_poster_crop.manual_record(800, 538, {"x0": 420, "y0": 0, "x1": 800, "y1": 538})
+        manual = self.cover("SSIS-003", record={**manual_record, "rules": 3}, rules=False)
+        repair = cover_repair.CoverRepair(self.covers, self.state, self.database, self.root / "secrets")
+        with patch("peach.spine_label.default_reader", return_value=None):
+            self.assertEqual(repair.plan()["crop"], [(old, (800, 538))])
+            cover_repair.recrop(self.covers, repair.plan()["crop"])
+        self.assertEqual(repair.plan()["crop"], [])
+        self.assertEqual(jav_poster_crop.read_sidecar(old)["rules"], jav_poster_crop.CROP_RULES)
+        self.assertEqual(jav_poster_crop.read_sidecar(manual)["rules"], 3)
 
     def test_a_cover_checked_without_a_dmm_portrait_is_not_pending_again(self):
         """素人系本来就没有 DMM 竖版图：查过一次记下，下次估算不再算待处理；图换了才再查。"""

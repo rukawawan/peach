@@ -174,7 +174,7 @@ ALGORITHM_VERSION = "poster-crop-v13"
 #: 番号定折痕的容差区要更明显的边、测不出边时原有判据与模板吻合就信它（3）。sidecar 记着它，
 #: 「修复与迁移」的封面一项据此找出按旧判据算的边车重算（`cover_repair`）。不进位 `ALGORITHM_VERSION`：
 #: 那会让所有旧边车立刻作废，页面在重算完之前全退回默认切法。判据再变就把它加一。
-CROP_RULES = 3
+CROP_RULES = 4
 #: sidecar 与封面同名换后缀：`ABW-232.jpg` → `ABW-232.poster.json`。人脸取景是
 #: `.face.json`，两者同目录、同命名风格，各描述一件事：一个是脸在哪，一个是正封在哪。
 SIDECAR_SUFFIX = ".poster.json"
@@ -280,10 +280,12 @@ def file_gradient(path: Path | str) -> Callable[[], ColumnProfile | None]:
     """把一张封面包成惰性的列梯度来源：真要用到时才解码。"""
     def source() -> ColumnProfile | None:
         try:
-            import cv2
+            from .face_detect import read_image
+
+            image = read_image(path)
         except ImportError:                     # pragma: no cover - 缺 vision 依赖组
             return None
-        return column_gradient(cv2.imread(str(path)))
+        return column_gradient(image)
     return source
 
 

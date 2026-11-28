@@ -40,6 +40,7 @@ from pathlib import Path
 from . import interface_text
 from .fsutil import atomic_write_text
 from .migrations import plan as migration_plan, sqlite_backup, upgrade as migration_upgrade
+from .migrations import readonly_uri
 from .task_stages import stage as stage_fields
 from .user_messages import UserFacingError, nested_message
 
@@ -168,7 +169,7 @@ def integrity(db: Path, *, foreign_keys: bool = False) -> str | dict:
     """`"ok"`，或者没通过的原因：SQLite `integrity_check` 的原文，或一句带 code 的话 `{code, params}`
     （打不开、外键失效、检查出错）。两种都能直接作为报错的参数。"""
     try:
-        connection = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(readonly_uri(db), uri=True)
     except sqlite3.Error as exc:
         return {"code": "labels.ledgerBackups.integrity.openFailed", "params": {"error": str(exc)}}
     try:
@@ -406,7 +407,7 @@ def _record(live: Path, **fields) -> dict:
 
 
 def _page_size(path: Path) -> int:
-    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as connection:
+    with closing(sqlite3.connect(readonly_uri(path), uri=True)) as connection:
         return int(connection.execute("PRAGMA page_size").fetchone()[0])
 
 
@@ -417,7 +418,7 @@ def _copy_into(source: Path, live: Path) -> None:
     `live` 还是原来的账本，不会只剩半份。这是不直接换文件的原因：Windows 上服务的连接还开着，
     WAL 模式下 `-wal` 里也可能有没合进主文件的已提交内容。
     """
-    src = sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True)
+    src = sqlite3.connect(readonly_uri(source), uri=True)
     dst = sqlite3.connect(live, timeout=30)
     try:
         src.backup(dst)
@@ -443,7 +444,7 @@ def _carry_operational(live: Path, saved: Path) -> None:
     """
     connection = sqlite3.connect(live.resolve().as_uri(), uri=True, timeout=30, isolation_level=None)
     try:
-        connection.execute("ATTACH DATABASE ? AS saved", (saved.resolve().as_uri() + "?mode=ro",))
+        connection.execute("ATTACH DATABASE ? AS saved", (readonly_uri(saved),))
         def columns(schema: str, table: str) -> list[str]:
             return [row[1] for row in connection.execute(f"PRAGMA {schema}.table_info({table})")]
 

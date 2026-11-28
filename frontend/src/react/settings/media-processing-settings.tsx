@@ -1,8 +1,7 @@
 /* 这台机器的媒体处理偏好，两张卡读写同一个 `['media-processing']` 键：
  * - 「视频预览」（「媒体库与入库」）：为本地视频生成九宫格与时间轴预览的总开关、时间轴档位与抽帧解码方式。
  *   总开关在前，依赖它的档位次之，少改的解码方式最后。
- * - 「视频播放」（「应用与维护」）：播放时整片与 HLS 转码的编解码方式与画质上限。它管的是这台电脑的硬件，
- *   和开机自启同属本机运行，不放在设置弹窗的界面偏好里（ADR-0103）。 */
+ * - 「视频播放」：播放时整片与 HLS 转码的编解码方式与画质上限。两张卡都在「媒体库与入库」。 */
 import { useQuery } from '@tanstack/react-query';
 import { SettingsRow } from '@/components/application/settings/settings-rows';
 import { Switch } from '@/components/base/switch/switch';

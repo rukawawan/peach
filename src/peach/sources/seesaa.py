@@ -158,6 +158,8 @@ class WikiPages:
         self.requests += 1
         try:
             response = self.transport(HttpRequest('GET', url, {}), TIMEOUT, limit)
+        except (TimeoutError, httpx.TimeoutException) as error:
+            raise MetadataProviderError('errors.seesaa.requestTimedOut', kind='unavailable', retryable=True) from error
         except (OSError, RuntimeError, httpx.HTTPError) as error:
             raise MetadataProviderError('errors.seesaa.networkFailed', kind='unavailable', retryable=True) from error
         if response.status in {403, 429}:
@@ -169,7 +171,7 @@ class WikiPages:
             self.blocked = True
             raise auth_error(self.config.name, reason, status_code=response.status)
         if response.status != 200:
-            raise MetadataProviderError('errors.seesaa.httpFailed', kind='unavailable',
+            raise MetadataProviderError('errors.seesaa.httpFailed', {'status': response.status}, kind='unavailable',
                                         status_code=response.status, retryable=True)
         if len(response.body) > limit:
             raise MetadataProviderError('errors.seesaa.pageTooLarge', kind='size_limit')

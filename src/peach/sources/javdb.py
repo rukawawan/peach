@@ -1,13 +1,14 @@
 """javdb 的作品页。
 
-搜索页 `/search?q=<番号>&f=all` 的结果卡片带番号，只在对应唯一来源 ID 时进详情页；详情页
+搜索页 `/search?q=<番号>&f=all` 的结果卡片带番号。唯一来源 ID 直接读详情，FANZA 生写真特典与
+通常版须核对两份详情再收通常版。详情页
 `?locale=zh` 下面板字段是 `番號`、`日期`、`片商`、`發行`、`系列`、`導演`、`演員`，
 演员里女优带 `actor-female`，类别保留链接里的原词。它按出口 IP 计配额，限速与封禁的处理在 `scraping_access`
 和调用方的主机间隔里，这里只管取页与解析。几家的值常有出入：ABW-358 在 javdb 上发行日期是
 MGS 的 5/23、标题带 MGS 附注、演员里有男优，各字段按 Peach 的来源策略结算。
 有隐藏 `origin-title` 时用作原标题，`current-title` 单独保存为显示标题；两者不互相改写。
 
-一部分页面要登录才给，回的是登入页而不是 401/403（`peach.javdb.LOGIN`），搜索页与详情页都要认。
+搜索页与详情页共用 `peach.javdb.login_page` 识别整页登录面板。
 
 刮削先走 `JavDBPublicSource` 的匿名接口（ADR-0144）：不带 Cookie，不占 javdb.com
 的出口配额，字段投影成与详情页同形的记录。接口冷却或未取得时退回详情页（ADR-0160）；详情页解析也供视频预览。
@@ -23,10 +24,10 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from ..catalog_rules import same_release_code
-from ..javdb import LOGIN, clean
+from ..javdb import clean, login_page
 from ..javdb_genres import page_genres
-from ..javdb_identity import RULE
-from ..javdb_public import actor_gender, public_image_url
+from ..javdb_identity import RULE, fanza_regular_id
+from ..javdb_public import actor_gender, public_image_url, verified_fanza_regular
 from ..metadata import relay_args
 from ..coded_text import Said, parallel
 from ..user_messages import nested_message
@@ -53,7 +54,6 @@ PUBLIC_REQUESTS = 7
 #: 会话没有动作截止时刻时，一问最多等这么久。
 PUBLIC_SECONDS = 90.0
 
-_BOX = re.compile(r'<a href="(/v/[A-Za-z0-9]+)" class="box" title="[^"]*">.*?<strong>([^<]+)</strong>', re.S)
 _PANEL = re.compile(r'<div class="panel-block[^"]*">\s*<strong>([^<:：]+)[:：]</strong>\s*(?:&nbsp;)?\s*'
                     r'<span class="value">(.*?)</span>', re.S)
 #: 详情页那张封面。认标签、再从标签里取 `src`，不把属性挨着写死：站上 `class` 与 `src` 的先后
@@ -162,15 +162,15 @@ def page_movie(text: str, movie_id: str) -> dict:
 
 
 @contextlib.contextmanager
-def page_reader(secrets_root, *, seconds: float = 30.0):
-    """库外详情与磁链读 javdb.com 网页的入口：带用户在「来源和凭证」里贴的 Cookie，与资料处理和视频预览
-    共用 `SOURCE_LIMITER` 的主机间隔，撞登录页、验证页或封禁时按 `javdb` 这一站的来源冷却停下。"""
+def page_reader(secrets_root, *, seconds: float = 30.0, javdb_account_fallback: bool = False):
+    """库外详情与磁链共用 javdb.com 读取、主机间隔和来源冷却。"""
     from ..jav_cover_fetch import HostLimitedTransport
     from ..library_processing import SOURCE_LIMITER
     from ..scraping_access import SourceTransport
 
     transport = HostLimitedTransport(SourceTransport(secrets_root, max_requests=6, max_bytes=6 * 1024 * 1024,
-                                                     max_seconds=seconds), JAVDB.interval, limiter=SOURCE_LIMITER)
+                                                     max_seconds=seconds, javdb_account_fallback=javdb_account_fallback),
+                                     JAVDB.interval, limiter=SOURCE_LIMITER)
     session = Session(transport, deadline=time.monotonic() + seconds)
     source = JavDBSource(JAVDB)
     pages = {}
@@ -198,23 +198,40 @@ class JavDBSource(SiteSource):
         if urllib.parse.urlsplit(url).path == "/search":
             SEARCH_LIMITER.wait(url)
         page = session.get(url, config=self.config)
-        if LOGIN.search(page.text):
+        if login_page(page.text):
             raise SourceFailure(FailureReason.AUTH_REQUIRED, "errors.javdb.loginRequired")
         return page
 
     def fetch(self, code: str, *, session: Session) -> Page:
         search = self._page(self.search_url(code), session=session)
-        paths = list(dict.fromkeys(path for path, shown in _BOX.findall(search.text)
-                                  if same_release_code(code, clean(shown))))
-        if not paths:
+        rows = {row['id']: row for row in page_search_rows(search.text)
+                if same_release_code(code, row['number'])}
+        if not rows:
             raise SourceFailure(FailureReason.NOT_FOUND, _MISSING)
-        if len(paths) > 1:
-            raise SourceFailure(FailureReason.PARSE_ERROR, "errors.javdb.identityAmbiguous",
-                                {"identities": '、'.join(paths)}, detail='identity_ambiguous')
-        path = paths[0]
-        detail = self._page(self.config.base_url + path + "?locale=zh", session=session)
+        if len(rows) == 1:
+            return self._detail_page(next(iter(rows)), session=session)
+        regular = fanza_regular_id(list(rows.values()))
+        if regular is not None:
+            page = self._verified_regular_page(code, rows, regular, session=session)
+            if page is not None:
+                return page
+        raise SourceFailure(FailureReason.PARSE_ERROR, "errors.javdb.identityAmbiguous",
+                            {"identities": '、'.join(f'/v/{identity}' for identity in rows)},
+                            detail='identity_ambiguous')
+
+    def _detail_page(self, identity: str, *, session: Session) -> Page:
+        url = f'{self.config.base_url}/v/{identity}'
+        detail = self._page(url + "?locale=zh", session=session)
         # `source_url` 记不带界面语言参数的详情页地址。
-        return Page(self.config.base_url + path, detail.body)
+        return Page(url, detail.body)
+
+    def _verified_regular_page(self, code, rows, regular, *, session: Session) -> Page | None:
+        pages = {identity: self._detail_page(identity, session=session) for identity in rows}
+        movies = [page_movie(page.text, identity) for identity, page in pages.items()]
+        if all(same_release_code(code, movie['number']) for movie in movies):
+            if verified_fanza_regular(movies, regular, series_field='series_name') is not None:
+                return pages[regular]
+        return None
 
     def parse(self, page: Page, code: str) -> SiteRecord:
         fields = _detail(page.text)

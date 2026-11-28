@@ -229,8 +229,8 @@ export interface FollowVisit extends Visit {
 
 /** 打开关注页：导航前装好桩与定种子，等到岛的卡片画出来、等待态结束。 */
 export async function openFollowFeed(browser: import('playwright-core').Browser, path: string, viewport: Viewport,
-  { settings = {}, ready = '[data-follow-list] > [data-follow-item]', bindAuthors = false }: {
-    settings?: Record<string, unknown>; ready?: string; bindAuthors?: boolean;
+  { settings = {}, ready = '[data-follow-list] > [data-follow-item]', bindAuthors = false, prepare }: {
+    settings?: Record<string, unknown>; ready?: string; bindAuthors?: boolean; prepare?: (page: Page) => Promise<void>;
   } = {},
 ): Promise<FollowVisit> {
   let stubbed!: FollowStub;
@@ -241,6 +241,7 @@ export async function openFollowFeed(browser: import('playwright-core').Browser,
       Math.random = () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 4294967296 };
     }, { detailAutoplay: false, ...settings });
     stubbed = await stub(page, bindAuthors);
+    await prepare?.(page);
   });
   const page = opened.page;
   await page.locator(ready).first().waitFor({ timeout: 15_000 });

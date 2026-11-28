@@ -958,13 +958,38 @@ class TaskRunStore:
                 "(SELECT 1 FROM task_run p WHERE p.id=t.parent_run_id)) AND NOT EXISTS "
                 f"(SELECT 1 FROM task_run c WHERE c.parent_run_id=t.id AND c.status IN ({active}))")
 
-    def finished_count(self) -> int:
+    @staticmethod
+    def _search_condition(q: str) -> tuple[str, list[object]]:
+        """任务中心查找框的条件与参数；空词不加条件。
+
+        一轮算命中，要么它自己、要么它派出的某条后继对得上：任务名（中英文名与 `task_key`）、
+        进度那一句、报错或结果摘要里出现这个词。任务名不是库里的列，先在登记表里找出名字对得上的
+        种类再按 `task_key` 筛。`%`、`_` 当普通字符。
+        """
+        needle = q.strip()
+        if not needle:
+            return "", []
+        folded = needle.casefold()
+        keys = [key for key in TASK_KEYS if folded in task_label(key).casefold()
+                or folded in interface_text.label(f"server:task.{key}", key, language="en").casefold()]
+        pattern = "%" + needle.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        columns = ("task_key", "progress_label", "error", "result_summary")
+
+        def row(alias: str) -> str:
+            named = f" OR {alias}.task_key IN ({','.join('?' * len(keys))})" if keys else ""
+            return " OR ".join(f"{alias}.{column} LIKE ? ESCAPE '!'" for column in columns) + named
+        values = [*(pattern,) * len(columns), *keys]
+        return (f" AND ({row('t')} OR EXISTS (SELECT 1 FROM task_run s "
+                f"WHERE s.root_run_id=t.id AND ({row('s')})))", values * 2)
+
+    def finished_count(self, q: str = "") -> int:
+        search, values = self._search_condition(q)
         with self.database.read_connection() as connection:
             return connection.execute(
-                f"SELECT count(*) FROM task_run t WHERE {self._finished_condition()}").fetchone()[0]
+                f"SELECT count(*) FROM task_run t WHERE {self._finished_condition()}{search}", values).fetchone()[0]
 
     def finished_page(self, *, before: tuple[str, int] | None = None,
-                      limit: int = 50, offset: int = 0) -> tuple[list[TaskRun], bool]:
+                      limit: int = 50, offset: int = 0, q: str = "") -> tuple[list[TaskRun], bool]:
         """终态行按结束时刻从新到旧取一页，返回这一页和它后面还有没有更早的。
 
         排序键是 `(finished_at, id)` 而不是 `id`：开跑早、结束晚的长任务按 id 会落进
@@ -980,11 +1005,11 @@ class TaskRunStore:
         自动修复每分钟派一批，它们留在这里会占满第一页，「最近完成」就只剩一个「加载更早」。
         """
         size = max(1, min(int(limit), 500))
-        where = self._finished_condition()
-        values: list[object] = []
+        search, values = self._search_condition(q)
+        where = self._finished_condition() + search
         if before is not None:
             where += " AND (t.finished_at<? OR (t.finished_at=? AND t.id<?))"
-            values = [before[0], before[0], int(before[1])]
+            values = [*values, before[0], before[0], int(before[1])]
         columns = ",".join(f"t.{name}" for name in _COLUMNS.split(","))
         with self.database.read_connection() as connection:
             rows = connection.execute(

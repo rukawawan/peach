@@ -65,10 +65,19 @@ export function scrollMovesAnchor(event: Event, anchor: Node): boolean {
    内容和再往左的头像。 */
 export function wireAnchoredMenu(
   mount: HTMLElement, toggle: HTMLElement, menu: HTMLElement,
-  { side = false, align = 'end' }: { side?: boolean; align?: 'start' | 'end' } = {},
+  { side = false, align = 'end', fitVisualViewport = false }: {
+    side?: boolean; align?: 'start' | 'end'; fitVisualViewport?: boolean;
+  } = {},
 ): { setOpen(next: boolean): void; isOpen(): boolean; dispose(): void } {
   let anchorPosition: { left:number; top:number } | null = null;
+  const viewport = fitVisualViewport ? window.visualViewport : null;
   const position=()=>{
+    const viewLeft=viewport?.offsetLeft ?? 0, viewTop=viewport?.offsetTop ?? 0;
+    const viewWidth=viewport?.width ?? innerWidth, viewHeight=viewport?.height ?? innerHeight;
+    if(viewport){
+      menu.style.maxHeight='';
+      menu.style.maxWidth=`${Math.max(0,viewWidth-16)}px`;
+    }
     // 宽度读 offsetWidth：进场动画起手是 scale(.95)，getBoundingClientRect 量到的是缩过的框。
     const anchor=toggle.getBoundingClientRect(),width=menu.offsetWidth;
     anchorPosition={left:anchor.left,top:anchor.top};
@@ -81,7 +90,10 @@ export function wireAnchoredMenu(
       menu.style.left=Math.max(16,Math.min(anchor.right+8,innerWidth-width-16))+'px';
       menu.style.top=Math.max(16,Math.min(anchor.top,innerHeight-menu.offsetHeight-16))+'px';return;
     }
-    const top=viewportTop(),under=innerHeight-8-anchor.bottom-8,over=anchor.top-8-top;
+    const top=Math.max(viewportTop(),viewTop+8),bottom=Math.max(top,viewTop+viewHeight-8);
+    const below=Math.min(bottom,Math.max(top,anchor.bottom+8));
+    const above=Math.min(bottom,Math.max(top,anchor.top-8));
+    const under=bottom-below,over=above-top;
     /* 下方放不下就改到上方；两侧都放不下时取宽的那一侧，并把菜单压到那一侧的高度，
        内容在菜单内滚。不压高度的话它会横跨触发钮盖住自己，点开之后连改的是哪一个
        名字都看不见。 */
@@ -91,8 +103,13 @@ export function wireAnchoredMenu(
     menu.dataset.placement=downward?'bottom':'top';
     menu.style.maxHeight=height+'px';
     const preferredLeft=align==='start'||menu.classList.contains('context-card')?anchor.left:anchor.right-width;
-    menu.style.left=Math.max(8,Math.min(preferredLeft,innerWidth-width-8))+'px';
-    menu.style.top=(downward?anchor.bottom+8:anchor.top-8-height)+'px'};
+    menu.style.left=Math.max(viewLeft+8,Math.min(preferredLeft,viewLeft+viewWidth-width-8))+'px';
+    menu.style.top=(downward?below:above-height)+'px'};
+  const stopPositioning=()=>{
+    window.removeEventListener('resize',position);
+    viewport?.removeEventListener('resize',position);
+    viewport?.removeEventListener('scroll',position);
+  };
   /* 触发钮被滚走了就关掉：菜单固定在视口里，锚点跟着内容跑，留着就悬在半空。
      菜单自己的滚动不算——它装不下时本来就要在内部滚，滚一下就关等于底下那几项
      根本够不着；别处那一排横滚也不算，判据见 `scrollMovesAnchor`。 */
@@ -117,12 +134,14 @@ export function wireAnchoredMenu(
       if(openedMenu&&openedMenu.mount!==mount)openedMenu.setOpen(false);
       open=true;presentMenu(menu);if(inTopLayer&&!menu.matches(':popover-open'))menu.showPopover();position();
       window.addEventListener('resize',position);
+      viewport?.addEventListener('resize',position);
+      viewport?.addEventListener('scroll',position);
       window.addEventListener('scroll',closeFromViewport,{capture:true,passive:true});
     }else{
       open=false;
-      window.removeEventListener('resize',position);
+      stopPositioning();
       window.removeEventListener('scroll',closeFromViewport,true);
-      dismissMenu(menu,()=>{menu.style.left='';menu.style.top='';menu.style.maxHeight='';
+      dismissMenu(menu,()=>{menu.style.left='';menu.style.top='';menu.style.maxHeight='';if(viewport)menu.style.maxWidth='';
         if(inTopLayer&&menu.matches(':popover-open'))menu.hidePopover()});
     }
     toggle.setAttribute('aria-expanded',String(next));
@@ -137,12 +156,12 @@ export function wireAnchoredMenu(
     disposed=true;open=false;
     toggle.removeEventListener('click',click);
     mount.removeEventListener('keydown',keydown);
-    window.removeEventListener('resize',position);
+    stopPositioning();
     window.removeEventListener('scroll',closeFromViewport,true);
     if(openedMenu?.menu===menu)openedMenu=null;
     leavingMenus.delete(menu);menu.classList.remove('leaving');menu.hidden=true;
     if(inTopLayer&&menu.matches(':popover-open'))menu.hidePopover();
-    menu.style.left='';menu.style.top='';menu.style.maxHeight='';
+    menu.style.left='';menu.style.top='';menu.style.maxHeight='';if(viewport)menu.style.maxWidth='';
     toggle.setAttribute('aria-expanded','false');
   };
   return {setOpen,isOpen:()=>open,dispose};

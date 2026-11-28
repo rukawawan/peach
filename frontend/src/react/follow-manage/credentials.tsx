@@ -16,6 +16,10 @@ import { cardClass } from '../components/card';
 import { EmptyState } from '../components/empty-state';
 import { Note } from '../components/note';
 import { PathLine } from '../components/path-line';
+import {
+  SourceBrowserLoginButton, SourceBrowserLoginStatus, sourceBrowserLoginUrl, useSourceBrowserLogin,
+} from '../components/source-browser-login';
+import { FOLLOW_CREDENTIALS_KEY as FOLLOW_FEED_CREDENTIALS_KEY } from '../follow-feed/follow-feed';
 import { queryClient } from '../query';
 import { busyProps } from '../settings/use-action';
 import { Disclosure, ErrorText, ExternalLink, Help, Section, Stack } from '../settings/section';
@@ -30,6 +34,7 @@ import { joinList, t } from '../../i18n';
 
 const CLEAR_BODY = t('follow:sourceCredentials.clearBody');
 const WORLD_READABLE = t('follow:sourceCredentials.worldReadable');
+const REFRESH_CREDENTIALS = [FOLLOW_CREDENTIALS_KEY, FOLLOW_FEED_CREDENTIALS_KEY] as const;
 
 /** 一个字段此刻的样子：共享回填的、本机存过的，还是从来没填过。 */
 function fieldHint(row: CredentialRow, name: string): string {
@@ -45,11 +50,13 @@ function StateChip({ row }: { row: CredentialRow }) {
   return <Chip variant="caption" color={color}>{CREDENTIAL_STATE[row.requirement] || ''}</Chip>;
 }
 
-function CredentialForm({ row, readOnly, toast }:
-{ row: CredentialRow; readOnly: boolean; toast(message: string): void }) {
+function CredentialForm({ row, readOnly, open, toast }:
+{ row: CredentialRow; readOnly: boolean; open: boolean; toast(message: string): void }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState('');
   const done = credentialDone(row);
+  const supportsBrowserLogin = row.browser_login === true && !readOnly;
+  const login = useSourceBrowserLogin(sourceBrowserLoginUrl(row.provider), supportsBrowserLogin && open, REFRESH_CREDENTIALS);
 
   const write = useMutation({
     mutationFn: (next: Record<string, string>) => saveCredential(row.provider, next),
@@ -59,13 +66,14 @@ function CredentialForm({ row, readOnly, toast }:
       if (result.note) { setProblem(serverLabel(result.note_code ?? '', result.note)); return }
       setProblem('');
       setValues({});
-      void queryClient.invalidateQueries({ queryKey: FOLLOW_CREDENTIALS_KEY, exact: true });
+      for (const queryKey of REFRESH_CREDENTIALS) void queryClient.invalidateQueries({ queryKey, exact: true });
       toast(Object.keys(next).length ? t('follow:sourceCredentials.saved') : t('follow:sourceCredentials.cleared'));
     },
     onError: (cause) => setProblem(errorMessage(cause)),
   });
 
   const save = () => {
+    if (login.busy) return;
     const filled = Object.fromEntries(
       Object.entries(values).map(([name, value]) => [name, value.trim()]).filter(([, value]) => value));
     if (!Object.keys(filled).length) { setProblem(t('follow:sourceCredentials.nothingEntered')); return }
@@ -79,28 +87,34 @@ function CredentialForm({ row, readOnly, toast }:
         {/* 「去取」跳到那个站自己的页面，会离开 Peach，所以带外链标。 */}
         {row.where ? <> <ExternalLink href={row.where}>{t('follow:sourceCredentials.getCredentials')}</ExternalLink></> : null}
       </Help>
+      {supportsBrowserLogin ? <>
+        <div className="self-start">
+          <SourceBrowserLoginButton login={login} disabled={write.isPending} onStart={() => setProblem('')} />
+        </div>
+        <SourceBrowserLoginStatus login={login} saved={done} />
+      </> : null}
       {row.howto ? <Help>{codedText(row, 'howto')}</Help> : null}
       <div className="flex w-full flex-col gap-3">
         {(row.needs || []).map((name) => (
           <Input key={name} type="password" label={name} placeholder={fieldHint(row, name)}
-            autoComplete="off" spellCheck="false" isDisabled={readOnly}
+            autoComplete="off" spellCheck="false" isDisabled={readOnly || login.busy}
             value={values[name] || ''} onChange={(value) => setValues({ ...values, [name]: value })}
             className="w-full min-w-0" />
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {done ? (
-          <Button variant="danger" disabled={readOnly} {...busyProps(write.isPending)}
+          <Button variant="danger" disabled={readOnly} {...busyProps(write.isPending || login.busy)}
             onClick={() => void confirmModal({
               title: t('follow:sourceCredentials.clearTitle'), body: CLEAR_BODY, confirmLabel: t('follow:sourceCredentials.clearTitle'), danger: true,
               holdToConfirm: true,
               onConfirm: () => write.mutateAsync({}),
             })}>{t('follow:shared.clear')}</Button>
         ) : null}
-        <Button variant="primary" disabled={readOnly} {...busyProps(write.isPending)}
+        <Button variant="primary" disabled={readOnly} {...busyProps(write.isPending || login.busy)}
           onClick={save}>{t('follow:shared.saveSettings')}</Button>
       </div>
-      {problem ? <ErrorText>{problem}</ErrorText> : null}
+      {problem || login.error ? <ErrorText>{problem || login.error}</ErrorText> : null}
       {(row.shared_fields || []).length
         ? <Help>{t('follow:sourceCredentials.sharedFieldsHint', { count: row.shared_fields!.length, fields: joinList(row.shared_fields!) })}</Help>
         : null}
@@ -113,6 +127,7 @@ function CredentialForm({ row, readOnly, toast }:
 
 function CredentialSection({ row, readOnly, toast }:
 { row: CredentialRow; readOnly: boolean; toast(message: string): void }) {
+  const [open, setOpen] = useState(row.requirement === 'required' && !credentialDone(row));
   const head = (
     <span className="flex min-w-0 flex-wrap items-center gap-2">
       <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
@@ -133,11 +148,12 @@ function CredentialSection({ row, readOnly, toast }:
     );
   }
   return (
-    <div className="flex flex-col gap-2 border-b border-separator-border px-6 py-5 last:border-b-0 max-sm:px-4">
+    <div data-credential-provider={row.provider}
+      className="flex flex-col gap-2 border-b border-separator-border px-6 py-5 last:border-b-0 max-sm:px-4">
       {head}
       <Disclosure summary={credentialDone(row) ? t('follow:sourceCredentials.editCredentials') : t('follow:sourceCredentials.enterCredentials')}
-        defaultOpen={row.requirement === 'required' && !credentialDone(row)}>
-        <CredentialForm row={row} readOnly={readOnly} toast={toast} />
+        isOpen={open} onOpenChange={setOpen}>
+        <CredentialForm row={row} readOnly={readOnly} open={open} toast={toast} />
       </Disclosure>
       {row.world_readable ? <Note tone="error" title={t('follow:sourceCredentials.permissionsTooOpen')}>{WORLD_READABLE}</Note> : null}
     </div>

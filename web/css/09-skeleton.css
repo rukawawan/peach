@@ -51,16 +51,6 @@
    卡内间距。 */
 .follow-content-skeleton .skeletoncard em{height:21px}
 .follow-content-skeleton .skeletoncard{padding-bottom:8px}
-/* 数据管理是一列 fieldset，不是海报网格：骨架照 fieldset 的轮廓排，
-   否则整页刷新先看到三列 16:9 占位，加载完又整个换成一列长条。
-   底部那条是操作条的位置，不参与微光——它是框体，不是待填的内容。 */
-.cleanup-skeleton>div{grid-template-columns:minmax(0,1fr);gap:16px}
-.cleanup-skeleton .skeletoncard{gap:0;overflow:hidden;border:1px solid var(--line-soft);
-  border-radius:var(--floating-radius);background:var(--ground)}
-.cleanup-skeleton .skeletoncard i{aspect-ratio:auto;width:38%;height:20px;margin:20px 20px 0}
-.cleanup-skeleton .skeletoncard b{width:26%;height:16px;margin:12px 20px 20px}
-.cleanup-skeleton .skeletoncard em{width:100%;height:var(--fieldset-bar-h);margin:0;
-  border-radius:0;border-top:1px solid var(--border-10);background:var(--overlay-5)}
 /* 人工复核是左边一列分类、右边工具条加一格一格等高的卡片。骨架直接用最终容器
    那几个类名（`.review-workspace`、`.reviewcontrols`、`.reviewbulktoolbar`、`.reviewlist`），
    分栏、列宽和间距就都由页面自己那套规则给，这里只补占位件的尺寸——版面从占位到到货
@@ -98,7 +88,6 @@
   background-size:50% 100%;
   animation:skeleton-sweep 1.5s ease-in-out infinite reverse}
 /* 框体不是待填的内容，本来就不参与呼吸，也不参与微光。 */
-.cleanup-skeleton .skeletoncard em::after,
 .review-skeleton .skeletoncard em::after{content:none}
 /* 封面与头像还在路上：框上铺同一条微光，到手后淡出并糊掉，和换头像那一格
    （`reveal-skeleton`）同一形态。类名由 app.js 的 `watchPendingImages` 标、`settleImage`

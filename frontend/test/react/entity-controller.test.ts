@@ -88,7 +88,7 @@ describe('实体与索引域控制', () => {
     const { controller, ports, context } = setup(), actions = controller.actions('creator', '甲');
     expect(controller.actions('creator', '甲')).toBe(actions);
     context({ kind: 'creator', name: '甲', filters: { ...emptyEntityFilters(), sort: 'rating', dir: 'desc', tag: 'two' } });
-    actions.setSort('rating');
+    actions.setSort('rating', 'asc');
     expect(ports.push).toHaveBeenLastCalledWith(expect.objectContaining({ filters: expect.objectContaining({ dir: 'asc', tag: 'two' }) }));
     expect(actions.reshuffleVideos()).toBe('31');
     expect(ports.push).toHaveBeenLastCalledWith(expect.objectContaining({ seed: '31' }));

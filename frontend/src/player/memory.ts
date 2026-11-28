@@ -1,7 +1,7 @@
 /* 每部视频共用一次读取、按身份串行提交；所有设置保存在字幕清单文件中。 */
 import { api } from '@peach/legacy/core';
 import type { CaptionStyle } from './subtitle-style';
-import type { VjsPlayer } from './types';
+import type { QualityLevelList, VjsPlayer } from './types';
 import { playerHost } from './host';
 import { t } from '../i18n';
 
@@ -11,6 +11,8 @@ export interface PlayerMemoryValue {
   rotation?: number;
   rate?: number;
   caption_style?: Partial<CaptionStyle>;
+  subtitle_offsets?: Record<string, number>;
+  quality_pixels?: number;
 }
 export type PlayerMemoryPatch = Partial<Omit<PlayerMemoryValue, 'tracks'>> & {
   track?: { key: string; name: string; text: string };
@@ -66,7 +68,8 @@ class PlayerMemory {
     if (!this.url) return Promise.resolve();
     const task = (pending.get(this.url) || Promise.resolve()).catch(() => {}).then(async () => {
       const patch = { ...this.unsaved, ...value,
-        ...(value.caption_style ? { caption_style: { ...this.unsaved.caption_style, ...value.caption_style } } : {}) };
+        ...(value.caption_style ? { caption_style: { ...this.unsaved.caption_style, ...value.caption_style } } : {}),
+        ...(value.subtitle_offsets ? { subtitle_offsets: { ...this.unsaved.subtitle_offsets, ...value.subtitle_offsets } } : {}) };
       try {
         const response = await fetch(this.url, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patch), keepalive: !patch.track });
@@ -97,6 +100,20 @@ export function playerMemory(player: VjsPlayer) {
   let memory = sessions.get(player);
   if (!memory) { memory = new PlayerMemory(player); sessions.set(player, memory) }
   return memory;
+}
+
+export function qualityPixels(width: unknown, height: unknown): number {
+  const edges = [Number(width), Number(height)].filter(edge => edge > 0);
+  return edges.length ? Math.min(...edges) : 0;
+}
+
+/** 按轨道序号应用本次选择。-1 交给播放器自动选档。 */
+export function setAdaptiveQuality(levels: QualityLevelList, selected: number): void {
+  for (let index = 0; index < levels.length; index++) {
+    const level = levels[index]!;
+    const enabled = selected === -1 || selected === index;
+    if (level.enabled !== enabled) level.enabled = enabled;
+  }
 }
 
 /** 倍速只在用户选择时写入；媒体换源后恢复同一部视频的设置。 */

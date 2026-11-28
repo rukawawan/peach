@@ -1,7 +1,7 @@
 export type ColumnFilterKey = 'people' | 'library' | 'studio' | 'tags' | 'rating' | 'resolution';
 export type ColumnSelection = string[] | { exclude: string[] };
 export const columnRangeKinds = {
-  size: 'size', dur: 'duration', plays: 'count', o: 'count', release: 'date', new: 'timestamp', played: 'timestamp', score: 'score',
+  size: 'size', dur: 'duration', plays: 'count', o: 'count', release: 'date', new: 'timestamp', played: 'timestamp', score: 'score', taste: 'taste',
 } as const;
 export type ColumnRangeKey = keyof typeof columnRangeKinds;
 export type RangeKind = typeof columnRangeKinds[ColumnRangeKey];
@@ -22,7 +22,7 @@ export function isColumnRangeKey(key: string): key is ColumnRangeKey {
 function validBound(kind: RangeKind, value: unknown): value is RangeScalar {
   if (kind === 'date') return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
   return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER
-    && (kind === 'timestamp' || value >= 0);
+    && (kind === 'timestamp' || value >= 0) && (kind !== 'taste' || value <= 1);
 }
 
 export function validRange(kind: RangeKind, range: RangeBounds): boolean {

@@ -6,7 +6,8 @@
 普通的筛选列表，留给排查用。
 
 「最近完成」按结束时刻从新到旧排，一页数的是顶层那几轮，后继随父任务一起下发；
-活动页通过 `page` 与 `limit` 读取当前页和总数，轮询刷新同一页。
+活动页通过 `page` 与 `limit` 读取当前页和总数，轮询刷新同一页；`q` 是查找框的词，
+只收窄这一段（`TaskRunStore._search_condition`）。
 原游标调用通过 `before_finished_at` 与 `before_id` 读取更早的终态任务，
 响应仅包含该页及后继计数。
 """
@@ -126,12 +127,7 @@ def _tasks(contract, args):
         rows = contract.task_runs.query(status=status, task_key=task_key, limit=limit)
         return {"ok": True, "filtered": True, "available": True,
                 "runs": [payload(row) for row in rows]}
-    page = int((args or {}).get('page') or 1)
-    if page < 1 or (before is not None and page != 1):
-        raise UserValueError('api.tasks.invalidPage')
-    total = contract.task_runs.finished_count()
-    page = min(page, max(1, (total + limit - 1) // limit))
-    finished, has_more = contract.task_runs.finished_page(before=before, limit=limit, offset=(page - 1) * limit)
+    page, total, finished, has_more = _recent_page(contract, args, limit, before)
     if before is not None:
         return {"ok": True, "filtered": False, "available": True,
                 "finished": [payload(row) for row in finished],
@@ -165,6 +161,22 @@ def _tasks(contract, args):
         "followup_counts": _parent_counts(contract, (*running, *finished, *working)),
         "statuses": {"active": list(ACTIVE_STATUSES), "finished": list(TERMINAL_STATUSES)},
     }
+
+
+def _recent_page(contract, args, limit: int, before):
+    """「最近完成」这一段的当前页：页号、总数、这一页的行与后面还有没有。
+
+    页号越界收回末页。查找词只收窄这一段：在排在跑的就那几条，一眼看得完，照常全给。
+    """
+    page = int((args or {}).get('page') or 1)
+    if page < 1 or (before is not None and page != 1):
+        raise UserValueError('api.tasks.invalidPage')
+    search = str((args or {}).get('q') or '').strip()
+    total = contract.task_runs.finished_count(search)
+    page = min(page, max(1, (total + limit - 1) // limit))
+    finished, has_more = contract.task_runs.finished_page(
+        before=before, limit=limit, offset=(page - 1) * limit, q=search)
+    return page, total, finished, has_more
 
 
 def _active(contract, limit: int) -> list:

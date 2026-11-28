@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import threading
@@ -29,6 +30,7 @@ from pathlib import Path
 from . import jav_poster_crop as crop
 from .coded_text import Said
 from .cover_artwork import cover_group, install_cover, is_user_cover
+from .face_detect import read_image
 from .images import measure_image_file, measure_image_size
 from .jav_cover_fetch import (AWS_MODERN, PACKAGE_PREFERENCE, HostLimitedTransport, Unavailable, candidate_for,
                               dmm_evidence, dmm_portrait, dmm_portrait_url, official_image, package_cid, probe_size)
@@ -157,8 +159,13 @@ def crop_stale(path: Path, size: tuple[int, int] | None) -> bool:
     record = crop.read_sidecar(path)
     if crop.is_manual(record):
         return False
-    return (size is None or not crop.is_current(record, *size)
-            or (record or {}).get('rules') != crop.CROP_RULES)
+    if size is None or not crop.is_current(record, *size):
+        return True
+    rules = (record or {}).get('rules')
+    if (crop.CROP_RULES, rules) == (4, 3):
+        # 第 4 版修正 Windows 非 ASCII 文件名读图。其余路径的第 3 版记录仍能使用。
+        return os.name == 'nt' and not str(path.absolute()).isascii()
+    return rules != crop.CROP_RULES
 
 
 def crop_inputs(path: Path, width: int, height: int) -> dict:
@@ -176,9 +183,7 @@ def crop_inputs(path: Path, width: int, height: int) -> dict:
     title = saved.get('title', '')
     spine = across = None
     if crop.crops_to_portrait(path.stem, title) or portrait is not None:
-        import cv2
-
-        spine = cover_artwork.spine_box(cv2.imread(str(path)), path.stem, title, portrait)
+        spine = cover_artwork.spine_box(read_image(path), path.stem, title, portrait)
         # 一批几千张，不能把解码后的图都留在内存里：用到时才重读原图。
         across = cover_artwork.text_across_file(path)
     current_face = face.get('px') == [width, height]
@@ -239,11 +244,9 @@ def face_stale(path: Path, *, parts: bool) -> bool:
 
 def face_of(path: Path, detector, parts=None) -> dict | None:
     """一张封面的人脸记录；`parts` 是部位检测器，整幅画面上比主脸大的部位记成 `subject`。"""
-    import cv2
-
     from .cover_artwork import face_record, needs_whole_face
 
-    image = cv2.imread(str(path))
+    image = read_image(path)
     poster = crop.read_sidecar(path) or {}
     title = poster.get('title', '')
     # 竖版图比对的结论描述的是这张图本身：装封面时按它找脸，这里也一样。

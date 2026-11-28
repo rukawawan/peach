@@ -123,7 +123,7 @@ export function PerformerDeleteCard({ toast }: { toast(message: string): void })
       <Note tone="error" title={t('cleanup:performerDelete.loadFailed')}
         action={<Button variant="secondary" size="small" onClick={() => void query.refetch()}>{t('cleanup:shared.retry')}</Button>}>
         {errorMessage(query.error)}</Note>
-    </Fieldset> : <DataTable label={t('cleanup:performerDelete.tableLabel')} title={t('cleanup:tools.bulkDelete')} titleId="batch-delete-title" unit={t('cleanup:performerDelete.unit')}
+    </Fieldset> : <DataTable preferenceId="performer-delete" label={t('cleanup:performerDelete.tableLabel')} title={t('cleanup:tools.bulkDelete')} titleId="batch-delete-title" unit={t('cleanup:performerDelete.unit')}
       description={BATCH_DELETE_TEXT} items={items} columns={columns}
       rowId={person => String(person.entity_id)} rowLabel={person => entityDisplayName('performer', person.k, person.entity_id)}
       selected={selected} onSelected={setSelected}

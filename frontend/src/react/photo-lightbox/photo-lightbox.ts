@@ -94,18 +94,19 @@ export interface PhotoZoom {
 }
 
 /** `box` 是灯箱本身，它不在文档里了（已经关掉）就什么都不做；`show` 把百分比交给读数与滑杆。 */
-export function photoZoom(box: Element, main: SwiperInstance, show: (percent: number) => void): PhotoZoom {
+export function photoZoom(box: Element, main: SwiperInstance, show: (percent: number) => void, devicePixels = false): PhotoZoom {
   let target: number | 'fit' = 'fit';
   const image = () => main.slides?.[main.activeIndex]?.querySelector('img');
   const fitPercent = () => {
     const img = image();
     if (!img?.naturalWidth || !img.naturalHeight) return 100;
-    return Math.min(100, img.offsetWidth / img.naturalWidth * 100, img.offsetHeight / img.naturalHeight * 100);
+    const pixelRatio = devicePixels ? window.devicePixelRatio || 1 : 1;
+    return Math.min(1, img.offsetWidth / img.naturalWidth, img.offsetHeight / img.naturalHeight) * pixelRatio * 100;
   };
   const apply = (raw: number | 'fit') => {
     if (main.destroyed || !box.isConnected) return;
     const fit = fitPercent();
-    const percent = raw === 'fit' ? fit : Math.min(PHOTO_ZOOM_MAX, Math.max(PHOTO_ZOOM_MIN, Number(raw) || fit));
+    const percent = raw === 'fit' ? Math.min(100, fit) : Math.min(PHOTO_ZOOM_MAX, Math.max(PHOTO_ZOOM_MIN, Number(raw) || fit));
     target = raw === 'fit' ? 'fit' : percent;
     show(Math.round(percent));
     const ratio = percent / fit;

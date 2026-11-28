@@ -68,24 +68,51 @@ class TestEnvironmentTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "依赖同步失败"):
             self.prepare(self.worker, run)
 
-    def test_frontend_dependencies_out_of_step_with_the_lock_stop_before_starting_tests(self):
-        """前端依赖没装或与锁文件对不上时开跑前就拦下，并给出该执行的 npm ci。"""
+    def frontend_lock(self):
         frontend = self.worker / "frontend"
         frontend.mkdir()
         lock = {"packages": {"": {"name": "peach"},
                              "node_modules/vite": {"version": "8.0.0"},
                              "node_modules/@esbuild/linux-x64": {"version": "0.25.0", "optional": True}}}
         (frontend / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        return frontend, frontend / "node_modules" / ".package-lock.json"
+
+    def test_a_worktree_without_frontend_dependencies_installs_them_from_the_lock(self):
+        """新工作树没有 `frontend/node_modules` 时入口照锁文件装一遍；装不上就停在开跑前。"""
+        frontend, installed = self.frontend_lock()
+        commands = []
+
+        def run(command, **kwargs):
+            commands.append(command)
+            if command[1:3] == ["ci", "--prefix"]:
+                self.assertEqual(command[3], str(frontend))
+                installed.parent.mkdir()
+                installed.write_text(json.dumps({"packages": {"node_modules/vite": {"version": "8.0.0"}}}),
+                                     encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0)
+        self.prepare(self.worker, run)
+        self.assertEqual([command[1] for command in commands], ["sync", "ci"])
+        shutil.rmtree(installed.parent)
+        failing = mock.Mock(side_effect=lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1 if command[1] == "ci" else 0))
+        with self.assertRaisesRegex(RuntimeError, "npm ci") as raised:
+            self.prepare(self.worker, failing)
+        self.assertIn(str(frontend), str(raised.exception))
+
+    def test_frontend_dependencies_out_of_step_with_the_lock_stop_before_starting_tests(self):
+        """已有的前端依赖与锁文件对不上时开跑前就拦下，给出该执行的 npm ci，不替人重装。"""
+        frontend, installed = self.frontend_lock()
+        installed.parent.mkdir()
         run = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        # 装到一半留下的目录没有安装记录：可能正被预览服务占着，不自动重装。
         with self.assertRaisesRegex(RuntimeError, "npm ci") as raised:
             self.prepare(self.worker, run)
         self.assertIn(str(frontend), str(raised.exception))
-        installed = frontend / "node_modules" / ".package-lock.json"
-        installed.parent.mkdir()
         installed.write_text(json.dumps({"packages": {"node_modules/vite": {"version": "7.3.0"}}}),
                              encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "node_modules/vite"):
             self.prepare(self.worker, run)
+        self.assertEqual([call.args[0][1] for call in run.call_args_list], ["sync", "sync"])
         # 别的平台的可选原生绑定没装不算对不上。
         installed.write_text(json.dumps({"packages": {"node_modules/vite": {"version": "8.0.0"}}}),
                              encoding="utf-8")
@@ -148,6 +175,8 @@ class TestEnvironmentTests(unittest.TestCase):
                     self.assertEqual(os.path.realpath(seen["pythonpath"]),
                                      os.path.realpath(root / "src"))
                     self.assertEqual(seen["encoding"], "utf-8")
+                    # 最后一行回显退出码：输出经管道截断后仍读得到成败。
+                    self.assertEqual(result.stdout.splitlines()[-1], "Peach test exit: 0")
 
     def test_worktree_environment_cannot_resolve_to_the_production_environment(self):
         # 路径解析也覆盖 Windows junction；不要求运行测试的账户能建立符号链接。

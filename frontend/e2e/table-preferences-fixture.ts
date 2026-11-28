@@ -58,6 +58,14 @@ export async function verifyTablePreferences(page: Page, table: Locator, label: 
   const controls = page.getByRole('group', { name: `${label}列设置`, exact: true });
   const header = table.locator(`th[data-key="${identity}"]`);
   const width = async () => header.evaluate(node => node.getBoundingClientRect().width);
+  const viewport = page.viewportSize()!;
+  const resizeViewport = async (wide: boolean) => {
+    // 窄屏的名称列为下一列预留可见空间，缩放与保存的像素宽度在宽屏核对。
+    if (viewport.width > 600) return;
+    await page.setViewportSize(wide ? { ...viewport, width: 760 } : viewport);
+    await settle(page);
+  };
+  await resizeViewport(true);
   const initial = await width();
   const handle = header.getByRole('slider');
   await withPageDiagnostics(page, `${label}进入键盘列宽调整`, async () => {
@@ -75,6 +83,12 @@ export async function verifyTablePreferences(page: Page, table: Locator, label: 
     { node: await header.elementHandle(), initial }, { timeout: 5000 });
   await handle.press('Tab');
   const resized = await width(); assert.ok(resized > initial, `${label}: ${initial} → ${resized}`);
+  await resizeViewport(false);
+  const expectResizedWidth = async () => {
+    await resizeViewport(true);
+    assert.ok(Math.abs(await width() - resized) <= 1, label);
+    await resizeViewport(false);
+  };
   const scroll = table.locator('..');
   const range = await scroll.evaluate(node => node.scrollWidth - node.clientWidth);
   if (range > 1) {
@@ -86,6 +100,25 @@ export async function verifyTablePreferences(page: Page, table: Locator, label: 
     assert.ok(await scroll.evaluate(node => node.scrollLeft) >= Math.min(80, range) - 2, label);
     assert.equal(await table.locator('tbody input[type="checkbox"]:checked:not([role="switch"])').count(), 0, label);
   }
+  const headerColumns = 'thead th[data-key]:not([data-table-space])';
+  const headerKeys = () => table.locator(headerColumns).evaluateAll(headers => headers.map(node => node.getAttribute('data-key')));
+  const expectHeaderKeys = async (keys: (string | null)[]) => {
+    const node = await table.elementHandle();
+    await page.waitForFunction(({ root, selector, ordered }) => JSON.stringify(
+      Array.from(root!.querySelectorAll(selector), header => header.getAttribute('data-key')),
+    ) === ordered, { root: node, selector: headerColumns, ordered: JSON.stringify(keys) }, { timeout: 5000 });
+  };
+  const defaultOrder = await headerKeys();
+  const changedOrder = [...defaultOrder];
+  const columnIndex = changedOrder.indexOf(optional.id);
+  assert.ok(columnIndex > 1, label);
+  changedOrder.splice(columnIndex - 1, 0, changedOrder.splice(columnIndex, 1)[0]!);
+  const layoutMenu = page.getByRole('dialog', { name: `${label}的列布局`, exact: true });
+  const layoutButton = controls.getByRole('button', { name: '列布局', exact: true });
+  await layoutButton.click();
+  await layoutMenu.locator(`[data-tab="${optional.id}"]`).press('Alt+ArrowUp');
+  await expectHeaderKeys(changedOrder);
+  await page.keyboard.press('Escape');
   await controls.getByRole('button', { name: '显示列', exact: true }).click();
   const menu = page.getByRole('dialog', { name: `${label}显示列`, exact: true });
   const actionLayout = await menu.evaluate(element => {
@@ -122,23 +155,37 @@ export async function verifyTablePreferences(page: Page, table: Locator, label: 
   await page.reload({ waitUntil: 'load' });
   await restoreView?.();
   await table.waitFor();
-  assert.ok(Math.abs(await width() - resized) <= 1, label);
-  assert.equal(await table.locator(`th[data-key="${optional.id}"]`).count(), 0);
+  await expectResizedWidth();
+  await expectHeaderKeys(changedOrder.filter(id => id !== optional.id));
   await controls.getByRole('button', { name: '显示列', exact: true }).click();
   await menu.getByRole('button', { name: '恢复默认显示', exact: true }).click();
   await page.keyboard.press('Escape');
   await table.locator(`th[data-key="${optional.id}"]`).waitFor();
-  await controls.getByRole('button', { name: '重置列宽', exact: true }).click();
+  await expectHeaderKeys(changedOrder);
+  await layoutButton.click();
+  await layoutMenu.getByRole('button', { name: '重置列顺序', exact: true }).click();
+  await expectHeaderKeys(defaultOrder);
+  await expectResizedWidth();
+  await layoutMenu.getByRole('button', { name: '重置列宽', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await resizeViewport(true);
   await page.waitForFunction(({ node, initial }) => node && Math.abs(node.getBoundingClientRect().width - initial) <= 1,
     { node: await header.elementHandle(), initial }, { timeout: 5000 });
   assert.ok(Math.abs(await width() - initial) <= 1, label);
   assert.ok(await table.locator('th[data-table-space]').evaluate(node => node.getBoundingClientRect().width) <= 1,
     `${label} 默认剩余空间由名称列承接`);
+  await resizeViewport(false);
   await scroll.evaluate(node => { node.scrollLeft = 0 });
 }
 
 /** 内容的可用宽度跟随列变化，文字完整保留在 DOM 中。 */
 export async function verifyColumnContentWidth(table: Locator, id: string, selector: string) {
+  const page = table.page();
+  const viewport = page.viewportSize()!;
+  if (viewport.width <= 600) {
+    await page.setViewportSize({ ...viewport, width: 760 });
+    await settle(page);
+  }
   const header = table.locator(`th[data-key="${id}"]`);
   const index = await header.evaluate(node => [...node.parentElement!.children].indexOf(node));
   const cell = table.locator('tbody tr').first().locator('td').nth(index);
@@ -152,7 +199,7 @@ export async function verifyColumnContentWidth(table: Locator, id: string, selec
   // 滚到视口中间，避开右下角弹出的提示。
   await resizer.evaluate(node => node.scrollIntoView({ block: 'center', inline: 'nearest' }));
   const box = (await resizer.boundingBox())!;
-  const page = content.page(), x = box.x + box.width / 2, y = box.y + box.height / 2;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
   await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 100, y, { steps: 10 }); await page.mouse.up();
   await page.waitForFunction(({ node, initial }) => node && node.closest('td')!.getBoundingClientRect().width > initial + 70,
     { node: await content.elementHandle(), initial: initial.cell }, { timeout: 5000 }).catch(() => undefined);
@@ -164,4 +211,8 @@ export async function verifyColumnContentWidth(table: Locator, id: string, selec
   const geometry = await content.evaluate(node => ({ content: node.getBoundingClientRect().right,
     cell: node.closest('td')!.getBoundingClientRect().right }));
   assert.ok(geometry.content <= geometry.cell, JSON.stringify(geometry));
+  if (viewport.width <= 600) {
+    await page.setViewportSize(viewport);
+    await settle(page);
+  }
 }

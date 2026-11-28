@@ -20,6 +20,10 @@
   transition:box-shadow .12s ease}
 .search:focus-within{box-shadow:inset 0 0 0 2px var(--color-border-button-active)}
 .search input{flex:1;min-width:0;background:none;border:0;outline:none;font-size:var(--fs-lg)}
+.search:has(#aiSearchAction:not(:empty)){--search-action-inset:4px;padding-inline-end:var(--search-action-inset)}
+.search #aiSearchAction{position:relative;z-index:1;flex:none;display:flex;align-self:stretch;margin-block:var(--search-action-inset)}
+.search #aiSearchAction>a{height:100%;border-radius:var(--pill-radius)}
+.search #aiSearchAction:empty{display:none}
 .search>svg{width:21px;height:21px;flex:none;stroke:var(--muted);fill:none;stroke-width:2;stroke-linecap:round}
 /* 补全按种类分组，一次可能有七组，所以下拉栏自己滚：滚到底不把页面接着往下带，
    否则在搜索框里翻补全会把身后的列表也翻走。 */

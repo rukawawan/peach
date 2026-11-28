@@ -1,4 +1,4 @@
-/* 活动页「云下载」段：提交过的离线下载任务。提交在各页原地的弹层里（`cloud-download-dialog.tsx`）。
+/* 活动页「下载任务」段：提交过的云下载与本地下载任务。提交在各页原地的弹层里（`cloud-download-dialog.tsx`）。
  *
  * 任务表是 `/api/downloads` 自己的一份，不并进 `/api/tasks`：离线任务跑在网盘那头，一跑
  * 几小时到几天，是一条带远端编号的提交记录，不是这台电脑上的一轮批处理。所以这一段自己取数、
@@ -9,6 +9,7 @@
  * 违规的不给（服务端也会拒）。每张卡都能复制磁力：接口失效时退回手动添加。 */
 import { useId, useState, type CSSProperties } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { IndexSearch } from '../index/index-search';
 import { showToast } from '../toaster';
 
 import { Chip } from '@/components/base/badges/chip';
@@ -61,7 +62,8 @@ const taskName = (task: DownloadTask) => {
 
 /** 状态、失败类别与整理状态按 id 取当前界面语言；没有译文的照用服务端的中文名。
  *  整理状态排了自动重试时服务端给 `postprocess_label_code`（第几次），优先用它。 */
-const stateLabel = (task: DownloadTask) => serverLabel(`download.state.${task.state}`, task.state_label);
+const stateLabel = (task: DownloadTask) =>
+  serverLabel(task.state_label_code || `download.state.${task.state}`, task.state_label);
 const postprocessLabel = (task: DownloadTask) =>
   serverLabel(task.postprocess_label_code || `download.postprocess.${task.postprocess_state}`, task.postprocess_label,
     task.postprocess_label_params);
@@ -81,9 +83,11 @@ export function DownloadsPanel() {
   const id = useId();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  /* 按番号、标题或文件名找一次提交：服务端在全部任务里筛，翻页也在结果里翻。 */
+  const [search, setSearch] = useState('');
   const query = useQuery({
-    queryKey: [...DOWNLOADS_KEY, 'page', page, pageSize],
-    queryFn: ({ signal }) => apiGet<DownloadsSnapshot>(`${DOWNLOADS_URL}?limit=${pageSize}&page=${page}`, signal),
+    queryKey: [...DOWNLOADS_KEY, 'page', page, pageSize, search],
+    queryFn: ({ signal }) => apiGet<DownloadsSnapshot>(`${DOWNLOADS_URL}?limit=${pageSize}&page=${page}${search ? `&q=${encodeURIComponent(search)}` : ''}`, signal),
     refetchInterval: downloadsInterval,
     placeholderData: (previous) => previous,
   });
@@ -91,10 +95,13 @@ export function DownloadsPanel() {
   if (query.data && query.data !== lastData) setLastData(query.data);
   const data = query.data || lastData;
   const tasks = data?.tasks || [];
-  if (!tasks.length && !query.error) return null;
+  if (!tasks.length && !query.error && !search) return null;
   return (
     <section id="cloudDownloads" aria-labelledby={id} className="flex min-w-0 flex-col gap-3">
-      <h3 id={id} className="text-title-2-medium text-text-primary">{t('manage:downloadsPanel.title')}</h3>
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <h3 id={id} className="text-title-2-medium text-text-primary">{t('manage:downloadsPanel.title')}</h3>
+        <IndexSearch label={t('manage:downloadsPanel.search')} value={search} onQuery={value => { setSearch(value); setPage(1) }} />
+      </div>
       {query.error ? <Note tone="error">{errorMessage(query.error)}</Note> : null}
       {(data?.channel_alerts || []).map((alert) => (
         // 配置失效与连不上要用户动手，按错误显示；空间与额度等着腾出来，按提醒显示。
@@ -109,7 +116,7 @@ export function DownloadsPanel() {
         ? <ul aria-live="polite" className="flex min-w-0 flex-col gap-3">
             {tasks.map((task) => <TaskCard key={task.id} task={task} writable={data?.available ?? false} />)}
           </ul>
-        : null}
+        : search && !query.isFetching ? <p role="status" className="text-body-2-regular text-text-secondary">{t('manage:downloadsPanel.noMatches')}</p> : null}
       <DataTableFooter label={t('manage:downloadsPanel.title')} total={data?.total ?? tasks.length}
         pagination={{ pageIndex: (data?.page || page) - 1, pageSize }}
         onChange={(next) => {

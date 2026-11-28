@@ -11,7 +11,7 @@ from .catalog_rules import (
     normalise_code_key, tokyo_hot_code)
 from .genre_taxonomy import map_genres, unmapped_genre_warning
 from .http import body_text
-from .javdb import LOGIN as JAVDB_LOGIN_PAGE
+from .javdb import login_page as javdb_login_page
 from .entities import (
     FORMER_PREFIX,
     KANA,
@@ -135,7 +135,7 @@ LOGIN_LOCATIONS = re.compile(
 #: 站方自己给出的登录页标记。只认页面身份这种固定结构，不按「正文里出现登录二字」
 #: 猜——搜索结果页和页脚都会出现那两个字。javdb 那条判据留在 `peach.javdb`，
 #: 采集脚本按页判「这一页是不是登录墙」用的是同一份。
-_AUTH_PAGE_MARKERS = ((JAVDB_LOGIN_PAGE, "labels.metadata.authWall.javdbLoginPage"),)
+_AUTH_PAGE_MARKERS = ((javdb_login_page, "labels.metadata.authWall.javdbLoginPage"),)
 
 
 def auth_wall(*, status_code: int = 0, final_url: str = "", body: bytes | str = b"") -> dict | None:
@@ -154,8 +154,8 @@ def auth_wall(*, status_code: int = 0, final_url: str = "", body: bytes | str = 
     if path and LOGIN_LOCATIONS.search(path):
         return {"code": "labels.metadata.authWall.redirect", "params": {"path": path, "advice": _ADVICE}}
     text = body_text(body) if isinstance(body, bytes) else str(body)
-    for pattern, page in _AUTH_PAGE_MARKERS:
-        if pattern.search(text):
+    for matches_page, page in _AUTH_PAGE_MARKERS:
+        if matches_page(text):
             return {"code": "labels.metadata.authWall.loginPage", "params": {"page": {"code": page}, "advice": _ADVICE}}
     if status_code in AMBIGUOUS_AUTH_STATUS_CODES:
         return {"code": "labels.metadata.authWall.ambiguous", "params": {"status": status_code}}

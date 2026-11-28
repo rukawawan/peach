@@ -56,7 +56,7 @@ def current(row, entry) -> bool:
         return False
 
 
-def read(database, asset_id=None) -> dict[int, dict]:
+def read(database, asset_id=None, *, verdict=None) -> dict[int, dict]:
     path = cache_path(database)
     if not path.is_file():
         return {}
@@ -65,6 +65,9 @@ def read(database, asset_id=None) -> dict[int, dict]:
     if asset_id is not None:
         query += ' WHERE asset_id=?'
         values = (asset_id,)
+    elif verdict is not None:
+        query += ' WHERE verdict=?'
+        values = (verdict,)
     else:
         query += " WHERE verdict IN ('candidate','intro_only')"
     try:

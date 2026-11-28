@@ -32,6 +32,7 @@ export interface EntityFilterTag {
 export interface EntityComboItem {
   kind: 'clear' | 'untag';
   key: string;
+  value?: string;
   label: string;
 }
 
@@ -88,11 +89,13 @@ export interface EntityFilterActions {
   /** 四枚观看状态里的一枚。 */
   setState(state: string): void;
   toggleTag(tag: string): void;
+  /** 作品视图的查找框：在这一位名下按番号、标题找。 */
+  setQuery(q: string): void;
   /** 撤掉交集条上的一颗创作者／厂牌／归属。 */
   clearFilter(key: string): void;
   /** 交集条末尾的「全部清除」。 */
   clearAll(): void;
-  setSort(key: string): void;
+  setSort(key: string, dir: 'asc' | 'desc'): void;
   /** 换一批。视频视图由读数骨架说「在等」，照片视图的键自己转圈，等到这个 Promise 落定。 */
   reshuffle(): Promise<void>;
   setJavLayout(layout: string): void;
@@ -106,7 +109,7 @@ export interface EntityFilterActions {
   onlineStatus(status: string): void;
   onlineProvider(provider: string): void;
   onlineTag(tag: string): void;
-  onlineSort(key: string): void;
+  onlineSort(key: string, dir: 'asc' | 'desc'): void;
 }
 
 /** 仍由遗留层给的接线与 HTML。 */
@@ -129,6 +132,8 @@ export interface EntityFilterProps {
   /** 当前观看状态：''、fresh、later、flagged。 */
   state: string;
   states: readonly { k: string; label: string }[];
+  /** 作品视图查找框里的词（地址上的 `q`）。 */
+  query: string;
   tags: EntityFilterTag[];
   combo: EntityComboItem[];
   /** 表头左边那一句；`busy` 时换成骨架。 */

@@ -15,7 +15,6 @@ import { tagLabel } from '../core/tags';
 import { pageSkeletonHtml } from './../management-placeholder';
 import { buildBars, catalogGridLayout, catalogState, commitContextFilter, goHome, loadCatalog, mixRelated, pagePlaybackFilters } from './catalog.js';
 import { pagePlaybackParams } from '../react/video-wall/wall-route';
-import { wireDragReorder } from '../ui-kit';
 import { currentBarsContext, entityState, openEntity, revealForIsland, syncForIsland } from './entity.js';
 import { openAddToPlaylist, rereadPlaylists, saveMixAsPlaylist } from './playlists.js';
 import { releaseHoverPreviews } from './../card-art/hover';
@@ -45,13 +44,14 @@ export function disposeStage(push=false,preserveInlineOrigin=false,{miniplayer=t
 export function repaintDetailPoster(){stageApi()?.repaintPoster()}
 
 export function openQueue(kind,key,itemId,push,anchor=null,options={}){
-  key=+key;
-  const same=activeQueue?.kind===kind&&(kind==='playlist'?activeQueue.playlistId:activeQueue.seedId)===key;
+  key=kind==='filter'?String(key):+key;
+  const same=activeQueue?.kind===kind&&(activeQueue.filterId??activeQueue.playlistId??activeQueue.seedId)===key;
   /* 同一个队列里换条，来处保持打开队列那一刻的那一页：播放列表关掉回列表页并重读。 */
   if(push&&!same)writeShell({detailReturnPath:location.pathname+location.search});
   /* 队列地址取完数才推（`present`），背景按此刻记；同队列换条在详情地址上，沿用上一条的背景。 */
   if(push)holdOverlayBackground();
-  const queue=kind==='playlist'?{kind,playlistId:key,fresh:true}:{kind,seedId:key,fresh:!same};
+  const queue=kind==='playlist'?{kind,playlistId:key,fresh:true}:kind==='filter'
+    ?{kind,filterId:key,fresh:!same}:{kind,seedId:key,fresh:!same};
   if(options.autoplay)queue.autoplay=true;
   if(push){
     cancelQueueRequest();
@@ -77,12 +77,16 @@ export function hasReturnSurface(){
     ||!$('#index').hidden||!$('#stats').hidden;
 }
 
-export async function openItem(id,push=true,queue=null,anchor=null,queuePush=false,queueRequest=null){
+export async function openItem(id,push=true,queue=null,anchor=null,queuePush=false,queueRequest=null,returnPosition=null){
   if(queueRequest?.cancelled)return;
   if(!queueRequest)cancelQueueRequest();
   if(push&&!queue){
+    /* 地址切到详情时顶栏已可能重排，先记打开前的背景位置。 */
+    const opener=document.activeElement;
+    const position=opener instanceof HTMLElement&&opener!==document.body
+      ? {left:window.scrollX,top:window.scrollY,anchor:opener}:null;
     writeShell({detailReturnPath:location.pathname+location.search});
-    requestOverlay('/assets/'+(+id),'item',()=>openItem(id,false,null,anchor));
+    requestOverlay('/assets/'+(+id),'item',()=>openItem(id,false,null,anchor,false,null,position));
     return;
   }
   releaseHoverPreviews();
@@ -105,9 +109,9 @@ export async function openItem(id,push=true,queue=null,anchor=null,queuePush=fal
   if(stageApi()?.showing()!=='item')disposeStage(false,true,{miniplayer:false,preserveQueueRequest:queueRequest});
   writeShell({detailOriginAnchor:origin,detailOriginAbove:above,detailReturnNeedsRestore:needsReturnRestore});
   writeShell({detailReturnBarsContext:returnBars});
-  writeShell({activeQueue:queue&&{kind:queue.kind,seedId:queue.seedId,playlistId:queue.playlistId}});
+  writeShell({activeQueue:queue&&{kind:queue.kind,seedId:queue.seedId,playlistId:queue.playlistId,filterId:queue.filterId}});
   writeShell({pendingQueueRoute:queue&&queuePush
-    ? `${queue.kind}=${queue.kind==='playlist'?queue.playlistId:queue.seedId}`:null});
+    ? `${queue.kind}=${queue.filterId??queue.playlistId??queue.seedId}`:null});
   if(push&&!queue)navigationState.route('/assets/'+id,false,overlayState('item'));
   const stage=await loadStage(mediaState.stageHost);
   if(queueRequest?.cancelled)return;
@@ -121,7 +125,7 @@ export async function openItem(id,push=true,queue=null,anchor=null,queuePush=fal
     grid:{helpers:catalogState.gridHelpers,actions:catalogState.gridActions},
     layout:catalogGridLayout(),selectMode,selected:new Set(selected),seekSeconds:preferencesState.appSettings.seekSeconds,
     resume:push||id==null?null:urlResume(),
-  });
+  },returnPosition);
   scheduleStickySurfaces();
 }
 
@@ -213,7 +217,6 @@ mediaState.itemDetailHelpers = {
   relatedSkeletonHtml:()=>pageSkeletonHtml(t('shell:skeleton.loadingRecommendations'),{cards:true,className:'related-skeleton'}),
   mixRelated:seedId=>mixRelated(seedId),
   wireDrag:el=>wireDrag(el),
-  wireDragReorder:(root,options)=>wireDragReorder(root,options),
 };
 mediaState.itemDetailActions = {
   close:()=>closeItemDetail(),
@@ -238,31 +241,31 @@ mediaState.itemDetailActions = {
       void openFollowDetail(to.id,false,null,true);return;
     }
     if(to.kind==='item'){void openItem(to.id,true);return}
+    if(to.kind==='filter-error')receiptsState.toast({text:to.message});
     // 队列地址还没推、人就停在播放列表页上：只重读那一页。
     if(to.kind==='playlists'){if(push||location.pathname!=='/playlists')openRoutedPage('/playlists');else rereadPlaylists();return}
     disposeStage(false);
   },
-  openQueueItem:(queue,id,push=true)=>void openQueue(queue.kind,queue.kind==='playlist'?queue.playlistId:queue.seedId,id,push,null,{autoplay:queue.autoplay}),
+  openQueueItem:(queue,id,push=true)=>void openQueue(queue.kind,queue.filterId??queue.playlistId??queue.seedId,id,push,null,{autoplay:queue.autoplay}),
   // 盘回来了就按正常路径重开，不在半路挂播放器；开着的队列跟着留下。
   reopen:()=>{
     const it=presentedItem;
     if(!it)return;
     const queue=activeQueue;
-    if(queue)void openQueue(queue.kind,queue.kind==='playlist'?queue.playlistId:queue.seedId,it.id,false);
+    if(queue)void openQueue(queue.kind,queue.filterId??queue.playlistId??queue.seedId,it.id,false);
     else void openItem(it.id,false);
   },
   checkSource:async key=>(await loadSourceStatus())[key]!==false,
   /* 直接进「已保存」这一档。关注页的筛选照地址推导，所以状态要先写进地址，光设全局会被推回未看。 */
   openSavedFollow:()=>{
     followState.followAuthors=new Set();followState.followProviders=new Set();followState.followTags=new Set();followState.followWorks=new Set();followState.followMediaView='videos';
-    followState.followDurMin=followState.followDurMax=0;followState.followFilter='saved';openRoutedPage(followViewPath())},
+    followState.followDurMin=followState.followDurMax=0;followState.followQuery='';followState.followFilter='saved';openRoutedPage(followViewPath())},
   openEntity:(kind,name)=>openEntity(kind,name),
   openUnowned:()=>goHome({owner:'none'}),
   openRegion:region=>goHome({region:region||'none'}),
   openTag:tag=>commitContextFilter(filters=>{filters.tag=tag}),
   addToPlaylist:item=>openAddToPlaylist(item),
   saveMix:options=>saveMixAsPlaylist(options),
-  editPlaylist:()=>openRoutedPage('/playlists'),
   openPlaylists:()=>openRoutedPage('/playlists'),
   reveal:id=>revealForIsland(id),
   sync:id=>syncForIsland(id),
@@ -284,6 +287,7 @@ mediaState.itemDetailActions = {
 mediaState.immerseHost = {
   filters:()=>mediaState.immerseScope??state,
   seekSeconds:()=>preferencesState.appSettings.seekSeconds,
+  resumeRestartPercent:()=>preferencesState.appSettings.resumeRestartPercent,
   sourceOffline:key=>preferencesState.sourceOffline(key),
   displayName:it=>javDisplayName(it),
   /* 每换一条用 replace 写地址：每划一下都往历史里塞一条，后退键就废了。 */

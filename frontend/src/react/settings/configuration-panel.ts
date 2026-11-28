@@ -5,8 +5,7 @@ import type { ConfigurationPanel } from '../bundle';
 
 const GROUP = 'flex flex-col gap-6';
 
-export function groupRoot(panel?: ConfigurationPanel) {
-  if (!panel) return { className: GROUP };
+export function groupRoot(panel: ConfigurationPanel) {
   return {
     className: panel.active ? `${GROUP} ui-board-group-active` : GROUP,
     'data-board-group': String(panel.index),

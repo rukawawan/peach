@@ -53,9 +53,7 @@ def face_record_of(image, detector: FaceDetector) -> dict:
 
 def face_record(image_path: Path, detector: FaceDetector) -> dict | None:
     """检一张图，返回可直接落盘的 sidecar 内容；读不出图返回 None。"""
-    import cv2
-
-    image = cv2.imread(str(image_path))
+    image = face_detect.read_image(image_path)
     return None if image is None else face_record_of(image, detector)
 
 

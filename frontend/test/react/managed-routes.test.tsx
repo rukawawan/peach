@@ -9,6 +9,7 @@ import { act, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { NavigateFunction } from 'react-router';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { CONFIGURATION_URL } from '../../src/configuration-endpoints';
 
 import type {
   ConfigurationProps, DataCleanupProps, DuplicatesProps, FollowManageProps, QualityGoalsProps, ReviewProps,
@@ -51,6 +52,7 @@ function shellActions(): ShellActions {
   const sections: Record<string, string> = { review: '/review', quality: '/quality-goals', trash: '/trash' };
   return {
     openItem: vi.fn(), openEntity: vi.fn(), openTag: vi.fn(), openTasteSignal: vi.fn(), navigate: vi.fn(),
+    playSavedFilter: vi.fn(),
     openManage: vi.fn(), managePath: vi.fn((section: string) => sections[section] ?? ''), openFollow: vi.fn(),
     receipt: vi.fn(), toast: vi.fn(), failure: vi.fn(), revealSource: vi.fn(async () => ''),
     reopenTutorial: vi.fn(async () => {}),
@@ -320,7 +322,7 @@ it('配置页打开返回的那一刻，页签条已经在容器里，选中的�
   await mount(r);
   r.connectManagedRoutes(Promise.resolve(r.prefetchManagedRoute));
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => {
-    if (url === '/api/configuration') return configuration;
+    if (url.split('?')[0] === CONFIGURATION_URL) return configuration;
     if (url === '/api/configuration/indexers') return { indexers: [], max_indexers: 4 };
     if (url === '/api/follow/credentials') return { root: '', providers: [] };
     if (url === '/api/follow/schedule') return { enabled: false, available: true, interval_minutes: 60 };
@@ -330,10 +332,10 @@ it('配置页打开返回的那一刻，页签条已经在容器里，选中的�
     const open = { section: '网络与访问' };
     expect(await r.openManagedRoute('/settings/library', open, { container: stats, isCurrent: () => true })).toBe(true);
     const tabs = [...stats.querySelectorAll('.ui-configpage [role="tablist"] > [role="tab"]')];
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['媒体库与入库', '来源与订阅', '网络与访问', '应用与维护', '系统诊断']);
-    expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['false', 'false', 'true', 'false', 'false']);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['媒体库与入库', '来源与订阅', 'AI 接入', '网络与访问', '应用与维护', '系统诊断']);
+    expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['false', 'false', 'false', 'true', 'false', 'false']);
     const active = stats.querySelector('.ui-board-group-active');
-    expect(active?.id).toBe(tabs[2].getAttribute('aria-controls'));
+    expect(active?.id).toBe(tabs.find(tab => tab.textContent === '网络与访问')?.getAttribute('aria-controls'));
     expect(stats.querySelector('.ui-configpage')?.parentElement?.classList.contains('peach-react')).toBe(true);
   });
 });
@@ -520,7 +522,7 @@ it('冷启动深链索引页：壳画的骨架留到首屏取齐，换成整页�
   await act(async () => { expect(await opened).toBe(true) });
   expect(fetch.indexCalls()).toBe(1);
   expect(batches[0], '骨架撤下的那一批变化里整页已经画好').toEqual({ skeleton: false, painted: true });
-  expect(index.querySelector(':scope > .peach-react [data-index-search]')).not.toBeNull();
+  expect(index.querySelector(':scope > .peach-react [data-filter-search]')).not.toBeNull();
 });
 
 /* 壳那枚选择键关掉时经 `updateManagedRoute` 把新值推进画着的那一页：只合并这一项，其余 props 照旧，
@@ -535,13 +537,14 @@ it('就地更新：合并进画着的那一页，不重挂、不重取，代次�
   await act(async () => { await r.openManagedRoute('/tags', tagsOpen(true), { container: index, isCurrent: () => true }) });
   const revision = r.managedEntry(index)?.revision;
   const calls = fetch.fetched.mock.calls.length;
-  const input = index.querySelector('[data-index-search] input');
+  const input = index.querySelector('[data-filter-search] input');
+  expect(input, '标签页的查找在筛选浮层里').not.toBeNull();
   const tag = () => index.querySelector<HTMLElement>('[data-alpha-tag][data-k="痴女"]')!;
   await act(async () => { tag().click() });
   expect(tag().getAttribute('aria-pressed')).toBe('true');
   await act(async () => { r.updateManagedRoute(index, { selectMode: false }) });
   expect(tag().getAttribute('aria-pressed'), '关掉选择键时所选要跟着清空').toBe('false');
-  expect(index.querySelector('[data-index-search] input'), '推新值不许重挂').toBe(input);
+  expect(index.querySelector('[data-filter-search] input'), '推新值不许重挂').toBe(input);
   expect(r.managedEntry(index)?.revision).toBe(revision);
   expect(r.managedEntry(index)?.props).toMatchObject({ kind: 'tags', selectMode: false, layout: 'big' });
   expect(fetch.fetched.mock.calls.length, '推新值不许重取').toBe(calls);

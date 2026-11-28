@@ -203,28 +203,7 @@ def script_consumers(root: Path = ROOT) -> dict[str, frozenset[str]]:
     return {stem: frozenset(names) for stem, names in found.items()}
 
 
-_LOCALE_FILE = re.compile(r"resources/locales/[^/]+/(?:server|cli)\.json")
 _PLACEHOLDER = re.compile(r"\{\{[^}]*\}\}")
-
-
-def locale_file(path: str) -> bool:
-    """后端语言资源：经 `interface_text` 渲染给 API、托盘与命令行的文字。"""
-    return bool(_LOCALE_FILE.fullmatch(path))
-
-
-def _flat_texts(source: str | None) -> dict[str, str]:
-    try:
-        data = json.loads(source) if source else {}
-    except ValueError:
-        return {}
-    found, todo = {}, [("", data)]
-    while todo:
-        prefix, node = todo.pop()
-        if isinstance(node, dict):
-            todo.extend((f"{prefix}{key}.", value) for key, value in node.items())
-        elif isinstance(node, str):
-            found[prefix[:-1]] = node
-    return found
 
 
 @lru_cache(maxsize=None)
@@ -257,8 +236,9 @@ def locale_readers(root: Path, before: str | None, after: str | None) -> frozens
     """改动的语言条目的读者：源码里写了条目键，或在断言里写了旧原文片段的测试文件。
 
     没有前后内容时按整份文件的全部条目算，宁多勿漏。"""
-    old, new = _flat_texts(before), _flat_texts(after)
-    keys = {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)} if before and after         else set(old) | set(new)
+    old = change_impact.locale_texts(before) or {}
+    new = change_impact.locale_texts(after) or {}
+    keys = {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)}
     needles = {key for key in keys if len(key) >= 6}
     short = {key for key in keys if len(key) < 6}
     for key in keys:
@@ -277,11 +257,11 @@ def file_consumers(path: str, kind: str, contents: dict | None, root: Path) -> f
         return frozenset()
     if path.startswith("scripts/") and path.endswith(".py") and "/" not in path.removeprefix("scripts/"):
         return script_consumers(root).get(path.removeprefix("scripts/").removesuffix(".py"), frozenset())
-    if locale_file(path):
-        before, after = (contents or {}).get(path, (None, None))
-        if before is None and after is None and (root / path).is_file():
-            after = (root / path).read_text(encoding="utf-8")
-        return locale_readers(root, before, after)
+    if change_impact.locale_file(path):
+        if contents and path in contents:
+            return locale_readers(root, *contents[path])
+        if (root / path).is_file():
+            return locale_readers(root, None, (root / path).read_text(encoding="utf-8"))
     return frozenset()
 
 
@@ -325,7 +305,7 @@ def changed_contents(root: Path, base: str, paths: Iterable[str]) -> dict:
     result = {}
     for path in paths:
         if not (path.endswith(".py") or path in {*change_impact.PACKAGE_FILES, "pyproject.toml", change_impact.REGISTRY}
-                or locale_file(path)):
+                or change_impact.locale_file(path)):
             continue
         try:
             raw = "\n".join((
@@ -404,9 +384,10 @@ def scopes_for_changes(paths: Iterable[str], *, contents: dict | None = None,
         path = raw.replace("\\", "/").strip("/")
         if not path:
             continue
-        kind = (kinds or {}).get(path, "logic")
-        if contents and path in contents:
-            kind = change_impact.kind(path, *contents[path])
+        if kinds and path in kinds:
+            kind = kinds[path]
+        else:
+            kind = change_impact.kind(path, *contents[path]) if contents and path in contents else "logic"
         scopes = special_scopes(path, kind)
         if scopes is None:
             scopes = mapped_scopes(path, root=root)
@@ -861,13 +842,15 @@ def environment_preflight(scopes: tuple[str, ...], timings: Path | None = None,
     raise SystemExit(3)
 
 
-#: 分片之前单独先跑的秒级检查（合计约 1 分钟）：仓库策略、ADR 编号、复杂度与依赖清单。
-#: 这几类问题以前要等 20 分钟的全量才报出来；有一项不过就不再起其余分片。
+#: 分片之前单独先跑的秒级检查（合计约 1.5 分钟）：仓库策略、ADR 编号、复杂度、依赖清单，
+#: 以及只读源码就能判定的文案基线、模块分层、开发文案与更新日志格式。
+#: 先收齐这组检查与所选的前端构建和单测，再据快速门槛结果决定是否启动其余分片。
 GATE_TESTS = frozenset({
     "test_script_policy", "test_subprocess_encoding", "test_copy_final_state", "test_context_budget",
     "test_source_assertion_ratchet", "test_complexity_ratchet", "test_python_lint",
     "test_outbound_proxy_policy", "test_repo_hygiene", "test_dependency_policy",
     "test_reference_updates", "test_frontend_preflight",
+    "test_user_messages", "test_module_layering", "test_dev_text", "test_changelog",
 })
 #: 失败后单独重跑的文件数上限。失败面更大多半是真回归，重跑只会再白等一轮。
 RERUN_LIMIT = 6
@@ -968,7 +951,12 @@ def run_local_suite(scopes: tuple[str, ...], jobs: int, label: str | None = None
         measured: dict[str, float] = {}
         rows: list[dict] = []
         passed, count, timings = True, 0, []
+        gate_failed = False
+        attempted: list[str] = []
         for stage, plan, concurrency in local_batches([path.name for path in chosen], jobs):
+            if gate_failed and stage != 'test_frontend_build':
+                break
+            attempted.extend(name.removesuffix(".py") for group in plan for name in group)
             print(t("test_runner.stageStart", stage=phase_label(stage), shards=len(plan),
                     processes=min(concurrency, len(plan))), flush=True)
             with test_run_progress.phase(progress.phases if progress is not None else {}, stage):
@@ -979,18 +967,16 @@ def run_local_suite(scopes: tuple[str, ...], jobs: int, label: str | None = None
                     ok, more, slow = run_shards(scopes, jobs=concurrency, shard_count=len(plan), measured=measured,
                                                 plan=plan, outcomes=rows, **progress_args)
             passed, count, timings = passed and ok, count + more, [*timings, *slow]
-            if not ok and stage == '快速门槛':
-                print(t("test_runner.gatesFailed"), flush=True)
-                save_file_seconds(measured)
-                test_history.append(ROOT, scope=label or " ".join(scopes), rows=rows,
-                                    files=[name.removesuffix(".py") for name in plan[0]])
-                return False, count, timings
+            if stage == '快速门槛':
+                gate_failed = not ok
             if progress is not None:
                 progress_args['resume_plan'] = progress.child_plan(scopes)
+        if gate_failed:
+            print(t("test_runner.gatesFailed"), flush=True)
         save_file_seconds(measured)
         test_history.append(ROOT, scope=label or " ".join(scopes), rows=rows,
-                            files=[path.stem for path in sorted(chosen)])
-        if not passed and rows:
+                            files=sorted(attempted))
+        if not gate_failed and not passed and rows:
             passed = rerun_failures(rows)
         return passed, count, timings
     return run_serial_suite(scopes, chosen, original, progress, label)
@@ -1062,6 +1048,43 @@ def run_shard_child(args, requested, scopes, files) -> int:
     return 0 if success else 1
 
 
+def drop_injected_git_config(environ=None) -> list[str]:
+    """去掉外层工具经环境变量注入的 Git 命令行配置，返回去掉的变量名。
+
+    `GIT_CONFIG_COUNT` 与成对的 `GIT_CONFIG_KEY_n`、`GIT_CONFIG_VALUE_n` 只要缺一个，git 的每条
+    命令都以「missing config value」退出：依赖 git 的用例整组失败或跳过，与被验证的改动无关。
+    测试用到的 Git 配置由夹具和调用处自己给出，不依赖外层会话。
+    """
+    environ = os.environ if environ is None else environ
+    names = sorted(name for name in environ
+                   if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")))
+    for name in names:
+        del environ[name]
+    return names
+
+
+def prepare_run(parser, args) -> None:
+    """参数组合与外层环境的开跑前处理。"""
+    if args.gate and (args.focus or args.fresh or args.resume or args.shard_count > 1 or args.shard_plan is not None):
+        parser.error(t("test_runner.gateAlone"))
+    dropped = drop_injected_git_config()
+    if dropped and args.shard_plan is None:
+        print(t("test_runner.gitConfigDropped", names=", ".join(dropped)), flush=True)
+
+
+def run_without_record(parser, args, requested, scopes, files) -> int | None:
+    """不签发本机记录的两种运行；其余情况返回 None，由正式路径接手。"""
+    if args.gate:
+        # 推送前的快速一轮：本次范围里的快速门槛与前端构建、单测，按定向调试执行。
+        args.focus = sorted(path.stem for path in files
+                            if path.stem in GATE_TESTS or path.stem == "test_frontend_build")
+        return run_focus(parser, args)
+    if args.shard_count > 1 or args.shard_plan is not None:
+        # CI 的每片独立 runner，或父进程派出的分片（含只有一片的快速门槛）；分片绝不签发本机记录。
+        return run_shard_child(args, requested, scopes, files)
+    return None
+
+
 def scope_name(value: str) -> str:
     """`--scope` 的取值：`full`、`auto`、登记的域，或 `auto` 按文件补选的测试文件名。"""
     if value in ("full", "auto", *SCOPES) or change_impact.EXACT_TEST.fullmatch(value) and (TESTS / value).is_file():
@@ -1079,6 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--focus", action="append", default=[], help=t("test_runner.helpFocus"))
     parser.add_argument("--rerun-failures", action="store_true",
                         help=t("test_runner.helpRerunFailures"))
+    parser.add_argument("--gate", action="store_true", help=t("test_runner.helpGate"))
     parser.add_argument("--full-lock-held", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--lock-timeout", type=float, default=math.inf,
                         help=t("test_runner.helpLockTimeout"))
@@ -1105,6 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(t("test_runner.resumePlanParentOnly"))
     if args.rerun_failures and not args.focus:
         parser.error(t("test_runner.rerunFailuresFocusOnly"))
+    prepare_run(parser, args)
     try:
         test_slots.slot_count()
     except ValueError as error:
@@ -1127,9 +1152,9 @@ def main(argv: list[str] | None = None) -> int:
     environment_preflight(scopes, args.timings, shard_count=args.shard_count)
     files = {path for scope in scopes for path in selected_files(scope)}
     print(f"Peach test scope: {' '.join(scopes)} ({len(files)} files)", flush=True)
-    if args.shard_count > 1 or args.shard_plan is not None:
-        # CI 的每片独立 runner，或父进程派出的分片（含只有一片的快速门槛）；分片绝不签发本机记录。
-        return run_shard_child(args, requested, scopes, files)
+    partial = run_without_record(parser, args, requested, scopes, files)
+    if partial is not None:
+        return partial
     if ci_frontend_delegated():
         print(t("test_runner.ciFrontendDelegated"), flush=True)
         success, count, _ = run_local_suite(scopes, args.jobs, f"{' '.join(requested)}:{' '.join(scopes)}")

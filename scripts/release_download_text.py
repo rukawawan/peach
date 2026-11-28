@@ -46,8 +46,9 @@ SECTION = {
         "does not show while you type. The command only removes Peach's quarantine flag. Run it again after "
         "dragging in a new version by hand; installs through the in-app updater do not need it.\n\n"
         "### Docker\n\n"
-        "The `edge` tag always points to the newest release; pin a version with the versioned tags in the table "
-        "above. See [Docker deployment]({docs}/DOCKER.md) for setup, updates and rollback."
+        "The image tags in the table become available after Docker publishing completes. The `edge` and `latest` "
+        "tags track the most recently published image. See [Docker deployment]({docs}/DOCKER.md) for setup, "
+        "updates and rollback."
     ),
     "zh-CN": (
         "Windows 安装包、免安装包和 macOS DMG 都内置 Python、FFmpeg、untrunc、cloudflared 和人脸模型，装好即可使用；"
@@ -75,7 +76,8 @@ SECTION = {
         "要求输入的是这台 Mac 的登录密码，输入时屏幕不显示字符。这条命令只移除 Peach 的隔离标记。"
         "手动拖入新版本后要再执行一次，经应用内更新安装的不需要。\n\n"
         "### Docker\n\n"
-        "`edge` 标签始终指向最新一版，要固定版本就用上表里带版本号的标签。部署、更新与回滚见 [Docker 部署]({docs}/DOCKER.md)。"
+        "镜像发布完成后即可拉取上表的版本号标签。`edge` 和 `latest` 指向最新发布的镜像。"
+        "部署、更新与回滚见 [Docker 部署]({docs}/DOCKER.md)。"
     ),
 }
 

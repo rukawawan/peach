@@ -127,7 +127,7 @@ const posts = (fetcher: ReturnType<typeof serve>) => fetcher.mock.calls
 
 /* ── 宿主与页面 ── */
 
-type HostMock = { [K in keyof ImmerseHost]: Mock<ImmerseHost[K]> };
+type HostMock = { [K in keyof ImmerseHost]: Mock<NonNullable<ImmerseHost[K]>> };
 
 function makeHost(): HostMock {
   return {
@@ -168,6 +168,7 @@ type Loaded = Awaited<ReturnType<typeof load>>;
 function shellActions(): ShellActions {
   return {
     openItem: vi.fn(), openEntity: vi.fn(), openTag: vi.fn(), openTasteSignal: vi.fn(), navigate: vi.fn(),
+    playSavedFilter: vi.fn(),
     openManage: vi.fn(), managePath: vi.fn(() => ''), openFollow: vi.fn(), receipt: vi.fn(), toast: vi.fn(),
     failure: vi.fn(), revealSource: vi.fn(async () => ''), reopenTutorial: vi.fn(async () => {}),
     routeReview: vi.fn(),

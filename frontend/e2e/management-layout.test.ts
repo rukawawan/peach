@@ -62,11 +62,17 @@ describe('管理页面容器与骨架', () => {
         assert.equal(await menu.locator('[data-pill-thumb]').evaluate(node => getComputedStyle(node).opacity), '0');
         if (reducedMotion === 'no-preference') {
           await page.waitForFunction(() => parseFloat(getComputedStyle(document.querySelector('[data-manage="taste"]')!).translate) > 0);
-          await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-manage="activity"]')!).scale === '0.9');
-          assert.equal(await picked.evaluate(node => {
+          const preview = menu.locator('[data-navigation-drag-preview]:popover-open');
+          assert.equal(await preview.evaluate(element => {
+            const node = element as HTMLElement;
             const rect = node.getBoundingClientRect();
-            return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('[data-dragging]') === node;
-          }), true, '拾起项移出菜单行后仍应完整可见');
+            node.inert = false;
+            node.style.pointerEvents = 'auto';
+            const visible = node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+            node.style.pointerEvents = '';
+            node.inert = true;
+            return visible;
+          }), true, '拖动预览越出菜单行仍显示在内容上方');
         } else {
           assert.equal(await neighbor.evaluate(node => getComputedStyle(node).translate), 'none');
           assert.equal(await picked.evaluate(node => getComputedStyle(node).position), 'static');
@@ -78,7 +84,7 @@ describe('管理页面容器与骨架', () => {
         await saved;
         assert.deepEqual(await keys(), expected);
         assert.deepEqual(server.posts.find(post => 'manageOrder' in post.body)?.body.manageOrder, expected);
-        assert.equal(await menu.locator('[data-dragging],[data-manage-drop-line]').count(), 0);
+        assert.equal(await menu.locator('[data-dragging],[data-manage-drop-line],[data-navigation-drag-preview]').count(), 0);
         assert.equal(await menu.evaluate(node => getComputedStyle(node).overflowY), 'hidden');
         assert.equal(await page.locator('[data-manage-bar] .ov-y:not([hidden])').count(), 0, '放下后菜单右侧应清除纵向滚动条');
         assert.equal(new URL(page.url()).pathname, '/data-cleanup');

@@ -2,7 +2,7 @@
 import { t } from '../i18n';
 
 export type SidebarKey = '' | 'performers' | 'studios' | 'tags' | 'jav' | 'flagged' | 'playlists'
-  | 'follow' | 'immerse' | 'manage' | 'stats' | 'taste' | 'review' | 'data-cleanup' | 'trash'
+  | 'ai' | 'follow' | 'immerse' | 'manage' | 'stats' | 'taste' | 'review' | 'data-cleanup' | 'trash'
   | 'follow-manage' | 'quality' | 'activity';
 export type ManagementKey = 'stats' | 'taste' | 'review' | 'cleanup' | 'trash' | 'follow'
   | 'quality' | 'activity' | 'configuration';
@@ -10,6 +10,7 @@ export type NavigationItem<Key extends string = string> = readonly [key: Key, la
 
 export const SIDEBAR_ITEMS = [
   ['', t('navigation:sidebar.home'), 'home'],
+  ['ai', t('catalog:libraryAssistant.title'), 'bot-orb'],
   ['performers', t('navigation:sidebar.performers'), 'user-round'],
   ['studios', t('navigation:sidebar.studios'), 'clapperboard'],
   ['tags', t('navigation:sidebar.tags'), 'tags'],

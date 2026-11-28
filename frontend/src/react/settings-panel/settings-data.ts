@@ -19,13 +19,15 @@ import { withBackoff } from '../../polling';
 import { queryClient } from '../query';
 import type { NavigationOrders } from '../../navigation-order';
 import type { SortControls } from '../../sort-controls';
+import { PROFILE_SETTINGS_KEY, type TableLayout, type TableLayoutChange } from '../../table-column-order';
 
 export const SETTINGS_URL = '/api/settings';
 export const FOLLOW_SCHEDULE_URL = '/api/follow/schedule';
 export const FEED_SCHEDULE_URL = '/api/feeds/schedule';
 export const THUMBNAIL_JOBS_URL = '/api/thumbnail-jobs';
 
-export const SETTINGS_KEY = ['settings'] as const;
+export const SETTINGS_KEY = PROFILE_SETTINGS_KEY;
+export const settingsMutationKey = (scope: string) => [...SETTINGS_KEY, scope] as const;
 export const FOLLOW_SCHEDULE_KEY = ['follow-schedule'] as const;
 export const FEED_SCHEDULE_KEY = ['feed-schedule'] as const;
 export const THUMBNAIL_JOBS_KEY = ['thumbnail-jobs'] as const;
@@ -53,6 +55,7 @@ export interface SyncedSettings {
   manageOrder?: string[];
   navigationOrders?: NavigationOrders;
   sortControls?: SortControls;
+  tableLayouts?: Record<string, TableLayout>;
   libraryOrder?: string[];
   followInitialDays?: number;
   postSetupTutorialDone?: boolean;
@@ -73,6 +76,8 @@ export interface SyncedSettings {
   /** 没有别的封面时用 JavDB 带水印的图（#531），默认关。 */
   javdbCoverFallback?: boolean;
 }
+
+export type SettingsPatch = Omit<SyncedSettings, 'tableLayouts'> & { tableLayouts?: Record<string, TableLayoutChange> };
 
 export interface FollowScheduleStatus {
   available: boolean;
@@ -112,7 +117,8 @@ export function refreshPanelData(client: QueryClient = queryClient): Promise<Syn
 export function useSaveSettings(scope?: string) {
   return useMutation({
     scope: scope ? { id: scope } : undefined,
-    mutationFn: (patch: SyncedSettings) => apiSend<SyncedSettings>(SETTINGS_URL, patch),
+    mutationKey: scope ? settingsMutationKey(scope) : undefined,
+    mutationFn: (patch: SettingsPatch) => apiSend<SyncedSettings>(SETTINGS_URL, patch),
     onSuccess: (saved) => queryClient.setQueryData(SETTINGS_KEY, saved),
   }, queryClient);
 }

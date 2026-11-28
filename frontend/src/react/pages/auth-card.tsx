@@ -8,8 +8,8 @@
 import type { ReactNode } from 'react';
 
 export function AuthCard({ title, lede, busy = false, children }: {
-  title: string;
-  lede?: string;
+  title: ReactNode;
+  lede?: ReactNode;
   busy?: boolean;
   children?: ReactNode;
 }) {

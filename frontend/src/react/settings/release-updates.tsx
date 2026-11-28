@@ -13,12 +13,14 @@ import { checkClientUpdates, useClientUpdates } from '../client-updates';
 import { codedText, jobText, serverLabel, serverText } from '../../core/server-text';
 import type { ReleaseNotes, ReleaseState, UpdateJob } from '../bundle';
 import { Note } from '../components/note';
+import { AnimatedNumber } from '../components/animated-number';
 import { Progress } from '../components/progress';
 import { StatusLabel } from '../components/status-label';
 import { DockerUpdateProgress, useDockerUpdate } from './docker-update';
 import { RELEASE_NOTICE_EVENT } from '../release-notice';
 import { CommandSteps, Disclosure, ErrorText, ExternalLink, Fact, FactList, Footer, Help, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
+import { useCheckReceipt } from './use-check-receipt';
 import { interfaceLanguage, joinList, t } from '../../i18n';
 
 const ACTIVE = new Set(['downloading', 'verifying', 'extracting', 'preparing', 'restarting', 'installing']);
@@ -82,6 +84,7 @@ export function ReleaseUpdates({ initial, initialJob }: { initial: ReleaseState;
   /** 挂上时已有的那份快照可能比 `initial`／`initialJob` 旧，只接之后取到的。 */
   const mountedSnapshot = useRef(snapshot);
   const action = useAction();
+  const { checked, checkFailed } = useCheckReceipt();
   const prompted = useRef(false);
   const mounted = useRef(true);
   const running = ACTIVE.has(job.state);
@@ -134,8 +137,17 @@ export function ReleaseUpdates({ initial, initialJob }: { initial: ReleaseState;
       checkClientUpdates();
     });
   };
-  const check = () => void action.run('check', (signal) => apiGet<ReleaseState>('/api/configuration/updates', signal), setData,
-    (cause) => { setData({ ...initial, state: 'error' }); action.setError(errorMessage(cause)); });
+  const check = () => void action.run('check', (signal) => apiGet<ReleaseState>('/api/configuration/updates', signal), (next) => {
+    setData(next);
+    const message = serverText(next);
+    if (next.state === 'error') checkFailed(t('settings:releaseUpdates.check'), message);
+    else checked(message || t('settings:releaseUpdates.checkDone'));
+  }, (cause) => {
+    const message = errorMessage(cause);
+    setData({ ...initial, state: 'error' });
+    action.setError(message);
+    checkFailed(t('settings:releaseUpdates.check'), message);
+  });
 
   const pollError = failures >= LOST_AFTER_FAILURES ? t('settings:releaseUpdates.connectionLost') : '';
   const error = action.error || pollError || container.error;
@@ -186,7 +198,7 @@ export function ReleaseUpdates({ initial, initialJob }: { initial: ReleaseState;
           <div aria-live="polite" className="flex flex-col gap-2">
             <Progress label={t('settings:releaseUpdates.progressLabel')} value={job.progress} stops={STOPS} />
             <Help>{t('settings:releaseUpdates.progressSteps')} {jobText(job)}</Help>
-            <Help>{reading}</Help>
+            <Help><AnimatedNumber value={reading} /></Help>
           </div>
         ) : null}
       </Stack>}

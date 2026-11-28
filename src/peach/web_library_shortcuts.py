@@ -11,12 +11,12 @@ from .catalog_rules import solo_performer_clause
 from .library_favorites import KEY, favorite_entry, favorite_entries, favorite_entities
 from .profiles import DEFAULT_PROFILE_ID, read_settings
 from .user_messages import UserValueError
-from .web_catalog import VISIBLE_CATALOG_ASSET, entity_ref
+from .web_catalog import VISIBLE_CATALOG_ASSET, entity_ref, q_items
 
 QUERY_KEYS = frozenset({"loc", "creator", "studio", "owner", "tag", "tag_match", "len",
                         "dur_min", "dur_max", "orient", "region", "year", "sort", "dir", "q", "jav", "thumb", "state",
                         "browse", "folder", "folder_recursive"})
-PATHS = frozenset({"/", "/unseen", "/watch-later", "/flagged"})
+FILTER_STATES = {"/": "", "/unseen": "fresh", "/watch-later": "later", "/flagged": "flagged"}
 
 
 def _snapshot(c, settings):
@@ -40,7 +40,7 @@ def clean_href(raw):
     if not isinstance(raw, str) or len(raw) > 4096:
         raise UserValueError("api.libraryShortcuts.invalidFilterHref")
     parsed = urlsplit(raw)
-    if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in PATHS:
+    if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in FILTER_STATES:
         raise UserValueError("api.libraryShortcuts.collectionFiltersOnly")
     pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=40)
     if any(key not in QUERY_KEYS or len(value) > 1000 for key, value in pairs):
@@ -54,6 +54,22 @@ def q_library_shortcuts(contract, _args=None):
         data = _snapshot(c, read_settings(c))
         _attach_art(contract, c, data["favorites"])
         return data
+
+
+def q_filter_queue(contract, args):
+    from .web_playlists import MAX_PLAYLIST_ITEMS
+
+    with contract.read_connection() as connection:
+        filters = _snapshot(connection, read_settings(connection))["filters"]
+    saved = next((row for row in filters if row["id"] == args.get("id")), None)
+    if saved is None:
+        raise UserValueError("api.libraryShortcuts.filterMissing")
+    url = urlsplit(saved["href"])
+    query = dict(parse_qsl(url.query, keep_blank_values=True))
+    if state := FILTER_STATES[url.path]:
+        query["state"] = state
+    result = q_items(contract, {**query, "limit": MAX_PLAYLIST_ITEMS, "count": "0"}, playback_queue=True)
+    return {"name": saved["name"], "items": result["items"], "has_more": result["has_more"]}
 
 
 def _attach_art(contract, connection, rows):

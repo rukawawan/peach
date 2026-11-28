@@ -499,6 +499,28 @@ class LedgerRestoreTests(unittest.TestCase):
         self.assertFalse((self.database / ledger_backups.STAGING_NAME).exists())
         self.assertEqual(ledger_backups.integrity(self.live), "ok")
 
+    def test_backup_and_restore_preserve_the_ledger_in_a_directory_with_uri_characters(self):
+        directory = self.database / "恢复#%23账本"
+        directory.mkdir()
+        live = fresh_ledger(directory)
+        note(live, "before")
+        backup = ledger_backups.create(live)
+        note(live, "after")
+
+        outcome = ledger_backups.restore(live, backup, migrations_dir=MIGRATIONS_DIR)
+
+        self.assertEqual(notes(live), ["before"])
+        self.assertEqual(notes(outcome.saved), ["before", "after"])
+        self.assertEqual(ledger_backups.integrity(live, foreign_keys=True), "ok")
+        self.assertFalse((self.database / "恢复").exists())
+
+    def test_integrity_of_a_missing_database_does_not_open_or_create_a_truncated_path(self):
+        directory = self.database / "不存在#账本"
+        directory.mkdir()
+        result = ledger_backups.integrity(directory / "ledger.db")
+        self.assertEqual(result["code"], "labels.ledgerBackups.integrity.openFailed")
+        self.assertFalse((self.database / "不存在").exists())
+
     def test_restore_refuses_a_damaged_backup_without_touching_the_ledger(self):
         damaged = self.database / "ledger.pre-manual-20261101-000000.db"
         damaged.write_bytes(b"SQLite format 3\x00" + b"\x00" * 200)

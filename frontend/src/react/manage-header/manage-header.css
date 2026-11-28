@@ -32,7 +32,7 @@
 
 /* ── 页面标题 ──
    字形同全站页面标题（Board Title，窄屏 Board Figure）；正文是 812px 窄列的那几页在窄屏上再收一档。 */
-h2[data-manage-title]{margin-top:0;margin-bottom:24px;font:var(--board-title);letter-spacing:0}
+h2[data-manage-title]{margin-top:0;margin-bottom:24px;font:var(--board-title)}
 @media(max-width:760px){
   h2[data-manage-title]{font:var(--board-figure)}
   h2[data-manage-title][data-compact]{font-size:22px}

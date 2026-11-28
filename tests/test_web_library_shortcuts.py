@@ -87,6 +87,27 @@ class LibraryShortcutsTests(unittest.TestCase):
             settings = json.loads(c.execute("SELECT settings_json FROM profile").fetchone()[0])
         self.assertEqual(settings['sidebarOrder'], ['tags'])
 
+    def test_playing_a_saved_filter_queries_current_videos_in_filter_order(self):
+        from tests.support.ledger import fresh_ledger
+
+        self.contract = WebContract(fresh_ledger(Path(self.tmp.name), 'filter-queue.db'))
+        saved = self.write(action='save_filter', name='Unseen', href='/unseen?sort=name&dir=desc')['filters'][0]
+        read = lambda: dispatch_api_get(self.contract, '/api/library-shortcuts/queue', {'id': saved['id']})
+        self.assertEqual(read()['items'], [])
+        with self.contract.write_transaction() as connection:
+            connection.executemany("INSERT INTO asset(id,location,path,name,medium,play_count) VALUES(?,?,?,?,?,?)", [
+                (1, 'local', 'R:/temp/first.mp4', 'first.mp4', 'video', 0),
+                (2, 'local', 'R:/temp/second.mp4', 'second.mp4', 'video', 0),
+                (3, 'online', 'online', 'stream', 'video', 0),
+                (4, 'local', 'R:/temp/seen.mp4', 'seen.mp4', 'video', 2),
+            ])
+        result = read()
+        self.assertEqual(result['name'], 'Unseen')
+        self.assertEqual([row['id'] for row in result['items']], [2, 1])
+        self.write(action='delete_filter', id=saved['id'])
+        with self.assertRaises(ValueError):
+            read()
+
     def test_favorites_include_entity_art_logos_and_available_representatives(self):
         with closing(sqlite3.connect(self.path)) as c, c:
             c.execute("INSERT INTO asset(id,medium,disposal,size,snapshot_path) "

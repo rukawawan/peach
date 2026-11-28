@@ -10,6 +10,7 @@ import { cardClass } from './react/components/card';
 import { FIELDSET_BODY, FIELDSET_FOOT, fieldsetClass } from './react/components/fieldset-layout';
 import { repairCardSkeletonHtml } from './management';
 import { t } from './i18n';
+import { legacyTableKeys, orderTableColumns, tableLayoutSnapshot } from './table-column-order';
 
 export const ORGANIZE_TEXT = t('cleanup:organize.description');
 export const ORGANIZE_SCOPE_HINT = t('cleanup:organize.scopeHint');
@@ -76,19 +77,22 @@ const links = () => `<section class="flex scroll-mt-20 flex-col gap-4">
 </section>`;
 
 /** `DataTable` 的等待态：填充卡里工具行、说明、表头与几行占位、分页行，列宽取列定义的缺省宽度。
- *  可调列宽的表是 `table-layout: fixed`：首列不写宽度，吃掉余下的宽度；整表最窄是各列缺省宽度之和，
+ *  可调列宽的表是 `table-layout: fixed`：名称列吃掉余下的宽度；整表最窄是各列缺省宽度之和，
  *  窄屏上同真表一样横向滚动。末尾那一格行空白压到 0；分页键要等总数才知道几页，不画。 */
-interface TableColumn { label: string; width: number; cell: string }
-function dataTable({ title: name, description, search = '', columns, rows }:
-  { title: string; description: string; search?: string; columns: TableColumn[]; rows: number }): string {
-  const least = columns.reduce((sum, { width }) => sum + width, 48);
-  const head = `<th style="width:48px"><span class="flex items-center gap-0.5">${followCheck()}</span></th>${columns.map(({ label, width }, index) =>
-    `<th${index ? ` style="width:${width}px"` : ''}><span class="flex items-center gap-0.5">${label}<span data-sort-indicator>${SORT_MARK}</span></span></th>`).join('')}<th data-table-space style="width:0"></th>`;
+interface TableColumn { id: string; label: string; width: number; cell: string }
+function dataTable({ title: name, id, label, description, search = '', columns: defaults, rows }:
+  { title: string; id: string; label: string; description: string; search?: string; columns: TableColumn[]; rows: number }): string {
+  const { order, visibility = {}, widths = {} } = tableLayoutSnapshot(id, legacyTableKeys(`data:${label}`));
+  const identity = defaults[0]!.id;
+  const columns = orderTableColumns(defaults, order).filter(column => column.id === identity || visibility[column.id] !== false);
+  const least = columns.reduce((sum, { id, width }) => sum + (widths[id] ?? width), 48);
+  const head = `<th style="width:48px"><span class="flex items-center gap-0.5">${followCheck()}</span></th>${columns.map(({ id, label, width }) =>
+    `<th${id !== identity || (widths[id] && widths[id] !== width) ? ` style="width:${widths[id] ?? width}px"` : ''}><span class="flex items-center gap-0.5">${label}<span data-sort-indicator>${SORT_MARK}</span></span></th>`).join('')}<th data-table-space style="width:0"></th>`;
   const row = `<tr><td>${followCheck()}</td>${columns.map(({ cell }) => `<td>${cell}</td>`).join('')}<td data-table-space></td></tr>`;
   const searchBox = search ? `<div data-index-search class="ml-auto min-w-0 max-w-80 flex-1">${islandSearchInput('', '', search)}</div>` : '';
   return `<div data-data-table-panel class="${cardClass({ padding: 'none', className: 'flex flex-col gap-4 px-6 py-5 max-sm:px-4' })}">
     <div data-responsive-toolbar><div data-toolbar-heading>${title(name, '')}<span class="text-body-2-regular tabular-nums text-text-secondary">${text('4em')}</span></div>
-      <div data-toolbar-actions>${searchBox}<div class="flex flex-none gap-2">${islandButton({ variant: 'secondary', label: t('shell:tableColumns.columns') })}${islandButton({ variant: 'secondary', label: t('shell:tableColumns.resetWidths') })}</div>
+      <div data-toolbar-actions>${searchBox}<div class="flex flex-none gap-2">${islandButton({ variant: 'secondary', label: t('shell:tableColumns.columns') })}${islandButton({ variant: 'secondary', label: t('shell:tableColumns.layout') })}</div>
         <span class="flex flex-none items-center gap-2">${islandSelect(t('shell:tableSort.defaultOrder'), { prefix: t('shell:shared.sort') })}${islandButton({ variant: 'secondary', glyph: 'arrow-up', attrs: WAITING })}</span></div></div>
     <p class="text-body-2-regular text-text-secondary">${description}</p>
     <div data-board-data-table data-resizable-table data-follow-table><div class="relative min-w-0"><div class="w-full overflow-x-auto"><table class="bui-table bui-table-sm" style="min-width:${least}px"><thead><tr>${head}</tr></thead><tbody>${row.repeat(rows)}</tbody></table></div></div></div>
@@ -98,21 +102,21 @@ function dataTable({ title: name, description, search = '', columns, rows }:
 
 const twoLines = (first: string, second: string) => `<span class="flex min-w-0 flex-1 flex-col gap-0.5"><span class="text-body-regular">${text(first)}</span><small class="text-caption-1-regular">${text(second)}</small></span>`;
 const orphanRecords = () => `<section class="flex scroll-mt-20 flex-col gap-4">${dataTable({
-  title: t('cleanup:tools.orphanRecords'), description: ORPHAN_RECORDS_TEXT, rows: 4,
+  title: t('cleanup:tools.orphanRecords'), id: 'orphan-records', label: t('cleanup:orphans.tableLabel'), description: ORPHAN_RECORDS_TEXT, rows: 4,
   columns: [
-    { label: t('cleanup:shared.video'), width: 480, cell: `<span class="flex min-w-0 items-center gap-3"><span class="skeleton flex-none rounded-lg max-cleanup-tight:hidden" style="width:96px;height:60px"></span>${twoLines('70%', '40%')}</span>` },
-    { label: t('cleanup:orphans.columnActivity'), width: 176, cell: text('6em') },
-    { label: t('cleanup:shared.actions'), width: 128, cell: islandButton({ variant: 'secondary', size: 'small', label: t('cleanup:orphans.deleteRecord'), attrs: WAITING }) },
+    { id: 'item', label: t('cleanup:shared.video'), width: 480, cell: `<span class="flex min-w-0 items-center gap-3"><span class="skeleton flex-none rounded-lg max-cleanup-tight:hidden" style="width:96px;height:60px"></span>${twoLines('70%', '40%')}</span>` },
+    { id: 'records', label: t('cleanup:orphans.columnActivity'), width: 176, cell: text('6em') },
+    { id: 'target', label: t('cleanup:shared.actions'), width: 128, cell: islandButton({ variant: 'secondary', size: 'small', label: t('cleanup:orphans.deleteRecord'), attrs: WAITING }) },
   ],
 })}</section>`;
 
 const batchDelete = () => `<section class="flex min-w-0 scroll-mt-20 flex-col gap-3">${dataTable({
-  title: t('cleanup:tools.bulkDelete'), description: BATCH_DELETE_TEXT, search: t('cleanup:performerDelete.search'), rows: 12,
+  title: t('cleanup:tools.bulkDelete'), id: 'performer-delete', label: t('cleanup:performerDelete.tableLabel'), description: BATCH_DELETE_TEXT, search: t('cleanup:performerDelete.search'), rows: 12,
   columns: [
-    { label: t('cleanup:shared.actress'), width: 280, cell: `<span class="flex min-w-0 items-center gap-3">${block(32, 32, true)}${text('5em')}</span>` },
-    { label: t('cleanup:shared.videos'), width: 104, cell: text('3em') },
-    { label: t('cleanup:shared.files'), width: 104, cell: text('3em') },
-    { label: t('cleanup:performerDelete.columnSize'), width: 136, cell: text('4em') },
+    { id: 'name', label: t('cleanup:shared.actress'), width: 280, cell: `<span class="flex min-w-0 items-center gap-3">${block(32, 32, true)}${text('5em')}</span>` },
+    { id: 'works', label: t('cleanup:shared.videos'), width: 104, cell: text('3em') },
+    { id: 'files', label: t('cleanup:shared.files'), width: 104, cell: text('3em') },
+    { id: 'bytes', label: t('cleanup:performerDelete.columnSize'), width: 136, cell: text('4em') },
   ],
 })}</section>`;
 

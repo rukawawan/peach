@@ -60,4 +60,8 @@ if [[ "$LOADED_MODULE" != "$SOURCE_ROOT/"* ]]; then
 fi
 
 echo "Peach source: $LOADED_MODULE"
-exec "$PYTHON" scripts/test_runner.py --scope "$SCOPE" ${JOBS[@]+"${JOBS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"}
+STATUS=0
+"$PYTHON" scripts/test_runner.py --scope "$SCOPE" ${JOBS[@]+"${JOBS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} || STATUS=$?
+# 末行固定回显退出码：输出被截断或经管道转交时，成败仍能从最后一行读到。
+echo "Peach test exit: $STATUS"
+exit "$STATUS"

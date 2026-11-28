@@ -195,13 +195,13 @@ FAILURES = {
                 '先看站点是否要求登录再决定换凭据还是等', 403, False, True),
     'http401': ('auth', 'sougouwiki 需要登录或已被拒绝：来源返回 401，换一份凭据后重跑', 401, False, True),
     'login': ('auth', 'sougouwiki 需要登录或已被拒绝：重定向终点落在 /auth/login，换一份凭据后重跑', 200, False, True),
-    'http429': ('unavailable', 'Wiki HTTP 请求未取得', 429, True, False),
-    'http404': ('unavailable', 'Wiki HTTP 请求未取得', 404, True, False),
-    'http500': ('unavailable', 'Wiki HTTP 请求未取得', 500, True, False),
-    'challenge': ('blocked', 'Wiki 机器人验证未取得', 403, False, False),
-    'redirect': ('redirect', 'Wiki 重定向页面未取得身份验证', 0, False, False),
+    'http429': ('unavailable', 'Wiki 请求失败（HTTP 429）', 429, True, False),
+    'http404': ('unavailable', 'Wiki 请求失败（HTTP 404）', 404, True, False),
+    'http500': ('unavailable', 'Wiki 请求失败（HTTP 500）', 500, True, False),
+    'challenge': ('blocked', 'Wiki 返回机器人验证页', 403, False, False),
+    'redirect': ('redirect', '无法验证 Wiki 重定向后的页面身份', 0, False, False),
     'size': ('size_limit', 'Wiki 页面超过读取上限', 0, False, False),
-    'timeout': ('unavailable', 'Wiki 网络请求未取得', 0, True, False),
+    'timeout': ('unavailable', 'Wiki 请求超时', 0, True, False),
     'budget': ('budget', 'Wiki 本批请求已停止或达到限额', 0, True, False),
 }
 FAILURE_RESPONSES = {
@@ -231,7 +231,7 @@ class SeesaaContractTests(unittest.TestCase):
         self.assertEqual({key: dvd[key] for key in ('id', 'actresses', 'source_warnings')},
                          {'id': 'JAC-040', 'actresses': [],
                           'source_warnings': ['社区 Wiki 的出演断言需要人工复核；人物页链接不自动合并艺名',
-                                              '出演栏含未识别或不确定内容，完整出演名单未取得']})
+                                              '出演栏含未识别或不确定内容，无法确认完整出演名单']})
         self.assertEqual(dvd['wiki_evidence'], {'table': 'table_edit_1', 'row': 1, 'performer_links': [],
                                                 'performers_complete': False, 'actress_text': '未詳',
                                                 'notes': '別版 ABC-008'})
@@ -281,7 +281,7 @@ class SeesaaContractTests(unittest.TestCase):
             with self.assertRaises(MetadataProviderError) as caught:
                 source.query('ABC-009', session=session)
             self.assertEqual(described(caught.exception),
-                             ('incomplete_search', 'Wiki 搜索范围内未取得精确作品表格行', 0, True, False))
+                             ('incomplete_search', 'Wiki 搜索结果里没有完全匹配的作品表格行', 0, True, False))
 
     def test_parse_reads_one_page_without_any_transport(self):
         record = SeesaaSource().parse(Page(ROOT+'d/Label', fixture()), 'abc-007')
@@ -331,7 +331,7 @@ class ChainWikiTests(unittest.TestCase):
             root = Path(tmp).resolve()
             transport = Mock(return_value=HttpResponse(200, {}, b'<div class="result-box"></div>'))
             provider = self.provider(root, transport)
-            with self.assertRaisesRegex(NotFound, '搜索范围内未取得'):
+            with self.assertRaisesRegex(NotFound, 'Wiki 搜索结果里没有'):
                 provider.wiki('sougouwiki', 'ABC-007')
             transport.reset_mock()
             with self.assertRaises(DeadlineExceeded):

@@ -3,6 +3,7 @@
  * 数据全由壳取好推进来，这里只挑出当前视图画。作品网格跨刷新代次保留宿主：新的作品请求
  * 将 `items` 置为 `null`，内容与骨架原位交叉淡化，数据到达时同时呈现内容并撤下骨架。 */
 import { Fragment, useCallback, useMemo, useState, type MouseEvent } from 'react';
+import { hasSelectionModifier } from '../../selection';
 
 import { CatalogGridPage, LoadMore } from '../catalog-grid/catalog-grid-page';
 import { SkeletonContent } from '../components/skeleton-content';
@@ -15,6 +16,7 @@ import type {
   EntityBodyProps, EntityCodeSet, EntityPhotos, EntityRoster, EntitySamplePhoto, EntityWallPhoto,
 } from './entity-body';
 import { t } from '../../i18n';
+import { useRectangleSelection } from '../components/rectangle-selection';
 
 export function EntityBodyPage(props: EntityBodyProps) {
   if (props.view === 'people' && props.roster) return <Roster roster={props.roster} props={props} />;
@@ -43,7 +45,7 @@ function Roster({ roster, props }: { roster: EntityRoster; props: EntityBodyProp
   const selection = useRosterSelection(props.selectMode, people);
   return (
     <>
-      <PeopleGrid kind={roster.kind} items={people} layout={roster.layout} props={cell} picks={selection.picks} />
+      <PeopleGrid kind={roster.kind} items={people} layout={roster.layout} props={cell} picks={selection.picks} onRectangle={selection.rectangle} />
       <RosterDock kind={roster.kind} hiddenView={false} selection={selection} total={people.length} visible={props.selectMode} />
       {shown < roster.people.length
         ? <LoadMore key={shown} entity load={loadMore} enabled={() => true} />
@@ -116,6 +118,8 @@ function PhotoSection({ photos, props }: { photos: EntityPhotos; props: EntityBo
   }, [actions, wall]);
   /* 多选：本地图片是馆藏条目，和作品卡同一份选择集与批量键；样张不是条目，不能选。 */
   const { selectMode, selected } = props;
+  const rectangle = useRectangleSelection(actions.selectCardRectangle
+    ? (keys, add) => actions.selectCardRectangle?.(keys.map(Number), add) : undefined, { selecting: selectMode });
   const pick = useCallback((id: number, range: boolean) => actions.toggleSelection(id, range), [actions]);
   const cell = (item: EntityWallPhoto, index: number) => (
     <PhotoCell key={index} item={item} index={index} lost={lost.has(index)} onLose={lose} onOpen={open}
@@ -140,7 +144,7 @@ function PhotoSection({ photos, props }: { photos: EntityPhotos; props: EntityBo
         </Fragment>
       ))}
       {groups.length && photos.total ? <GroupHead label={t('catalog:entityPhotos.localImages')} meta={t('catalog:entityPhotos.imageCount', { count: photos.total })} /> : null}
-      <div {...wallAttrs} data-local-wall="">
+      <div {...wallAttrs} data-local-wall="" {...rectangle}>
         {photos.items.map((item, i) => (lost.has(localStart + i) ? null : cell(item, localStart + i)))}
       </div>
       {photos.hasMore ? (
@@ -171,7 +175,7 @@ function PhotoCell({ item, index, lost, onLose, onOpen, selectMode, selected, on
   const selectable = !isSample(item);
   /* 多选模式或按着修饰键时点一格是切换选中；其余时候进灯箱。 */
   const click = (event: MouseEvent<HTMLButtonElement>) => {
-    if (selectable && (selectMode || event.shiftKey || event.ctrlKey || event.metaKey)) {
+    if (selectable && (selectMode || hasSelectionModifier(event))) {
       event.preventDefault();
       onPick((item as { id: number }).id, event.shiftKey);
       return;
@@ -179,7 +183,7 @@ function PhotoCell({ item, index, lost, onLose, onOpen, selectMode, selected, on
     onOpen(index);
   };
   return (
-    <button type="button" data-photo-cell="" data-photo-index={index} title={name} onClick={click}
+    <button type="button" data-photo-cell="" data-photo-index={index} data-rectangle-key={isSample(item) ? undefined : item.id} title={name} onClick={click}
       data-selected={selected ? '' : undefined} aria-pressed={selectMode && selectable ? selected : undefined}>
       {lost ? null : (
         <img src={thumbSrc(item)} alt={name} loading="lazy" decoding="async" fetchPriority="low"

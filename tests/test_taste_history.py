@@ -115,7 +115,7 @@ class TasteHistoryTests(unittest.TestCase):
         self.assertEqual(import_history_exports([path], self.root / "store.sqlite")[0]["bookmarks"], 1)
         html = self.root / "普通页面.html"
         html.write_text('<a href="https://example.com">普通页面</a>', encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "书签文件未取得"):
+        with self.assertRaisesRegex(ValueError, "书签文件读取失败"):
             import_history_exports([html], self.root / "invalid.sqlite")
         self.assertFalse((self.root / "invalid.sqlite").exists())
 
@@ -313,7 +313,7 @@ class TasteHistoryTests(unittest.TestCase):
         path = self.root / "History"
         path.write_bytes(b"not a sqlite database")
         with mock.patch("peach.taste_history.discover_history_sources", return_value=[]):
-            with self.assertRaisesRegex(ValueError, "历史文件未取得"):
+            with self.assertRaisesRegex(ValueError, "无法读取浏览器历史文件"):
                 configure_browser(self.root / "private.sqlite", "add", {"name": "custom", "path": str(path)})
 
     def test_download_history_does_not_hide_web_history_in_same_profile(self):

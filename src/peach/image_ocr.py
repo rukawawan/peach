@@ -67,7 +67,7 @@ class ImageReader:
     @staticmethod
     def _macos(paths):
         import objc
-        from Foundation import NSURL
+        from Foundation import NSDictionary, NSURL
         import Vision
         texts = []
         for path in paths:
@@ -77,7 +77,7 @@ class ImageReader:
                 request.setRecognitionLanguages_(['zh-Hans', 'zh-Hant', 'en-US'])
                 request.setUsesLanguageCorrection_(False)
                 handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(
-                    NSURL.fileURLWithPath_(str(path)), {})
+                    NSURL.fileURLWithPath_(str(path)), NSDictionary.dictionary())
                 ok, error = handler.performRequests_error_([request], None)
                 if not ok:
                     raise OcrUnavailable(error)

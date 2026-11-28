@@ -4,7 +4,7 @@
  * 没改动时点空处就关；改了一半点空处不关，丢掉的是用户刚敲的一整份。
  * 草稿只在本地：保存时与打开那一刻比出差异交给 `/api/item-edit`，带上打开时读到的版本，
  * 这期间后台改过这一部就整份拒收。 */
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { UNSAFE_PortalProvider } from 'react-aria';
@@ -12,7 +12,7 @@ import { formModal } from '@peach/legacy/ui';
 import { foldName, icon } from '@peach/legacy/core';
 import { coverUrl, performerLabel } from '@peach/card-art';
 import { Button } from '@/components/base/buttons/button';
-import { Input } from '@/components/base/input/input';
+import { Input, InputBase } from '@/components/base/input/input';
 import { Select, SelectItem } from '../components/select';
 import { DetailTags } from '../components/detail-tags';
 import { overlayHost } from '../components/overlay-host';
@@ -130,14 +130,23 @@ export function ItemEditButton({ item, helpers, onSaved }: {
 
 type FormDialog = ReturnType<typeof formModal>;
 
-function ItemEditDialog({ item, helpers, close, onSaved }: {
-  item: DetailItem; helpers: ItemDetailHelpers; close(): void; onSaved(item: DetailItem): void;
+type EditTagHelpers = Pick<ItemDetailHelpers, 'tagLabel' | 'isDurationTag' | 'tagCandidates'>;
+export type MetadataSuggestion = Partial<Pick<Draft['text'], 'title' | 'original_title' | 'release_date'> & { studio: string }>;
+
+export function ItemEditDialog({ item, helpers, close, onSaved, suggestion }: {
+  item: DetailItem; helpers: EditTagHelpers; close(): void; onSaved(item: DetailItem): void; suggestion?: MetadataSuggestion;
 }) {
   /* 打开那一刻的这一部与草稿起点只取一次：开着的时候详情在后台重取（补全进度、播放上报），
      不能因此重建弹层、丢掉正在填的那一份。 */
   const given = useRef({ item, close, onSaved, before: initialDraft(item, helpers) });
   const before = given.current.before;
-  const draft = useRef(before);
+  const [initial] = useState(() => {
+    if (!suggestion) return before;
+    const { studio, ...text } = suggestion;
+    return { ...before, text: { ...before.text, ...text },
+      studio: studio && !sameChoice(before.studio, { name: studio, id: null }) ? { name: studio, id: null } : before.studio };
+  });
+  const draft = useRef(initial);
   const [view, setView] = useState<{ host: Element; dialog: FormDialog } | null>(null);
   useEffect(() => {
     const { item: opened, close: done, onSaved: saved, before: start } = given.current;
@@ -173,13 +182,13 @@ function ItemEditDialog({ item, helpers, close, onSaved }: {
   /* 下拉、提示这些弹层挂进编辑框自己的 dialog：经 portal 挂过来的子树仍继承舞台那一层的容器，
      弹层会落进舞台，被压在这个后开的模态框底下，看起来就是一个空下拉。 */
   return view ? createPortal(<UNSAFE_PortalProvider getContainer={() => overlayHost(view.dialog.dialog)}>
-    <EditFields item={given.current.item} helpers={helpers} initial={before}
+    <EditFields item={given.current.item} helpers={helpers} initial={initial}
       update={value => { draft.current = value }} />
   </UNSAFE_PortalProvider>, view.host) : null;
 }
 
 function EditFields({ item, helpers, initial, update }: {
-  item: DetailItem; helpers: ItemDetailHelpers; initial: Draft; update(value: Draft): void;
+  item: DetailItem; helpers: EditTagHelpers; initial: Draft; update(value: Draft): void;
 }) {
   const [draft, setDraft] = useState(initial);
   useEffect(() => { update(draft) }, [draft, update]);
@@ -331,8 +340,16 @@ export function EntityChips({ kind, values, single = false, labelledBy, onChange
   kind: string; values: Choice[]; single?: boolean; labelledBy: string; onChange(values: Choice[]): void;
   picker?: { allowCreate?: boolean; exclude?: number; placeholder?: string };
 }) {
+  const focusAfterChange = useRef(false);
+  const focusReplacement = (node: HTMLElement | null) => {
+    if (node && focusAfterChange.current) {
+      focusAfterChange.current = false;
+      node.focus();
+    }
+  };
   const pick = (value: Choice) => {
     if (values.some(other => sameChoice(other, value))) return;
+    focusAfterChange.current = single;
     onChange(single ? [value] : [...values, value]);
   };
   return (
@@ -343,10 +360,15 @@ export function EntityChips({ kind, values, single = false, labelledBy, onChange
           {value.user_created ? <span data-user-created-mark="">{t('catalog:itemEdit.userCreated')}</span> : null}
           <button type="button" data-entity-remove="" aria-label={t('catalog:itemEdit.removeNamed', { name: value.name })}
             title={t('catalog:itemEdit.removeNamed', { name: value.name })}
-            onClick={() => onChange(values.filter(other => !sameChoice(other, value)))}><Glyph name="x" /></button>
+            ref={single ? focusReplacement : undefined}
+            onClick={() => {
+              focusAfterChange.current = single;
+              onChange(values.filter(other => !sameChoice(other, value)));
+            }}><Glyph name="x" /></button>
         </span>
       ))}
-      {single && values.length ? null : <EntityPicker kind={kind} labelledBy={labelledBy} onPick={pick} {...picker} />}
+      {single && values.length ? null : <EntityPicker kind={kind} labelledBy={labelledBy} onPick={pick}
+        inputRef={single ? focusReplacement : undefined} {...picker} />}
     </div>
   );
 }
@@ -354,55 +376,87 @@ export function EntityChips({ kind, values, single = false, labelledBy, onChange
 interface SuggestItem { value: string; n: number; entity_id: number | null }
 interface SuggestResponse { groups?: { kind: string; items: SuggestItem[] }[] }
 
-/** 输入名字搜馆藏里已有的档案（名称与别名都认），列表最后一格是「新建」。搜的是 `/api/suggest`，
- *  与搜索栏同一条判据。回车挑高亮那一项，没有高亮就按输入新建。资料页的「合并重复档案」也用它：
- *  那里不新建（`allowCreate`），也不列出当前这份（`exclude`）。 */
-export function EntityPicker({ kind, labelledBy, onPick, allowCreate = true, exclude, placeholder }: {
+/** 通过 `/api/suggest` 按名称与别名搜索馆藏档案。回车选中高亮项，可新建的名字排在列表末尾。
+ *  资料页的「合并重复档案」通过 `allowCreate` 和 `exclude` 限定为其他已有档案。 */
+export function EntityPicker({ kind, labelledBy, onPick, allowCreate = true, exclude, placeholder, inputRef }: {
   kind: string; labelledBy: string; onPick(value: Choice): void;
-  allowCreate?: boolean; exclude?: number; placeholder?: string;
+  allowCreate?: boolean; exclude?: number; placeholder?: string; inputRef?: Ref<HTMLInputElement>;
 }) {
   const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState<string | undefined>();
+  const [dismissed, setDismissed] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const listId = useId();
   const term = query.trim();
+  const open = !dismissed && !!term && !composing;
   const found = useQuery({
-    queryKey: ['item-edit-suggest', kind, term],
+    queryKey: ['item-edit-suggest', kind, composing ? '' : term],
     queryFn: ({ signal }) => apiGet<SuggestResponse>(`/api/suggest?q=${encodeURIComponent(term)}&kind=${kind}&limit=8`, signal),
-    enabled: term.length > 0, staleTime: 30_000,
+    enabled: open, staleTime: 30_000,
   });
   const items = (found.data?.groups || []).find(group => group.kind === kind)?.items || [];
   const exact = items.some(item => foldName(item.value) === foldName(term));
   const options: Choice[] = [
     ...items.filter(item => exclude == null || item.entity_id !== exclude).map(item => ({ id: item.entity_id, name: item.value })),
-    ...(allowCreate && term && !exact ? [{ id: null, name: term }] : []),
+    ...(allowCreate && term && !found.isPending && !exact ? [{ id: null, name: term }] : []),
   ];
-  const choose = (value: Choice) => { onPick(value); setQuery(''); setActive(0) };
+  const optionId = (value: Choice) => `${listId}-option-${value.id ?? `new-${encodeURIComponent(value.name)}`}`;
+  const activeIndex = Math.max(0, options.findIndex(option => optionId(option) === active));
+  const selected = open ? options[activeIndex] : undefined;
+  const selectedId = selected && optionId(selected);
+  const changeQuery = (value: string) => { setQuery(value); setActive(undefined); setDismissed(false) };
+  const choose = (value: Choice) => { onPick(value); changeQuery('') };
   const keydown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (composingKey(event.nativeEvent)) return;
+    if (composing || composingKey(event.nativeEvent)) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!open || !options.length) return;
       event.preventDefault();
-      if (options.length) setActive((active + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length);
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const id = optionId(options[(activeIndex + step + options.length) % options.length]!);
+      setActive(id);
+      document.getElementById(id)?.scrollIntoView?.({ block: 'nearest' });
     } else if (event.key === 'Enter') {
       // 表单里的回车会提交整个弹层；在这个框里它只是挑一项。
       event.preventDefault();
-      const chosen = options[active];
-      if (chosen) choose(chosen);
-    } else if (event.key === 'Escape' && query) {
-      event.preventDefault(); event.stopPropagation(); setQuery('');
+      if (selected) choose(selected);
+    } else if (event.key === 'Escape' && open) {
+      event.preventDefault(); event.stopPropagation(); changeQuery('');
     }
   };
+  const status = found.isPending ? 'searching'
+    : found.isError ? 'entitySearchFailed' : options.length ? null : 'entityNoMatches';
   return (
-    <div data-entity-picker="">
-      <Input aria-labelledby={labelledBy} value={query} maxLength={200} placeholder={placeholder ?? t('catalog:itemEdit.searchOrCreate')}
-        onChange={value => { setQuery(value); setActive(0) }} onKeyDown={keydown} />
-      {term ? (
-        <div role="listbox" aria-labelledby={labelledBy} data-entity-options="" aria-busy={found.isFetching || undefined}>
-          {options.map((option, index) => (
-            <button type="button" role="option" key={`${option.id ?? 'new'}:${option.name}`} aria-selected={index === active}
-              data-entity-option={option.id ?? 'new'} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
-              {option.id == null ? <><Glyph name="plus" /><span>{t('catalog:itemEdit.createNamed', { name: option.name })}</span></>
-                : <span>{option.name}</span>}
-            </button>
-          ))}
+    <div data-entity-picker="" onBlur={event => {
+      const next = event.relatedTarget;
+      if (!event.currentTarget.contains(next) && !next?.closest('[data-copy-editor]')) {
+        setDismissed(true);
+        setActive(undefined);
+      }
+    }}>
+      <InputBase ref={inputRef} role="combobox" aria-labelledby={labelledBy} aria-autocomplete="list"
+        aria-expanded={open} aria-controls={open ? listId : undefined} aria-activedescendant={selectedId}
+        value={query} maxLength={200} placeholder={placeholder ?? t('catalog:itemEdit.searchOrCreate')}
+        onChange={event => changeQuery(event.currentTarget.value)} onKeyDown={keydown}
+        onFocus={() => setDismissed(false)}
+        onCompositionStart={() => { setComposing(true); setActive(undefined) }}
+        onCompositionEnd={event => { setComposing(false); changeQuery(event.currentTarget.value) }} />
+      {open ? (
+        <div data-entity-options="" onMouseDown={event => {
+          if (!(event.target instanceof Element && event.target.closest('[contenteditable]'))) event.preventDefault();
+        }}>
+          {status ? <p role="status" data-copy-key={`catalog.itemEdit.${status}`}
+            className="px-2.5 py-1.5 text-body-2-regular text-text-tertiary">{t(`catalog:itemEdit.${status}`)}</p> : null}
+          <div id={listId} role="listbox" aria-labelledby={labelledBy} aria-busy={found.isFetching || undefined} className="flex flex-col">
+            {options.map(option => {
+              const id = optionId(option);
+              return <button type="button" role="option" tabIndex={-1} key={id} id={id} aria-selected={id === selectedId}
+                data-copy-interact="" data-entity-option={option.id ?? 'new'} onMouseEnter={() => setActive(id)}
+                onClick={() => choose(option)}>
+                {option.id == null ? <><Glyph name="plus" /><span>{t('catalog:itemEdit.createNamed', { name: option.name })}</span></>
+                  : <span>{option.name}</span>}
+              </button>;
+            })}
+          </div>
         </div>
       ) : null}
     </div>

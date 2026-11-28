@@ -2,7 +2,19 @@
 
 各节分别记录复核日期（Asia/Taipei）。本文件是人工复核笔记，不登记为可覆盖的上游快照；原文字节、哈希与 revision 见 [来源登记](../reference-sources.json)。
 
+## 2026-11-25 稳定依赖与参考复核
+
+- 更新 grpcio、PyObjC 的 Cocoa 与 Vision，以及 lucide-static、i18next、Sentry Vite 插件和 Oxc 工具。Sentry 插件已声明 glob 14，前端移除旧覆盖。
+- FFmpeg 的源码、Windows 导入和 CI 验证对齐 9.1。untrunc 使用独立源码锁。
+- 复核并更新 18 份原文，包含 Open Claude UI 手册迁至 `docs/v1/`。FANBOX 与 OpenAver 两项复核分支提交并保留人工笔记。参考用于后续产品判断，本批仅同步证据。
+
 ## amane 桥
+
+### 采用稳定版 v0.29.0
+
+2026-11-24 复核官方 [v0.29.0](https://github.com/sqzw-x/amane/releases/tag/v0.29.0) 和 [15 个提交的差集](https://github.com/sqzw-x/amane/compare/391af4fdc9fec4c7eb279ce8de53fbf693f09d5a...888dff820194fce4449f1cc6e1540a17e4e6b417)，固定到发布提交 `888dff820194fce4449f1cc6e1540a17e4e6b417`。Prestige 查询 SKU 索引以查到带前缀的同捆版本。AVSOX 的后备匹配保留番号的短横线位置。桥继续独立核对结果番号。
+
+升级后重新判断 Prestige 的旧缺失记忆和对应的聚合封面缺失，保留其他来源的记忆和已有资料。新增的官网爬虫未进入 Peach 的来源链。仅自检使用的 IQQTV 不改动线上调用路径。
 
 ### 采用稳定版 v0.28.0
 

@@ -14,6 +14,7 @@
  * JAV 探索卡（`../jav/discovery-card.tsx`）：封面、头像那一格放勾选框、两行标题、来源与体积，
  * 判定原因落在标签行，底部一排动作键。 */
 import { useState, type CSSProperties } from 'react';
+import { hasSelectionModifier } from '../../selection';
 import { RiCheckboxLine, RiPlayLine, RiSearchLine, RiSparklingLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
 
@@ -27,7 +28,7 @@ import { CloudDownloadDialog, type DownloadPrefill } from '../activity/cloud-dow
 import type { QualityGoalsProps } from '../bundle';
 import { CardTags, Icon } from '../components/card-meta';
 import { EmptyState } from '../components/empty-state';
-import { FilterGlassRows, SelectAllButton } from '../components/filter-glass';
+import { FilterGlassRows, FilterSearch, SelectAllButton } from '../components/filter-glass';
 import { QueueFilterChips, QueueIdentity, QueuePicture, QueueTable } from '../components/queue-table';
 import { useQueueSort } from '../components/queue-sort';
 import { useCatalogView } from '../catalog-grid/catalog-view';
@@ -47,6 +48,7 @@ import {
   fetchQualityGoals, previewUrl, QUALITY_GOALS_KEY, type QualityGoal,
 } from './quality-goals';
 import { t } from '../../i18n';
+import { useRectangleSelection } from '../components/rectangle-selection';
 import type { TableFilters } from '../components/use-table-filters';
 import { useWorkContextMenu, type WorkContextOperation } from '../components/work-context-menu';
 
@@ -82,13 +84,13 @@ function GoalCard({ item, openItem, searchResources, javTitleHtml, javDisplayNam
   const library = item.library_id && tints.get(item.library_id)?.color ? item.library_id : undefined;
   return (
     /* 多选模式与修饰键优先：点在卡上任何地方都是切换选中，同探索卡；平时点封面与标题打开。 */
-    <article data-media-card="" data-jav-card="" data-queue-card="" data-goal-id={item.id} data-library={library}
+    <article data-media-card="" data-jav-card="" data-queue-card="" data-goal-id={item.id} data-rectangle-key={item.id} data-library={library}
       data-selected={picked ? '' : undefined}
       onContextMenu={event => menu.onContextMenu(event, context)}
       onKeyDown={event => menu.onKeyDown(event, context)}
       onClickCapture={(event) => {
         if ((event.target as Element).closest('[data-work-context-menu]')) return;
-        if (!selecting && !event.shiftKey && !event.ctrlKey && !event.metaKey) return;
+        if (!selecting && !hasSelectionModifier(event)) return;
         event.preventDefault(); event.stopPropagation(); onPick(!picked);
       }}>
       {menu.menu}
@@ -133,12 +135,22 @@ export function QualityGoalsPage({ toast, ...props }: QualityGoalsProps) {
   const [filters, setFilters] = useState<TableFilters>({});
   const encoded = JSON.stringify(filters);
   const filtered = encoded !== '{}';
-  const goals = useQuery({ queryKey: filtered ? [...QUALITY_GOALS_KEY, encoded] : QUALITY_GOALS_KEY,
-    queryFn: ({ signal }) => fetchQualityGoals(signal, filtered ? filters : undefined), placeholderData: previous => previous });
+  const [query, setQuery] = useState('');
+  const goals = useQuery({ queryKey: filtered || query ? [...QUALITY_GOALS_KEY, encoded, query] : QUALITY_GOALS_KEY,
+    queryFn: ({ signal }) => fetchQualityGoals(signal, filtered ? filters : undefined, query), placeholderData: previous => previous });
   const order = useQueueSort<QualityGoal>('quality-goals', {
     size: (item) => Number(item.size || 0), dur: (item) => Number(item.duration || 0), new: (item) => item.id,
   });
   const data = goals.data;
+  const items = order.sort(data?.items || []);
+  const selectRectangle = (ids: number[], add: boolean) => {
+    if (ids.length) enterPageSelection();
+    const keys = new Set(ids);
+    setPicked(current => new Map([...(add ? current : []), ...items
+      .filter(item => keys.has(item.id)).map(item => [item.id, item] as const)]));
+  };
+  const rectangle = useRectangleSelection(!goals.isFetching && !goals.isError
+    ? (keys, add) => selectRectangle(keys.map(Number), add) : undefined, { selecting });
   if (goals.isPending) return <Page><div dangerouslySetInnerHTML={{
     __html: queueContentSkeletonHtml('quality-goals', t('shell:spinner.loading'), ['w-20', 'w-24']),
   }} /></Page>;
@@ -149,8 +161,7 @@ export function QualityGoalsPage({ toast, ...props }: QualityGoalsProps) {
       </Page>
     );
   }
-  const items = order.sort(data.items || []);
-  if (!items.length && view !== 'list' && !filtered) {
+  if (!items.length && view !== 'list' && !filtered && !query) {
     return (
       <Page>
         <EmptyState icon={RiSparklingLine} title={t('manage:hdUpgrades.emptyTitle')}>
@@ -181,6 +192,8 @@ export function QualityGoalsPage({ toast, ...props }: QualityGoalsProps) {
         attrs={{ 'data-catalog-frame': '', 'data-filter-frame': '' }} bottomClassName="min-h-12" bottom={<><span data-catalog-summary="">
           <span data-catalog-readout="" role="status">
             {t('manage:hdUpgrades.summaryLabel')} · {t('manage:hdUpgrades.videoCount', { count: Number(data.total || 0) })}</span>
+          <FilterSearch label={t('manage:hdUpgrades.search')} value={query}
+            onQuery={value => { setQuery(value); setPicked(new Map()) }} />
           <SelectAllButton label={t('manage:hdUpgrades.selectAll')} picked={items.filter(item => picked.has(item.id)).length} total={items.length} onChange={pickAll} />
         </span>
         <span data-entity-sorts=""><CatalogViewToggle /><SortKeys sorts={order.sorts} onSort={order.onSort} /></span></>} />
@@ -207,6 +220,7 @@ export function QualityGoalsPage({ toast, ...props }: QualityGoalsProps) {
             rowLabel={(item) => t('manage:hdUpgrades.selectVideo', { title: props.javDisplayName(item) })}
             onPick={(item, on) => pick(item.id, on)}
             onPickAll={pickAll}
+            onRectangle={selectRectangle}
             cells={{
               name: (item) => <QueueIdentity name={props.javDisplayName(item)}
                 onOpen={() => props.openItem(item.id)} picture={<QueuePicture src={previewUrl(item)} glyph="film" />} />,
@@ -224,7 +238,7 @@ export function QualityGoalsPage({ toast, ...props }: QualityGoalsProps) {
               </span>,
             }} />
         : !items.length ? <EmptyState icon={RiSparklingLine} title={t('shell:dataTable.empty')}>{null}</EmptyState>
-        : <div data-media-grid="" data-select-mode={selecting ? '' : undefined}>
+        : <div data-media-grid="" data-select-mode={selecting ? '' : undefined} {...rectangle}>
             {items.map((item) => <GoalCard key={item.id} item={item} {...props} searchResources={setDownload}
               picked={picked.has(item.id)} onPick={(on) => pick(item.id, on)} selecting={selecting} />)}
           </div>}

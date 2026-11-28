@@ -75,7 +75,7 @@ function helpers(patch: Partial<ItemDetailHelpers> = {}): ItemDetailHelpers {
     javImage: () => 'cover',
     tagLabel: (tag) => tag, isDurationTag: () => false, tagCandidates: () => [], sourceOffline: () => false,
     offlineReason: () => '盘没挂上', relatedSkeletonHtml: () => '', mixRelated: async () => [], wireDrag: vi.fn(),
-    wireDragReorder: vi.fn(), ...patch,
+    ...patch,
   };
 }
 
@@ -84,7 +84,7 @@ function actions(): { [K in keyof RequestActions]: Mock<RequestActions[K]> } {
   return {
     close: vi.fn(), present: vi.fn(), redirect: vi.fn(), openQueueItem: vi.fn(), reopen: vi.fn(),
     checkSource: vi.fn(async () => false), openSavedFollow: vi.fn(), openEntity: vi.fn(), openUnowned: vi.fn(), openRegion: vi.fn(),
-    openTag: vi.fn(), addToPlaylist: vi.fn(), saveMix: vi.fn(), editPlaylist: vi.fn(), openPlaylists: vi.fn(),
+    openTag: vi.fn(), addToPlaylist: vi.fn(), saveMix: vi.fn(), openPlaylists: vi.fn(),
     reveal: vi.fn(async () => ''), sync: vi.fn(async () => ({ text: '', removed: [] })), trashChanged: vi.fn(async () => {}), deleted: vi.fn(async () => {}),
     toast: vi.fn(), failure: vi.fn(),
   };
@@ -120,6 +120,7 @@ type Loaded = Awaited<ReturnType<typeof load>>;
 function shellActions(): ShellActions {
   return {
     openItem: vi.fn(), openEntity: vi.fn(), openTag: vi.fn(), openTasteSignal: vi.fn(), navigate: vi.fn(),
+    playSavedFilter: vi.fn(),
     openManage: vi.fn(), managePath: vi.fn(() => ''), openFollow: vi.fn(), receipt: vi.fn(), toast: vi.fn(),
     failure: vi.fn(), revealSource: vi.fn(async () => ''), reopenTutorial: vi.fn(async () => {}),
     routeReview: vi.fn(),

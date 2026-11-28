@@ -167,7 +167,7 @@ export interface AutomaticUpdateState {
 }
 
 /** 媒体库中可用的直连渠道与 CloudDrive2 路径渠道。 */
-export type DownloadProviderKey = '115' | 'pikpak' | `clouddrive:${string}:${string}`;
+export type DownloadProviderKey = '115' | 'pikpak' | 'qbittorrent' | `clouddrive:${string}:${string}`;
 
 export interface DownloadConfig {
   clouddrive_address: string;
@@ -176,6 +176,10 @@ export interface DownloadConfig {
   pikpak_root: string;
   wait_hours: number;
   edition_preferences?: string[];
+  /** 本地 qBittorrent：地址、下载器保存目录、对应媒体库根目录。 */
+  qbittorrent_address?: string;
+  qbittorrent_save_path?: string;
+  qbittorrent_media_root?: string;
 }
 
 export type PikPakBrowserState = 'idle' | 'waiting' | 'done' | 'cancelled' | 'timeout' | 'failed';
@@ -198,6 +202,12 @@ export interface DownloadSettingsState {
   pikpak_browser: { available: boolean; state: PikPakBrowserState; message: string;
                     message_code?: string; message_params?: Record<string, unknown> };
   pikpak_roots: string[];
+  /** 可作为本地下载目标的媒体根；`root` 是账本路径，`label` 是媒体库名。 */
+  local_roots: { root: string; label: string }[];
+  /** 本地 qBittorrent 设置；密码只报存没存过。 */
+  qbittorrent: {
+    address: string; save_path: string; media_root: string; username: string; password_set: boolean;
+  };
   providers: { key: DownloadProviderKey; label: string }[];
   max_wait_hours: number;
 }
@@ -205,6 +215,21 @@ export interface DownloadSettingsState {
 /** 「保存配置」的响应：设置块加一份按已保存配置做的检查报告，没有令牌时为 null。 */
 export interface DownloadSaveResult extends DownloadSettingsState {
   report?: DownloadCheckReport | null;
+  qbittorrent_report?: QbittorrentCheckReport | null;
+}
+
+/** 本地 qBittorrent 的只读检查结果。 */
+export interface QbittorrentCheckReport {
+  ok: boolean;
+  address: string;
+  version: string;
+  webapi_version: string;
+  /** 页面填写的保存目录；留空时可能带出 qB 的默认保存目录。 */
+  save_path: string;
+  /** 与保存目录对应的媒体库账本路径。 */
+  media_root: string;
+  problems: string[];
+  problem_codes?: CodedLine[];
 }
 
 /** 检查的结果：每一项各自报，一项失败不挡住其余几项。 */
@@ -254,6 +279,8 @@ export interface DownloadTask {
   artwork?: (CoverItem & { performer_entities?: (FaceRef & { name: string })[]; performer_total?: number }) | null;
   state: string;
   state_label: string;
+  /** 本地下载器任务用 `download.state.local.<state>`，其余照 `download.state.<state>`。 */
+  state_label_code?: string;
   failure: string | null;
   failure_label: string | null;
   failure_detail: string | null;
@@ -435,11 +462,9 @@ export interface ConfigurationPanel {
   active: boolean;
 }
 
-/** Peach 配置的分组：媒体库与入库、来源与订阅、下载渠道、网络与访问、应用与维护。
- *  `panel` 只在配置页里给，单独挂一组时没有。 */
+/** Peach 配置的分组共享配置快照和操作回执。 */
 export interface ConfigurationGroupProps extends Pick<ConfigurationProps, 'receipt'> {
   data: ConfigurationData;
-  panel?: ConfigurationPanel;
   issues?: import('react').ReactNode;
 }
 

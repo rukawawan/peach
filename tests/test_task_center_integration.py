@@ -549,6 +549,26 @@ class TasksEndpointTests(unittest.TestCase):
             seen += [row["id"] for row in page["finished"]]
         self.assertEqual(seen, [slow.id, late, *reversed(early)])
 
+    def test_search_narrows_recent_runs_by_name_error_summary_and_followups(self):
+        plain = self._settled("2026-09-11T10:00:00.000Z")
+        failed = self.store.start("follow-check", trigger="manual")
+        self.store.finish(failed.id, "failed", error="连接超时 100%_x")
+        named = self.store.start("link-check", trigger="manual")
+        self.store.finish(named.id, "succeeded", summary={"name": "IPX-219.mp4"})
+
+        def found(q):
+            page = web_tasks.q_tasks(self.contract, {"q": q})
+            self.assertEqual(page["finished_total"], len(page["finished"]))
+            return {row["id"] for row in page["finished"]}
+        self.assertEqual(found(""), {plain, failed.id, named.id})
+        self.assertEqual(found("追更"), {failed.id})
+        self.assertEqual(found("FOLLOW-check"), {failed.id})
+        self.assertEqual(found("ipx-219"), {named.id})
+        # `%`、`_` 是普通字符：不当通配符用。
+        self.assertEqual(found("100%_x"), {failed.id})
+        self.assertEqual(found("1__%"), set())
+        self.assertEqual(found("没有这个词"), set())
+
     def test_recent_page_numbers_support_totals_and_clamp_to_the_last_page(self):
         ids = [self._settled(f"2026-09-11T10:0{minute}:00.000Z") for minute in range(5)]
         page = web_tasks.q_tasks(self.contract, {"limit": "2", "page": "2"})

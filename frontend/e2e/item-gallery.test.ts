@@ -231,14 +231,16 @@ describe('馆藏 JAV 官方预览', () => {
           ? { code: COVER_ONLY_ITEM.code, state: 'partial', preview_count: 0, message: '来源暂不可用' }
           : { code: COVER_ONLY_ITEM.code, state: 'ready', preview_count: 1 } });
       });
-      await page.route('**/jav-image?*', route => route.fulfill({ status: 404, headers: { 'cache-control': 'no-store' } }));
+      await page.context().route(url => url.pathname === '/jav-image', route =>
+        route.fulfill({ status: 404, headers: { 'cache-control': 'no-store' } }));
       await page.goto(new URL(`/assets/${COVER_ONLY_ITEM.id}`, page.url()).href);
       const frame = page.locator('[data-item-gallery]');
       const retry = frame.getByRole('button', { name: '立即重试样图', exact: true });
       assert.equal(await retry.count(), 0);
       await frame.getByRole('button', { name: '查看图片', exact: true }).click();
-      await retry.waitFor();
-      assert.equal(await retry.getAttribute('title'), '来源暂不可用');
+      const notice = frame.getByRole('note').filter({ hasText: '来源暂不可用' });
+      await notice.getByText('来源暂不可用', { exact: true }).waitFor();
+      assert.ok(await notice.getByRole('button', { name: '立即重试样图', exact: true }).isVisible());
       assert.ok(await page.locator('[data-item-side] [data-stage-side-content]').isVisible());
       assert.ok(await frame.locator('.video-js').isHidden());
       await frame.getByRole('button', { name: '播放正片', exact: true }).click();
@@ -249,8 +251,10 @@ describe('馆藏 JAV 官方预览', () => {
         badge.textContent = '加载中…';
       });
       await frame.getByRole('button', { name: '查看图片', exact: true }).click();
+      const failedSample = page.waitForResponse(response => new URL(response.url()).pathname === '/jav-image');
       await retry.click();
       await frame.getByRole('button', { name: '预览 1', exact: true }).waitFor();
+      assert.equal((await failedSample).status(), 404);
       assert.equal(attempts, 2);
     } finally { await opened.close() }
   });

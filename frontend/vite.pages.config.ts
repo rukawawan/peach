@@ -17,6 +17,7 @@ export default defineConfig({
   plugins: [tailwindcss(), ...browserSymbols('peach-pages')],
   resolve: {
     alias: {
+      '@peach/legacy/core': fileURLToPath(new URL('./src/core/index.ts', import.meta.url)),
       '@peach/legacy/ui': fileURLToPath(new URL('./src/react/pages/legacy-ui.ts', import.meta.url)),
       '@': fileURLToPath(new URL('./src/react/boardui', import.meta.url)),
     },

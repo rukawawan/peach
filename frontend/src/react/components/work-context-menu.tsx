@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type ComponentType, type CSSProperties, type DOMAttributes, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import { RiCheckboxLine } from '@remixicon/react';
 import { mergeProps, Overlay, useOverlay, useOverlayPosition } from 'react-aria';
 import { Menu, MenuItem } from 'react-aria-components';
@@ -22,9 +22,65 @@ export function rowSelectionOperation(selected: boolean, toggle: () => void): Wo
 export interface WorkContext { key: string | number; operations: WorkContextOperation[] }
 interface Target extends WorkContext { anchor: HTMLElement; x: number; y: number }
 
-/** 右键与键盘共用菜单定位，实际动作由作品所在页面提供。 */
+/** 触屏长按走同一菜单入口。短按、移动和第二根手指都交还给页面。 */
+function useTouchContext(): Pick<DOMAttributes<HTMLElement>, 'onPointerDownCapture' | 'onPointerMoveCapture' | 'onPointerUpCapture'
+  | 'onPointerCancelCapture' | 'onLostPointerCapture' | 'onContextMenuCapture' | 'onClickCapture'> {
+  const pending = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const consumed = useRef<HTMLElement | null>(null);
+  const cancel = () => {
+    clearTimeout(pending.current?.timer);
+    pending.current = null;
+  };
+  useEffect(() => () => clearTimeout(pending.current?.timer), []);
+  const end = (event: PointerEvent<HTMLElement>) => {
+    if (pending.current?.id === event.pointerId) cancel();
+  };
+  return {
+    onPointerDownCapture: event => {
+      cancel();
+      consumed.current = null;
+      const anchor = event.currentTarget;
+      const origin = event.target;
+      if (event.pointerType !== 'touch' || !event.isPrimary || !(origin instanceof Element) || !anchor.contains(origin)) return;
+      const control = origin.closest('a,button,input,textarea,select,[contenteditable=true],[role=button]');
+      if (control && control !== anchor && !control.matches('[data-open], [data-media-open]')) return;
+      const { clientX: x, clientY: y, pointerId: id } = event;
+      pending.current = { id, x, y, timer: setTimeout(() => {
+        pending.current = null;
+        if (!anchor.isConnected) return;
+        const allowed = anchor.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2,
+        }));
+        if (!allowed) consumed.current = anchor;
+      }, 500) };
+    },
+    onPointerMoveCapture: event => {
+      const press = pending.current;
+      if (press?.id === event.pointerId && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) cancel();
+    },
+    onPointerUpCapture: end,
+    onPointerCancelCapture: end,
+    onLostPointerCapture: end,
+    onContextMenuCapture: event => {
+      if (!event.nativeEvent.isTrusted || event.currentTarget === consumed.current) {
+        if (event.nativeEvent.isTrusted) { event.preventDefault(); event.stopPropagation(); }
+        return;
+      }
+      if (pending.current) { cancel(); consumed.current = event.currentTarget; }
+    },
+    onClickCapture: event => {
+      if (!event.detail || consumed.current !== event.currentTarget) return;
+      consumed.current = null;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+  };
+}
+
+/** 右键、触屏与键盘共用菜单定位，实际动作由作品所在页面提供。 */
 export function useWorkContextMenu() {
   const [target, setTarget] = useState<Target | null>(null);
+  const touchProps = useTouchContext();
   const open = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>, context: WorkContext, anchor = event.currentTarget) => {
     if (!context.operations.length) return;
     event.preventDefault(); event.stopPropagation();
@@ -35,6 +91,7 @@ export function useWorkContextMenu() {
   };
   return {
     onContextMenu: open,
+    touchProps,
     onKeyDown: (event: KeyboardEvent<HTMLElement>, context: WorkContext, anchor?: HTMLElement) => {
       if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) open(event, context, anchor);
     },
@@ -47,6 +104,7 @@ export function useRowWorkContext<T>(findRow: (key: string) => T | undefined, op
   const menu = useWorkContextMenu();
   return {
     menu: menu.menu,
+    touchProps: operations ? menu.touchProps : undefined,
     onContextMenu: operations ? (event: MouseEvent<HTMLElement>, item: T, key: string) =>
       menu.onContextMenu(event, { key, operations: operations(item) }) : undefined,
     onKeyDown: operations ? (event: KeyboardEvent<HTMLElement>) => {

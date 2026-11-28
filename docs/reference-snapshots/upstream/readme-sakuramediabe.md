@@ -6,6 +6,10 @@ SakuraMediaBE is the server-side project of SakuraMedia. It provides the backend
 
 The project is currently built on Python 3.10, FastAPI, Peewee, Pydantic 2 and APScheduler. The code is layered as `api -> service -> model` and targets single-account deployments.
 
+## Plugin development
+
+Plugin developers can find runnable examples, the manifest JSON Schema and type stubs in [`plugin-sdk/`](./plugin-sdk/README.md). The full plugin contract is documented in the [plugin development guide](https://tinypinglite.github.io/sakuramedia/guide/plugin-development).
+
 ## Acknowledgements
 
 The movie number parsing implementation and its regression tests were inspired by the following open-source projects, and we would like to thank their authors: [JavSP](https://github.com/Yuukiy/JavSP), [JavBoss](https://github.com/Solr159/JavBoss), [Emby.Plugins.JavScraper](https://github.com/JavScraper/Emby.Plugins.JavScraper), [JAVOneStop](https://github.com/ddd354/JAVOneStop), [metatube-sdk-go](https://github.com/metatube-community/metatube-sdk-go), [Movie_Data_Capture](https://github.com/mvdctop/Movie_Data_Capture), [mdcz](https://github.com/ShotHeadman/mdcz), [javinizer-go](https://github.com/javinizer/javinizer-go).

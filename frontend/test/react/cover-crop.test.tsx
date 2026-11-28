@@ -2,6 +2,7 @@
  *
  * 裁的是取景框不是图片，所以这里看的是「发出去的那组坐标对不对」。 */
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
+import { act } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { PANEL_ASPECT } from '../../src/jav-artwork';
@@ -73,6 +74,29 @@ it('没有生效的框时默认框满高贴右缘，按正封比例取宽', asyn
   expect(sentBox(calls)).toEqual({ x0: 420, y0: 0, x1: 800, y1: 540 });
   // 宿主拿到的是写端点回的那个框：背后网格就地换上它，不必重取。
   expect(saved).toHaveBeenCalledExactlyOnceWith(SAVED_BOX);
+});
+
+it('键盘可分别移动取景框和缩小右下角，播报的尺寸与提交的坐标一致', async () => {
+  const calls = server();
+  await openCrop();
+  await reportSize(800, 540);
+  const frame = document.querySelector<HTMLElement>('[data-crop-box]')!;
+  const handle = document.querySelector<HTMLElement>('[data-crop-handle]')!;
+  const press = async (element: HTMLElement, key: string) => {
+    await act(async () => {
+      element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+  };
+  const announcement = () => frame.parentElement?.querySelector('[role="status"]')?.textContent;
+
+  expect(handle.tabIndex).toBe(0);
+  await press(frame, 'ArrowLeft');
+  expect(announcement()).toBe('宽 380、高 540 像素，距原图左侧 412、上方 0 像素。');
+  await press(handle, 'ArrowUp');
+  expect(announcement()).toBe('宽 373、高 530 像素，距原图左侧 412、上方 0 像素。');
+  await click(buttonNamed('用这一块'));
+  await settle();
+  expect(sentBox(calls)).toEqual({ x0: 412, y0: 0, x1: 785, y1: 530 });
 });
 
 it('已经有框就摆在那个框上，人改的是现状不是从头来过', async () => {

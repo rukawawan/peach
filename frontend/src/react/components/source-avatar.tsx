@@ -11,6 +11,7 @@ export function SourceAvatar({ code, person, detail = false }: {
   useEntityNames();
   const node = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(detail || typeof IntersectionObserver === 'undefined');
+  const [failedSource, setFailedSource] = useState<string>();
   useEffect(() => {
     if (!node.current || visible) return;
     const observer = new IntersectionObserver(entries => {
@@ -19,7 +20,8 @@ export function SourceAvatar({ code, person, detail = false }: {
     observer.observe(node.current);
     return () => observer.disconnect();
   }, [visible]);
-  const face = <><span ref={node} data-source-initial="">{firstGrapheme(entityDisplayName('performer', person.name))}</span>{visible && person.source_actor_id
-    ? <img src={javImageUrl(code, `actor:${person.source_actor_id}`)} alt="" data-drop="self" /> : null}</>;
+  const source = visible && person.source_actor_id ? javImageUrl(code, `actor:${person.source_actor_id}`) : undefined;
+  const face = <><span ref={node} data-source-initial="">{firstGrapheme(entityDisplayName('performer', person.name))}</span>
+    {source && source !== failedSource ? <img src={source} alt="" onError={() => setFailedSource(source)} /> : null}</>;
   return detail ? <span data-id-face="">{face}</span> : face;
 }

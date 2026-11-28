@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from html import escape
 
 from . import interface_text
+from .config import PROJECT_ROOT
 from .user_messages import UserFacingError, UserValueError
 
 #: 三页共用的文档头（`<html lang>` 之后的部分）。`robots` 那一行管只读 HTML 的爬虫，响应头 `X-Robots-Tag`
@@ -32,15 +33,25 @@ _THEME_SCRIPT = ('<script>(()=>{try{'
                  '}catch(e){}})();</script>')
 
 _DATA_KEY = re.compile(r"[a-z][a-z0-9-]*")
+_SYMBOL = re.compile(r'(<symbol id="i-([a-z0-9-]+)"[^>]*>.*?</symbol>)', re.DOTALL)
+_LIGHTBOX_ICONS = frozenset({"chevron-left", "folder-open", "info", "maximize", "x", "zoom-in", "zoom-out"})
 
 
-def page_shell(title: str, page: str, data: Mapping[str, str] | None = None, *, symbols: str = "",
+def page_sprite(icons: Iterable[str] = ()) -> str:
+    """从主界面雪碧图取独立页面和共用灯箱的图标。"""
+    names = _LIGHTBOX_ICONS.union(icons)
+    index = (PROJECT_ROOT / "web/index.html").read_text(encoding="utf-8")
+    symbols = "".join(markup for markup, name in _SYMBOL.findall(index) if name in names)
+    return f'<svg width="0" height="0" aria-hidden="true" style="position:absolute">{symbols}</svg>'
+
+
+def page_shell(title: str, page: str, data: Mapping[str, str] | None = None, *, icons: Iterable[str] = (),
                language: str = interface_text.SOURCE_LANGUAGE) -> str:
     """入口页的薄壳：主题预读、Inter、页面包的样式与脚本，以及挂载点 `#peach-page`。
 
     `page` 写进 `data-page`，页面包按它挑哪一页；`data` 的每一项写成挂载点上的 `data-<键>`，
-    值一律经 HTML 转义。骨架文案归页面包，这里只放服务端才知道的变量。`symbols` 是页面要借的
-    雪碧图字形，原样放进一张不占位的 `<svg>`。`language` 是这一页的语言（`interface_text.request_language`），
+    值一律经 HTML 转义。骨架文案归页面包，这里只放服务端才知道的变量。`icons` 指定页面额外使用的
+    雪碧图字形。`language` 是这一页的语言（`interface_text.request_language`），
     写进 `<html lang>`；`title` 由调用方按同一种语言渲染好。
     """
     attributes = ""
@@ -48,7 +59,7 @@ def page_shell(title: str, page: str, data: Mapping[str, str] | None = None, *, 
         if not _DATA_KEY.fullmatch(key):
             raise UserValueError("api.entry.invalidDataKey", {"key": repr(key)})
         attributes += f' data-{key}="{escape(value, quote=True)}"'
-    sprite = f'<svg width="0" height="0" aria-hidden="true" style="position:absolute">{symbols}</svg>' if symbols else ""
+    sprite = page_sprite(icons)
     return (f'<!doctype html>\n<html lang="{escape(language, quote=True)}">{_PAGE_HEAD}'
             f'<title>{escape(title)}</title>{_THEME_SCRIPT}'
             '<link rel="stylesheet" href="/vendor/inter/5.3.0/index.css">'

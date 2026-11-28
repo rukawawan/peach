@@ -281,7 +281,8 @@ def local_players(request: Request, args=Depends(require_auth)):
     players = []
     if local_playback.available() and _local_playback_client(request):
         players = [{'id': 'default', **_label('labels.routesMedia.defaultPlayer')}, *[
-            {'id': key, 'label': value[0]} for key, value in local_playback.installed().items()]]
+            {'id': key, 'label': value[0]} for key, value in local_playback.installed().items()],
+            {'id': 'custom', **_label('labels.routesMedia.customPlayer')}]
     return JSONResponse({'players': players}, headers={'Cache-Control': 'no-store'})
 
 
@@ -294,6 +295,7 @@ def _local_playback_client(request: Request) -> bool:
 @router.post('/api/local-playback')
 def local_playback(request: Request, id: int, player: str = 'default', args=Depends(require_auth)):
     from . import local_playback as launcher
+    from .folder_picker import PickerBusy, PickerUnavailable
     from .routes_auth import same_origin
     from fastapi import HTTPException
     import subprocess
@@ -303,7 +305,13 @@ def local_playback(request: Request, id: int, player: str = 'default', args=Depe
     asset = request.app.state.media_engine.asset(id)
     path = request.app.state.media_engine.filesystem.file_for(asset, thumbnail=False)
     try:
+        if player == 'custom':
+            return {'opened': launcher.open_custom_media(path)}
         launcher.open_media(path, player, track=_playback_tracker(request.app.state, id))
+    except PickerBusy as exc:
+        raise HTTPException(409, error_detail(exc)) from None
+    except PickerUnavailable as exc:
+        raise HTTPException(501, error_detail(exc)) from None
     except ValueError as exc:
         raise HTTPException(400, error_detail(exc)) from None
     except TimeoutError:
@@ -1291,7 +1299,7 @@ def follow_image(request: Request, id: int, media: int | None = None,
 
 
 @router.api_route("/cover-image", methods=["GET", "HEAD"])
-def cover_image(request: Request, code: str, args: dict[str, str] = Depends(require_auth)):
+def cover_image(request: Request, code: str = "", catalog: str = "", args: dict[str, str] = Depends(require_auth)):
     """库外作品的官方封面：按番号在服务端查地址，经 Peach 的出网设置取图并落盘缓存。
 
     取不到一律回 404 且不缓存：卡片按 `data-drop` 换成占位，网络恢复后下一次加载重取。
@@ -1299,9 +1307,10 @@ def cover_image(request: Request, code: str, args: dict[str, str] = Depends(requ
     """
     from .jav_cover_fetch import COVER_PROXY_HOSTS, PLACEHOLDER, candidate_for
     from .web_jav_detail import detail_code, stored_cover_url
+    from .web_jav_catalog import catalog_cover_target
     state = request.app.state
     try:
-        url = stored_cover_url(state.web_contract, detail_code({"code": code}))
+        url = catalog_cover_target(catalog) if catalog else stored_cover_url(state.web_contract, detail_code({"code": code}))
         if not url:
             raise UserValueError("api.media.coverNotFound")
         cache = cache_for(state.web_contract)
@@ -1314,11 +1323,14 @@ def cover_image(request: Request, code: str, args: dict[str, str] = Depends(requ
             upstream = open_upstream(state.http_transport.client, request.method, target, incoming=request.headers)
             if PLACEHOLDER.search(str(upstream.url)):
                 upstream.close()
-                raise FollowProxyError("upstream returned the not-ready placeholder image")
+                raise FollowProxyError("upstream returned the not-ready placeholder image", status_code=404)
             return upstream
         return cache.stream(key, request, fetch)
-    except (ValueError, FollowProxyError, OSError, httpx.HTTPError):
-        return Response(status_code=404, headers={"cache-control": "no-store"})
+    except (ValueError, FollowProxyError, OSError, httpx.HTTPError) as error:
+        probe = catalog and request.method == "HEAD"
+        missing = isinstance(error, FollowProxyError) and error.status_code in (404, 410)
+        return Response(status_code=502 if probe and not missing and not isinstance(error, ValueError) else 404,
+                        headers={"cache-control": "no-store"})
 
 
 #: 来源图片只按位图回给浏览器：同源下发 SVG 等于让来源在 Peach 的源里跑脚本。

@@ -182,7 +182,7 @@ export function ReviewCard(props: ReviewCardProps) {
   }
   const context = { key: row.item_key, operations };
   return (
-    <section aria-label={title} data-review-key={row.item_key}
+    <section aria-label={title} data-review-key={row.item_key} data-rectangle-key={row.item_key} tabIndex={-1}
       className={cx(CARD, CARD_HEIGHT(category))}
       onContextMenu={event => {
         if (!(event.target as Element).closest('input, textarea, select, [contenteditable]')) menu.onContextMenu(event, context);

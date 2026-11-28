@@ -106,9 +106,10 @@ class SettingsRoundTripTests(unittest.TestCase):
 
     def test_navigation_groups_keep_independent_orders_and_fixed_first_item(self):
         w_settings(self.contract, {'navigationOrders': {'review': ['studio_logos', 'metadata_fields']}})
-        saved = w_settings(self.contract, {'navigationOrders': {'favorites': ['tag', 'all', 'filters']}})
+        saved = w_settings(self.contract, {'navigationOrders': {'favorites': ['tag', 'all', 'filters'], 'jav': ['online', 'discover']}})
         self.assertEqual(saved['navigationOrders']['review'][:2], ['studio_logos', 'metadata_fields'])
         self.assertEqual(saved['navigationOrders']['favorites'][:3], ['all', 'tag', 'filters'])
+        self.assertEqual(saved['navigationOrders']['jav'], ['online', 'discover', 'library', 'wants', 'releases'])
         self.assertEqual(q_settings(self.contract)['navigationOrders'], saved['navigationOrders'])
         reset = w_settings(self.contract, {'navigationOrders': {'review': []}})
         self.assertEqual(reset['navigationOrders']['review'], list(web_settings.NAVIGATION_ORDERS['review']))
@@ -133,17 +134,17 @@ class SettingsRoundTripTests(unittest.TestCase):
         original_sidebar = q_settings(self.contract)['sidebarOrder']
         w_settings(self.contract, {'sortControls': {'catalog': {'order': ['size', 'rating'], 'hidden': ['rating']}}})
         saved = w_settings(self.contract, {'sortControls': {'follow': {'order': ['dur', 'new'], 'hidden': ['new', 'hot', 'dur']}}})
-        self.assertEqual(saved['sortControls']['catalog']['order'][:2], ['size', 'rating'])
+        self.assertEqual(saved['sortControls']['catalog']['order'][:5], ['performer', 'studio', 'tags', 'size', 'rating'])
         self.assertEqual(saved['sortControls']['catalog']['hidden'], ['rating'])
         self.assertEqual(saved['sortControls']['catalog']['order'][-1], 'release')
-        self.assertEqual(saved['sortControls']['follow'], {'order': ['dur', 'new', 'hot'], 'hidden': ['new', 'hot', 'dur']})
+        self.assertEqual(saved['sortControls']['follow'], {'order': ['source', 'tags', 'dur', 'new', 'hot'], 'hidden': ['new', 'hot', 'dur']})
         self.assertEqual(q_settings(self.contract)['sortControls'], saved['sortControls'])
         self.assertEqual(saved['sidebarOrder'], original_sidebar)
         reset = w_settings(self.contract, {'sortControls': {'catalog': {'order': [], 'hidden': []}}})
         self.assertEqual(reset['sortControls']['catalog'], {'order': list(web_settings.SORT_CONTROL_KEYS['catalog']), 'hidden': []})
         self.assertEqual(reset['sortControls']['follow'], saved['sortControls']['follow'])
         dated = w_settings(self.contract, {'sortControls': {'catalog': {'order': ['release', 'size'], 'hidden': []}}})
-        self.assertEqual(dated['sortControls']['catalog']['order'][:2], ['release', 'size'])
+        self.assertEqual(dated['sortControls']['catalog']['order'][:5], ['performer', 'studio', 'tags', 'release', 'size'])
 
     def test_sort_controls_reject_invalid_payloads_before_writing(self):
         invalid = [None, [], {'unknown': {'order': [], 'hidden': []}}, {'catalog': []},
@@ -159,6 +160,8 @@ class SettingsRoundTripTests(unittest.TestCase):
     def test_an_unset_profile_reads_the_default_order(self):
         self.assertEqual(q_settings(self.contract),
                          {"sidebarOrder": list(DEFAULT_SIDEBAR_ORDER),
+                          "tableLayouts": {},
+                          "browsePreferences": {},
                           "avatarRefreshDays": 90, "faviconRefreshDays": 365,
                           "followInitialDays": 30, "postSetupTutorialDone": False,
                           "organizeTemplates": {}, "codePatterns": [],
@@ -168,6 +171,33 @@ class SettingsRoundTripTests(unittest.TestCase):
                           "interfaceLanguage": "auto", "systemLanguage": None, "javBrowserWantOnNoMatch": True,
                           "javdbCoverFallback": False, "wantStaleSearchDays": 7, "wantStaleAttemptLimit": 3,
                           "sourceBudgetRequests": 6000, "sourceBudgetHours": 4, "sourceBudgetGigabytes": 1})
+
+    def test_table_layouts_merge_independent_tables_and_reset_one_field(self):
+        w_settings(self.contract, {"tableLayouts": {"catalog": {
+            "widths": {"name": 360}, "visibility": {"library": False}, "order": ["library", "name"],
+        }}})
+        w_settings(self.contract, {"tableLayouts": {"media-directory": {"widths": {"name": 250}}}})
+        current = w_settings(self.contract, {"tableLayouts": {"catalog": {"widths": {}}}})["tableLayouts"]
+        self.assertEqual(current, {
+            "catalog": {"widths": {}, "visibility": {"library": False}, "order": ["library", "name"]},
+            "media-directory": {"widths": {"name": 250}},
+        })
+        self.assertEqual(q_settings(self.contract)["tableLayouts"], current)
+
+    def test_legacy_table_layout_only_imports_fields_the_instance_has_never_saved(self):
+        w_settings(self.contract, {"tableLayouts": {"catalog": {"widths": {}, "order": []}}})
+        w_settings(self.contract, {"tableLayouts": {"catalog": {"legacy": {
+            "widths": {"name": 420}, "order": ["size", "name"], "visibility": {"size": True},
+        }}}})
+        self.assertEqual(q_settings(self.contract)["tableLayouts"]["catalog"],
+                         {"widths": {}, "order": [], "visibility": {"size": True}})
+
+    def test_invalid_table_layouts_are_rejected_without_partial_writes(self):
+        for invalid in ({"widths": {"name": True}}, {"widths": {"name": float("inf")}},
+                        {"order": ["name", "name"]}, {"legacy": {"visibility": {"size": 1}}}, {"extra": []}):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                w_settings(self.contract, {"tableLayouts": {"catalog": invalid, "media-directory": {"order": []}}})
+        self.assertEqual(q_settings(self.contract)["tableLayouts"], {})
 
     def test_code_patterns_are_checked_when_saved(self):
         """写错的规则在保存那一刻报出来；存下的规则去掉空行，读回来是同一份。"""
@@ -312,7 +342,7 @@ class SettingsRoundTripTests(unittest.TestCase):
     def test_a_written_order_survives_a_reread(self):
         order = ["", "follow", "tags", "trash"]
         self.assertEqual(w_settings(self.contract, {"sidebarOrder": order}),
-                         {"ok": True, "sidebarOrder": order,
+                         {"ok": True, "sidebarOrder": order, "tableLayouts": {}, "browsePreferences": {},
                           "avatarRefreshDays": 90, "faviconRefreshDays": 365,
                           "followInitialDays": 30, "postSetupTutorialDone": False,
                           "organizeTemplates": {}, "codePatterns": [],
@@ -324,6 +354,39 @@ class SettingsRoundTripTests(unittest.TestCase):
                           "sourceBudgetRequests": 6000, "sourceBudgetHours": 4, "sourceBudgetGigabytes": 1})
         self.assertEqual(q_settings(self.contract)["sidebarOrder"], order)
         self.assertEqual(self._stored_json()["sidebarOrder"], order)
+
+    def test_ai_sidebar_entry_upgrades_the_old_default_and_can_be_hidden(self):
+        previous = ["", "follow", "jav", "performers", "tags", "studios", "flagged", "manage"]
+        web_settings._write_settings(self.contract, {"sidebarOrder": previous})
+        self.assertEqual(q_settings(self.contract)["sidebarOrder"], list(DEFAULT_SIDEBAR_ORDER))
+        self.assertEqual(w_settings(self.contract, {"sidebarOrder": previous})["sidebarOrder"], previous)
+        self.assertEqual(q_settings(self.contract)["sidebarOrder"], previous)
+
+    def test_ai_sidebar_entry_preserves_an_existing_custom_order(self):
+        custom = ["jav", "", "follow"]
+        web_settings._write_settings(self.contract, {"sidebarOrder": custom})
+        self.assertEqual(q_settings(self.contract)["sidebarOrder"], custom)
+        self.assertEqual(w_settings(self.contract, {"sidebarOrder": [*custom, "ai"]})["sidebarOrder"], [*custom, "ai"])
+
+    def test_browse_preferences_import_and_merge_without_replacing_other_devices_choices(self):
+        w_settings(self.contract, {"browsePreferences": {
+            "catalogView": "list", "theme": "light", "pageSizes": {"library": 30},
+        }})
+        w_settings(self.contract, {"browsePreferences": {
+            "legacy": {"catalogView": "cards", "pageSizes": {"library": 50, "feeds": 40}},
+            "pageSizes": {"jav-releases": 24}, "queueSort": {"junk-files": {"sort": "size", "dir": "desc"}},
+        }})
+        expected = {
+            "catalogView": "list", "theme": "light", "pageSizes": {"library": 30, "feeds": 40, "jav-releases": 24},
+            "queueSort": {"junk-files": {"sort": "size", "dir": "desc"}},
+        }
+        self.assertEqual(q_settings(self.contract)["browsePreferences"], expected)
+        w_settings(self.contract, {"browsePreferences": {"queueSort": {"junk-files": None}}})
+        expected["queueSort"]["junk-files"] = None
+        for invalid in ({"localAppearance": True}, {"pageSizes": {"library": True}}, {"legacy": {"theme": "unsupported"}}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                w_settings(self.contract, {"browsePreferences": invalid})
+        self.assertEqual(q_settings(self.contract)["browsePreferences"], expected)
 
     def test_the_tutorial_marker_is_a_boolean_that_survives_a_reread(self):
         """装完就是装完：换台设备打开不该再被教一遍，所以它也跟着账本走。"""
@@ -418,11 +481,10 @@ class ContractRegistrationTests(unittest.TestCase):
             return tuple(item.strip().strip("'") for item in raw.split(","))
 
         self.assertEqual(js_list("DEFAULT_SIDEBAR_ORDER"), DEFAULT_SIDEBAR_ORDER)
-        # 默认那一份是首页、关注、JAV、三个索引、已标记、管理；播放列表和沉浸模式
-        # 是从别处发起的动作，只在可加清单里。
+        # AI 助手紧接首页。播放列表和沉浸模式可按需添加。
         self.assertEqual(
             DEFAULT_SIDEBAR_ORDER,
-            ("", "follow", "jav", "performers", "tags", "studios", "flagged", "manage"))
+            ("", "ai", "follow", "jav", "performers", "tags", "studios", "flagged", "manage"))
         self.assertNotIn("playlists", DEFAULT_SIDEBAR_ORDER)
         self.assertIn("playlists", web_settings.OPTIONAL_SIDEBAR_KEYS)
         self.assertIn("immerse", web_settings.OPTIONAL_SIDEBAR_KEYS)

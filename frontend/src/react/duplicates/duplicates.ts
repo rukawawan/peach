@@ -92,11 +92,13 @@ export async function keepGroups(groups: readonly DuplicateGroup[], keep: boolea
 export const KEPT_DUPLICATES_URL = '/api/duplicates?limit=120&view=kept';
 export const KEPT_DUPLICATES_KEY = ['duplicates', 'kept'] as const;
 
-export const fetchDuplicates = (signal?: AbortSignal) =>
-  apiGet<DuplicatesData>(DUPLICATES_URL, signal);
+/** `q` 按番号或文件名找一组，由服务端在全部分组里筛。 */
+const withQuery = (url: string, q = '') => (q ? `${url}&q=${encodeURIComponent(q)}` : url);
+export const fetchDuplicates = (signal?: AbortSignal, q = '') =>
+  apiGet<DuplicatesData>(withQuery(DUPLICATES_URL, q), signal);
 
-export const fetchKeptDuplicates = (signal?: AbortSignal) =>
-  apiGet<DuplicatesData>(KEPT_DUPLICATES_URL, signal);
+export const fetchKeptDuplicates = (signal?: AbortSignal, q = '') =>
+  apiGet<DuplicatesData>(withQuery(KEPT_DUPLICATES_URL, q), signal);
 
 /** 一组的文件 id 连起来，当作这组在选择集里的键。 */
 export const groupKey = (group: DuplicateGroup) => group.files.map((file) => file.id).join(',');

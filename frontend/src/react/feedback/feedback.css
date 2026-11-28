@@ -1,0 +1,124 @@
+:root {
+  --feedback-launcher-bottom: max(1rem, env(safe-area-inset-bottom), var(--selection-dock-space, 0px),
+    var(--miniplayer-space, 0px), var(--feedback-copy-clearance, 0px));
+}
+
+:root:has([data-copy-bar]) {
+  --feedback-copy-clearance: calc(5rem + env(safe-area-inset-bottom));
+}
+
+:root:has([data-feedback-launcher][data-feedback-corner="bottom"]) {
+  --feedback-toast-floor: calc(var(--feedback-launcher-bottom) + 2rem + 12px);
+}
+
+[data-feedback-launcher] {
+  position: fixed;
+  z-index: var(--layer-popover, 1100);
+  inset: auto;
+  inset-inline-end: max(1rem, env(safe-area-inset-right));
+  bottom: var(--feedback-launcher-bottom);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+}
+
+[data-feedback-launcher][data-feedback-corner="top"] {
+  top: max(1rem, env(safe-area-inset-top));
+  inset-inline-end: max(4.5rem, calc(3.5rem + env(safe-area-inset-right)));
+  bottom: auto;
+}
+
+[data-feedback-launcher] > button {
+  opacity: .65;
+}
+
+[data-feedback-launcher] > button:is(:focus-visible, :active) {
+  opacity: 1;
+}
+
+[data-modal-motion]:has(> [data-feedback-surface]) {
+  z-index: calc(var(--layer-tooltip, 1200) + 1);
+}
+
+@media (hover: hover) {
+  [data-feedback-launcher] > button:hover {
+    opacity: 1;
+  }
+
+  [data-feedback-action]:hover:not(:active, :disabled, [aria-disabled="true"]) {
+    background-color: var(--control-hover, var(--color-border-button-default));
+  }
+}
+
+/* Read the visible page frame without the feedback sheet sitting above it. */
+:is([data-feedback-awaiting-frame], [data-feedback-capturing-tab]),
+[data-modal-motion]:has(> :is([data-feedback-awaiting-frame], [data-feedback-capturing-tab])) > [data-modal-backdrop] {
+  opacity: 0 !important;
+  transition: none;
+}
+
+[data-feedback-tab-busy],
+[data-modal-motion]:has(> [data-feedback-tab-busy]) > [data-modal-backdrop] {
+  transition: none !important;
+}
+
+body:has([data-feedback-capturing-tab]) :is([data-feedback-launcher], [data-copy-bar], [data-copy-editor]) {
+  visibility: hidden;
+}
+
+[data-feedback-surface] .ui-fcollapse > * {
+  transition: opacity var(--motion-content, 150ms cubic-bezier(.22, 1, .36, 1));
+}
+
+[data-feedback-surface] .ui-fcollapse[inert] > * {
+  opacity: 0;
+}
+
+@starting-style {
+  [data-feedback-surface] .ui-fcollapse > * { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-feedback-surface] .ui-fcollapse,
+  [data-feedback-surface] .ui-fcollapse > * { transition: none; }
+}
+
+[data-feedback-environment] {
+  display: grid;
+}
+
+@media (min-width: 640px) {
+  [data-feedback-environment] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+[data-feedback-editor-stage] canvas {
+  width: auto;
+  height: auto;
+}
+
+[data-feedback-editor-stage] :is(canvas, img[data-draw-crop]) {
+  max-height: min(50dvh, 34rem, max(7rem, calc(100dvh - 19rem)));
+}
+
+[data-feedback-editor-stage] [data-draw-crop] {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+[data-feedback-editor-stage] [data-draw-crop]:focus-visible {
+  outline: 2px solid var(--color-border-focus-ring);
+  outline-offset: -2px;
+}
+
+[data-settings-panel]:has(> [data-feedback-launcher]) {
+  padding-bottom: var(--feedback-toast-floor);
+}
+
+[data-settings-panel]:has(> [data-feedback-launcher]) [data-settings-card] {
+  max-height: min(720px, calc(100dvh - max(18px, env(safe-area-inset-top)) - var(--feedback-toast-floor)));
+}

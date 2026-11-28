@@ -312,7 +312,7 @@ class PackagedBuildAgeTests(unittest.TestCase):
             self.assertIsNone(snapshot.build_commit)
             self.assertEqual(snapshot.build_behind, UNKNOWN_BUILD_AGE)
             self.assertTrue(snapshot.build_stale)
-            self.assertIn("托盘构建身份未取得", snapshot.build_label)
+            self.assertIn("托盘构建版本未知", snapshot.build_label)
 
     def test_a_build_commit_outside_this_repository_counts_as_stale(self):
         with tempfile.TemporaryDirectory() as directory:

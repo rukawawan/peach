@@ -77,7 +77,7 @@ READ_HELPERS = frozenset({"media-read", "local-image"})
 
 
 def wants_cli(argv: list[str]) -> bool:
-    return len(argv) > 1 and argv[1] in cli_commands()
+    return len(argv) > 1 and (argv[1] in ("-h", "--help") or argv[1] in cli_commands())
 
 
 def installer_reporting(usage: str, errors: str) -> int:

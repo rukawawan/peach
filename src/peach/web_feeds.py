@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import PureWindowsPath
 from urllib.parse import quote
+
+from httpx import TransportError
+from itsdangerous import BadData, URLSafeTimedSerializer
 
 from . import (
     avatar_followup, entities, entry_links, feed_followup, feeds, interface_text, javdb,
@@ -25,6 +30,7 @@ from .follow_scheduler import CHECK_WAIT_SECONDS
 from .followups import Attempts, attempts_root
 from .jobs import TaskRunConflict
 from .http import HttpRequest, public_https_url
+from .kanji import japanese_search_spelling
 from .task_runs import MAX_FOLLOWUPS
 from .user_messages import UserFacingError, UserInterruptedError, UserValueError
 
@@ -69,7 +75,7 @@ def _paused_by_source(error: Exception) -> bool:
 
 def _parse_source(kind: str, body: bytes, url: str):
     """演员页受登录限制时返回可操作的原因。"""
-    if kind == feeds.KIND_JAVDB_ACTOR and javdb.LOGIN.search(body.decode("utf-8", "replace")):
+    if kind == feeds.KIND_JAVDB_ACTOR and javdb.login_page(body.decode("utf-8", "replace")):
         raise UserValueError("api.feeds.javdbLoginRequired")
     parsed = feeds.parse(kind, body, url)
     if parsed is None:
@@ -83,7 +89,7 @@ def _transport(contract):
     from .scraping_access import SourceTransport
 
     return HostLimitedTransport(
-        SourceTransport(contract.follow_secrets_root), 2.0, limiter=SOURCE_LIMITER)
+        SourceTransport(contract.follow_secrets_root, javdb_account_fallback=True), 2.0, limiter=SOURCE_LIMITER)
 
 
 def fetch(transport, url: str, *, etag: str | None = None,
@@ -487,10 +493,10 @@ def q_feeds(contract, args) -> dict:
 
 
 def w_feed_source(contract, body) -> dict:
-    """订阅的移除与开关、人物页的「订阅新作」，以及订阅源页签按名字订。
+    """订阅的移除与开关、人物页的「订阅新作」，以及按搜索结果选页订阅。
 
     这里不收页面送来的地址：地址由服务端按这位的 JavDB 身份现拼，按名字订时页面送的也只是
-    她在站上的演员 id（ADR-0047、ADR-0083）。
+    她在站上的演员 ID（ADR-0047、ADR-0083、ADR-0175）。
     """
     action = str(body.get("action") or "")
     if action == "remove":
@@ -511,19 +517,25 @@ def w_feed_source(contract, body) -> dict:
         return _follow_entity(contract, body)
     if action == "follow-name":
         return _follow_by_name(contract, body)
+    if action == "follow-pages":
+        return _follow_by_name(contract, body, selected_only=True)
     raise ValueError(f"unknown feed source action: {action}")
 
 
 def subscribe_performer(connection, entity_id: int, canonical_name: str) -> list[int]:
     """这位的每个 JavDB 演员页与 DMM 片单各订一条，返回源 id。地址按账本里她的编号现拼。"""
+    pages = _performer_feed_pages(connection, entity_id, canonical_name)
+    if not pages:
+        raise UserValueError("api.feeds.noSourceIds")
+    feeds.set_manual_pages(connection, entity_id, False)
+    return feeds.follow_entity(connection, entity_id, pages)
+
+
+def _performer_feed_pages(connection, entity_id: int, name: str) -> list[str]:
     refs = [dict(ref) for ref in connection.execute(
         "SELECT provider,external_kind,external_id,metadata_json FROM entity_external_ref"
         " WHERE entity_id=?", (int(entity_id),))]
-    pages = [*entry_links.javdb_actor_pages(canonical_name, refs),
-             *feeds.dmm_actress_pages(connection, entity_id)]
-    if not pages:
-        raise UserValueError("api.feeds.noSourceIds")
-    return feeds.follow_entity(connection, entity_id, pages)
+    return [*entry_links.javdb_actor_pages(name, refs), *feeds.dmm_actress_pages(connection, entity_id)]
 
 
 def fetch_new_sources(contract, ids: list[int]) -> None:
@@ -569,78 +581,196 @@ ACTOR_ID = re.compile(r"^[A-Za-z0-9]{1,16}$")
 
 #: 搜索页的超时。它比演员页小，体积上限沿用演员页那一档。
 LOOKUP_TIMEOUT = 20.0
+_DMM_SELECTION = URLSafeTimedSerializer(secrets.token_urlsafe(32), salt="peach-dmm-feed-lookup")
+_DMM_SELECTION_AGE = 30 * 60
 
 
 def q_feed_lookup(contract, args) -> dict:
-    """按女优名到 JavDB 搜演员卡，列出候选；只查不写（ADR-0083）。
-
-    每张卡带站内 id、标题一栏的全部写法与记录类型，再对一遍账本：这个 id 已经在谁名下
-    （`held_by`），卡上哪个写法是账本里某位的正名或别名（`matched`）。名字对得上、又只有
-    一个人的那几张先勾上（`suggested`）；同名不止一位时一张都不替用户挑。
-    """
+    """按艺名查 JavDB、DMM 和账本中的订阅页，保留各来源的失败原因。"""
     name = entities.canonicalize_entity_name("performer", str(args.get("q") or ""))
     if not name:
         raise UserValueError("api.feeds.nameRequired")
     url = javdb.SEARCH.format(quote(name))
     with contract.database.read_connection() as connection:
-        # 账本里按这个名字认得出谁：登记时没人持有所勾的卡就挂到她名下（`_follow_by_name`），
-        # 页面提前把这句话说出来，免得点了才知道挂给了谁。
         found = entities.resolve_entity(connection, "performer", name)
-        known = _known_performer(connection, found) if found else None
+        known = _known_performer(contract, connection, found) if found else None
+    result = {"ok": True, "q": name, "url": url, "known": known}
     try:
-        html = _search_javdb(contract, url)
-    except ValueError as error:
-        # 她已有 JavDB 或 DMM 编号时不必靠这一趟搜索，按库里的她直接订；原因照样告诉页面。
-        if known and known["subscribable"]:
-            return {"ok": True, "q": name, "url": url, "candidates": [], "suggested": [],
-                    "known": known, "unavailable": str(error),
-                    **({"unavailable_code": error.code, "unavailable_params": dict(error.params)}
-                       if isinstance(error, UserFacingError) else {})}
-        raise
-    cards = javdb.search_cards(html)
+        cards = javdb.search_cards(_search_javdb(contract, url))
+    except UserFacingError as error:
+        result.update(unavailable=error.message, unavailable_code=error.code, unavailable_params=dict(error.params))
+        cards = []
     wanted = alias.match_key(name)
+    mine = [card for card in cards if any(alias.match_key(written) == wanted for written in card["names"])]
+    unique = mine if javdb.one_person(mine) else []
+    terms = [name, japanese_search_spelling(name)]
+    if known is not None:
+        terms.extend(written for source in known["sources"] if source["provider"] == "dmm" for written in source["names"])
+    terms.extend(written for card in unique for written in card["names"])
+    try:
+        dmm_pages = _search_dmm_actresses(contract, terms)
+    except UserFacingError as error:
+        result["dmm_unavailable"] = _failure(error)
+        dmm_pages = {}
     with contract.database.read_connection() as connection:
-        candidates = [_describe_card(connection, card) for card in cards]
-    mine = [card for card in cards
-            if any(alias.match_key(written) == wanted for written in card["names"])]
-    suggested = [card["id"] for card in mine] if javdb.one_person(mine) else []
-    return {"ok": True, "q": name, "url": url, "candidates": candidates, "suggested": suggested,
-            "known": known}
+        subscriptions = _subscription_rows(connection, [
+            *(_actor_page(card["id"]) for card in cards),
+            *(feeds.dmm_actress_url(number) for number in dmm_pages)])
+        candidates = [_describe_card(contract, connection, card, subscriptions.get(_actor_page(card["id"])))
+                      for card in cards]
+        avatar = next((card["avatar_url"] for card in unique if card.get("avatar_url")), None)
+        dmm_candidates = [_describe_dmm_page(contract, connection, number, written, subscriptions, avatar)
+                          for number, written in dmm_pages.items()]
+    result.update(candidates=candidates, suggested=[card["id"] for card in unique], dmm_candidates=dmm_candidates)
+    if dmm_pages:
+        result["dmm_selection"] = _DMM_SELECTION.dumps([name, list(dmm_pages)])
+    return result
 
 
-def _search_javdb(contract, url: str) -> str:
+def q_feed_suggest(contract, args) -> dict:
+    """订阅框的在线联想，返回经过名称匹配的公开来源候选。"""
+    term = str(args.get("q") or "").strip()[:120]
+    key = alias.match_key(term)
+    if len(key) < (3 if key.isascii() else 2):
+        return {"items": []}
+    items = {}
+    try:
+        cards = javdb.search_cards(_search_javdb(contract, javdb.SEARCH.format(quote(term)), timeout=5))
+        for card in cards:
+            match = next((name for name in card["names"] if key in alias.match_key(name)), "")
+            if match:
+                items.setdefault(alias.match_key(match), {
+                    "name": match, "provider": "JavDB", "avatar_url": card.get("avatar_url"),
+                })
+    except UserFacingError:
+        pass
+    if len(items) < 8:
+        try:
+            for name in _search_dmm_actresses(contract, [term, japanese_search_spelling(term)],
+                                              prefix=True, timeout=5).values():
+                items.setdefault(alias.match_key(name), {"name": name, "provider": "DMM"})
+        except UserFacingError:
+            pass
+    return {"items": list(items.values())[:8]}
+
+
+def _search_dmm_actresses(contract, terms: list[str], *, prefix: bool = False,
+                          timeout: float = LOOKUP_TIMEOUT) -> dict[str, str]:
+    from .sources.base import Session
+    from .sources.dmm import DmmSource
+
+    site = DmmSource()
+    session = Session(_transport(contract), deadline=time.monotonic() + timeout)
+    try:
+        with site.holding(session):
+            return site.search_actresses(terms, session=session, prefix=prefix)
+    except (OSError, TransportError) as error:
+        raise UserValueError("api.feeds.dmmSearchFailed", {"error": str(error)}) from error
+
+
+def _search_javdb(contract, url: str, *, timeout: float = LOOKUP_TIMEOUT) -> str:
     """取一页 JavDB 演员搜索结果；冷却、限流、断网、登入页都按原因报 ValueError。"""
     from .sources.javdb import SEARCH_LIMITER
     SEARCH_LIMITER.wait(url)
     try:
         response = _transport(contract)(HttpRequest("GET", url, {"Accept": "text/html"}),
-                                        LOOKUP_TIMEOUT, FETCH_MAX_BYTES)
+                                        timeout, FETCH_MAX_BYTES)
     except Exception as error:  # noqa: BLE001 - 冷却、限流还是断网，原因原样交给页面
         raise UserValueError("api.feeds.javdbSearchFailed", {"error": str(error)}) from error
     if response.status != 200:
         raise UserValueError("api.feeds.javdbHttpStatus", {"status": response.status})
     html = response.body.decode("utf-8", "replace")
-    if javdb.LOGIN.search(html):
+    if javdb.login_page(html):
         raise UserValueError("api.feeds.javdbSearchLogin")
     return html
 
 
 def subscribable(connection, row) -> bool:
     """这位不经搜索就能订：已有 JavDB 演员页或 DMM 女优编号。"""
-    entity_id = int(row["id"])
-    refs = [dict(ref) for ref in connection.execute(
-        "SELECT provider,external_kind,external_id,metadata_json FROM entity_external_ref"
-        " WHERE entity_id=?",
-        (entity_id,))]
-    return bool(entry_links.javdb_actor_pages(str(row["canonical_name"]), refs)
-                or feeds.dmm_actress_ids(connection, entity_id))
+    return bool(_performer_feed_pages(connection, int(row["id"]), str(row["canonical_name"])))
 
 
-def _known_performer(connection, row) -> dict:
+def _actor_page(actor_id: str) -> str:
+    return f"{javdb.BASE}actors/{actor_id}"
+
+
+def _subscription_rows(connection, pages: list[str]) -> dict:
+    if not pages:
+        return {}
+    marks = ",".join("?" for _ in pages)
+    return {row["url"]: row for row in connection.execute(
+        f"SELECT url,name,enabled,entity_id FROM feed_source WHERE url IN ({marks})", pages)}
+
+
+def _subscription_state(row) -> str:
+    if row is None:
+        return "missing"
+    return "enabled" if row["enabled"] else "paused"
+
+
+def _dmm_page_names(contract, connection, entity_id: int, missing: set[str]) -> dict[str, str]:
+    """用当地保存的刮削证据核对编号与页名。查询时只读本部署的来源快照。"""
+    if not missing:
+        return {}
+    evidence = (contract.follow_sources_root / "library-metadata").resolve()
+    found = {}
+    for ref in connection.execute(
+            "SELECT provider,external_id,CASE WHEN json_valid(metadata_json)"
+            " THEN json_extract(metadata_json,'$.raw_snapshot') END AS snapshot"
+            " FROM entity_external_ref WHERE entity_id=? AND external_kind='performer'"
+            " AND provider IN ('dmm','r18dev') ORDER BY provider", (entity_id,)):
+        provider, number, snapshot = ref
+        if number not in missing or number in found or not isinstance(snapshot, str):
+            continue
+        filename = PureWindowsPath(snapshot).name
+        if not filename.endswith(f"-{provider}.json"):
+            continue
+        try:
+            path = (evidence / filename).resolve()
+            if not path.is_relative_to(evidence):
+                continue
+            with path.open("rb") as handle:
+                raw = handle.read(FETCH_MAX_BYTES + 1)
+            if len(raw) > FETCH_MAX_BYTES:
+                continue
+            payload = json.loads(raw)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        document = payload.get("result", payload)
+        cast = document.get("actresses") if isinstance(document, dict) else None
+        if not isinstance(cast, list):
+            continue
+        for person in cast:
+            if isinstance(person, dict) and str(person.get("dmm_id")) == number:
+                if (name := person.get("japanese_name")) and isinstance(name, str):
+                    found[number] = name
+                break
+    return found
+
+
+def _known_performer(contract, connection, row) -> dict:
     """库里认出的这位：能不能直接订、订没订着。"""
     entity_id = int(row["id"])
-    return {"id": entity_id, "name": str(row["canonical_name"]),
-            "subscribable": subscribable(connection, row),
+    name = str(row["canonical_name"])
+    pages = _performer_feed_pages(connection, entity_id, name)
+    subscriptions = _subscription_rows(connection, pages)
+    dmm_names = _dmm_page_names(contract, connection, entity_id, {
+        number for url in pages if (number := feeds.dmm_actress_id(url))
+        and not (url in subscriptions and subscriptions[url]["name"])})
+    sources = []
+    for url in pages:
+        subscription = subscriptions.get(url)
+        page_name = subscription["name"] if subscription is not None else ""
+        number = feeds.dmm_actress_id(url)
+        sources.append({"provider": "dmm" if number else "javdb", "url": url,
+                        "id": number or url.rsplit("/", 1)[-1],
+                        "names": javdb.split_names(page_name or dmm_names.get(number, "")),
+                        "subscription": _subscription_state(subscription)})
+    return {"id": entity_id, "name": name, "sources": sources,
+            "portrait": web_catalog.entity_ref(contract, "performer", entity_id, name),
+            "subscribable": bool(sources),
             "following": feeds.entity_following(connection, entity_id)}
 
 
@@ -654,7 +784,7 @@ def create_followed_performer(connection, name: str) -> int:
          json.dumps({"source": FOLLOW_SOURCE}, ensure_ascii=False), stamp, stamp)).lastrowid)
 
 
-def _describe_card(connection, card: dict) -> dict:
+def _describe_card(contract, connection, card: dict, subscription) -> dict:
     held = connection.execute(
         "SELECT e.id,e.canonical_name FROM entity_external_ref r JOIN entity e ON e.id=r.entity_id"
         " WHERE r.provider='javdb' AND r.external_kind='performer' AND r.external_id=?",
@@ -671,13 +801,80 @@ def _describe_card(connection, card: dict) -> dict:
                 " WHERE e.kind='performer' AND a.normalized_alias=? ORDER BY 1", (key, key)):
             if all(int(row[0]) != found["id"] for found in matched):
                 matched.append({"id": int(row[0]), "name": str(row[1])})
+    portrait = web_catalog.entity_ref(contract, "performer", held[0], held[1]) if held else None
     return {"id": card["id"], "names": card["names"], "record": card["record"],
-            "url": f"{javdb.BASE}actors/{card['id']}",
+            "url": _actor_page(card["id"]), "subscription": _subscription_state(subscription),
+            "avatar_url": card.get("avatar_url"), "portrait": portrait,
             "held_by": {"id": int(held[0]), "name": str(held[1])} if held else None,
             "matched": matched}
 
 
-def _follow_by_name(contract, body) -> dict:
+def _dmm_holders(connection, number: str, subscription) -> dict[int, str]:
+    holders = {int(row[0]): str(row[1]) for row in connection.execute(
+        "SELECT e.id,e.canonical_name FROM entity_external_ref r JOIN entity e ON e.id=r.entity_id"
+        " WHERE r.provider IN ('dmm','r18dev') AND r.external_kind='performer' AND r.external_id=?",
+        (number,))}
+    if subscription is not None and subscription["entity_id"] is not None:
+        owner = connection.execute("SELECT id,canonical_name FROM entity WHERE id=?",
+                                   (subscription["entity_id"],)).fetchone()
+        if owner is not None:
+            holders[int(owner[0])] = str(owner[1])
+    return holders
+
+
+def _describe_dmm_page(contract, connection, number: str, name: str, subscriptions, avatar: str | None) -> dict:
+    url = feeds.dmm_actress_url(number)
+    subscription = subscriptions.get(url)
+    holders = _dmm_holders(connection, number, subscription)
+    owner = portrait = None
+    if len(holders) == 1:
+        [(entity_id, canonical)] = holders.items()
+        owner = {"id": entity_id, "name": canonical}
+        portrait = web_catalog.entity_ref(contract, "performer", entity_id, canonical)
+    return {"id": number, "url": url, "names": [name], "held_by": owner, "portrait": portrait,
+            "avatar_url": avatar, "subscription": _subscription_state(subscription)}
+
+
+def _dmm_offered_ids(name: str, token) -> set[str]:
+    if not isinstance(token, str) or len(token) > 8192:
+        return set()
+    try:
+        query, numbers = _DMM_SELECTION.loads(token, max_age=_DMM_SELECTION_AGE)
+    except BadData:
+        return set()
+    return set(numbers) if query == name else set()
+
+
+def _selected_follow_ids(body, selected_only):
+    raw = body.get("ids")
+    if selected_only and (not isinstance(raw, list) or any(
+            not isinstance(value, str) or not ACTOR_ID.fullmatch(value) for value in raw)):
+        raise UserValueError("api.feeds.invalidActorId")
+    ids = list(dict.fromkeys(value for value in (raw if isinstance(raw, list) else [])
+                            if isinstance(value, str) and ACTOR_ID.fullmatch(value)))
+    dmm_ids = body.get("dmm_ids", []) if selected_only else []
+    if not isinstance(dmm_ids, list) or any(
+            not isinstance(number, str) or not re.fullmatch(r"[0-9]{1,10}", number) for number in dmm_ids):
+        raise UserValueError("errors.feeds.dmmActressIdDigits")
+    if not ids and not dmm_ids:
+        raise UserValueError("api.feeds.cardRequired")
+    return ids, dmm_ids
+
+
+def _selected_dmm_holders(connection, name, numbers, offered):
+    known = entities.resolve_entity(connection, "performer", name)
+    linked = set(feeds.dmm_actress_ids(connection, int(known["id"]))) if known is not None else set()
+    urls = {number: feeds.dmm_actress_url(number) for number in numbers}
+    subscriptions = _subscription_rows(connection, list(urls.values()))
+    holders = {}
+    for number, url in urls.items():
+        if number not in linked and number not in offered:
+            raise UserValueError("api.feeds.dmmPagesNotLinked")
+        holders.update(_dmm_holders(connection, number, subscriptions.get(url)))
+    return holders
+
+
+def _follow_by_name(contract, body, *, selected_only: bool = False) -> dict:
     """订阅源页签「添加 JAV 订阅」：勾选的演员卡登记到这位名下，再订上她的演员页（ADR-0083）。
 
     这位是谁按这个顺序定：卡上的 id 已经在账本里谁名下就是谁；都没主时按名字认账本里
@@ -687,11 +884,8 @@ def _follow_by_name(contract, body) -> dict:
     name = entities.canonicalize_entity_name("performer", str(body.get("name") or ""))
     if not name:
         raise UserValueError("api.feeds.nameEmpty")
-    raw = body.get("ids")
-    ids = [value for value in (raw if isinstance(raw, list) else [])
-           if isinstance(value, str) and ACTOR_ID.match(value)]
-    if not ids:
-        raise UserValueError("api.feeds.cardRequired")
+    ids, dmm_ids = _selected_follow_ids(body, selected_only)
+    offered = _dmm_offered_ids(name, body.get("dmm_selection")) if dmm_ids else set()
     with contract.database.write_transaction() as connection:
         holders: dict[int, str] = {}
         for actor_id in ids:
@@ -701,6 +895,8 @@ def _follow_by_name(contract, body) -> dict:
                 " AND r.external_kind='performer' AND r.external_id=?", (actor_id,)).fetchone()
             if held is not None:
                 holders[int(held[0])] = str(held[1])
+        if dmm_ids:
+            holders.update(_selected_dmm_holders(connection, name, dmm_ids, offered))
         if len(holders) > 1:
             raise UserValueError("api.feeds.cardsSpanPeople", {"names": "、".join(holders.values())})
         created = False
@@ -713,10 +909,24 @@ def _follow_by_name(contract, body) -> dict:
             else:
                 entity_id = create_followed_performer(connection, name)
                 canonical, created = name, True
+        if selected_only:
+            pages = [_actor_page(actor_id) for actor_id in ids] + [
+                feeds.dmm_actress_url(number) for number in dict.fromkeys(dmm_ids)]
+            for subscription in _subscription_rows(connection, pages).values():
+                if subscription["entity_id"] not in (None, entity_id):
+                    raise UserValueError("api.feeds.pageLinkedElsewhere")
         for actor_id in ids:
             performer_profile_followup.bind(connection, entity_id, "javdb", actor_id,
                                             {"source": FOLLOW_SOURCE})
-        sources = subscribe_performer(connection, entity_id, canonical)
+        if selected_only:
+            linked = set(feeds.dmm_actress_ids(connection, entity_id)) if dmm_ids else set()
+            for number in dict.fromkeys(dmm_ids):
+                if number not in linked:
+                    performer_profile_followup.bind(connection, entity_id, "dmm", number, {"source": FOLLOW_SOURCE})
+            feeds.set_manual_pages(connection, entity_id, True)
+            sources = feeds.follow_entity(connection, entity_id, pages)
+        else:
+            sources = subscribe_performer(connection, entity_id, canonical)
     fetch_new_sources(contract, sources)
     return {"ok": True, "entity_id": entity_id, "entity_name": canonical, "created": created,
             "sources": sources}

@@ -15,7 +15,7 @@ import { LIBRARY_FOLDER_HELP, POLICY_SUMMARY } from './react/settings/library-po
 import { ENTRY_LINKS_HELP, ENTRY_LINKS_HINT } from './configuration-copy';
 import { serverLabel } from './core/server-text';
 import { t } from './i18n';
-import { sectionId, sectionTitle } from './history/settings-route';
+import { configurationDescriptionKey, sectionId, sectionTitle } from './history/settings-route';
 import CREDENTIAL_REGISTRY from './react/follow-manage/credential-providers.json' with { type: 'json' };
 
 export const CLOUD_PROXY_HELP = t('settings:cloudProxy.help');
@@ -30,14 +30,14 @@ export interface IndexersShape { open: boolean[] }
 export interface JavBrowserShape { enabled: boolean; ready: boolean }
 /** 每个网盘账号一项：[数据代理走代理, API 代理走代理]，走代理时多出地址、端口与认证三行。 */
 export interface CloudProxyShape { configured: boolean; accounts: [boolean, boolean][]; unlinked: number }
-export interface DownloadsShape { cloud: boolean; has115: boolean; pikpak: boolean; pikpakRoots: boolean; pikpakLoggedIn: boolean; browserLogin: boolean }
+export interface DownloadsShape { cloud: boolean; has115: boolean; pikpak: boolean; pikpakRoots: boolean; pikpakLoggedIn: boolean; browserLogin: boolean; localDownload: boolean }
 export interface NetworkShape { port: boolean; addresses?: number; networkEditable?: boolean; lan?: boolean; proxyAddress: boolean; access: string; tunnelNamed: boolean; tunnelNamedMode: boolean; tunnelNote: boolean }
 /** 已登录的设备：行数，以及底栏有没有「撤销其他设备」。 */
 export interface DevicesShape { rows: number; manageable: boolean }
 export interface MaintenanceShape {
   releaseFacts: number; releaseNotes: number; autoUpdateHelp: boolean; startupNote: boolean; desktopNote: boolean;
-  storage: boolean; storageRows: number; storageNotes: number; reporting: boolean; reportingIdle: boolean; sharing: boolean;
-  sharingNotice: boolean; sharingIdle: boolean; facts: string[]; uninstall: boolean; uninstallHelp: boolean;
+  storage: boolean; storageRows: number; storageNotes: number; reporting: boolean; reportingIdle: boolean;
+  sharingIdle: boolean; facts: string[]; uninstall: boolean; uninstallHelp: boolean;
 }
 export interface ConfigurationShape {
   media: MediaShape; discovery: DiscoveryShape; credentials: CredentialsShape; indexers: IndexersShape;
@@ -88,8 +88,10 @@ const heading = (name: string, aside: string, mark: boolean) => {
   const label = `<p class="w-full px-3 text-body-2-medium text-text-secondary">${mark ? `<span class="inline-flex items-center gap-1.5">${icon()}${name}</span>` : name}</p>`;
   return aside ? `<div class="flex w-full flex-wrap items-center justify-between gap-2"><div class="min-w-40 flex-1">${label}</div><div class="flex min-w-0 max-w-full">${aside}</div></div>` : label;
 };
-const section = (name: string, content: string, actions = '', { aside = '', status = '', mark = false } = {}) =>
-  `<section aria-label="${name}" class="flex w-full flex-col gap-2 wrap-anywhere">${heading(name, aside, mark)}<div class="flex w-full flex-col rounded-2xl bg-background-secondary-default pl-3">${content}${actions ? footer(actions, status) : ''}</div></section>`;
+const section = (name: string, content: string, actions = '', { aside = '', status = '', mark = false } = {}) => {
+  const label = esc(name);
+  return `<section aria-label="${label}" class="flex w-full flex-col gap-2 wrap-anywhere">${heading(label, aside, mark)}<div class="flex w-full flex-col rounded-2xl bg-background-secondary-default pl-3">${content}${actions ? footer(actions, status) : ''}</div></section>`;
+};
 /** 同 BoardUI `SettingsRow`；`lead` 是行首图标的占位。 */
 const controlRow = (label: string, description: string, control: string, lead = '') => {
   const body = `<div class="flex min-w-0 flex-col"><p class="text-body-regular text-text-primary">${label}</p>${description ? `<p class="text-body-2-regular text-text-secondary">${description}</p>` : ''}</div>`;
@@ -101,7 +103,7 @@ const valueRow = (label: string, description = '', width = '4em') => controlRow(
 const help = (content: string) => `<p class="text-body-2-regular text-text-secondary">${content}</p>`;
 const fieldLabel = (label: string) => `<p class="text-body-medium text-text-primary">${label}</p>`;
 const inputField = (label: string, hint = '') => `<div class="flex w-full flex-col items-start gap-1"><span class="flex items-center gap-0.5 text-body-medium text-text-primary">${label}</span>${input()}${hint ? `<span class="pt-px text-caption-1-medium text-text-secondary">${hint}</span>` : ''}</div>`;
-const selectField = (label: string) => `<div class="flex flex-col gap-1">${fieldLabel(label)}${islandSelect(text('8em'))}</div>`;
+const selectField = (label: string, description = '') => `<div class="flex flex-col gap-1">${fieldLabel(label)}${islandSelect(text('8em'))}${description ? help(description) : ''}</div>`;
 const check = (label: string) => `<span class="flex items-center gap-2 text-body-regular text-text-primary">${block('16px', '16px')}${label}</span>`;
 const marked = (label: string) => `<span class="inline-flex items-center gap-1">${icon()}${label}</span>`;
 /** 折叠行（`Disclosure` 的 summary）：箭头与名字；展开时箭头转下。 */
@@ -112,7 +114,7 @@ const facts = (terms: string[]) => `<dl class="ui-settings-facts flex flex-col">
 
 /* ---------- 来源凭据：站点清单是静态登记 ---------- */
 
-interface CredentialProvider { provider: string; label: string; requirement: string; fields?: string[]; why?: string; where?: string; howto?: string }
+interface CredentialProvider { provider: string; label: string; requirement: string; fields?: string[]; why?: string; where?: string; howto?: string; browser_login?: boolean }
 /** 与 `/api/follow/credentials` 的静态部分一致，由 `tests/test_follow_web.py` 对照接口核对。 */
 export const CREDENTIAL_PROVIDERS: readonly CredentialProvider[] = CREDENTIAL_REGISTRY;
 
@@ -142,7 +144,9 @@ function credentialRow(row: CredentialSkeletonRow): string {
     return `<div class="flex flex-wrap items-center gap-3 border-b border-separator-border px-6 py-5 last:border-b-0 max-sm:px-4">${head}${row.requirement === 'blocked' && row.why ? help(esc(guide(row, 'why'))) : ''}</div>`;
   }
   const form = row.open ? '<div class="flex flex-col gap-2 pt-3"><div class="flex flex-col gap-3">'
-    + help(`${esc(guide(row, 'why'))}${row.where ? ` ${t('follow:sourceCredentials.getCredentials')}` : ''}`) + (row.howto ? help(esc(guide(row, 'howto'))) : '')
+    + help(`${esc(guide(row, 'why'))}${row.where ? ` ${t('follow:sourceCredentials.getCredentials')}` : ''}`)
+    + (row.browser_login ? `<div class="self-start">${button(t('manage:sourceSettings.browserSignIn'), 'secondary')}</div>` : '')
+    + (row.howto ? help(esc(guide(row, 'howto'))) : '')
     + `<div class="flex w-full flex-col gap-3">${fields.map(name => inputField(esc(name))).join('')}</div>`
     + `<div class="flex flex-wrap items-center gap-2">${button(t('settings:shared.saveSettings'))}</div>${summary(t('follow:sourceCredentials.credentialsFile'))}</div></div>` : '';
   return `<div class="flex flex-col gap-2 border-b border-separator-border px-6 py-5 last:border-b-0 max-sm:px-4">${head}<div>${summary(row.done ? t('follow:sourceCredentials.editCredentials') : t('follow:sourceCredentials.enterCredentials'), row.open)}${form}</div></div>`;
@@ -234,7 +238,8 @@ export function discoverySkeleton(): string {
   const webhook = cloud && on(shape?.webhook);
   const prefixRow = `<div class="flex items-start gap-2"><span class="min-w-0 flex-1">${input()}</span>${islandSelect(text('4em'), { prefix: t('settings:pushDiscovery.mapsTo') })}${islandButton({ glyph: 'trash', variant: 'secondary', attrs: wait })}</div>`;
   return section(t('settings:fileDiscovery.title'), stack(`<div class="flex flex-wrap items-center gap-2"><span class="text-body-regular text-text-secondary">${t('settings:pushDiscovery.localMonitoring')}</span>${chip()}</div>`)
-    + row(t('settings:fileDiscovery.autoImport'), enabled ? text('10em') : '') + row(t('settings:fileDiscovery.monitorLocal'), enabled && on(shape?.watchLocal) ? text('12em') : '')
+    + row(t('settings:fileDiscovery.autoImport'), t('settings:fileDiscovery.autoImportHelp') + (enabled ? `<br>${text('10em')}` : ''))
+    + row(t('settings:fileDiscovery.monitorLocal'), t('settings:fileDiscovery.monitorLocalHelp') + (enabled && on(shape?.watchLocal) ? `<br>${text('12em')}` : ''))
     + row(t('settings:fileDiscovery.cloudNotify'), t('settings:fileDiscovery.cloudNotifyHelp')) +(cloud ? controlRow(t('settings:fileDiscovery.webhookConfig'), text('20em'), '') : '')
     + (webhook ? stack(summary(t('settings:fileDiscovery.viewConfig')), true) : '')
     + (cloud ? stack(`<div class="flex flex-col gap-3">${fieldLabel(t('settings:pushDiscovery.cloudPrefixes'))}<div class="flex flex-col gap-3">${prefixRow.repeat(count(shape?.prefixes, 20))}</div><div>${button(t('settings:pushDiscovery.addPrefix'), 'secondary')}</div></div>`, true) : ''),
@@ -242,50 +247,71 @@ export function discoverySkeleton(): string {
 }
 
 /** 媒体库与目录：图例、每个媒体库的标题行、文件夹行与它自己的添加键，最下面添加媒体库与底部动作。 */
+function configurationGroupsSkeleton(groups: [string, string][]) {
+  return `<div class="flex min-w-0 flex-col gap-5">${configurationContentsSkeleton(groups.map(([label]) => label))}
+    <div class="flex min-w-0 flex-col gap-8">${groups.map(([, content]) => content).join('')}</div>
+  </div>`;
+}
+
 const media = () => {
   const shape = mediaSkeletonShape();
-  return section(t('settings:libraryFolders.title'), stack(`${legend}<div class="flex flex-col gap-4">${shape.folders.map(folders => libraryBlock(folders, shape.folders.length)).join('')}</div>
+  const folders = section(t('settings:libraryFolders.title'), stack(`${legend}<div class="flex flex-col gap-4">${shape.folders.map(folders => libraryBlock(folders, shape.folders.length)).join('')}</div>
   <div class="self-start">${button(t('settings:mediaLibraries.addLibrary'), 'secondary')}</div>
   <p class="text-body-2-regular text-text-secondary">${LIBRARY_FOLDER_HELP}</p>
   ${shape.cloud ? cloudHelp : ''}<span class="text-body-medium text-text-primary">${text('15em')}</span>`),
-  button(t('settings:shared.saveSettings')), { status: t('settings:libraryFolders.restartNotice') })
-  + (shape.cloud ? cloudProxySkeleton() : '')
-  + discoverySkeleton()
-  + section(t('settings:codePatterns.title'), stack(`${text('90%')}${text('60%')}<span class="skeleton ui-configuration-skeleton-input" style="width:100%;height:88px"></span>`), button(t('settings:shared.saveSettings')))
-  + section(t('settings:videoPreviews.title'), row(t('settings:videoPreviews.generate'), t('settings:videoPreviews.generateHelp'))
+  button(t('settings:shared.saveSettings')), { status: t('settings:libraryFolders.restartNotice') });
+  const patterns = section(t('settings:codePatterns.title'), stack(`${text('90%')}${text('60%')}<span class="skeleton ui-configuration-skeleton-input" style="width:100%;height:88px"></span>`), button(t('settings:shared.saveSettings')));
+  const previews = section(t('settings:videoPreviews.title'), row(t('settings:videoPreviews.generate'), t('settings:videoPreviews.generateHelp'))
     + row(t('settings:videoPreviews.timeline'), t('settings:videoPreviews.timelineHelp'), 'ui-configuration-skeleton-select')
     + row(t('settings:videoPreviews.decoder'), t('settings:videoPreviews.decoderHelp'), 'ui-configuration-skeleton-select'));
+  const transcode = section(t('settings:transcoding.title'), row(t('settings:transcoding.mode'), t('settings:transcoding.modeHelp'), 'ui-configuration-skeleton-select')
+    + row(t('settings:transcoding.quality'), t('settings:transcoding.qualityHelp'), 'ui-configuration-skeleton-select'));
+  const groups: [string, string][] = [[t('settings:libraryFolders.title'), folders]];
+  if (shape.cloud) groups.push([t('settings:cloudProxy.title'), cloudProxySkeleton()]);
+  groups.push([t('settings:fileDiscovery.title'), discoverySkeleton()], [t('settings:codePatterns.title'), patterns],
+    [t('settings:videoPreviews.title'), previews], [t('settings:transcoding.title'), transcode], [t('settings:taskSpeed.title'), '']);
+  return configurationGroupsSkeleton(groups);
 };
 
 /* ---------- 来源与订阅 ---------- */
 
-const subscriptions = () => `<div>${button(t('settings:sourceSettings.sourcesLink'), 'secondary')}</div>`
-  + credentialsSkeleton()
-  + section(t('settings:followFetch.title'), controlRow(t('settings:followFetch.autoCheck'), '', `<span class="flex items-center gap-2"><span class="skeleton ui-configuration-skeleton-toggle"></span><span class="skeleton ui-configuration-skeleton-input" style="width:96px"></span></span>`)
+const subscriptions = () => configurationGroupsSkeleton([
+  [t('follow:sourceCredentials.sectionTitle'), `<div class="flex min-w-0 flex-col gap-6"><div>${button(t('settings:sourceSettings.sourcesLink'), 'secondary')}</div>${credentialsSkeleton()}</div>`],
+  [t('settings:followFetch.title'), section(t('settings:followFetch.title'), controlRow(t('settings:followFetch.autoCheck'), '', `<span class="flex items-center gap-2"><span class="skeleton ui-configuration-skeleton-toggle"></span><span class="skeleton ui-configuration-skeleton-input" style="width:96px"></span></span>`)
     + valueRow(t('settings:followFetch.feedSchedule')) + row(t('settings:followFetch.initialRange'), t('settings:followFetch.initialRangeHelp'), 'ui-configuration-skeleton-select')
-    + valueRow(t('settings:followFetch.avatarRefresh'), t('settings:followFetch.avatarRefreshHelp')) + valueRow(t('settings:followFetch.faviconRefresh'), t('settings:followFetch.faviconRefreshHelp')))
-  + section(t('settings:scrapingBrowser.title'), row(t('settings:scrapingBrowser.mode'), t('settings:scrapingBrowser.modeHelp'), 'ui-configuration-skeleton-select'))
-  + section(t('settings:wantSearch.title'), row(t('settings:wantSearch.interval'), t('settings:wantSearch.intervalHelp'), 'ui-configuration-skeleton-select')
-    + row(t('settings:wantSearch.giveUp'), t('settings:wantSearch.giveUpHelp'), 'ui-configuration-skeleton-select'))
-  + section(t('settings:coverFallback.title'), row(t('settings:coverFallback.javdb'), t('settings:coverFallback.javdbHelp')))
-  + indexersSkeleton()
-  + section(t('settings:entryLinks.title'), stack(`<p class="text-body-2-regular text-text-secondary">${ENTRY_LINKS_HELP}</p>${inputField(marked(t('settings:entryLinks.siteAddress', { site: 'JavDB' })), ENTRY_LINKS_HINT)}${inputField(marked(t('settings:entryLinks.siteAddress', { site: 'MISSAV' })), ENTRY_LINKS_HINT)}`), button(t('settings:shared.saveSettings')));
+    + valueRow(t('settings:followFetch.avatarRefresh'), t('settings:followFetch.avatarRefreshHelp')) + valueRow(t('settings:followFetch.faviconRefresh'), t('settings:followFetch.faviconRefreshHelp')))],
+  [t('settings:scrapingBrowser.title'), section(t('settings:scrapingBrowser.title'), row(t('settings:scrapingBrowser.mode'), t('settings:scrapingBrowser.modeHelp'), 'ui-configuration-skeleton-select'))],
+  [t('settings:coverFallback.title'), section(t('settings:coverFallback.title'), row(t('settings:coverFallback.javdb'), t('settings:coverFallback.javdbHelp')))],
+  [t('settings:entryLinks.title'), section(t('settings:entryLinks.title'), stack(`<p class="text-body-2-regular text-text-secondary">${ENTRY_LINKS_HELP}</p>${inputField(marked(t('settings:entryLinks.siteAddress', { site: 'JavDB' })), ENTRY_LINKS_HINT)}${inputField(marked(t('settings:entryLinks.siteAddress', { site: 'MISSAV' })), ENTRY_LINKS_HINT)}`), button(t('settings:shared.saveSettings')))],
+  [t('settings:indexers.title'), indexersSkeleton()],
+  [t('settings:wantSearch.title'), section(t('settings:wantSearch.title'), row(t('settings:wantSearch.interval'), t('settings:wantSearch.intervalHelp'), 'ui-configuration-skeleton-select')
+    + row(t('settings:wantSearch.giveUp'), t('settings:wantSearch.giveUpHelp'), 'ui-configuration-skeleton-select'))],
+]);
 
 /* ---------- 下载渠道：云下载与 PikPak 两块随媒体库里的网盘出现 ---------- */
 
 const downloads = () => {
   const shape = rememberedShape('downloads');
   const pikpak = on(shape?.pikpak);
-  const roots = on(shape?.pikpakRoots) ? selectField(marked(t('settings:cloudDownload.pikpakRootDirectory')))
+  const roots = on(shape?.pikpakRoots) ? selectField(marked(t('settings:cloudDownload.pikpakRootDirectory')), t('settings:cloudDownload.pikpakRootDirectoryHelp'))
     : `<div class="flex flex-col gap-1">${fieldLabel(marked(t('settings:cloudDownload.pikpakRootDirectory')))}${help(t('settings:cloudDownload.addPikpakMount'))}</div>`;
-  const cloud = on(shape?.cloud) ? section(t('settings:cloudDownload.title'), stack(inputField(t('settings:cloudDownload.cloudDriveUrl')) + inputField(t('settings:cloudDownload.apiToken'), t('settings:cloudDownload.apiTokenHelp'))
+  const cloud = on(shape?.cloud) ? section(t('settings:cloudDownload.title'), stack(inputField(t('settings:cloudDownload.cloudDriveUrl'), t('settings:cloudDownload.cloudDriveUrlHelp')) + inputField(t('settings:cloudDownload.apiToken'), t('settings:cloudDownload.apiTokenHelp'))
     + (on(shape?.has115) ? inputField(marked(t('settings:cloudDownload.target115')), t('settings:cloudDownload.target115Help')) : '')
     + (pikpak ? inputField(marked(t('settings:cloudDownload.targetPikpak')), t('settings:cloudDownload.targetPikpakHelp')) + roots : '')
     + inputField(t('settings:cloudDownload.maxWait'), text('14em'))), button(t('settings:cloudDownload.testConnection'), 'secondary') + button(t('settings:shared.saveSettings'))) : '';
   const loggedIn = on(shape?.pikpakLoggedIn);
   const account = pikpak ? section(t('settings:pikpakAccount.title'), loggedIn ? facts([t('settings:shared.account'), text('4em')]) : stack(inputField(t('settings:shared.account')) + inputField(t('settings:shared.password')) + check(t('settings:pikpakAccount.rememberPassword'))),
     loggedIn ? button(t('settings:shared.signOut'), 'secondary') : (on(shape?.browserLogin) ? button(t('settings:pikpakAccount.browserSignIn'), 'secondary') : '') + button(t('settings:shared.signIn')), { aside: chip(), mark: true }) : '';
-  return cloud + account + javBrowserSkeleton();
+  const local = on(shape?.localDownload) ? section(t('settings:localDownload.title'), stack(
+    help(t('settings:localDownload.help'))
+    + inputField(t('settings:localDownload.address')) + inputField(t('settings:localDownload.username')) + inputField(t('settings:localDownload.password'))
+    + inputField(t('settings:localDownload.savePath')) + selectField(marked(t('settings:localDownload.mediaRoot')))),
+  button(t('settings:cloudDownload.testConnection'), 'secondary') + button(t('settings:shared.saveSettings'))) : '';
+  const groups: [string, string][] = [];
+  if (cloud) groups.push([t('settings:cloudDownload.title'), cloud]);
+  if (account) groups.push([t('settings:pikpakAccount.title'), account]);
+  groups.push([t('settings:localDownload.title'), local], [t('settings:javBrowser.title'), javBrowserSkeleton()]);
+  return configurationGroupsSkeleton(groups);
 };
 
 /* ---------- 网络与访问 ---------- */
@@ -336,15 +362,20 @@ const network = () => {
     : help(TUNNEL_HELP.quick)) + (on(shape?.tunnelNote) ? block('100%', '64px') : '');
   const addresses = count(shape?.addresses, 3);
   const addressFields = Array.from({ length: addresses }, (_, i) => `<div class="flex min-w-0 flex-wrap items-end gap-2"><div class="min-w-0 flex-1">${inputField([t('settings:accessAddress.localUrl'), t('settings:accessAddress.phoneUrl'), t('settings:accessAddress.alternateIp')][i]!)}</div>${button(t('settings:accessAddress.copyUrl'), 'secondary')}</div>`).join('');
-  return (addresses || on(shape?.port) ? section(t('settings:accessUrls.title'), stack(addressFields + (addresses ? block('100%', '40px') : '')
+  const accessUrls = addresses || on(shape?.port) ? section(t('settings:accessUrls.title'), stack(addressFields + (addresses ? block('100%', '40px') : '')
       + (on(shape?.networkEditable) ? `<div class="flex flex-col gap-1.5">${fieldLabel(t('settings:accessAddress.whoCanConnect'))}${block('min(100%, 20em)', '36px')}</div>` + (on(shape?.lan) ? inputField(t('settings:accessUrls.lanUrl')) : '') : '')
       + (on(shape?.port) ? inputField(t('settings:accessUrls.port')) : '')), on(shape?.port) ? button(t('settings:shared.saveSettings')) : '',
-      on(shape?.port) ? { status: t('settings:accessUrls.restartNotice') } : {}) : '')
-    + section(t('settings:accessPassword.title'), stack(accessBody(mode)), mode === 'locked' ? '' : button(t('settings:shared.saveSettings')))
-    + (mode === 'password' || mode === 'legacy' ? devicesSkeleton() : '')
-    + section(t('settings:remoteAccess.title'), stack((named ? block('10.5em', '36px') : '') + tunnel),
-      button(t('settings:remoteAccess.start'), named ? 'secondary' : 'primary') + (named ? button(t('settings:shared.saveSettings')) : ''), { aside: chip() })
-    + section(t('settings:peachProxy.title'), row(t('settings:peachProxy.mode'), t('settings:peachProxy.modeHelp'), 'ui-configuration-skeleton-select') + (on(shape?.proxyAddress) ? stack(inputField(t('settings:peachProxy.url')), true) : ''), button(t('settings:shared.saveSettings')));
+      on(shape?.port) ? { status: t('settings:accessUrls.restartNotice') } : {}) : '';
+  const access = section(t('settings:accessPassword.title'), stack(accessBody(mode)), mode === 'locked' ? '' : button(t('settings:shared.saveSettings')));
+  const devices = mode === 'password' || mode === 'legacy' ? devicesSkeleton() : '';
+  const remote = section(t('settings:remoteAccess.title'), stack((named ? block('10.5em', '36px') : '') + tunnel),
+      button(t('settings:remoteAccess.start'), named ? 'secondary' : 'primary') + (named ? button(t('settings:shared.saveSettings')) : ''), { aside: chip() });
+  const proxy = section(t('settings:peachProxy.title'), row(t('settings:peachProxy.mode'), t('settings:peachProxy.modeHelp'), 'ui-configuration-skeleton-select') + (on(shape?.proxyAddress) ? stack(inputField(t('settings:peachProxy.url')), true) : ''), button(t('settings:shared.saveSettings')));
+  const groups: [string, string][] = [];
+  if (accessUrls) groups.push([t('settings:accessUrls.title'), accessUrls]);
+  groups.push([t('settings:accessPassword.title'), `<div class="flex min-w-0 flex-col gap-6">${access}${devices}</div>`],
+    [t('settings:certificateTrust.title'), ''], [t('settings:remoteAccess.title'), remote], [t('settings:peachProxy.title'), proxy]);
+  return configurationGroupsSkeleton(groups);
 };
 
 /* ---------- 应用与维护 ---------- */
@@ -360,18 +391,18 @@ const maintenance = () => {
   const storageNotes = count(shape?.storageNotes, 3);
   const runtime = list(shape?.facts, 12, entry => esc(String(entry)));
   const idle = `<span class="self-start">${chip('6em')}</span>`;
-  /* 数据上传与卸载两块服务端总会给；没有记录时也画上，只是不画随状态出现的提示。 */
+  /* 无配置页读数时先画常见分区。 */
   const given = (value: unknown) => shape ? on(value) : true;
   const storage = shape?.storage !== false;
   const reporting = given(shape?.reporting) ? row(t('settings:dataSharing.reportErrors'), t('settings:dataSharing.reportErrorsHelp')) + (on(shape?.reportingIdle) ? stack(idle, true) : '') : '';
-  const sharing = given(shape?.sharing) ? `<div class="border-t border-separator-border">${row(t('settings:librarySharing.uploadDetails'), on(shape?.sharingNotice) ? text('12em') : '')}${on(shape?.sharingIdle) ? stack(idle, true) : ''}${footer(button(t('settings:librarySharing.preview'), 'secondary'))}</div>` : '';
+  const sharing = row(t('settings:communitySharing.enable'), t('settings:communitySharing.description'))
+    + (on(shape?.sharingIdle) ? stack(idle, true) : '')
+    + footer(button(t('settings:communitySharing.preview'), 'secondary'), chip('5em'));
   const updates = section(t('settings:releaseUpdates.check'), facts(releaseFacts) + (releaseNotes ? stack(help(text('50%')).repeat(releaseNotes), true) : ''),
     button(t('settings:releaseUpdates.check')), { aside: chip('4em'), status: text('5em') })
-    + section(t('settings:autoUpdate.title'), row(t('settings:autoUpdate.autoCheck')) + row(t('settings:autoUpdate.autoDownload'), t('settings:autoUpdate.autoDownloadHelp')) +row(t('settings:autoUpdate.frequency'), on(shape?.autoUpdateHelp) ? text('12em') : '', 'ui-configuration-skeleton-select'), button(t('settings:shared.saveSettings')));
-  const runtimeCards = section(t('settings:startup.title'), row(t('settings:startup.launchAtStartup')) + row(t('settings:startup.trayOnly'), t('settings:startup.trayOnlyHelp')) +row(t('settings:startup.desktopShortcut'), on(shape?.desktopNote) ? text('12em') : '')
+    + section(t('settings:autoUpdate.title'), row(t('settings:autoUpdate.autoCheck'), t('settings:autoUpdate.autoCheckHelp')) + row(t('settings:autoUpdate.autoDownload'), t('settings:autoUpdate.autoDownloadHelp')) +row(t('settings:autoUpdate.frequency'), on(shape?.autoUpdateHelp) ? text('12em') : '', 'ui-configuration-skeleton-select'), button(t('settings:shared.saveSettings')));
+  const runtimeCards = section(t('settings:startup.title'), row(t('settings:startup.launchAtStartup'), t('settings:startup.launchAtStartupHelp')) + row(t('settings:startup.trayOnly'), t('settings:startup.trayOnlyHelp')) +row(t('settings:startup.desktopShortcut'), on(shape?.desktopNote) ? text('12em') : '')
       + (on(shape?.startupNote) ? stack(help(text('60%')), true) : ''), button(t('settings:shared.saveSettings')))
-    + section(t('settings:transcoding.title'), row(t('settings:transcoding.mode'), t('settings:transcoding.modeHelp'), 'ui-configuration-skeleton-select')
-      + row(t('settings:transcoding.quality'), t('settings:transcoding.qualityHelp'), 'ui-configuration-skeleton-select'))
     + (storage ? section(t('settings:diskUsage.title'), facts([t('settings:shared.dataDirectory'), t('settings:diskUsage.disk')])
       + (storageRows ? Array.from({ length: storageRows }, () => controlRow(text('6em'), '', text('4em'))).join('') : stack(help(t('settings:diskUsage.emptyHelp')), true))
       + (storageNotes ? stack(help(text('80%')).repeat(storageNotes), true) : ''),
@@ -385,7 +416,9 @@ const maintenance = () => {
     [t('settings:maintenanceGroups.updates'), updates],
     [t('settings:maintenanceGroups.runtime'), runtimeCards],
     ...(storage ? [[t('settings:maintenanceGroups.backups'), backupCards] as [string, string]] : []),
-    [t('settings:maintenanceGroups.privacy'), reporting || sharing ? section(t('settings:dataSharing.title'), reporting + sharing) : ''],
+    [t('settings:maintenanceGroups.privacy'),
+      (reporting ? section(t('settings:dataSharing.diagnosticsTitle'), reporting) : '')
+      + section(t('settings:dataSharing.communityTitle'), sharing)],
   ];
   const uninstall = given(shape?.uninstall) ? section(t('settings:uninstall.title'), (on(shape?.uninstallHelp) ? stack(help(t('settings:uninstall.help'))) : '')
       + row(t('settings:uninstall.full'), t('settings:uninstall.fullHelp')) + stack(summary(t('settings:shared.dataDirectory')), true), button(t('settings:uninstall.title')), { status: text('16em') }) : '';
@@ -399,11 +432,37 @@ const maintenance = () => {
   </div>`;
 };
 
+export function aiConnectionsSkeleton(): string {
+  const api = ['Claude', 'OpenAI', 'DeepSeek'].map(label => section(label,
+    (label === 'OpenAI' ? `<div class="mt-3">${block('12em', '36px')}</div>` : '') +
+    stack(help(text('12em')) + selectField(t('settings:aiLibrary.endpointMode'))
+      + inputField('API Key') + selectField(t('settings:aiLibrary.model'))),
+    button(t('settings:aiLibrary.verify'), 'secondary', 'small') + button(t('settings:shared.saveSettings'), 'primary', 'small'),
+    { mark: true }));
+  const prompts = t('settings:aiLibrary.prompts.title');
+  const usage = t('settings:aiLibrary.usage.title');
+  return `<div class="@container flex min-w-0 flex-col gap-5">
+    <div class="flex min-w-0 flex-col gap-5">
+      ${configurationContentsSkeleton([t('settings:aiLibrary.servicesTitle'), prompts, usage])}
+      <div class="flex min-w-0 flex-col gap-8">
+        <div class="flex min-w-0 flex-col gap-5">${api.join('')}</div>
+        ${section(prompts,
+          stack(selectField(t('settings:aiLibrary.prompts.scope')))
+          + stack(selectField(t('catalog:aiLibrary.provider')) + selectField(t('settings:aiLibrary.model')) + selectField(t('settings:aiLibrary.effort')))
+          + stack(help(text('16em')) + block('100%', '168px')),
+          button(t('settings:shared.saveSettings'), 'primary', 'small'))}
+        ${section(usage, stack(help(text('16em'))))}
+      </div>
+    </div>
+  </div>`;
+}
+
 /** 各分区复用正式表单的 Section、Stack 与 SettingsRow 几何。 */
 export function configurationContentSkeleton(chosen: string): string {
   switch (sectionId(chosen)) {
     case 'diagnostics': return diagnosticsSkeleton();
     case 'subscriptions': return subscriptions();
+    case 'ai': return aiConnectionsSkeleton();
     case 'downloads': return downloads();
     case 'network': return network();
     case 'maintenance': return maintenance();
@@ -414,6 +473,9 @@ export function configurationContentSkeleton(chosen: string): string {
 export function configurationSkeleton(chosen = 'library'): string {
   const titles = normalizeNavigationOrder('configuration', appSettingsStore().value.navigationOrders.configuration)
     .map(key => NAVIGATION_GROUPS.configuration.items.find(([id]) => id === key)![1]);
-  const nav = `<div class="ui-board-local-nav" data-section-nav data-section-items>${titles.map(title => `<button type="button" tabindex="-1" aria-selected="${title === sectionTitle(chosen)}">${title}</button>`).join('')}</div>`;
-  return `<div class="peach-react"><div class="ui-configpage">${nav}<div class="flex min-w-0 flex-col gap-6">${configurationContentSkeleton(chosen)}</div></div></div>`;
+  const title = sectionTitle(chosen);
+  const nav = `<div class="ui-board-local-nav" data-section-nav data-section-items>${titles.map(label => `<button type="button" tabindex="-1" aria-selected="${label === title}">${esc(label)}</button>`).join('')}</div>`;
+  const description = t('settings:' + configurationDescriptionKey(sectionId(chosen) || 'library'));
+  const heading = `<header class="flex min-w-0 flex-col gap-1"><h2 class="text-title-2-medium text-text-primary">${esc(title)}</h2>${help(esc(description))}</header>`;
+  return `<div class="peach-react"><div class="ui-configpage">${nav}<div class="flex min-w-0 flex-col gap-6">${heading}${configurationContentSkeleton(chosen)}</div></div></div>`;
 }

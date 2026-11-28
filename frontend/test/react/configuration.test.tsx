@@ -21,17 +21,21 @@ const downloads: DownloadSettingsState = {
   available: true, config: { clouddrive_address: '', targets: {}, pikpak_root: '', wait_hours: 168 },
   token_set: false, pikpak: { logged_in: false, username: '', remember: false, method: 'password' },
   pikpak_browser: { available: true, state: 'idle', message: '' }, pikpak_roots: [],
+  local_roots: [],
+  qbittorrent: { address: '', save_path: '', media_root: '', username: '', password_set: false },
   providers: [{ key: '115', label: '115' }, { key: 'pikpak', label: 'PikPak' }], max_wait_hours: 1440,
 };
-const full = () => data({ downloads, startup: {
+const startup = {
   available: true, enabled: false, silent: true, desktop: false, desktop_message: '', message: '',
-}, peach_proxy: { mode: 'environment', proxy_saved: false, needs_selection: false },
+};
+const full = () => data({ downloads, startup, peach_proxy: { mode: 'environment', proxy_saved: false, needs_selection: false },
   entry_links: { sites: [{ key: 'javdb', label: 'JavDB', host: '', default_host: 'javdb.com' }] },
 });
-const names = ['媒体库与入库', '来源与订阅', '下载渠道', '网络与访问', '应用与维护', '系统诊断'];
+const names = ['媒体库与入库', '来源与订阅', 'AI 接入', '下载渠道', '网络与访问', '应用与维护', '系统诊断'];
 function serve(config: ConfigurationData, credentials: CredentialData = { root: '', providers: [] }) {
   const fetcher = vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => {
-    if (url === CONFIGURATION_URL) return config;
+    if (url.split('?')[0] === CONFIGURATION_URL) return config;
+    if (url === '/api/configuration/startup') return startup;
     if (url === '/api/configuration/seed-sharing') return { enabled: false, available: false, schema: 1, last_attempt: {} };
     if (url === '/api/configuration/indexers') return { indexers: [], max_indexers: 4 };
     if (url === '/api/configuration/jav-browser') return { enabled: false, provider: '115', available: true,
@@ -57,6 +61,21 @@ const press = (target: Element, key: string) => act(async () => {
   target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
 });
 
+it('打开维护分区才读取开机自启状态', async () => {
+  const fetcher = serve({ ...full(), startup: undefined });
+  await prefetchConfiguration(new AbortController().signal);
+  const host = await mount(<QueryClientProvider client={queryClient}>
+    <ConfigurationPage receipt={vi.fn()} reopenTutorial={vi.fn()} />
+  </QueryClientProvider>);
+  const startupReads = () => fetcher.mock.calls.filter(([url]) => url === '/api/configuration/startup').length;
+  expect(fetcher.mock.calls[0]?.[0]).toBe(`${CONFIGURATION_URL}?include_startup=0`);
+  expect(startupReads()).toBe(0);
+  await click(tabs(host).find(tab => tab.textContent === '应用与维护')!);
+  await settle();
+  expect(startupReads()).toBe(1);
+  expect(section(host, '开机自启')?.querySelector('[role="switch"]')).toBeInstanceOf(HTMLElement);
+});
+
 it('Peach 配置按用途分类，媒体库与入库默认打开，各分类关联独立面板', async () => {
   const host = await open();
   expect(tabs(host).map(tab => tab.textContent)).toEqual(names);
@@ -67,11 +86,14 @@ it('Peach 配置按用途分类，媒体库与入库默认打开，各分类关�
     expect(panel.getAttribute('aria-labelledby')).toBe(tab.id);
   }
   expect(host.querySelector('#configPort')?.closest('[role="tabpanel"]')?.getAttribute('aria-labelledby'))
-    .toBe(tabs(host)[3]!.id);
+    .toBe(tabs(host).find(tab => tab.textContent === '网络与访问')!.id);
   expect(host.querySelector('#entry-link-javdb')?.closest('[role="tabpanel"]')?.getAttribute('aria-labelledby'))
     .toBe(tabs(host)[1]!.id);
 });
-it('方向键首尾循环，Home 与 End 选择两端并同步焦点', async () => {
+it('桌面分区的方向键首尾循环，Home 与 End 选择两端并同步焦点', async () => {
+  vi.stubGlobal('matchMedia', (media: string) => ({
+    media, matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  }));
   const host = await open();
   chosen(host).focus();
   await press(chosen(host), 'ArrowUp');
@@ -83,7 +105,7 @@ it('方向键首尾循环，Home 与 End 选择两端并同步焦点', async () 
   expect(chosen(host).textContent).toBe('系统诊断');
   await press(chosen(host), 'Home');
   expect(chosen(host).textContent).toBe('媒体库与入库');
-  expect(tabs(host).map(tab => tab.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
+  expect(tabs(host).map(tab => tab.tabIndex)).toEqual([0, -1, -1, -1, -1, -1, -1]);
 });
 it('分区深链打开来源与订阅，切换分类保留未保存字段', async () => {
   const host = await open(full(), '来源与订阅');
@@ -106,7 +128,7 @@ it.each([false, true])('来源凭据依据数据库只读状态 %s 控制写入'
 });
 it('未知分区回到媒体库，未提供下载渠道时省略对应分类', async () => {
   const host = await open(data({ editable: false }), '不存在');
-  expect(tabs(host).map(tab => tab.textContent)).toEqual(['媒体库与入库', '来源与订阅', '应用与维护', '系统诊断']);
+  expect(tabs(host).map(tab => tab.textContent)).toEqual(['媒体库与入库', '来源与订阅', 'AI 接入', '应用与维护', '系统诊断']);
   expect(chosen(host).textContent).toBe('媒体库与入库');
 });
 it('配置读取失败显示服务端原因', async () => {
@@ -149,19 +171,19 @@ it('只读媒体配置可刷新挂载状态，更新共用配置快照', async (
   expect(queryClient.getQueryData<ConfigurationData>(CONFIGURATION_KEY)?.revision).toBe('rev-2');
 });
 
-it('下载设置未取得时保留分区与健康表单，并可重试恢复', async () => {
+it('无法读取下载设置时保留分区与健康表单，并可重试恢复', async () => {
   const partial = full();
   delete partial.downloads;
-  partial.section_errors = { downloads: { title: '下载设置未取得', message: '请重新读取。', error_id: 'test-error-id' } };
+  partial.section_errors = { downloads: { title: '无法读取下载设置', message: '请重新读取。', error_id: 'test-error-id' } };
   const host = await open(partial, '下载渠道');
   expect(tabs(host).map(tab => tab.textContent)).toEqual(names);
   expect(chosen(host).textContent).toBe('下载渠道');
-  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('下载设置未取得');
+  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('无法读取下载设置');
   expect(host.querySelector('[data-folder-row]')).not.toBeNull();
   serve(full());
   await click(buttonNamed('重新读取', host.querySelector('.ui-board-group-active')!));
   await settle();
-  expect(host.textContent).not.toContain('下载设置未取得');
+  expect(host.textContent).not.toContain('无法读取下载设置');
   expect(section(host, '云下载')).not.toBeNull();
 });
 
@@ -171,26 +193,26 @@ it('局部配置错误出现在对应分区且不替换其他未保存输入', a
   await type(input, 'D:\\Edited');
   await act(async () => {
     queryClient.setQueryData(CONFIGURATION_KEY, { ...full(), section_errors: {
-      storage: { title: '存储空间未取得', message: '请重新读取。', error_id: 'storage-error' },
-      tunnel: { title: '公网入口未取得', message: '请重新读取。', error_id: 'tunnel-error' },
+      storage: { title: '无法读取存储空间', message: '请重新读取。', error_id: 'storage-error' },
+      tunnel: { title: '无法读取公网入口', message: '请重新读取。', error_id: 'tunnel-error' },
     } });
   });
   expect(input.value).toBe('D:\\Edited');
-  expect(host.querySelector('.ui-board-group-active')?.textContent).not.toContain('存储空间未取得');
+  expect(host.querySelector('.ui-board-group-active')?.textContent).not.toContain('无法读取存储空间');
   await click(tabs(host).find(tab => tab.textContent === '应用与维护'));
-  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('存储空间未取得');
+  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('无法读取存储空间');
   await click(tabs(host).find(tab => tab.textContent === '网络与访问'));
-  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('公网入口未取得');
+  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('无法读取公网入口');
   expect(host.querySelector('#peachProxy')).not.toBeNull();
 });
 
 it('媒体来源未取得时隐藏会提交媒体配置的表单，其他设置仍可用', async () => {
   const partial = full();
-  partial.section_errors = { media_sources: { title: '媒体目录未取得', message: '请重新读取。', error_id: 'media-error' } };
+  partial.section_errors = { media_sources: { title: '无法读取媒体目录', message: '请重新读取。', error_id: 'media-error' } };
   const host = await open(partial);
   expect(host.querySelector('[data-folder-row]')).toBeNull();
   expect(host.querySelector('#configPort')).toBeNull();
   expect(host.querySelector('#peachProxy')).not.toBeNull();
   await click(tabs(host).find(tab => tab.textContent === '网络与访问'));
-  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('媒体目录未取得');
+  expect(host.querySelector('.ui-board-group-active')?.textContent).toContain('无法读取媒体目录');
 });

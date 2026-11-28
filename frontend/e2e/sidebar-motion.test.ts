@@ -25,8 +25,13 @@ interface Toggle {
   mainRight: number;
   railW: number;
   viewport: number;
-  /** 点击后 300ms（过渡的时长）里出了几帧，首帧算点击那一刻。 */
-  frames: number;
+  /** 从点击起主线程连续占住多久：跨过点击那一刻的长动画帧（LoAF）里最晚的结束时刻减去点击时刻；没有就是 0。 */
+  blockedFromClick: number;
+}
+
+interface LongFrame {
+  startTime: number;
+  duration: number;
 }
 
 /** 点一下左上角的切换键，等 `body` 的 `padding-left` 与抽屉的 `width` 两段过渡都停下。 */
@@ -39,15 +44,16 @@ async function toggle(page: Page): Promise<Toggle> {
     let mapsDuring = -1;
     let opticDuring = '';
     const timer = setTimeout(() => reject(new Error(`过渡没有结束，还差 ${[...pending].join('、')}`)), 5_000);
-    /* 帧数从点击那一刻数到 300ms：主线程被一次整页重排占住多久，这段里就少出多少帧。 */
+    /* 主线程占用按长动画帧（LoAF，单帧超过 50ms 才记）量：一帧从它第一个任务算到样式、布局做完，
+       不含合成与光栅。按墙钟数出了几帧会把无头 Chrome 软件光栅的停顿也算进来：本机空闲时
+       收起过渡中就有 130～260ms 不出帧、主线程却空着的间隙，几个浏览器并行时这段能盖住整个
+       300ms，而主线程并没有被占住。 */
     let clicked = 0;
-    let frames = 1;
-    let counting = true;
-    const tick = (now: number) => {
-      if (!counting) return;
-      if (now - clicked <= 300) frames++;
-      requestAnimationFrame(tick);
-    };
+    const longFrames: LongFrame[] = [];
+    const observer = new PerformanceObserver((list) => {
+      longFrames.push(...list.getEntries().map(({ startTime, duration }) => ({ startTime, duration })));
+    });
+    observer.observe({ type: 'long-animation-frame' });
     const window300 = new Promise<void>((done) => setTimeout(done, 320));
     const onEnd = (event: TransitionEvent) => {
       const key = event.target === document.body && event.propertyName === 'padding-left' ? 'padding-left'
@@ -61,7 +67,11 @@ async function toggle(page: Page): Promise<Toggle> {
       clearTimeout(timer);
       window.removeEventListener('transitionend', onEnd, true);
       void window300.then(() => requestAnimationFrame(() => requestAnimationFrame(() => {
-        counting = false;
+        longFrames.push(...observer.takeRecords().map(({ startTime, duration }) => ({ startTime, duration })));
+        observer.disconnect();
+        const blockedFromClick = Math.max(0, ...longFrames
+          .filter((frame) => frame.startTime <= clicked)
+          .map((frame) => frame.startTime + frame.duration - clicked));
         const drawerBox = drawer.getBoundingClientRect();
         const mainBox = document.querySelector('#main')!.getBoundingClientRect();
         resolve({
@@ -78,14 +88,13 @@ async function toggle(page: Page): Promise<Toggle> {
           mainRight: mainBox.right,
           railW: parseFloat(getComputedStyle(document.body).paddingLeft),
           viewport: document.documentElement.clientWidth,
-          frames,
+          blockedFromClick: Math.round(blockedFromClick),
         });
       })));
     };
     // 挂在 window 的捕获阶段：比页面挂在 document 上的补画先拿到这一次结束。
     window.addEventListener('transitionend', onEnd, true);
     clicked = performance.now();
-    requestAnimationFrame(tick);
     document.querySelector<HTMLElement>('#filterBtn')!.click();
   }));
 }
@@ -108,8 +117,9 @@ describe('侧栏开合', () => {
       await expectBody(page, '/', [page.locator('#drawer.open')]);
       await settle(page);
       await page.waitForFunction(() => document.querySelector<HTMLElement>('#drawer')?.dataset.opticGlass === 'true');
-      await page.emulateMedia({ reducedMotion: 'no-preference' });
-      await page.evaluate(() => {
+      assert.ok(await page.evaluate(() => PerformanceObserver.supportedEntryTypes.includes('long-animation-frame')),
+        '浏览器不支持长动画帧计时，量不了主线程占用');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });      await page.evaluate(() => {
         const counter = window as unknown as { __maps: number };
         counter.__maps = 0;
         const native = HTMLCanvasElement.prototype.toDataURL;
@@ -129,10 +139,10 @@ describe('侧栏开合', () => {
         assert.ok(Math.abs(state.mainLeft - state.railW) <= .5, `${name}后主区左缘 ${state.mainLeft}，应落在 --railW ${state.railW}`);
         assert.ok(Math.abs(state.mainRight - state.viewport) <= 1, `${name}后主区右缘 ${state.mainRight} 没有贴到视口右缘 ${state.viewport}`);
         assert.ok(state.drawerRight <= state.mainLeft, `${name}后抽屉右缘 ${state.drawerRight} 压进了主区`);
-        /* 下限只拦「整段过渡被一次长任务吞掉、直接跳到终态」：除了点击那一帧，300ms 里至少
-           还要出一帧中间帧。本机无头 Chrome 收起 10～15 帧、展开 30～38 帧；CPU 降速 6 倍后
-           收起 2 帧、展开 4 帧，CI 的慢机落在这两档之间。 */
-        assert.ok(state.frames >= 2, `${name}过渡的 300ms 里只出了 ${state.frames} 帧，主线程整段被占住`);
+        /* 只拦「整段过渡被一次长任务吞掉、直接跳到终态」：点击之后主线程不能连续占住整个
+           300ms 过渡。本机无头 Chrome 点击那一帧 50～65ms，CPU 降速 6 倍约 300ms，CI 的慢机
+           落在这两档之间；在点击里塞一段 400ms 忙等，这里量到约 440ms。 */
+        assert.ok(state.blockedFromClick < 300, `${name}后主线程连续占住 ${state.blockedFromClick}ms，整段过渡被吞掉`);
       }
       assert.equal(collapsed.open, false);
       assert.equal(expanded.open, true);

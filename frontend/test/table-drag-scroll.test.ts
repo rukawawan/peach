@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { wireTableScroller } from '../src/ui-kit/scroll';
+import { wireHorizontalScroller, wireTableScroller } from '../src/ui-kit/scroll';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); document.body.replaceChildren(); vi.restoreAllMocks() });
@@ -30,6 +30,46 @@ it('拖动表格滚动并拦截拖动产生的点击，普通点击保留', () =
   expect(clicked).not.toHaveBeenCalled();
   mouse(cell, 'mousedown', 80); mouse(window, 'mouseup', 80); mouse(cell, 'click', 80);
   expect(clicked).toHaveBeenCalledOnce();
+});
+
+it('支持框选的表格横拖会滚动，斜向起拖留给框选', () => {
+  const viewport = fixture(), cell = viewport.querySelector('td')!;
+  viewport.dataset.rectangleArea = '';
+  mouse(cell, 'mousedown', 180, { clientY: 50 });
+  mouse(window, 'mousemove', 178, { clientY: 51 });
+  expect(viewport.scrollLeft).toBe(0);
+  mouse(window, 'mousemove', 95, { clientY: 55 });
+  mouse(window, 'mouseup', 95);
+  expect(viewport.scrollLeft).toBe(85);
+
+  mouse(cell, 'mousedown', 180, { clientY: 50 });
+  mouse(window, 'mousemove', 165, { clientY: 67 });
+  mouse(window, 'mousemove', 95, { clientY: 67 });
+  mouse(window, 'mouseup', 95);
+  expect(viewport.scrollLeft).toBe(85);
+});
+
+it('横排的链接随横拖滚动，斜拖交给框选', () => {
+  const row = document.createElement('div');
+  row.dataset.rectangleArea = '';
+  row.innerHTML = '<a href="#">卡片</a>';
+  document.body.append(row);
+  Object.defineProperties(row, { clientWidth: { get: () => 200 }, scrollWidth: { get: () => 900 } });
+  const control = wireHorizontalScroller(row, { drag: true, selectionScope: '[data-rectangle-area]' });
+  cleanups.push(() => control.destroy());
+  const card = row.querySelector('a')!;
+  mouse(card, 'mousedown', 180, { clientY: 50 });
+  mouse(window, 'mousemove', 170, { clientY: 50 });
+  expect(mouse(card, 'dragstart', 170).defaultPrevented).toBe(true);
+  mouse(window, 'mousemove', 80, { clientY: 50 });
+  mouse(window, 'mouseup', 80);
+  expect(row.scrollLeft).toBe(100);
+
+  mouse(card, 'mousedown', 180, { clientY: 50 });
+  mouse(window, 'mousemove', 165, { clientY: 70 });
+  mouse(window, 'mousemove', 80, { clientY: 70 });
+  mouse(window, 'mouseup', 80);
+  expect(row.scrollLeft).toBe(100);
 });
 
 it('表格控件、列宽手柄和修饰键不触发拖动，滚轮维持浏览器默认行为', () => {

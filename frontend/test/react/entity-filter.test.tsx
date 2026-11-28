@@ -10,14 +10,14 @@ import {
   videoOnly, type EntityFilterActions, type EntityFilterHelpers, type EntityFilterProps, type EntityOnlineHead,
 } from '../../src/react/entity-filter/entity-filter';
 import { FOLLOW_FILTERS } from '../../src/react/follow-feed/follow-feed';
-import { click, mount, settle } from './render';
+import { chooseFilter, click, mount, settle } from './render';
 
 const STATES = [{ k: '', label: '全部' }, { k: 'fresh', label: '没看过' }, { k: 'later', label: '稍后看' }, { k: 'flagged', label: '已标记' }];
 const LAYOUTS = [['big', '大图', 'maximize'], ['small', '小图', 'layout-grid']] as const;
 
 function actions(patch: Partial<EntityFilterActions> = {}): EntityFilterActions {
   return {
-    setView: vi.fn(), setState: vi.fn(), toggleTag: vi.fn(), clearFilter: vi.fn(), clearAll: vi.fn(),
+    setView: vi.fn(), setState: vi.fn(), toggleTag: vi.fn(), setQuery: vi.fn(), clearFilter: vi.fn(), clearAll: vi.fn(),
     setSort: vi.fn(), reshuffle: vi.fn(async () => {}), setJavLayout: vi.fn(), setPhotoLayout: vi.fn(),
     photoBack: vi.fn(), onlineMedia: vi.fn(), onlineShuffle: vi.fn(), onlineImagesOnly: vi.fn(), onlineStatus: vi.fn(),
     onlineProvider: vi.fn(), onlineTag: vi.fn(), onlineSort: vi.fn(), ...patch,
@@ -32,7 +32,7 @@ function props(patch: Partial<EntityFilterProps> = {}): EntityFilterProps {
   return {
     kind: 'performer', name: '篠田ゆう', view: 'videos',
     views: { label: '媒体类型', people: null, videos: { count: 24 }, photos: { count: 18 }, online: null },
-    state: '', states: STATES,
+    state: '', states: STATES, query: '',
     tags: [{ k: '巨乳', label: '巨乳', n: 1200, selected: false }, { k: '中出', label: '中出', n: 36, selected: true }],
     combo: [{ kind: 'untag', key: '中出', label: '中出' }, { kind: 'clear', key: 'studio', label: '厂牌 S1' }],
     readout: '视频 · 24 · 中出', busy: false,
@@ -66,7 +66,7 @@ describe('作品视图', () => {
     expect($(host, '[data-media-view="photos"]')?.getAttribute('aria-label')).toBe('照片 18');
     expect($(host, '[data-entity-states]')?.hidden).toBe(false);
     expect($(host, '[data-entity-state=""]')?.getAttribute('aria-pressed')).toBe('true');
-    expect($$(host, '[data-entity-tag]').map((tag) => [tag.textContent, tag.getAttribute('aria-pressed')]))
+    expect($$(host, '[data-filter-tag]').map((tag) => [tag.textContent, tag.getAttribute('aria-pressed')]))
       .toEqual([['巨乳1,200', 'false'], ['中出36', 'true']]);
     expect($(host, '[data-entity-combo]')?.hidden).toBe(false);
     expect($$(host, '[data-combo-chip]').map((chip) => chip.firstChild?.textContent)).toEqual(['中出', '厂牌 S1']);
@@ -84,11 +84,11 @@ describe('作品视图', () => {
     await click($(host, '[data-media-view="photos"]')!);
     await click($(host, '[data-entity-state="later"]')!);
     await click($(host, '[data-entity-state=""]')!);
-    await click($(host, '[data-entity-tag="巨乳"]')!);
+    await click($(host, '[data-filter-tag="巨乳"]')!);
     await click($(host, '[aria-label="撤掉 中出"]')!);
     await click($(host, '[aria-label="撤掉 厂牌 S1"]')!);
     await click($(host, '[data-combo-clear]')!);
-    await click($(host, '[data-entity-sort="rating"]')!);
+    await chooseFilter($(host, '[data-entity-sort="rating"]'), 'desc');
     await click($(host, '[data-entity-batch]')!);
     expect(shell.setView).toHaveBeenCalledWith('photos');
     // 已经按下的那一枚再点不发请求。
@@ -98,7 +98,7 @@ describe('作品视图', () => {
     expect(shell.toggleTag).toHaveBeenNthCalledWith(2, '中出');
     expect(shell.clearFilter).toHaveBeenCalledWith('studio');
     expect(shell.clearAll).toHaveBeenCalledTimes(1);
-    expect(shell.setSort).toHaveBeenCalledWith('rating');
+    expect(shell.setSort).toHaveBeenCalledWith('rating', 'desc');
     expect(shell.reshuffle).toHaveBeenCalledTimes(1);
   });
 
@@ -130,7 +130,7 @@ describe('照片与名册视图', () => {
       photo: { back: false, shuffle: true, layout: 'masonry', layouts: [['fixed', '固定比例', 'layout-grid'], ['masonry', '瀑布流', 'columns-2']], setId: 0 },
     })} />);
     expect($(host, '[data-entity-states]')?.hidden).toBe(true);
-    expect($$(host, '[data-entity-tag]')).toHaveLength(0);
+    expect($$(host, '[data-filter-tag]')).toHaveLength(0);
     expect($(host, '[data-entity-combo]')?.hidden).toBe(true);
     expect($$(host, '[data-entity-sort]')).toHaveLength(0);
     expect($(host, '[data-entity-layout][aria-label="图片布局"]')).not.toBeNull();
@@ -205,26 +205,27 @@ describe('在线视图', () => {
       .map((key) => key.dataset.mediaView)).toEqual(['videos', 'online']);
     expect($$(host, '[data-entity-state]').map((key) => key.dataset.entityState)).toEqual(['', 'new', 'saved', 'ignored']);
     expect($(host, '[data-entity-states]')?.hidden).toBe(false);
-    expect($(host, '[data-follow-provider="rule34video"]')).not.toBeNull();
-    expect($(host, '[data-follow-tag="cum"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect($(host, '[data-filter-tag="cum"]')?.getAttribute('aria-pressed')).toBe('true');
     expect($$(host, '[data-online-media] > [data-media-view]').map((key) => key.dataset.mediaView)).toEqual(['videos', 'images']);
     expect($(host, '[data-follow-images-only]'), '视频那一档没有照片墙的控件').toBeNull();
     expect($(host, '[data-entity-layout][aria-label="图片布局"]')).toBeNull();
+    await click($(host, '[data-table-column-filter="entity-online-source"]'));
+    expect(document.querySelector('[data-filter-option="rule34video"]')).not.toBeNull();
   });
 
   it('点下去回调各自的在线动作，不走作品视图那一套', async () => {
     const shell = actions();
     const host = await mount(<EntityFilterPage {...online({ actions: shell, online: head() })} />);
     await click($(host, '[data-entity-state="new"]')!);
-    await click($(host, '[data-follow-provider="rule34video"]')!);
-    await click($(host, '[data-follow-tag="cum"]')!);
+    await chooseFilter($(host, '[data-table-column-filter="entity-online-source"]'), 'rule34video');
+    await click($(host, '[data-filter-tag="cum"]')!);
     await click($(host, '[data-online-media] [data-media-view="images"]')!);
-    await click($(host, '[data-entity-sort="new"]')!);
+    await chooseFilter($(host, '[data-entity-sort="new"]'), 'asc');
     expect(shell.onlineStatus).toHaveBeenCalledWith('new');
     expect(shell.onlineProvider).toHaveBeenCalledWith('rule34video');
     expect(shell.onlineTag).toHaveBeenCalledWith('cum');
     expect(shell.onlineMedia).toHaveBeenCalledWith('images');
-    expect(shell.onlineSort).toHaveBeenCalledWith('new');
+    expect(shell.onlineSort).toHaveBeenCalledWith('new', 'asc');
     expect([shell.setState, shell.toggleTag, shell.setSort].every((fn) => vi.mocked(fn).mock.calls.length === 0)).toBe(true);
   });
 

@@ -151,7 +151,7 @@ def finish(output: Path, lock: dict) -> dict:
     (bundle / "LICENSE-nv-codec-headers.txt").write_text("\n".join(header_notices), encoding="utf-8")
     notice = (
         "# FFmpeg Windows x64\n\n"
-        "FFmpeg 9.0.2 与 libx264 按 GPL-3.0-or-later 分发。\n"
+        f"FFmpeg {lock['version']} 与 libx264 按 GPL-3.0-or-later 分发。\n"
         "版权与完整许可证见本目录 LICENSE 文件及对应源码归档。\n"
         "编解码使用 FFmpeg 内置实现、静态 libx264 与 BSD-2-Clause 许可的 dav1d AV1 软件解码器；NVIDIA 接口使用 nv-codec-headers。\n"
         "AMD AMF 接口使用 MIT 许可的 AMF 头文件；Intel QSV 接口静态链接 MIT 许可的 libvpl 调度器。\n"

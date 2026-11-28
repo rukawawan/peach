@@ -22,17 +22,13 @@ import urllib.parse
 from pathlib import Path
 
 from .config import DATABASE_PATH
+from .migrations import readonly_uri as readonly_uri
 from .migrations import sqlite_backup
 
 from .user_agent import USER_AGENT as USER_AGENT
 
 #: `--apply` 缺 `--backup` 时的唯一拒绝话术（开发工具输出，英文）。
 BACKUP_REQUIRED = "--apply requires --backup"
-
-
-def readonly_uri(db_path: Path | str) -> str:
-    """`mode=ro` 的 URI。路径先百分号转义，含 `#`/`?` 的目录名才不会被当查询串截断。"""
-    return "file:" + urllib.parse.quote(Path(db_path).resolve().as_posix()) + "?mode=ro"
 
 
 def open_readonly(db_path: Path | str) -> sqlite3.Connection:

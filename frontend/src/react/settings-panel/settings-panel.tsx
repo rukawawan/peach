@@ -305,13 +305,15 @@ function Group({ index, tab, children, cards = false }: { index: number; tab: nu
 }
 
 /** 一行开关：整行是 label，点哪儿都切。说明那一句的 id 默认取开关 id 去掉 `Setting` 再接 `Description`。 */
-function ToggleRow({ id, title, description, describedBy = `${id.replace(/Setting$/, '')}Description`, checked, onToggle }: {
-  id: string; title: string; description?: string; describedBy?: string; checked: boolean; onToggle(on: boolean): void;
+function ToggleRow({ id, title, description, describedBy = `${id.replace(/Setting$/, '')}Description`, copyKey, checked, onToggle }: {
+  id: string; title: string; description?: string; describedBy?: string; copyKey?: string; checked: boolean; onToggle(on: boolean): void;
 }) {
   return (
     <label data-setting-row="">
-      <span><b>{title}</b>{description ? <small id={describedBy}>{description}</small> : null}</span>
-      <input data-toggle="" type="checkbox" id={id} role="switch" aria-describedby={description ? describedBy : undefined}
+      <span><b data-copy-key={copyKey}>{title}</b>{description ?
+        <small id={describedBy} data-copy-key={copyKey ? `${copyKey}Help` : undefined}>{description}</small> : null}</span>
+      <input data-toggle="" type="checkbox" id={id} role="switch" aria-label={title}
+        aria-describedby={description ? describedBy : undefined}
         checked={checked} onChange={(event) => onToggle(event.target.checked)} />
     </label>
   );
@@ -396,22 +398,29 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
                 attr="data-theme-choice" variant="themeswitch" epoch={epoch}
                 onChoose={(choice) => { settings.theme = choice; save(); current.changed('theme') }} />
             </Row>
+            <ToggleRow id="localAppearanceSetting" title={t('settings:preferencesPanel.localAppearance')}
+              description={t('settings:preferencesPanel.localAppearanceHelp')} checked={settings.localAppearance}
+              onToggle={on => { settings.localAppearance = on; save() }} />
             <InterfaceLanguageSetting host={current} epoch={epoch} />
-            <div data-setting-row="">
-              <label htmlFor="glassContrastSetting"><b>{t('settings:preferencesPanel.increaseContrast')}</b></label>
-              <input type="checkbox" id="glassContrastSetting" data-toggle="" role="switch" checked={current.highContrast()}
-                onChange={(event) => current.setHighContrast(event.target.checked)} />
-            </div>
+            <ToggleRow id="glassContrastSetting" title={t('settings:preferencesPanel.increaseContrast')}
+              description={t('settings:preferencesPanel.increaseContrastHelp')} checked={current.highContrast()}
+              onToggle={(on) => current.setHighContrast(on)} />
             <ToggleRow id="uiSoundsSetting" title={t('settings:preferencesPanel.interfaceSounds')} checked={settings.uiSounds}
               onToggle={(on) => { settings.uiSounds = on; save(); current.changed('uiSounds') }} />
-            <ToggleRow id="ingestNoticesSetting" title={t('settings:preferencesPanel.ingestNotices')} checked={settings.ingestNotices}
+            <ToggleRow id="ingestNoticesSetting" title={t('settings:preferencesPanel.ingestNotices')}
+              description={t('settings:preferencesPanel.ingestNoticesHelp')} checked={settings.ingestNotices}
               onToggle={(on) => { settings.ingestNotices = on; save() }} />
+            <ToggleRow id="showFeedbackButtonSetting" title={t('settings:preferencesPanel.showFeedbackButton')}
+              description={t('settings:preferencesPanel.showFeedbackButtonHelp')} copyKey="preferencesPanel.showFeedbackButton"
+              checked={settings.showFeedbackButton} onToggle={(on) => { settings.showFeedbackButton = on; save() }} />
             <ToggleRow id="homeGlowSetting" title={t('settings:preferencesPanel.sidebarGlow')} checked={settings.homeGlow.on}
               onToggle={(on) => { settings.homeGlow.on = on; save(); current.changed('glow') }} />
             </div>
             <GlowSettings host={current} />
             <section data-setting-block="" aria-labelledby="sidebarOrderTitle">
-              <h4 data-settings-subheading="" id="sidebarOrderTitle">{t('settings:preferencesPanel.navigationOrder')}</h4>
+              <h4 data-settings-subheading="" id="sidebarOrderTitle" data-copy-key="settings.preferencesPanel.navigationOrder">
+                {t('settings:preferencesPanel.navigationOrder')}
+              </h4>
               <div data-setting-card="">
                 <section data-sidebar-setting=""><SidebarOrder host={current} /></section>
               </div>
@@ -425,9 +434,9 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
           <Group index={3} tab={shown.tab}>
             <SearchHistoryRow host={current} epoch={epoch} />
             <ToggleRow id="searchRecommendationsSetting" title={t('settings:preferencesPanel.searchRecommendations')}
-              checked={settings.searchRecommendations}
+              description={t('settings:preferencesPanel.searchRecommendationsHelp')} checked={settings.searchRecommendations}
               onToggle={(on) => { settings.searchRecommendations = on; save(); current.changed('searchRecommendations') }} />
-            <Row title={t('settings:preferencesPanel.relatedLimit')}>
+            <Row title={t('settings:preferencesPanel.relatedLimit')} description={t('settings:preferencesPanel.relatedLimitHelp')}>
               <div id="relatedLimitSetting">
                 <NumberSetting key={epoch} id="relatedLimitSetting" label={t('settings:preferencesPanel.relatedLimit')} value={settings.relatedLimit}
                   onApply={(value) => { settings.relatedLimit = value; save() }} />
@@ -450,8 +459,7 @@ function SettingsPanel({ host: current, view: shown }: { host: SettingsPanelHost
 
 interface GroupProps { host: SettingsPanelHost; tab: number; epoch: number }
 
-/* 「浏览与播放」分两段：作品列表（网格、排序、卡片与悬停）在前，播放在后。转码方式写的是运行 Peach
-   那台电脑的配置，在 Peach 配置「应用与维护 → 视频播放」，不在这里（ADR-0103）。 */
+/* 「浏览与播放」按作品列表、首页和播放分组。本机转码方式在 Peach 配置「媒体库与入库 → 视频播放」。 */
 function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
   const settings = current.store.value;
   const save = () => current.store.save();
@@ -466,7 +474,7 @@ function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
             onApply={(value) => { settings.batchSize = value || 60; save(); current.changed('batchSize') }} />
         </div>
       </Row>
-      <Row title={t('settings:preferencesPanel.defaultSort')} kind="sort">
+      <Row title={t('settings:preferencesPanel.defaultSort')} description={t('settings:preferencesPanel.defaultSortHelp')} kind="sort">
         <div data-setting-sort-controls="">
           <SelectField id="defaultSortSetting" label={t('settings:preferencesPanel.defaultSort')} options={SORT_OPTIONS} value={settings.defaultSort} epoch={epoch}
             onPick={(value) => { settings.defaultSort = value; save(); current.changed('defaultSort') }} />
@@ -486,15 +494,14 @@ function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
           value={current.videoLayout()} attr="data-video-layout" variant="javimageswitch" text epoch={epoch}
           onChoose={(layout) => current.setVideoLayout(layout)} />
       </Row>
-      <label data-setting-row=""><span><b>{t('settings:preferencesPanel.groupEditions')}</b></span>
-        <input type="checkbox" id="groupCollapseSetting" data-toggle="" role="switch" checked={settings.groupCollapse}
-          onChange={(event) => { settings.groupCollapse = event.target.checked; save(); current.changed('groupCollapse') }} />
-      </label>
+      <ToggleRow id="groupCollapseSetting" title={t('settings:preferencesPanel.groupEditions')}
+        description={t('settings:preferencesPanel.groupEditionsHelp')} checked={settings.groupCollapse}
+        onToggle={(on) => { settings.groupCollapse = on; save(); current.changed('groupCollapse') }} />
       <ToggleRow id="hoverPreviewSetting" title={t('settings:preferencesPanel.hoverPreview')} checked={settings.hoverPreview}
         onToggle={(on) => { settings.hoverPreview = on; save(); current.changed('hoverPreview') }} />
       {/* SFW 模式与关掉悬停预览时延迟不起作用：禁用，SFW 另加说明。 */}
       <Row title={t('settings:preferencesPanel.hoverDelay')}
-        description={current.censored() ? t('settings:preferencesPanel.hoverDelaySfw') : undefined}>
+        description={current.censored() ? t('settings:preferencesPanel.hoverDelaySfw') : t('settings:preferencesPanel.hoverDelayHelp')}>
         <div id="hoverDelaySetting">
           <NumberSetting key={epoch} id="hoverDelaySetting" label={t('settings:preferencesPanel.hoverDelay')} value={settings.hoverDelaySeconds}
             disabled={current.censored() || !settings.hoverPreview}
@@ -503,7 +510,11 @@ function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
             }} />
         </div>
       </Row>
-      <Row title={t('settings:preferencesPanel.homeShorts')}>
+      <ToggleRow id="completionPromptSetting" title={t('settings:preferencesPanel.completionPrompt')}
+        description={t('settings:preferencesPanel.completionPromptHelp')} checked={settings.completionPrompt}
+        onToggle={(on) => { settings.completionPrompt = on; save() }} />
+      <h4 data-settings-subheading="">{t('navigation:sidebar.home')}</h4>
+      <Row title={t('settings:preferencesPanel.homeShorts')} description={t('settings:preferencesPanel.homeShortsHelp')}>
         <div id="homeShortsSetting">
           <NumberSetting key={epoch} id="homeShortsSetting" label={t('settings:preferencesPanel.homeShorts')} value={settings.homeShortsLimit}
             onApply={(value) => { settings.homeShortsLimit = value; save(); current.changed('homeShorts') }} />
@@ -511,10 +522,12 @@ function BrowseGroup({ host: current, tab, epoch }: GroupProps) {
       </Row>
       <ToggleRow id="homeTiersSetting" title={t('settings:preferencesPanel.homeTiers')} checked={settings.homeTiers}
         onToggle={(on) => { settings.homeTiers = on; save(); current.changed('homeTiers') }} />
-      <ToggleRow id="homePreviewOnlySetting" title={t('settings:preferencesPanel.homePreviewOnly')} checked={settings.homePreviewOnly}
+      <ToggleRow id="homePreviewOnlySetting" title={t('settings:preferencesPanel.homePreviewOnly')}
+        description={t('settings:preferencesPanel.homePreviewOnlyHelp')} checked={settings.homePreviewOnly}
         onToggle={(on) => { settings.homePreviewOnly = on; save(); current.changed('homePreviewOnly') }} />
-      <ToggleRow id="completionPromptSetting" title={t('settings:preferencesPanel.completionPrompt')} checked={settings.completionPrompt}
-        onToggle={(on) => { settings.completionPrompt = on; save() }} />
+      <ToggleRow id="containHomeScrollSetting" title={t('settings:preferencesPanel.containHomeScroll')}
+        description={t('settings:preferencesPanel.containHomeScrollDescription')} checked={settings.containHomeScroll}
+        onToggle={(on) => { settings.containHomeScroll = on; save(); current.changed('containHomeScroll') }} />
       <h4 data-settings-subheading="">{t('settings:preferencesPanel.playbackHeading')}</h4>
       <PlaybackRows host={current} epoch={epoch} />
     </Group>
@@ -528,7 +541,7 @@ function JavGroup({ host: current, tab, epoch }: GroupProps) {
     <Group index={2} tab={tab}>
       <h4 data-settings-subheading="">{t('settings:preferencesPanel.videoDisplay')}</h4>
       <NameLanguageSetting host={current} epoch={epoch} />
-      <Row title={t('settings:preferencesPanel.defaultImage')}>
+      <Row title={t('settings:preferencesPanel.defaultImage')} description={t('settings:preferencesPanel.defaultImageHelp')}>
         <IconSwitch id="javImageSetting" name="jav-image" legend={t('settings:preferencesPanel.defaultImage')} options={JAV_IMAGE_OPTIONS}
           value={settings.javImage} attr="data-jav-image-choice" variant="javimageswitch" text epoch={epoch}
           onChoose={(choice) => { settings.javImage = normalizeJavImage(choice); save(); current.changed('javImage') }} />
@@ -538,13 +551,14 @@ function JavGroup({ host: current, tab, epoch }: GroupProps) {
         onToggle={(on) => { settings.feedNewRows = on; save(); current.changed('feedNewRows') }} />
       {/* 数量与自动滚动只作用于首页和人物页的新作行：行关了就收起；合集开关还管「JAV → 新作」与未读数，照常显示。 */}
       {settings.feedNewRows ? <>
-        <Row title={t('settings:preferencesPanel.feedLimit')}>
+        <Row title={t('settings:preferencesPanel.feedLimit')} description={t('settings:preferencesPanel.feedLimitHelp')}>
           <div id="feedLimitSetting">
             <NumberSetting key={epoch} id="feedLimitSetting" label={t('settings:preferencesPanel.feedLimitInput')} value={settings.feedLimit}
               onApply={(value) => { settings.feedLimit = boundedPreference(value, 1, 100, 12); save(); current.changed('feedLimit') }} />
           </div>
         </Row>
-        <ToggleRow id="feedAutoScrollSetting" title={t('settings:preferencesPanel.autoScroll')} checked={settings.feedAutoScroll}
+        <ToggleRow id="feedAutoScrollSetting" title={t('settings:preferencesPanel.autoScroll')}
+          description={t('settings:preferencesPanel.autoScrollHelp')} checked={settings.feedAutoScroll}
           onToggle={(on) => { settings.feedAutoScroll = on; save(); current.changed('feedAutoScroll') }} />
       </> : null}
       {FEED_COMPILATIONS.map(([id, key, label, title]) => (
@@ -655,7 +669,7 @@ function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
       <ToggleRow id="autoChineseSubtitlesSetting" title={t('settings:preferencesPanel.autoChineseSubtitles')}
         description={t('settings:preferencesPanel.autoChineseSubtitlesHelp')}
         checked={settings.autoChineseSubtitles} onToggle={(on) => { settings.autoChineseSubtitles = on; save() }} />
-      <Row title={t('settings:playbackEnd.title')}>
+      <Row title={t('settings:playbackEnd.title')} description={t('settings:playbackEnd.titleHelp')}>
         <SelectField id="afterPlaybackSetting" label={t('settings:playbackEnd.title')} options={afterPlaybackOptions()} value={settings.afterPlayback} epoch={epoch}
           onPick={(value) => { settings.afterPlayback = allowedSetting(value, AFTER_PLAYBACK_CHOICES, 'next'); save() }} />
       </Row>
@@ -667,14 +681,14 @@ function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
       </Row>
       <ToggleRow id="miniplayerSetting" title={t('settings:preferencesPanel.miniPlayer')} checked={settings.miniplayer}
         onToggle={(on) => { settings.miniplayer = on; save(); current.changed('miniplayer') }} />
-      <Row title={t('settings:preferencesPanel.seekStep')}>
+      <Row title={t('settings:preferencesPanel.seekStep')} description={t('settings:preferencesPanel.seekStepHelp')}>
         <div id="seekSecondsSetting">
           <NumberSetting key={epoch} id="seekSecondsSetting" label={t('settings:preferencesPanel.seekStepInput')} value={settings.seekSeconds}
             onApply={(value) => { settings.seekSeconds = value || 10; save(); current.changed('seekSeconds') }} />
         </div>
       </Row>
       {/* 长按倍速也管右方向键，不随画面手势开关收起；拖动与双击区只在画面手势开着时有用。 */}
-      <Row title={t('settings:playbackGestures.holdRate')}>
+      <Row title={t('settings:playbackGestures.holdRate')} description={t('settings:playbackGestures.holdRateHelp')}>
         <SelectField id="holdRateSetting" label={t('settings:playbackGestures.holdRate')} epoch={epoch}
           options={HOLD_RATES.map((rate) => [String(rate), `${rate}×`] as Choice)} value={String(settings.holdRate)}
           onPick={(value) => { settings.holdRate = normalizeGestures({ holdRate: Number(value) }).holdRate; save() }} />
@@ -688,14 +702,15 @@ function PlaybackRows({ host: current, epoch }: Omit<GroupProps, 'tab'>) {
               onApply={(value) => { settings.swipeMinutes = normalizeGestures({ swipeMinutes: value }).swipeMinutes; save() }} />
           </div>
         </Row>
-        <Row title={t('settings:playbackGestures.doubleTapPercent')}>
+        <Row title={t('settings:playbackGestures.doubleTapPercent')} description={t('settings:playbackGestures.doubleTapPercentHelp')}>
           <div id="doubleTapPercentSetting">
             <NumberSetting key={epoch} id="doubleTapPercentSetting" label={t('settings:playbackGestures.doubleTapPercent')} value={settings.doubleTapPercent}
               onApply={(value) => { settings.doubleTapPercent = normalizeGestures({ doubleTapPercent: value }).doubleTapPercent; save() }} />
           </div>
         </Row>
       </> : null}
-      <ToggleRow id="autoFullscreenSetting" title={t('settings:playbackGestures.autoFullscreen')} checked={settings.autoFullscreen}
+      <ToggleRow id="autoFullscreenSetting" title={t('settings:playbackGestures.autoFullscreen')}
+        description={t('settings:playbackGestures.autoFullscreenHelp')} checked={settings.autoFullscreen}
         onToggle={(on) => { settings.autoFullscreen = on; save() }} />
       <Row title="Ctrl + 方向键快进 / 快退">
         <div id="longSeekSecondsSetting">
@@ -712,7 +727,7 @@ function SearchHistoryRow({ host: current, epoch }: { host: SettingsPanelHost; e
   const save = useSaveSettings();
   /* 条数跟着数据库走（`/api/settings`），所有访问端看到同一个数；本地那份只是镜像。 */
   return (
-    <Row title={t('settings:preferencesPanel.searchHistoryLimit')}>
+    <Row title={t('settings:preferencesPanel.searchHistoryLimit')} description={t('settings:preferencesPanel.searchHistoryLimitHelp')}>
       <div id="searchHistoryLimitSetting">
         <NumberSetting key={epoch} id="searchHistoryLimitSetting" label={t('settings:preferencesPanel.searchHistoryInput')} value={settings.searchHistoryLimit}
           onApply={(value) => {

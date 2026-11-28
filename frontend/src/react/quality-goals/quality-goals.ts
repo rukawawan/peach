@@ -40,8 +40,10 @@ export interface QualityGoalsData {
   has_more: boolean;
 }
 
-export const fetchQualityGoals = (signal?: AbortSignal, filters?: TableFilters) =>
-  apiGet<QualityGoalsData>(filters ? `${QUALITY_GOALS_URL}&column_filters=${encodeURIComponent(JSON.stringify(filters))}` : QUALITY_GOALS_URL, signal);
+/** `q` 按番号或文件名找一部，由服务端在全部目标里筛，先于列筛选。 */
+export const fetchQualityGoals = (signal?: AbortSignal, filters?: TableFilters, q = '') =>
+  apiGet<QualityGoalsData>(QUALITY_GOALS_URL + (filters ? `&column_filters=${encodeURIComponent(JSON.stringify(filters))}` : '')
+    + (q ? `&q=${encodeURIComponent(q)}` : ''), signal);
 
 /** 首屏：取完数才画。
  *

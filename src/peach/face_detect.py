@@ -150,6 +150,15 @@ def decode(payload: bytes):
     return image
 
 
+def read_image(path: Path | str):
+    """读取图片为 BGR 数组；支持中文路径，文件不可读或解码失败时返回 None。"""
+    try:
+        payload = Path(path).read_bytes()
+    except OSError:
+        return None
+    return decode(payload)
+
+
 def shows_a_face(payload: bytes, detector: "FaceDetector") -> Face | None:
     """这几个字节画的是一张脸吗；是就返回那张脸，用来当「这不是标识」的证据。
 

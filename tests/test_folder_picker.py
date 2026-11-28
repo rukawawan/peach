@@ -7,8 +7,11 @@ from __future__ import annotations
 import base64
 import ntpath
 import os
+import plistlib
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from peach import folder_picker
@@ -34,6 +37,30 @@ class FakeRun:
         return subprocess.CompletedProcess(argv, self.returncode, self.stdout, self.stderr)
 
 
+class FakeMacRun:
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.info = None
+        self.env = None
+        self.steps = []
+
+    def __call__(self, argv, **kwargs):
+        executable = Path(argv[0]).name
+        self.steps.append(executable)
+        if executable == "osacompile":
+            bundle = Path(argv[2])
+            contents = bundle / "Contents"
+            contents.mkdir(parents=True)
+            (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "applet"}))
+        elif executable == "codesign":
+            self.info = plistlib.loads((Path(argv[-1]) / "Contents" / "Info.plist").read_bytes())
+        else:
+            self.env = kwargs["env"]
+            if self.outcome is not None:
+                Path(self.env["PEACH_PICK_OUTPUT"]).write_bytes(self.outcome.encode("utf-8"))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+
 class CommandTests(unittest.TestCase):
     def test_windows_uses_the_modern_folder_picker_through_the_built_in_powershell(self):
         """`powershell.exe` 每台 Windows 都有，pwsh 7 是另装的；脚本以 -EncodedCommand 传，不碰引号转义。
@@ -55,7 +82,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("dialog.Show(IntPtr.Zero)", script, "不挂所有者窗口：透明置顶的 Form 会把对话框一起藏起来")
         self.assertIn("SetWindowPos(window, new IntPtr(-1)", script, "后台服务进程没有前台权，对话框要自己置顶")
         self.assertNotIn("System.Windows.Forms", script)
-        self.assertIn(f"Pick('{folder_picker.prompt()}', $env:PEACH_PICK_INITIAL)", script)
+        self.assertIn(f"Pick('{folder_picker.prompt()}', $env:PEACH_PICK_INITIAL, $false)", script)
         self.assertEqual(env, {"PEACH_PICK_INITIAL": r"D:\Media"})
 
     def test_windows_powershell_is_found_under_the_system_root_not_through_path(self):
@@ -67,20 +94,6 @@ class CommandTests(unittest.TestCase):
             os.environ.pop("SystemRoot", None)
             argv, _ = folder_picker.command(None, platform="win32")
         self.assertEqual(argv[0], "powershell.exe", "取不到系统目录时退回按名字查找")
-
-    def test_macos_uses_applescript_choose_folder_and_escapes_the_initial_path(self):
-        with mock.patch("os.path.isdir", return_value=True):
-            argv, env = folder_picker.command('/Volumes/My "Disk"', platform="darwin")
-        self.assertEqual(argv[:2], ["osascript", "-e"])
-        self.assertTrue(argv[2].startswith("POSIX path of (choose folder with prompt"))
-        self.assertIn('default location POSIX file "/Volumes/My \\"Disk\\""', argv[2])
-        self.assertEqual(env, {})
-
-    def test_a_missing_initial_folder_is_not_passed_to_applescript(self):
-        """`choose folder` 收到不存在的 default location 会直接报错，还不如不给。"""
-        with mock.patch("os.path.isdir", return_value=False):
-            argv, _ = folder_picker.command("/gone", platform="darwin")
-        self.assertNotIn("default location", argv[2])
 
     def test_other_platforms_say_so(self):
         with self.assertRaises(folder_picker.PickerUnavailable):
@@ -99,26 +112,36 @@ class PickTests(unittest.TestCase):
 
     def test_cancelling_yields_none_on_both_platforms(self):
         self.assertIsNone(folder_picker.pick_folder(platform="win32", run=FakeRun(b"")))
-        cancelled = FakeRun(b"", returncode=1, stderr=b"execution error: User canceled. (-128)\n")
-        self.assertIsNone(folder_picker.pick_folder(platform="darwin", run=cancelled))
+        self.assertIsNone(folder_picker.pick_folder(platform="darwin", run=FakeMacRun("cancelled")))
 
-    def test_cancelling_on_a_localized_macos_is_still_a_cancel(self):
-        """osascript 的消息跟随系统语言，中文系统写「用户已取消。」；错误码 -128 不变。"""
-        cancelled = FakeRun(b"", returncode=1,
-                            stderr="0:120: execution error: 用户已取消。 (-128)\n".encode("utf-8"))
-        self.assertIsNone(folder_picker.pick_folder(platform="darwin", run=cancelled))
+    def test_macos_launches_a_signed_localized_bundle_for_the_folder_picker(self):
+        with tempfile.TemporaryDirectory(prefix="peach media ") as initial:
+            run = FakeMacRun("path:/Volumes/媒体/")
+            self.assertEqual(folder_picker.pick_folder(initial, platform="darwin", run=run), "/Volumes/媒体")
+            self.assertEqual(run.steps, ["osacompile", "codesign", "applet"])
+            self.assertEqual(run.info["CFBundleLocalizations"], ["en", "zh-Hans"])
+            self.assertTrue(run.info["CFBundleAllowMixedLocalizations"])
+            self.assertEqual(run.env["PEACH_PICK_INITIAL"], initial)
+            self.assertEqual(run.env["PEACH_PICK_APPLICATION"], "0")
+            self.assertFalse(Path(run.env["PEACH_PICK_OUTPUT"]).parent.exists())
 
-    def test_macos_without_interaction_or_automation_permission_has_no_picker(self):
-        """-1713 不允许用户交互、-1743 未获自动化授权：这台机器此刻不提供对话框，不是服务故障。"""
-        for code in (b"-1713", b"-1743"):
-            denied = FakeRun(b"", returncode=1, stderr=b"execution error: Not authorized. (" + code + b")\n")
-            with self.subTest(code=code), self.assertRaises(folder_picker.PickerUnsupported):
-                folder_picker.pick_folder(platform="darwin", run=denied)
+    def test_macos_player_picker_uses_application_mode_and_accepts_an_app_path(self):
+        run = FakeMacRun("path:/Applications/我的播放器.app/")
+        with mock.patch.object(folder_picker.sys, "platform", "darwin"), \
+                mock.patch.object(folder_picker.subprocess, "run", run):
+            self.assertEqual(folder_picker.pick_application(), "/Applications/我的播放器.app")
+        self.assertEqual(run.env["PEACH_PICK_APPLICATION"], "1")
 
-    def test_macos_paths_lose_the_trailing_slash(self):
-        self.assertEqual(folder_picker.pick_folder(platform="darwin", run=FakeRun(b"/Volumes/Media/\n")),
-                         "/Volumes/Media")
-        self.assertEqual(folder_picker.pick_folder(platform="darwin", run=FakeRun(b"/\n")), "/")
+    def test_macos_a_missing_result_is_a_failure(self):
+        with self.assertRaises(folder_picker.PickerUnavailable):
+            folder_picker.pick_folder(platform="darwin", run=FakeMacRun(None))
+
+    def test_macos_preserves_the_root_path_and_ignores_a_missing_initial_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = FakeMacRun("path:/")
+            self.assertEqual(folder_picker.pick_folder(str(Path(directory) / "gone"), platform="darwin", run=run),
+                             "/")
+            self.assertEqual(run.env["PEACH_PICK_INITIAL"], "")
 
     def test_a_dialog_that_fails_to_open_is_reported_not_swallowed(self):
         with self.assertRaises(folder_picker.PickerUnavailable):

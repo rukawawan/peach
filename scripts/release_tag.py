@@ -47,6 +47,7 @@ MASTER_WRITER = "peach.masterWriter"
 #: README 下载直链不在其中：制品上传完之前换过去就是 404，它们等 Release 齐了单独提交。
 RELEASE_FILES = (version_bump.VERSION_FILE, changelog.CHANGELOG)
 README_SUBJECT = "docs(readme): 下载直链指向 {tag}"
+ANNOUNCEMENT_SCRIPT = "peach.releaseAnnouncementScript"
 
 #: `--ship` 等 Test 工作流的默认秒数上限，以及两次查询之间的间隔。版本提交的流水线里还有发布
 #: 演练（macOS 两个架构从源码编译，作业时限 2 小时），所以按整条演练定。
@@ -399,6 +400,8 @@ def ship(repo: str, *, apply: bool, timeout: float = TEST_TIMEOUT) -> dict:
               "commit": bool(pending), "push": bool(pending) or remote != head}
     if not apply:
         return result
+    document = (ROOT / changelog.CHANGELOG).read_text(encoding="utf-8")
+    changelog.require_review(ROOT, document, version, revision=head)
     if pending:
         command("git", "add", *RELEASE_FILES)
         command("git", "-c", f"{MASTER_WRITER}=release", "commit",
@@ -526,6 +529,35 @@ def require_candidate(repo: str, sha: str) -> dict:
     return {"rehearsal": f"https://github.com/{repo}/actions/runs/{run['run_id']}"}
 
 
+def finish_release(repo: str, result: dict, *, timeout: float, require_announcement: bool = False) -> int:
+    """给本机公告程序传入本次标签，并随发版结果返回独立回执。"""
+    if result["applied"] and not GITLAB:
+        try:
+            try:
+                configured = command("git", "config", "--local", "--get", ANNOUNCEMENT_SCRIPT)
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode != 1 or exc.stderr:
+                    raise
+                if require_announcement:
+                    raise ValueError(t("release_tag.announcementNotConfigured", key=ANNOUNCEMENT_SCRIPT)) from None
+            else:
+                script = Path(configured)
+                if not script.is_absolute() or not script.is_file():
+                    raise ValueError(t("release_tag.announcementPath", key=ANNOUNCEMENT_SCRIPT))
+                receipt = command(sys.executable, "-X", "utf8", str(script),
+                                  "--repo", repo, "--tag", result["tag"], "--timeout", str(timeout))
+                announcement = json.loads(receipt)
+                if not isinstance(announcement, dict):
+                    raise ValueError(t("release_tag.announcementReceipt", key=ANNOUNCEMENT_SCRIPT))
+                result["announcement"] = announcement
+        except subprocess.CalledProcessError as exc:
+            result["announcement_error"] = (exc.stderr or exc.stdout or str(exc)).strip()
+        except (OSError, ValueError) as exc:
+            result["announcement_error"] = str(exc)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return int("announcement_error" in result)
+
+
 def main(argv=None) -> int:
     global GITLAB
     parser = argparse.ArgumentParser(description=t("release_tag.description"),
@@ -545,6 +577,8 @@ def main(argv=None) -> int:
                       help=t("release_tag.helpShip"))
     mode.add_argument("--point-readme", action="store_true",
                       help=t("release_tag.helpPointReadme"))
+    mode.add_argument("--announce-tag", metavar="vX.Y.Z",
+                      help=t("release_tag.helpAnnounceTag"))
     mode.add_argument("--verify-sha", help=t("release_tag.helpVerifySha"))
     mode.add_argument("--release-sha", help=t("release_tag.helpReleaseSha"))
     args = parser.parse_args(argv)
@@ -564,13 +598,17 @@ def main(argv=None) -> int:
                              ensure_ascii=False, indent=2))
             return 0
         if args.ship:
-            print(json.dumps(ship(args.repo, apply=args.apply, timeout=args.timeout),
-                             ensure_ascii=False, indent=2))
-            return 0
+            result = ship(args.repo, apply=args.apply, timeout=args.timeout)
+            return finish_release(args.repo, result, timeout=args.timeout)
         if args.point_readme:
-            print(json.dumps(point_readme(args.repo, apply=args.apply, timeout=args.timeout),
-                             ensure_ascii=False, indent=2))
-            return 0
+            result = point_readme(args.repo, apply=args.apply, timeout=args.timeout)
+            return finish_release(args.repo, result, timeout=args.timeout)
+        if args.announce_tag is not None:
+            if GITLAB or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.announce_tag):
+                raise ValueError(t("release_tag.announceTagFormat"))
+            result = {"tag": args.announce_tag, "release": release_url(args.repo, args.announce_tag),
+                      "applied": args.apply}
+            return finish_release(args.repo, result, timeout=args.timeout, require_announcement=True)
         result = (plan_commit(args.repo, args.release_sha)
                   if args.release_sha is not None else plan(args.repo))
         if args.apply:
@@ -579,13 +617,14 @@ def main(argv=None) -> int:
                 result = plan_commit(args.repo, args.release_sha)
             elif master_sha(args.repo) != result["sha"]:
                 raise ValueError(t("release_tag.masterMoved"))
+            document = command("git", "show", f"{result['sha']}:{changelog.CHANGELOG}")
+            changelog.require_review(ROOT, document, result["tag"][1:], revision=result["sha"])
             command("git", "tag", "-a", result["tag"], result["sha"],
                     "-m", f"Peach {result['tag']} Windows 测试版")
             command("git", "push", remote_url(args.repo),
                     f"refs/tags/{result['tag']}")
             result["next"] = t("release_tag.nextPointReadme")
-        print(json.dumps({**result, "applied": args.apply}, ensure_ascii=False, indent=2))
-        return 0
+        return finish_release(args.repo, {**result, "applied": args.apply}, timeout=args.timeout)
     except (OSError, ValueError, version_bump.VersionError, subprocess.CalledProcessError) as exc:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
         print(t("release_tag.checkFailed", detail=detail))

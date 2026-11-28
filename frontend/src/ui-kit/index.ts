@@ -21,7 +21,7 @@ export {
   observeScrollRegions, wireOverlayScrollbars, wireScrollers,
 } from './scroll';
 export {
-  dialSliderHtml, iconSwitchHtml, setActionBusy, wireBusyActions, wireContextCard, wireDialSlider, wireDragReorder,
+  dialSliderHtml, iconSwitchHtml, setActionBusy, wireBusyActions, wireContextCard, wireDialSlider,
   wireIconSwitch,
 } from './controls';
 export { confirmModal, formModal } from './modal';

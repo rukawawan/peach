@@ -82,6 +82,7 @@ export function createGuideSession(options: {
   const keyboard = (event: KeyboardEvent) => {
     // 编辑模式的 Enter / Escape 由原位文案编辑器处理。
     if (event.target instanceof Element && event.target.closest('[data-copy-inline], [data-copy-input]')) return;
+    if (document.querySelector('form[data-peach-feedback]')) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); options.close(); return }
     const panel = document.querySelector<HTMLElement>('.peach-guide-popover');
     if (!panel) return;
@@ -134,6 +135,7 @@ export function createGuideSession(options: {
       let missing = !element;
       active = driver({
         animate: false, smoothScroll: false, disableActiveInteraction: !options.invitation, allowKeyboardControl: false,
+        allowedElements: '[data-feedback-launcher]:not([hidden]), [data-feedback-surface]:not([data-feedback-capturing-tab], [data-feedback-awaiting-frame])',
         allowClose: true, overlayClickBehavior: () => options.close(), stagePadding: 6,
         stageRadius: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-radius')) || 8,
         popoverClass: 'peach-react peach-guide-popover', showButtons: [],
@@ -142,9 +144,9 @@ export function createGuideSession(options: {
           // 原生详情 dialog 位于 top layer，说明和遮罩必须在同一层中。
           const dialog = document.querySelector<HTMLDialogElement>('#stage[open]');
           if (step.surface && dialog) {
-            dialog.append(popover.wrapper);
+            if (!dialog.contains(popover.wrapper)) dialog.append(popover.wrapper);
             const overlay = document.querySelector('.driver-overlay');
-            if (overlay) dialog.append(overlay);
+            if (overlay && !dialog.contains(overlay)) dialog.append(overlay);
           }
           popover.wrapper.setAttribute('role', 'dialog');
           popover.wrapper.setAttribute('aria-modal', 'true');
@@ -166,7 +168,7 @@ export function createGuideSession(options: {
         // Driver 在 onPopoverRender 之后创建遮罩；下一帧把它也移入原生弹层。
         const dialog = step.surface ? document.querySelector('#stage[open]') : null;
         const overlay = document.querySelector('.driver-overlay');
-        if (dialog && overlay && overlay.parentElement !== dialog) dialog.append(overlay);
+        if (dialog && overlay && !dialog.contains(overlay)) dialog.append(overlay);
         const next = resolveGuideTarget(step.target);
         if (next !== element) {
           element = next; missing = !next; highlight(); previous = '';

@@ -93,21 +93,11 @@
 }
 
 /* ── 侧栏 ── */
-.peach-react [data-follow-detail] [data-follow-detail-title] {
-  display: flex;
-  gap: 5px;
-  align-items: flex-start;
-  margin-bottom: 8px;
+.peach-react [data-follow-detail] [data-title-tools] [data-follow-tags-edit][aria-pressed="true"] {
+  background: var(--hover);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px currentColor;
 }
-.peach-react [data-follow-detail] [data-follow-detail-title] > [data-follow-detail-name] { width: auto; max-width: calc(100% - 35px); margin: 0; }
-/* 来源外链与下面的资源链接：显示方式、内距、边框、字色与悬停归 `board.css` 的全站外链规则，
-   这里只给尺寸与那枚外链标。30px 的命中区比标题一行（`stage.css` 里 `[data-stage-title]` 的
-   1.5 倍行高）高，上下各让出一半差值，外链标就和标题第一行同心；标题折成几行都贴着第一行。 */
-.peach-react [data-follow-detail] [data-follow-origin] {
-  flex: none; width: 30px; height: 30px; min-width: 0;
-  margin: calc((var(--fs-lg) * 1.5 - 30px) / 2) 0;
-}
-.peach-react [data-follow-detail] [data-follow-origin] svg { flex: none; width: 18px; height: 18px; }
 .peach-react [data-follow-detail] [data-follow-resources] a svg { flex: none; width: var(--icon-inline); height: var(--icon-inline); }
 .peach-react [data-follow-detail] [data-follow-detail-credit] {
   overflow-wrap: anywhere;
@@ -115,6 +105,12 @@
   font-size: var(--fs-xs);
 }
 .peach-react [data-follow-detail] [data-follow-detail-credit] > span { display: block; }
+.peach-react [data-follow-detail] [data-id-face] > :is(img, span) {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  outline: none;
+}
 .peach-react [data-follow-detail] [data-follow-badges] {
   display: flex;
   flex-wrap: nowrap;
@@ -128,7 +124,7 @@
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
-/* 摘要默认收在八行内，操作键留在首屏；量出来确实超出时才在下面给一枚「展开」。
+/* 摘要默认收在八行内；量出来确实超出时才在下面给一枚「展开」。
    侧栏内容区是定高的纵向 flex，裁切后的摘要最小高度归零，不禁止收缩就会被压没。 */
 .peach-react [data-follow-detail] [data-follow-detail-summary][data-clamped] {
   flex-shrink: 0;
@@ -157,8 +153,6 @@
 }
 .peach-react [data-follow-detail] [data-follow-resources] a { height: 34px; min-width: 0; }
 
-/* 操作键条：几何取 `[data-stage-actions]`（`../stage/stage.css`）。下载是 `<a download>`，
-   不是按钮：让浏览器自己落盘，不经过 JS，几何与同排按钮一致。 */
 /* 想要过的那一条，星是填实的；色调借保存那一档（`later`）。 */
 .peach-react [data-follow-detail] [data-follow-detail-want][aria-pressed="true"] svg { fill: currentColor; }
 
@@ -201,8 +195,4 @@
 }
 .peach-react [data-follow-detail] [data-follow-hidden-thumbs] svg { width: 11px; height: 11px; stroke: currentColor; fill: none; }
 
-/* 写失败的那一句。侧栏是纵向 flex：按内容高，不把整栏剩余高度都算给它（标签会被推到栏底）。 */
 .peach-react [data-follow-detail] [data-follow-state] { flex: none; font-size: var(--fs-xs); color: var(--drop); }
-
-/* 详情标签沿用本地标签行；在线侧栏在操作区之后留出间距。 */
-.peach-react [data-follow-detail-tags] { margin-top:16px; }

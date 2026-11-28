@@ -19,10 +19,11 @@ import { playerHost } from './host';
 import { mountImmersePlayer, type ImmersePlayerOptions } from './immerse-player';
 import { wirePlayerContextMenu } from './menu';
 import { detailPlayer, setDetailPlayer } from './registry';
-import { playbackKey, playbackPosition, stopPlaybackPosition, trackPlaybackPosition } from './progress';
+import { playbackKey, resolvePlaybackPosition, stopPlaybackPosition, trackPlaybackPosition } from './progress';
+import { mountVolumeMemory } from './volume-memory';
 import {
   averageBitrate, bufferedAhead, createBufferMeter, fmtLoadRate, fmtSpeed, PLAYER_PANEL_EVENT,
-  playerSpeedBits, playerStatsOverlayHtml, playerStatsPlot, pushPlayerStat, streamEntries,
+  playerRequestWaterfall, playerSpeedBits, playerStatsOverlayHtml, playerStatsPlot, pushPlayerStat, streamEntries,
 } from './stats';
 import { watchDecoding } from './decode-support';
 import {
@@ -41,6 +42,7 @@ export interface DetailPlayerOptions {
   released?: () => boolean;
   guidePreview?: boolean;
   playbackKey?: string;
+  nativeVolumeSignal?: AbortSignal;
   /** 给定片源（关注条目的 `/follow-stream`）；不给就按作品的来源解析。 */
   source?: PlayerSource;
   /** 播放出错时要不要查来源状态判脱盘。关注条目的片源不在本机来源里，不查。 */
@@ -98,6 +100,7 @@ export async function mountDetailPlayer(
     if (options.released?.()) return null;
     video.controls = true;
     if (options.guidePreview) return null;
+    if (options.nativeVolumeSignal) mountVolumeMemory(video, options.nativeVolumeSignal);
     source().then((next) => {
       if (options.released?.()) return;
       video.addEventListener('loadedmetadata', () => {
@@ -146,6 +149,9 @@ export async function mountDetailPlayer(
     }
   };
   const segmentedNow = () => String(player.currentSource()?.type || '').includes('mpegurl');
+  const requestStart = performance.now();
+  let previousWaterfall = '';
+  let previousPanel: HTMLElement | null = null;
   const session: PlayerSession = { chrome: null, ready: false, updateStats: () => {} };
   sessions.set(player, session);
   session.updateStats = () => {
@@ -192,8 +198,17 @@ export async function mountDetailPlayer(
       [t('catalog:playerStats.playbackTime'), `${fmtClock(video.currentTime)} / ${fmtClock(expected || player.duration())}`],
       [t('catalog:playerStats.date'), new Date().toLocaleString(interfaceLanguage)],
     ];
-    statsPanel.innerHTML = `<dl>${rows.map(([key, value, plot]) =>
+    statsPanel.querySelector('[data-player-stats-values]')!.innerHTML = `<dl>${rows.map(([key, value, plot]) =>
       `<dt>${esc(key)}</dt><dd${plot ? ' data-player-stats-metric=""' : ''}>${plot || ''}<span>${esc(value)}</span></dd>`).join('')}</dl>`;
+    const currentSource = player.currentSrc();
+    const source = currentSource ? new URL(currentSource, location.href) : null;
+    const timings = segmented && !options.source ? resources : source?.origin === location.origin
+      ? performance.getEntriesByName(source.href, 'resource') as PerformanceResourceTiming[] : [];
+    const waterfall = playerRequestWaterfall(timings.filter(entry => entry.startTime >= requestStart));
+    if (waterfall !== previousWaterfall || statsPanel !== previousPanel) {
+      statsPanel.querySelector('[data-player-waterfall-rows]')!.innerHTML = waterfall;
+      previousWaterfall = waterfall; previousPanel = statsPanel;
+    }
   };
   player.on(['loadstart', 'loadedmetadata', 'durationchange', 'error'], enforceDuration);
   let takeFallback: (error: unknown, failed: PlayerSource) => Promise<PlayerSource | null> = async () => null;
@@ -331,8 +346,18 @@ export function attachPlayerChrome(player: VjsPlayer, frame: HTMLElement): () =>
       statsTimer = setInterval(session.updateStats, 1000);
     };
     const closeStatsForOtherPanel = (event: Event) => { if ((event as CustomEvent<string>).detail !== 'stats') closeStats() };
+    const closeStatsOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeStats();
+      statsButton.focus();
+    };
+    statsPanel.addEventListener('keydown', closeStatsOnEscape);
     document.addEventListener(PLAYER_PANEL_EVENT, closeStatsForOtherPanel);
-    offPanels = () => document.removeEventListener(PLAYER_PANEL_EVENT, closeStatsForOtherPanel);
+    offPanels = () => {
+      statsPanel.removeEventListener('keydown', closeStatsOnEscape);
+      document.removeEventListener(PLAYER_PANEL_EVENT, closeStatsForOtherPanel);
+    };
   }
   const tech = player.el().querySelector('video');
   const stopAmbient = tech ? mountPlayerAmbient(tech) : () => {};
@@ -383,7 +408,8 @@ export function mountPlayer(video: HTMLVideoElement, options: MountPlayerOptions
   const frame = options.chrome === false ? null : video.parentElement;
   if (frame) preparePlayerFrame(frame, video);
   const key = playbackKey(kind, item, media?.index ?? null);
-  let detail: DetailPlayerOptions = { guidePreview, playbackKey: key, resume: guidePreview ? null : options.resume ?? { time: playbackPosition(key, item, host.settings().resumeRestartPercent), autoplay: false } };
+  const nativeVolume = new AbortController();
+  let detail: DetailPlayerOptions = { guidePreview, playbackKey: key, nativeVolumeSignal: nativeVolume.signal };
   if (kind === 'follow') {
     detail = {
       ...detail,
@@ -396,9 +422,11 @@ export function mountPlayer(video: HTMLVideoElement, options: MountPlayerOptions
     if (poster) video.poster = poster;
   }
   let player: VjsPlayer | null = null, released = false, detachChrome = () => {}, trackedVideo = video;
+  const resumeRequest = new AbortController();
   const release = () => {
     detachChrome();
     if (player && handedOff?.(player)) return;
+    nativeVolume.abort();
     stopPlaybackPosition(trackedVideo);
     if (!player) {
       stopTelemetry(trackedVideo);
@@ -412,8 +440,14 @@ export function mountPlayer(video: HTMLVideoElement, options: MountPlayerOptions
     if (detailPlayer() === player) { setDetailPlayer(null); stopPlayerPanels() }
     disposePlayer(player);
   };
-  void mountDetailPlayer(item, video, guidePreview ? false : options.autoplay ?? host.settings().detailAutoplay,
-    { ...detail, released: () => released }).then((mounted) => {
+  const mount = async () => {
+    const resume = guidePreview ? null : options.resume ?? {
+      time: await resolvePlaybackPosition(key, item, host.settings().resumeRestartPercent, resumeRequest.signal), autoplay: false,
+    };
+    return released ? null : mountDetailPlayer(item, video, guidePreview ? false : options.autoplay ?? host.settings().detailAutoplay,
+      { ...detail, resume, released: () => released });
+  };
+  void mount().then((mounted) => {
     player = mounted;
     // 挂载还没回来媒体区就换了：这一个一出来就拆掉。
     if (released) { release(); return }
@@ -434,5 +468,5 @@ export function mountPlayer(video: HTMLVideoElement, options: MountPlayerOptions
     if (frame) detachChrome = attachPlayerChrome(mounted, frame);
     onPlayer?.(mounted);
   });
-  return () => { released = true; release() };
+  return () => { released = true; resumeRequest.abort(); release() };
 }

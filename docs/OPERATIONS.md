@@ -21,6 +21,8 @@ macOS 安装依赖：`uv sync --locked --python 3.14 --extra macos`。完成后�
 
 ## macOS 独立测试包
 
+首次设置完成后，从菜单栏打开 Peach 会打开或复用原生窗口。点击「反馈」会附上当前 WebKit 视口的截图，原生截图失败时使用 SnapDOM。通过支持标签页捕获的浏览器访问时，反馈入口会请求共享当前标签页。
+
 在 macOS 的项目目录安装构建依赖：
 
 ```sh
@@ -112,7 +114,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.longmeidao.pea
 
 1. 私钥在 GitHub 仓库 `release` environment 的 secret `SPARKLE_ED_PRIVATE_KEY`，该 environment 只允许 `v*` 标签部署；维护者另有离线备份。ad-hoc 签名下无法轮换，丢失后已装客户端只能手动重装。导入 Mac 钥匙串用 Sparkle 发布包的 `generate_keys -f <私钥文件>`。
 2. 同一 environment 需要 R2 的 secret `PEACH_R2_ACCESS_KEY_ID`、`PEACH_R2_SECRET_ACCESS_KEY`、`PEACH_R2_ENDPOINT` 与变量 `PEACH_R2_BUCKET`。
-3. 仓库变量 `SPARKLE_APPCAST_ENABLED` 为 `true` 时，每个版本标签在 GitHub Release 公开后运行 `sparkle-appcast` 作业：官方 `generate_appcast` 生成两个架构的 appcast，`scripts/sparkle_appcast.py` 补写迁移号并核对版本、下载地址与大小，官方 `sign_update --verify` 核对签名，最后上传到 `https://downloads.peach.video/sparkle/macos-<架构>.xml`。没有 appcast 时，Sparkle 的检查会报更新源不可用。
+3. 仓库变量 `SPARKLE_APPCAST_ENABLED` 为 `true` 时，每个版本标签在 GitHub Release 公开后运行 `sparkle-appcast` 作业。官方 `generate_appcast` 生成两个架构的 appcast，`scripts/sparkle_appcast.py` 补写迁移号，并从 `CHANGELOG.md` 写入英文和简体中文更新日志。核对版本、下载地址、大小、更新日志和签名后，上传到 `https://downloads.peach.video/sparkle/macos-<架构>.xml`。没有 appcast 时，Sparkle 的检查会报更新源不可用。
 4. 第一个带公钥的版本须手动安装一次；之后的版本才能经 Sparkle 更新。在真机按 ADR-0130「未取得的证据」逐项验收。
 
 ### Windows 应用内更新的发布签名
@@ -437,7 +439,7 @@ Peach 配置页地址是 `/configuration`。从管理菜单或设置弹窗的「
 
 启动弹窗同时显示视频文件数、文件名或已有资料可识别的 JAV 文件数与去重后的部数。尚无登记视频的目录分批列出，只识别名称、不打开媒体内容、不写入账本；统计过程中可直接开始扫描，关闭弹窗后不再请求后续批次。新任务沿用同进程 5 分钟内该范围的预检结果，随后用实际扫描更新；账本中已有的记录优先。首次网盘预检的耗时取决于挂载工具列目录的速度；文件名没有番号的 JAV 要在读取配套资料后补充识别。明细里的每部平均预估只针对本次待补资料，缓存齐全的影片不进入这个均值。右下「管理媒体库」链接关闭弹窗并进入媒体库设置，可在那里调整各目录的读取选项。
 
-文件名不必只写番号。番号后面跟片名、女优或字幕说明（`CAWD-987 片名`、`GVH-520【中文字幕】片名`）时，取文件名里第一段「厂牌-至少三位序号」；FC2 商品号（`+++ FC2-PPV-1234567 片名 前編`）写在文件名任意位置都能识别。内置规则认不出的命名，在「媒体库与入库 → 番号识别规则」里每行写一条正则表达式：对完整文件名搜索、不分大小写，番号写在命名组 `(?<code>…)` 里，没有命名组时取第一个括号；取出的部分仍须符合番号格式。规则保存在账本里，各设备共用，保存时检查语法。「处理」时对还没有番号的视频先按这些规则识别，再按内置规则识别；已有番号不会被改写。启动弹窗的预检只按内置规则统计。
+文件名不必只写番号。番号后面跟片名、女优或字幕说明（`CAWD-987 片名`、`GVH-520【中文字幕】片名`）时，取文件名里第一段「厂牌-至少三位序号」；FC2 商品号（`+++ FC2-PPV-1234567 片名 前編`）写在文件名任意位置都能识别。内置规则认不出的命名，在「媒体库与入库 → 番号识别规则」里每行写一条正则表达式：对完整文件名搜索、不分大小写，番号写在命名组 `(?<code>…)` 里，没有命名组时取第一个括号；取出的部分仍须符合番号格式。规则保存在账本里，各设备共用，保存时检查语法。启动弹窗的预检与正式处理都优先使用已有番号。文件还没有番号时，先按自定义规则识别，再按内置规则识别。
 
 本机的 `state/library-processing-traffic.json` 保存近期同类用量。视频探测和单帧读取按媒体目录分开积累；资料采集按待访问来源、封面需求和直连／代理分组。至少取得 3 个有效样本后采用最近 50 次的平均值，后续同类工作随之校准；失败、零下载及计量不完整的资料采集不作为正常样本。首次使用无历史时仍采用默认计划值。
 
@@ -463,7 +465,9 @@ Peach 配置页地址是 `/configuration`。从管理菜单或设置弹窗的「
 | 缩略图 | `generated/cover-thumbs/` 与 `generated/avatar-thumbs/` | 浏览时重新生成 |
 | 日志 | `logs/` 里已归档的 `*.until-*.log` 与 `crash-*.log` | 正在写入的日志保留 |
 
-缩略图是封面与头像的小尺寸副本，由本机已有的原图缩小而来；预览图是从视频抽帧生成的九宫格、海报与进度条预览，重建要重新读取整部影片，网盘里的影片会重新下载，所以只统计不清理。封面与网络资料要重新联网下载，导入资料、任务与复核记录、媒体工具和登录状态都无法由 Peach 重建，同样只统计不清理。
+缩略图由本机的封面与头像缩小而来。预览图包括视频抽帧生成的九宫格、海报与进度条预览，重建时需重新读取媒体，所以只统计占用。资料采集快照单独统计，Peach 会在后续采集中复用。导入资料与浏览记录、任务与复核记录、媒体工具和登录状态也只统计占用。本机项目归档单独显示，存放构建产物、验收材料或运维备份的项目由其维护者管理。
+
+关注抓取快照单独显示占用。点「查看可清理的快照」进入「修复与迁移」，查看预计可释放的空间并确认。清理会保留每个来源最近 3 份快照以及仍被关注条目引用的快照。
 
 「更改位置」把整个数据目录迁到别的文件夹。安装版、从托盘启动的源码运行（Windows、macOS）和无桌面服务（`python -m peach.server`）都支持：
 
@@ -516,6 +520,31 @@ Windows 测试包在 Peach 配置「应用与维护 → 卸载 Peach」里卸载
 源码部署的托盘（Windows，以及配置了 TLS 的 macOS）同时运行一个 HTTP 服务和一个 HTTPS 服务。HTTP 那个只负责把浏览器引到 HTTPS 地址，所以 HTTP 口的 `/healthz` 正常只能说明它自己活着。
 
 托盘菜单的状态行会逐个列出每个服务，例如 `HTTP 正常 · HTTPS 异常（状态码 503）`，异常时附上最近一次失败的原因。
+
+### 反馈接收配置
+
+应用内反馈优先使用 [Sentry 配置](DIAGNOSTICS.md#可选远程诊断)。自托管部署可以为运行 Peach 的进程设置以下环境变量，启用 Cloudflare R2 备份。
+
+| 变量 | 用途 |
+| --- | --- |
+| `PEACH_FEEDBACK_R2_ENDPOINT` | Cloudflare R2 的 S3 API HTTPS 地址 |
+| `PEACH_FEEDBACK_R2_BUCKET` | 私有反馈桶的名称 |
+| `PEACH_FEEDBACK_R2_ACCESS_KEY_ID` | 专用 R2 API Access Key ID |
+| `PEACH_FEEDBACK_R2_SECRET_ACCESS_KEY` | 对应的 Secret Access Key |
+
+使用仅限反馈桶的 [R2 对象读写凭据](https://developers.cloudflare.com/r2/api/tokens/)。凭据由部署方在服务端注入。四项配置齐全时，Sentry 未配置或明确拒收的反馈以 `feedback/<反馈编号>.zip` 保存在桶里，可从 Cloudflare 控制台下载。ZIP 包括 `feedback.json` 和图片。接收结果未知时，Peach 返回未确认状态，避免自动向两个目的地重复投递。
+
+如需由 Peach 代发公开 Issue，将 GitHub App 安装到 `peach-mitao/peach`，授予 Issues 写入权限。如果要同步图片，还需授予 Contents 写入权限。在服务端配置以下环境变量。
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `PEACH_FEEDBACK_GITHUB_APP_ID` | GitHub App 的数字 ID |
+| `PEACH_FEEDBACK_GITHUB_INSTALLATION_ID` | 此仓库对应的 App 安装 ID |
+| `PEACH_FEEDBACK_GITHUB_PRIVATE_KEY_FILE` | 服务端可读的 PEM 私钥文件路径 |
+
+Peach 用私钥换取限于目标仓库的短期安装令牌。GitHub App 以自己的身份创建 Issue，用户无需登录 GitHub。旧部署也可继续使用 `PEACH_FEEDBACK_GITHUB_TOKEN`，需要同样的仓库权限。
+
+仅单独勾选公开的图片会写入独立的 `peach-feedback-screenshots` 分支，随后以 Issue 评论内的图片显示。首次上传时会创建独立分支。源代码、构建和部署工作流应只接收指定的代码分支。公开图片会进入 Git 历史，勾选前应核对内容。未配置代发或发布失败时，回执显示未同步。Issue 已创建但图片同步未确认时，回执保留 Issue 链接和图片下载入口。
 
 ### 本机诊断
 
@@ -664,11 +693,11 @@ untrunc 按相同顺序查找，对应目录为 `tools/untrunc`。独立程序�
 - 浏览器不支持的 AVI、MKV 等格式，Peach 会转成兼容的 MP4 缓存起来再播放，**不会改动原始文件**。第一次播放前会先探测文件，最长 20 秒。
 - `.ts`、`.m2ts`、`.mts` 起播前先探测编码：视频是 H.264（`yuv420p`／`yuvj420p`），或浏览器报了能力的 HEVC，就整片换封装成 MP4（视频复制，音轨不是 AAC 时转 AAC），产物和其他换封装缓存一样文件名带 `-copy`，换一次后命中缓存，受容量保护清理；解不了的编码仍走 HLS 转码分片。换封装要等整个文件复制完才开始播放。
 - 能保留的码流尽量保留：H.264（`yuv420p`／`yuvj420p`）视频不重新编码，AAC 音频直接复制，其他音频转成 AAC。需要重新编码视频时，自动模式依次尝试硬解加硬编、软解加硬编、全软件；Windows 使用 NVIDIA（`scale_cuda` + NVENC），Linux 使用可用 VAAPI 节点，macOS 使用 VideoToolbox。macOS 硬件编码通过实际合成帧探测，并禁止系统软件编码冒充硬件；H.264 输出采用 6 Mbit/s。AV1 硬解显式使用 FFmpeg 原生 `av1` 解码器，设备不支持时回退 dav1d 软件解码。
-- 「应用与维护 → 视频播放」的「画质上限」默认原画，可选 1080p、720p、480p，按短边计（竖屏片子的 720p 是宽 720）。只管重新编码的整片与 HLS 分片：短边超过上限才缩小，同时把峰值码率压到 8、4、2 Mbit/s；直接播放和只换封装的片子保持原画。帧在显存里的 CUDA、VAAPI、QSV 全硬件链分别用 `scale_cuda`、`scale_vaapi`、`vpp_qsv`，其余用软件 `scale`；AMF、QSV、VAAPI 改用带峰值的 VBR。档位存在 `media-processing.json` 的 `playback_max_height`（`0/1080/720/480`），换档后新缓存的文件名带档位，原画沿用原来的缓存。
+- 「媒体库与入库 → 视频播放」的「画质上限」默认原画，可选 1080p、720p、480p，按短边计（竖屏片子的 720p 是宽 720）。只管重新编码的整片与 HLS 分片：短边超过上限才缩小，同时把峰值码率压到 8、4、2 Mbit/s；直接播放和只换封装的片子保持原画。帧在显存里的 CUDA、VAAPI、QSV 全硬件链分别用 `scale_cuda`、`scale_vaapi`、`vpp_qsv`，其余用软件 `scale`；AMF、QSV、VAAPI 改用带峰值的 VBR。档位存在 `media-processing.json` 的 `playback_max_height`（`0/1080/720/480`），换档后新缓存的文件名带档位，原画沿用原来的缓存。
 - 同时最多进行 2 个转码或探测，单次最长 1 小时，关掉播放页会取消对应的任务。
 - 网盘来源（115、PikPak、光鸭云盘、OneDrive 与其他已挂载网盘）的视频通过媒体库配置中声明的挂载目录播放，哪些来源按网盘处理以 `resources/media-sources.json` 登记的 `cloud` 为准。能不能播，以在 Peach 里实际打开一个已知视频为准。
 
-Peach 配置「媒体库与入库 → 视频预览」中的「抽帧解码方式」与「应用与维护 → 视频播放」中的「转码方式」分别保存为运行 Peach 那台电脑的偏好，两者互不影响，均可选择「自动（硬件优先）」或软件。抽帧设置控制封面、九宫格与时间轴；扫描、读 NFO 和时长探测不依赖 GPU。播放设置只控制 Peach 服务端的整片与 HLS 转码，浏览器直接播放时自行选择解码方式。保存无需重启，对新任务生效；已生成的有效缓存继续使用，运行中的 FFmpeg 不被强行中断。macOS 抽帧在同一超时预算内尝试 VideoToolbox，Windows 抽帧对 H.264、HEVC、VP9、AV1 尝试 D3D11VA，Linux 对同一范围尝试第一个可用 VAAPI 渲染节点，失败后都回退软件；视频编码格式探测按文件大小和修改时间缓存。Windows 播放的自动档依次探测 NVENC、AMF、QSV 编码，三者都不可用时用 D3D11VA 解码再交给 libx264；AMF 只接受 AMD 显卡上的 D3D11 设备，Peach 按显卡序号逐个探测；QSV 优先让解码、缩放和编码都留在 Intel 显卡上，以 Windows 服务方式运行时建不出这条链，改为 D3D11VA 解码后交给 QSV 编码。偏好通过 `/api/media-processing` 的 GET/POST 读写，`preview_acceleration` 和 `playback_acceleration` 分别接受 `auto/software`，`playback_max_height` 接受 `0/1080/720/480`；省略的字段保持现值。这个接口与时间轴缩略图的 `/api/thumbnail-jobs` 和 `/api/configuration/*` 一样只接受运行 Peach 的电脑发来的请求，其他设备即使已登录或处于开放访问也返回 403。`PEACH_TRANSCODE_BACKEND` 可用于管理员诊断，支持 `auto/software/nvenc/amf/qsv/vaapi/videotoolbox`，显式 `software` 会保持禁用硬件。
+Peach 配置「媒体库与入库 → 视频预览」中的「抽帧解码方式」与「媒体库与入库 → 视频播放」中的「转码方式」分别保存为运行 Peach 那台电脑的偏好，两者互不影响，均可选择「自动（硬件优先）」或软件。抽帧设置控制封面、九宫格与时间轴；扫描、读 NFO 和时长探测不依赖 GPU。播放设置只控制 Peach 服务端的整片与 HLS 转码，浏览器直接播放时自行选择解码方式。保存无需重启，对新任务生效；已生成的有效缓存继续使用，运行中的 FFmpeg 不被强行中断。macOS 抽帧在同一超时预算内尝试 VideoToolbox，Windows 抽帧对 H.264、HEVC、VP9、AV1 尝试 D3D11VA，Linux 对同一范围尝试第一个可用 VAAPI 渲染节点，失败后都回退软件；视频编码格式探测按文件大小和修改时间缓存。Windows 播放的自动档依次探测 NVENC、AMF、QSV 编码，三者都不可用时用 D3D11VA 解码再交给 libx264；AMF 只接受 AMD 显卡上的 D3D11 设备，Peach 按显卡序号逐个探测；QSV 优先让解码、缩放和编码都留在 Intel 显卡上，以 Windows 服务方式运行时建不出这条链，改为 D3D11VA 解码后交给 QSV 编码。偏好通过 `/api/media-processing` 的 GET/POST 读写，`preview_acceleration` 和 `playback_acceleration` 分别接受 `auto/software`，`playback_max_height` 接受 `0/1080/720/480`；省略的字段保持现值。这个接口与时间轴缩略图的 `/api/thumbnail-jobs` 和 `/api/configuration/*` 一样只接受运行 Peach 的电脑发来的请求，其他设备即使已登录或处于开放访问也返回 403。`PEACH_TRANSCODE_BACKEND` 可用于管理员诊断，支持 `auto/software/nvenc/amf/qsv/vaapi/videotoolbox`，显式 `software` 会保持禁用硬件。
 
 卡片悬停预览请求的 `/stream` 不带流会话，取消不了，也看不到浏览器断开。片源需要整片转码且没有现成缓存时，这条请求直接回 415，不启动 FFmpeg；详情与沉浸模式带会话播放，关闭时按会话结束转码。
 
@@ -768,6 +797,7 @@ Windows 使用已安装的中文系统 OCR，macOS 使用 Vision，Linux 使用�
 - 两条接口共用守卫（`routes_pages._setup_guard`）：已配置 404，非回环来源 403，独立包地址栏主机名不是回环写法 403；提交另查 Origin（403）与设置文件已存在（409）。两条都在 `/api/` 下，错误一律回 JSON。
   - `GET /api/setup/questions` 给出画表单要的数据：`questions` 按 `onboarding.questions()` 的顺序列出每题的 `key`、`label`、`help`（说明行列表）、`default`、`required`、`advanced`（是否折进「高级设置」）、`input`（`text`、`number`、`choice`、`folders`）、`prefix`、`suffix`，`host` 另带按页面顺序排好的 `options`，`mdns_name` 另带 `visible_when: {"host": "2"}`；另有 `media_sources`、`media_source_default`、`media_root`（非 Windows 的对应路径格，Windows 为 `null`）、`cloud`（提示、帮助链接与缺失的挂载软件 `dependencies`）、`windows`、`standalone`，以及三个开关的初始值 `access_enabled`（host 默认是局域网就开）、`scan_now`、`history_guide`。
   - `POST /api/setup` 收同名字段：`media_dir` 是 `{path, location, root}` 行列表（`location` 缺省为 `local`），`access_enabled`、`scan_now`、`history_guide` 是布尔，选了「只有这台电脑」可不传 `mdns_name`。第一步的 `interface_language`（`auto` 或已登记的界面语言）在新建账本时写进同步设置，接到已有账本时不改。400 回 `{"error", "errors"}`：`errors` 按题目 key，访问密码在 `access_password`，`media_dir` 与提交的行一一对应、没错的行是空串；整表不成立（超过 100 行）时只有一句，长度与行数不等。`apply` 失败回 400，错误在 `data_root`。200 回 `url`、`scan_requested`、`history_guide`、`standalone`、`redirect`（独立包为入口地址，其余为 `null`，跳转时长由前端定）与运行信息 `facts`（同 `/api/configuration` 的 `facts`）。
+- 网页在进入下一步前检查当前步骤必填项，服务端在提交时校验路径、端口及其余配置。确认页的「参与馆藏与偏好研究」默认关闭。读题接口的 `library_sharing` 提供发送范围和 `consent_schema`。主动开启时提交 `library_sharing: {consent: true, consent_schema}`，当前版本校验通过后，授权写入所选数据目录。省略时沿用该目录已有选择，新目录默认关闭。
 - 建目录（`database`、`generated`、`sources`、`state`、`secrets`、`logs`、`tools`、`review`）、迁移数据库、生成 CA 与口令、写设置文件，都由 `onboarding.apply()` 完成；CLI 和设置页调用同一个函数，只是输出方式不同。问答的题目、默认值和写文件逻辑在 `src/peach/onboarding.py`。
 - 网页不展示数据库路径输入，`media_root` 为 `null`。`media_dir` 行中的 `root` 可省略或留空，服务端按媒体目录补齐；已有行提交原 `root` 时保留它。媒体目录与已有配置唯一匹配时复用原前缀，新目录自动生成前缀，并用目录名作为媒体库名称。
 - Windows 上 `peach init` 写出的 `[media.locations] local` 直接是那些目录，`[media.mounts]` 为空；macOS 上配置的目录是 `R:\media`（第二个起 `R:\media2`……），本机目录按同样顺序写进 `[media.mounts] local`。复制、writer 镜像、SMB 一律不问，保持关闭或留空。
@@ -867,7 +897,7 @@ Windows 托盘在取得单实例锁后启动独立监视器。监视器用 Win32
 ### 两台机器之间的同步
 
 - 「同步开发进度」走 GitHub，「同步数据库」走 SMB 共享，两者不能合并成一个按钮：任何一边连不上都不该拖住另一边。HTTP/HTTPS 服务只观察角色，不自动复制。
-- `replication.enabled` 开启时：建同步观察器、探测并挂载 SMB、托盘出现两个 Ledger 菜单项、追更凭据写入共享副本。关闭时这些都不发生，`/healthz` 的 `ledger_sync` 是 `disabled`，写接口全开。
+- 源码部署和 Windows、macOS 独立发行版均可在本机 `config.toml` 的 `[replication]` 中设置 `enabled = true`。重启应用后，托盘显示「同步数据库」和「由本机接管数据库写入」，同步观察器开始检查共享副本。关闭时托盘隐藏这两项，`/healthz` 的 `ledger_sync` 是 `disabled`，写接口全开。
 - 手动同步先用 `sync.resolve()` 只读判断这次会不会真的复制。`offline` 不是结论：macOS 重启后 SMB 共享不会自动挂回来，托盘按 `SHARED_SMB_HOST`／`SHARED_SMB_SHARE`／`SHARED_SMB_USER` 补挂一次再判断，真挂不上才报告。
 - 补挂用 `osascript` 的 `mount volume`，而且必须先查钥匙串：没有对应记录时 NetFS 不报错，而是弹出认证框一直等，后台操作既卡到超时，又在用户面前弹出密码框。钥匙串记录按主机名存，同一台机器的 IP 和 mDNS 名是两条不同的记录。
 - 补挂后仍是 `offline`，以及 `conflict`／`in-sync`，都直接报告，不停服务；确定要复制时才停掉自己创建的服务，用 SQLite backup API 加原子替换复制，最后恢复服务。
@@ -889,6 +919,7 @@ Windows 托盘在取得单实例锁后启动独立监视器。监视器用 Win32
 - **依赖升级**：定版前完成[每次发版检查](TESTING.md#每次发版检查)的依赖升级批次，包括适用的兼容修改、派生产物、完整验证与本地集成；暂不能升级的保留具体原因和失败证据。定版后发现需要改依赖时，先保存发行说明草稿，撤回本轮尚未提交的版本修改，完成升级后重新定版。
 - **定版**：在干净的 master 主检出上运行 `python scripts/release_tag.py --bump auto --apply`。它按上一个版本标签到 HEAD 的区间定档（`bump_part_for()`：主题以 `feat` 开头、带破坏性标记 `!`，或 `migrations/` 有新文件时推 minor，其余推 patch；1.0 要手工 `--bump major` 并另立 ADR，见 ADR-0012），写入 `__version__`，并把 `CHANGELOG.md` 的 `Unreleased` 一节定成这个版本号（每行「English / 中文」，Release 正文英文在前、中文与下载段折叠，见 `scripts/changelog.py`）。区间只改了文档、技能和测试时直接拒绝，因为那样打出的包和上一个标签完全相同。minor 及以上的版本还须先在 `src/peach/release_notices.py` 写好这一版的更新公告，缺了也直接拒绝（[ADR-0152](adr/0152-release-notice-after-upgrade.md)）。公告的 `features` 连同 `refs` 里的 issue 或 PR 编号会写成 Release 正文开头的重点，旧版本检查更新时只显示这一组。`--bump` 只写文件不提交，并打印定版的那一节供人检查；不带 `--apply` 只打印计划。
 - **发布**：确认之后运行 `python scripts/release_tag.py --ship --apply`，一次完成剩下四步：提交 `src/peach/__init__.py` 与 `CHANGELOG.md`（消息 `chore(release): 版本 <新版本>`）、推送 master、每 30 秒查一次这个提交的 Test 工作流、变绿后创建并推送 annotated tag。打标签后继续等 GitHub Release 把 README 下载直链对应的制品全部上传完，再单独提交 `docs(readme): 下载直链指向 <标签>` 并推送；等待期间 README 仍指向上一版，中断后用 `--point-readme --apply` 补做。默认最多等 30 分钟，用 `--timeout` 修改。不带 `--apply` 只打印步骤。
+- **发布公告**。在 Git 本机配置中将 `peach.releaseAnnouncementScript` 设为受信任 Python 脚本的绝对路径，可随 GitHub 发版执行公告。正式发布、补打标签和补做 README 换链时，入口把本次 `--repo`、`--tag` 和 `--timeout` 交给该脚本。脚本负责等待发布完成、发送和去重，通过标准输出返回 JSON 回执。失败时，发布结果保留并附 `announcement_error`，进程返回非零。处理失败后可用 `release_tag.py --announce-tag vX.Y.Z --apply` 补做。预演、GitLab 和未配置的检出跳过公告。
 - `--ship` 在动手前检查：不在 master、变更日志缺这一节、标签已被占用、工作区除了那两份定版文件还有别的改动，任何一条成立就拒绝（标签指向发布提交，夹带什么就等于发布什么）。Test 结束不是绿色就立刻停，这时标签还没打。
 - 标签流水线第一步就跑仓库根与 `frontend` 两份 npm 审计；新公布的高危漏洞会让已打出的标签什么也发不了。所以 `--bump --apply` 写文件前、`--ship` 在 Test 转绿之后打标签之前，都先用 `scripts/npm_audit.py` 的同一判据复查一次，有高危漏洞就停，版本文件与标签都不动。
 - 等 Test 期间能确定等不到结果的也立刻停，不耗到超时：GitLab 必需任务（`verify-linux`、`verify-windows`、`verify-macos`、`wheel-smoke`）已失败；任务排着队没人接，且带这些 tags 的 runner 都不在线或已暂停（读 runner 列表要维护者权限；读不到，或列表里查不到带这些 tags 的 runner 时，按排队满 5 分钟仍未开始判停）；推送 5 分钟后仍没有 Test 记录。报错写明任务名、tags 和已等时长。GitHub 只对自建 runner 任务做同样判断，托管 runner 排队照常等。处理好之后再跑一次 `--ship --apply` 接着走。
@@ -901,6 +932,12 @@ Windows 托盘在取得单实例锁后启动独立监视器。监视器用 Win32
 - **公开文字检查**：`scripts/check_public_text.py --hook-event` 挂在 Claude 的 `PreToolUse`（Bash、PowerShell）上，同样用 `uv run --no-project`。命令里没有 `gh pr|issue create|edit|comment` 或改评论的 `gh api` 时直接放行；有就把命令连同 `--body-file`、`-F body=@` 引用的文件，对照本机账本（`mode=ro`）检查。成串列出番号、人物或标题片段时退出码 2，理由交给模型改写。`agent_worktree.py integrate` 对 PR 正文和分支提交说明做同一检查，覆盖不走钩子的 Codex。没有账本的机器放行；确需多列时正文写一行 `peach-public-text: <理由>`。手工检查用 `python scripts/check_public_text.py <文件>`。
 - 「检查更新」只 fetch 和比较；「同步开发进度」只做 `merge --ff-only`，不 stash、不 rebase、不 `--force`：并行工作树和主检出共用同一个对象库与 reflog，任何改写历史的操作都会波及其他分支。工作区有改动或两边分叉时，原样报告交给人处理。本地不落后远端或连不上远端时，按构建身份判断打包托盘要不要重建（见「桌面入口与发布」）；这条路径不拦有改动的工作区，因为构建用的就是检出里的代码。
 - 快进涉及 `tray.py`／`menubar.py`／`versioning.py`／`certs.py`／`netwatch.py`／`config.py`／`pyproject.toml` 时，只重启子服务不够，托盘要用 `launchctl kickstart -k` 重启自己：先 `stop_owned()` 再 kickstart，前提是 launchd 报的 pid 等于自己的 pid。
+
+### 发布说明审阅
+
+汇总 `Unreleased` 时，以最后一个公开发布标签的实际行为为基准。用提交主题和 PR 找遗漏，对照上一版与候选提交核实用户看得到的变化。同一功能的新增、改法和同版修正合成最终说明。上版已有的能力只记录本版新增的行为。同一个 PR 包含多项独立变化时可分条。
+
+定版后运行 `python scripts/changelog.py --review <版本> --to build/changelog-review.json`。清单包含上一版原日志、候选与基准的差异入口，以及与每条文字或来源编号相关的历史记录。逐条在 `change` 写明相对上一版的真实变化。发现重复或误列新增时直接修订当前变更日志，再重新生成清单。正式发布和补打标签都核对候选提交、发布基准和最终日志，并拒绝本版重复条目。为较早的固定发布提交生成清单时，用 `--review-ref` 指定提交。
 
 ### 网络与服务细节
 

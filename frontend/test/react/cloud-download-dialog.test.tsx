@@ -80,7 +80,7 @@ it('带着番号与标题打开：标题行写番号与片名，搜索框与番�
   expect(posts).toEqual([{
     magnet: MAGNET, provider: '115', target: '/115/云下载', code: 'ABC-123', title: '一部作品', origin: 'asset:12',
   }]);
-  expect(receipt).toHaveBeenCalledWith('已提交离线下载，进度在任务中心');
+  expect(receipt).toHaveBeenCalledWith('已提交下载，进度在任务中心');
   expect(close).toHaveBeenCalled();
 });
 
@@ -95,7 +95,7 @@ it('提交没成功时弹层不关，原因留在表单里', async () => {
   expect([close.mock.calls.length, receipt.mock.calls.length]).toEqual([0, 0]);
 });
 
-it('查找另一番号时清空先前的磁力和作品资料，资料未取得时提交不带其他作品的标题', async () => {
+it('查找另一番号时清空先前的磁力和作品资料，馆藏没有匹配资料时提交不带其他作品的标题', async () => {
   const posts: unknown[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === 'POST') posts.push(JSON.parse(String(init.body)));
@@ -110,7 +110,7 @@ it('查找另一番号时清空先前的磁力和作品资料，资料未取得�
   await type(field(page, '按番号查找资源'), 'ABC-999');
   await act(async () => field(page, '按番号查找资源')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
   await settle();
-  expect(page.querySelector('[data-resource-work]')?.textContent).toContain('作品资料未取得');
+  expect(page.querySelector('[data-resource-work]')?.textContent).toContain('馆藏中没有这部作品的资料');
   expect(page.querySelector('[data-resource-work]')?.textContent).not.toContain('原作品');
   expect(field(page, '磁力链接')?.value).toBe('');
   await type(field(page, '磁力链接'), MAGNET);
@@ -167,7 +167,7 @@ it.each(['abf-258', 'ABF258', 'ABF-258'])('查询同番号 %s 保留已知作品
 it('只读端可查找资源，提交下载禁用', async () => {
   serve(snapshot({ available: false }));
   const { page } = await open({});
-  expect(page.textContent).toContain('云下载只在允许修改数据库的设备上可用');
+  expect(page.textContent).toContain('下载只在允许修改数据库的设备上可用');
   expect(section(page, '查找资源')).not.toBeNull();
   expect(buttonNamed('提交下载', page)?.disabled).toBe(true);
 });

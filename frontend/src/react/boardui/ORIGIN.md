@@ -16,6 +16,10 @@
 
 | 条目 | 注册表 JSON 的 SHA-256 | 复制的文件 |
 | --- | --- | --- |
+| `agent-thinking`（2026-11-26） | `b75cb4fc1830b64afdd0198ad8a47efb4cb715e5b59096cacc42029d016d4991` | `components/application/agent-thinking/agent-thinking.tsx` |
+| `composer-loader`（2026-11-26） | `304c856a9b3fbeda0a74b55c71d5ff77fc1d47558be4f7c0519ba9babcd46e52` | `components/application/composer-loader/composer-loader.tsx` |
+| `agent-log`（2026-11-26） | `be74e01e367f095d7ea4a479d8e4fc2e34513df5d2fbd8bbebea7b790a805de9` | `components/application/agent-log/agent-log.tsx` |
+| `template-copy`（2026-11-26） | `f5cdaffde20871106c9db2066a3bcf993f785014248b94502256b498346a77bf` | `components/foundations/template-copy/template-copy.tsx` |
 | `date-picker`（2026-11-18） | `36e77d0293daaead84fd939a1104e456904f4be49122185f41a738203cead3bf` | `components/base/date-picker/shared.tsx` |
 | `slider`（2026-11-18） | `43e3cff77c2471a6f544f297702151f4ae571e058716584f627a574ce4c09d39` | `components/base/slider/slider.tsx` |
 | `kbd`（2026-11-04） | `6a9e105249ff7e1e4abb38625b23d0195546158226b6a071a9965003651b188f` | `components/base/kbd/kbd.tsx` |
@@ -53,6 +57,7 @@
 | 设置行分隔线 | 配置页与设置弹层沿用 `SettingsCard` 的左侧 12px 内缩、右侧通到卡片边缘；`../settings/section.tsx` 的行组标记由 `configuration-page.css` 连接相邻行组 | 设置项由独立组件组合时，组与组之间仍保留一条分隔线；底部操作栏使用通栏线 |
 | `globals`（`693885494e6f229637fe118852efbfb3df820dd8d174a2a7e47f65dadfcd96bf`） | 不复制整份；用到的 `check-draw` 动画、根元素的字体平滑和 `.bui-table` 那一组规则逐字搬进 `../styles.css`，作用域是 `.peach-react` | 整份 `@import "tailwindcss"` 会把 Preflight 和 `html`、`body` 的底色铺到整页，未迁移页面仍由旧样式表绘制。`table` 条目的外观全在 `globals.css` 里（React Aria 的集合组件包不进自定义组件），不搬就只剩一张没有边线和字阶的裸表 |
 | `data-table`（`7bb73a6cd099b9b16390e5fe00f8ba2d55b5ef96c1e8f90a056168cd2e3235e6`） | 不复制；表格视图用 `table` 条目的 `Table` 配 `@tanstack/react-table`，列定义、排序、行选择与分页写在 `../follow-manage/` 里 | 该条目是 `registry:block`，只有一份 `docs/examples/data-table-example.tsx` 示例，依赖的 avatar、segmented-control、status-dot、tooltip 等条目 Peach 都没有；它演示的正是「`table` 加 TanStack Table」这套接法 |
+| Modal | `../components/modal-frame.tsx` 组合 React Aria，过渡取公开 `modal` 条目 | Peach 保留尺寸、遮罩色、Portal 与键盘瞬时关闭。版本见 `docs/reference-sources.json` 的 `boardui-modal` |
 | Tailwind Preflight | `../preflight-scoped.css` 逐字包进 `@scope (.peach-react)` | 同上 |
 | 深色模式 | 上游读 `<html class="dark">`；`appearance/theme.ts` 的 `applyTheme()` 与 `index.html` 首帧脚本按实际深浅加减这个类 | Peach 的主题选择写在 `data-theme`，跟随系统时不写属性 |
 | 与 `web/board.css` 同名的 `--color-*` token | `:root` 上由 `board.css` 定值；`../styles.css` 在 `.peach-react` 与 `.dark .peach-react` 上按 `theme.css` 原文重新声明 | 未迁移页面的颜色保持不变，React 子树读到上游值 |
@@ -82,7 +87,7 @@
 | 常驻处理任务 | `../library-processing/library-processing-notice.tsx` 与 `library-processing-dock.tsx` 组合进度、折叠正文、估时和直接控制，Sonner 按目标栈管理位置与持久停留 | 用户要求参考公开 Agent Progress 自行实现，任务由服务端真实阶段推进；取证与领域差异见 `docs/reference-snapshots/processing-task-controls.md` |
 | 进度环 | `../components/progress-ring.tsx` 的 `ProgressRing`：SVG 两圈，`pathLength={100}` 把一圈长度钉成 100，画出来的那一段就是完成比例；更新横幅与扫描采集通知卡共用，尺寸默认 `--icon-inline` | 任务总量未知时改画那一阶段的语义动画，已知总量才绘制读数 |
 | 三档处理强度 | `../library-processing/processing-effort.tsx` 基于 React Aria Slider 和已登记的 Button、Popover 组合，最高档 SVG 流光读取强调色色阶 | 用户要求参考 Composer Panel Effort 公开演示重建，六档适配低占用、标准、全速；流光绘制为 Peach 重建方案 |
-| 模态弹层 | `../avatar-picker/avatar-picker-page.tsx` 用 React Aria 的 `ModalOverlay` + `Modal` + `Dialog` 组合，遮罩取 `../styles.css` 的 `--color-scrim`（同旧样式表 `.geist-modal::backdrop` 的黑 60%） | 注册表里没有模态弹层，也就没有它的遮罩底色 |
+| 模态弹层遮罩 | `../components/modal-frame.tsx` 用 Peach 的 `--color-scrim`（同旧样式表 `.geist-modal::backdrop` 的黑 60%） | 上游 `modal` 条目使用黑 70% |
 | 候选网格 | 同上：一排四张 3:4 的候选，弹层宽度与格子比例取 `../styles.css` 的 `--container-avatar-picker` 与 `--aspect-avatar-choice` | 注册表里没有图片选择网格；这两档在工具类里没有对应档位，写成 `@theme` 而不是任意值 |
 | 空态里的去处 | `../components/empty-state.tsx` 的 `EmptyState` 收一个 `actions`，按钮与链接画在说明下面 | 上游没有空态组件；标题、说明和那个去处必须在同一个组件里，散到调用处就会各排各的 |
 | 读数兼页签 | `../stats/stats-page.tsx` 的四张读数卡是 React Aria 的 `Tabs`／`TabList`／`Tab`，选中态是一圈 `border-focus-ring` | `tabs` 条目是页面级导航的下划线页签，这里切的是同一页里的四层细节，而且页签本身要显示读数 |

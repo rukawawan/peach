@@ -17,7 +17,7 @@ it('推荐标签使用固定百分制与档次，未知值和越界值有明确�
   for (const [input, score, label] of [[0, '0', '探索'], [-0.1, '0', '探索'], [0.5, '50', '推荐'], [0.75, '75', '强烈推荐'], [1.2, '100', '强烈推荐']] as const) {
     expect(recommendationScore(input)).toMatchObject({ score, label });
   }
-  for (const value of [undefined, null, NaN, Infinity]) expect(recommendationScore(value)).toMatchObject({ score: '—', label: '资料未取得' });
+  for (const value of [undefined, null, NaN, Infinity]) expect(recommendationScore(value)).toMatchObject({ score: '—', label: '暂无推荐评分' });
 });
 it('发现查询隔离排序缓存且只读，资料读取用 POST 起停、进度单独轮询', async () => {
   const requests: { url: URL; method: string; body: unknown }[] = [];
@@ -51,7 +51,7 @@ it('发现封面优先本机缓存，远程封面经 Peach 代理并保留原地
   expect(image.dataset.javCover).toBe('/cover-image?code=ABC-001');
   expect(local.innerHTML).not.toContain('dmm.co.jp');
   expect(advanceImageFallback(image)).toBe('drop');
-  expect(local.querySelector('span.media-nopic')?.textContent).toBe('封面未取得');
+  expect(local.querySelector('span.media-nopic')?.textContent).toBe('封面无法显示');
   expect(discoveryArtwork({ ...item, has_cover: false, code: '' }, 'small', 'cover')).toBe('');
 });
 it('JAV 分区从深链恢复，未知分区落在馆藏', () => {

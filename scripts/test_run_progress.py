@@ -26,8 +26,9 @@ class RunProgress:
         self.scope_names, self.supplements = tuple(scope_names), supplements or {}
         records = list(records)
         self.sources = [record.get('state') for record in records if record.get('state')]
+        known_scopes = dict.fromkeys(('full', *self.scope_names, *scopes))
         self.requirements = {scope: resume.scope_units(root, scope, select, supplements)
-                             for scope in ('full', *scope_names)}
+                             for scope in known_scopes}
         self.all_units = set().union(*self.requirements.values())
         self.required = set().union(*(self.requirements[scope] for scope in scopes))
         self.units = resume.combine(root, records, context, self.all_units, resolve, select)

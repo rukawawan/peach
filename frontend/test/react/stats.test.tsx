@@ -263,7 +263,7 @@ it('全是 0 的分布图与没有分段的径向图都换成说明卡', async (
   expect(panel.querySelector('section[aria-label="画质"] p')?.textContent).toBe('探测画质后，这里会显示画质分布。');
 });
 
-it('计数取不到时读「未取得」，不白屏也不读成 NaN', async () => {
+it('计数取不到时读「未知」，不白屏也不读成 NaN', async () => {
   const { host } = await open(payload({
     tag_cov: null,
     attribution: { videos: 4, creator: null, code: null, studio: null, thumb: null, duration: null },
@@ -273,20 +273,20 @@ it('计数取不到时读「未取得」，不白屏也不读成 NaN', async () 
     },
   }));
   const cards = [...host.querySelectorAll('[role=tablist]')[0]!.querySelectorAll('[role=tab]')];
-  expect(cards.map((tab) => tab.querySelector('b')?.textContent)).toEqual(['4', '未取得', '未取得', '1 个卷']);
+  expect(cards.map((tab) => tab.querySelector('b')?.textContent)).toEqual(['4', '未知', '未知', '1 个卷']);
   expect(host.textContent).not.toContain('NaN');
 });
 
 it('计数加千分位，百分比夹在 0 到 100，有一点就不读 0%', () => {
   expect(fmtCount(1234567)).toBe((1234567).toLocaleString());
-  expect(fmtCount(null)).toBe('未取得');
+  expect(fmtCount(null)).toBe('未知');
   expect([percentOf(150, 100), percentOf(-3, 100), percentOf(5, 0), percentOf(null, 10)]).toEqual([100, 0, 0, 0]);
   expect([percentText(1, 1000), percentText(0, 1000), percentText(1, 2)]).toEqual(['<1%', '0%', '50%']);
 });
 
 it('播放时长：不到一小时读分钟，不到 48 小时读小时，再往上读天', () => {
   expect([playedFor(1800), playedFor(7200), playedFor(48 * 3600), playedFor(-5), playedFor(null)])
-    .toEqual(['30 分钟', '2.0 小时', '2 天', '0 分钟', '未取得']);
+    .toEqual(['30 分钟', '2.0 小时', '2 天', '0 分钟', '未知']);
 });
 
 it('径向图超过六段并掉尾部，体积跟着合计；负数与非有限值不画', () => {
@@ -334,7 +334,7 @@ it('取不到容量的卷不画使用率，只说取不到', async () => {
   }));
   await click(tabNamed(host, '使用空间'));
   const panel = host.querySelectorAll('[role=tabpanel]')[0]!;
-  expect(panel.textContent).toContain('容量未取得');
+  expect(panel.textContent).toContain('容量未知');
   expect(panel.textContent).toContain('未映射');
   expect(panel.querySelector('[role=meter]')).toBeNull();
 });
@@ -389,7 +389,8 @@ it('快进扫过和正常看完是两回事，一行里分得出来', async () =
 });
 
 it('空馆藏提供添加媒体入口，链到媒体库设置', async () => {
-  const { host } = await open(payload({ by_loc: [], by_library: [] }));
+  const { host } = await open(payload({ by_loc: [], by_library: [], top_tags: [], recent: [], tag_source: [] }));
+  expect(host.querySelectorAll('[data-empty-state]')).toHaveLength(1);
   expect(host.querySelector('h3')?.textContent).toBe('还没有视频');
   expect(radialCharts(host)).toEqual([]);
   expect(host.querySelector('[role=tabpanel] section[aria-label]')).toBeNull();

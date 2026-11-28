@@ -23,6 +23,7 @@ import {
 import { useFollowWrite } from '../follow-feed/follow-feed-page';
 import type { PhotoLayout, PhotoSize } from './entity-body';
 import { t } from '../../i18n';
+import { useRectangleSelection } from '../components/rectangle-selection';
 
 export interface EntityOnlineProps {
   view: FollowView;
@@ -67,6 +68,8 @@ export function EntityOnline(props: EntityOnlineProps) {
 function Cards({ view, media, data, visible, context, photoSize, photoLayout, imagesOnly, actions, clearFilters, selectMode = false, selected }:
   EntityOnlineProps & { data: FollowPage }) {
   const write = useFollowWrite({ view, revision: 0, actions });
+  const rectangle = useRectangleSelection(visible.length && actions.selectRectangle
+    ? (keys, add) => actions.selectRectangle?.(keys.map(Number), add) : undefined, { selecting: selectMode });
   const sources = useMemo(() => {
     const byId = new Map((data.sources || []).map((source) => [source.id, source]));
     const byAuthor = new Map<string, FollowSource[]>();
@@ -90,7 +93,7 @@ function Cards({ view, media, data, visible, context, photoSize, photoLayout, im
     );
   }) : <Empty searched={!!(data.groups || []).length || !!(view.status || view.provider || view.tags.length || view.durMin || view.durMax)}
     clear={clearFilters} actions={actions} sources={entityCheckSources(data.sources || [], view.author)} />;
-  return <div data-follow-list="" data-follow-wall={images ? '' : undefined} {...wall}>{body}</div>;
+  return <div data-follow-list="" data-follow-wall={images ? '' : undefined} {...wall} {...rectangle}>{body}</div>;
 }
 
 function Empty({ searched, clear, actions, sources }: {

@@ -669,7 +669,7 @@ class BrowserTests(unittest.TestCase):
         self.service.process_one()
         status = self.status().json()
         self.assertEqual((status["state"], status["retry_attempt"], status["message"]),
-                         ("queued", 1, "JavDB 未取得，等待自动重试"))
+                         ("queued", 1, "JavDB 搜索失败，等待自动重试"))
         self.assertEqual(status["retry_at"], dl.iso(now[0] + 900))
         self.assertEqual(self.wants(), [])
         # 只是一个来源没答复，不暂停整条队列：下一个番号照常搜索。
@@ -681,7 +681,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(self.service.search.call_count, 8)
         status = self.status().json()
         self.assertEqual((status["state"], status["retry_exhausted"]), ("failed", True))
-        self.assertEqual(status["message"], "JavDB 自动重试 3 次后仍未取得，请在 Peach 检查来源后重试")
+        self.assertEqual(status["message"], "JavDB 自动重试 3 次后仍无法完成搜索")
         self.assertNotIn("sources_complete", self.service.rows["ABC-123"])
         self.assertEqual(self.wants(), [])
         now[0] += 3600
@@ -698,7 +698,7 @@ class BrowserTests(unittest.TestCase):
         self.service.process_one()
         status = self.status().json()
         self.assertEqual((status["state"], status["message"]),
-                         ("no_match", "其余来源没找到；JavDB 暂时访问不了，恢复后自动补查"))
+                         ("no_match", "其余来源没找到。JavDB 搜索失败，恢复后自动补查"))
         self.assertNotIn("retry_at", status)
         self.assertEqual(self.wants(), [("ABC-123", "code", "wanted")])
         with self.service.contract.database.read_connection() as connection:
@@ -921,7 +921,9 @@ class BrowserTests(unittest.TestCase):
         waiting = self.status().json()
         self.assertEqual((waiting["state"], waiting["paused"]["failure"]), ("queued", "config"))
         paused = self.listed()["paused"]
-        self.assertEqual([(row["reason"], row["tone"]) for row in paused], [("网盘配置或登录有问题", "error")])
+        self.assertEqual([(row["reason"], row["tone"]) for row in paused],
+                         [("还没有填 CloudDrive2 的 API 令牌", "warning")])
+        self.assertEqual(waiting["message"], paused[0]["message"])
         self.assertFalse(self.service.process_one())
         # 令牌补上后，到了试探时间拿同一个磁力再交一次。
         self.remote.submit.side_effect = None
@@ -930,6 +932,30 @@ class BrowserTests(unittest.TestCase):
         self.service.process_one()
         self.assertEqual(self.status().json()["state"], "submitted")
         self.assertEqual(self.remote.submit.call_count, 2)
+
+    def test_cloud_probe_connection_failure_is_visible_until_the_channel_is_reachable(self):
+        catalog = self.downloads.channel_snapshot()
+        unavailable = dl.DownloadError("network", "errors.downloadsClouddrive.unreachable", {
+            "action": {"code": "labels.downloadsClouddrive.action.verifyToken"}, "details": "Connection refused"})
+        self.downloads.channel_catalog = lambda: {
+            "providers": [], "problems": [], "channel_errors": {"clouddrive": unavailable}}
+        self.add()
+        self.assertTrue(self.service.process_one())
+        waiting = self.status().json()
+        paused = self.listed()["paused"][0]
+        self.assertEqual((waiting["state"], paused["failure"], paused["tone"]), ("queued", "network", "warning"))
+        self.assertEqual(paused["reason"], "CloudDrive2 拒绝连接")
+        self.assertEqual(waiting["paused"]["message"], paused["message"])
+        self.service.search.assert_not_called()
+
+        self.downloads.channel_catalog = lambda: catalog
+        self.service.search.return_value = {"items": []}
+        start = self.downloads.clock()
+        self.downloads.clock = lambda: start + 601
+        self.assertTrue(self.service.process_one())
+        self.assertEqual(self.status().json()["state"], "no_match")
+        self.assertEqual(self.listed()["paused"], [])
+        self.remote.submit.assert_not_called()
 
     def test_an_unavailable_search_source_pauses_the_whole_queue(self):
         self.service.search.return_value = {"items": [], "state": "unavailable", "retry_after": 300}
@@ -958,12 +984,40 @@ class BrowserTests(unittest.TestCase):
         for code in ("ABC-123", "ABC-124"):
             self.add(code)
         self.service.process_one()
-        self.assertEqual(self.service.rows["ABC-123"]["message"], "JavDB 未取得，等待自动重试")
+        self.assertEqual(self.service.rows["ABC-123"]["message"], "JavDB 搜索失败，等待自动重试")
         for code in ("ABC-123", "ABC-124"):
             status = self.client.get("/api/jav-browser", params={"code": code}, headers=self.script_headers).json()
-            self.assertEqual(status["message"], "JavDB 未取得，已暂停；到时自动继续")
+            self.assertEqual(status["message"], "JavDB 搜索失败，已暂停；到时自动继续")
         self.assertEqual([(row["reason"], row["message"]) for row in self.listed()["paused"]],
-                         [("JavDB 未取得", "JavDB 未取得，已暂停；到时自动继续")])
+                         [("JavDB 搜索失败", "JavDB 搜索失败，已暂停；到时自动继续")])
+
+    def test_a_search_pause_explains_the_connection_failure_on_the_list_and_in_details(self):
+        from peach.coded_text import Said
+
+        failure = Said('labels.magnetChain.sourceFailed', source='sukebei',
+                       error=Said('labels.resourceSearch.connectionFailed'))
+        self.service.search.return_value = {"items": [], "state": "error", "retry_after": 0,
+                                            "unfetched_sources": ["sukebei"], "source_failures": [failure],
+                                            "connection_checks": ["sukebei"]}
+        self.add()
+        self.service.process_one()
+        row = self.service.rows["ABC-123"]
+        self.assertEqual(row["message"], "sukebei：无法访问，等待自动重试")
+        self.assertEqual(row["message_params"]["error"]["params"]["failures"], [failure.phrase])
+        expected = "sukebei：无法访问，已暂停；到时自动继续"
+        self.assertEqual(self.status().json()["message"], expected)
+        self.assertEqual(self.listed()["paused"][0]["message"], expected)
+        recovery = {"kind": "source_connection", "source": "sukebei"}
+        self.assertEqual(self.status().json()["paused"]["recovery"], recovery)
+        self.assertEqual(self.listed()["paused"][0]["recovery"], recovery)
+
+    def test_a_saved_search_retry_without_failure_details_uses_the_updated_message(self):
+        self.add()
+        self.service.rows["ABC-123"].update(
+            message="sukebei 未取得，等待自动重试", message_code="labels.javBrowser.sourcesWaiting",
+            message_params={"sources": "sukebei"})
+        self.assertEqual(self.status().json()["message"], "sukebei 搜索失败，等待自动重试")
+        self.assertEqual(self.service.rows["ABC-123"]["message"], "sukebei 未取得，等待自动重试")
 
     def test_a_search_pause_without_a_source_to_name_says_the_search_error(self):
         self.service.search.return_value = {"items": [], "state": "unavailable", "retry_after": 300,

@@ -31,6 +31,8 @@ WINDOWS_TRAY_INPUTS = (
     "src/peach/",
     "scripts/build_app_entry.py",
     "scripts/build_windows.ps1",
+    "scripts/build_windows_webview.ps1",
+    "scripts/windows_webview.cs",
     "scripts/replace_windows_tray.py",
     "web/",
     "migrations/",

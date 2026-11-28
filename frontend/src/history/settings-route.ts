@@ -10,6 +10,7 @@ export const PREFERENCE_SECTIONS = {
 export const CONFIGURATION_SECTIONS = {
   library: t('navigation:configurationSections.library'), subscriptions: t('navigation:configurationSections.feeds'),
   downloads: t('navigation:configurationSections.downloads'), network: t('navigation:configurationSections.network'),
+  ai: t('navigation:configurationSections.ai'),
   maintenance: t('navigation:configurationSections.maintenance'), diagnostics: t('navigation:configurationSections.diagnostics'),
 } as const;
 export type SettingsSectionId = keyof typeof PREFERENCE_SECTIONS | keyof typeof CONFIGURATION_SECTIONS;
@@ -30,8 +31,11 @@ export function sectionId(name: string | null | undefined): SettingsSectionId | 
 /** 分区在当前界面语言里的标题；认不出的原样返回。 */
 export const sectionTitle = (name: string): string => { const id = sectionId(name); return id ? SECTION_TITLES[id] : name; };
 export type ConfigurationPath = `/settings/${keyof typeof CONFIGURATION_SECTIONS}`;
+export const configurationDescriptionKey = (id: string) =>
+  id === 'ai' ? 'aiLibrary.help' : 'configurationPage.descriptions.' + (id === 'subscriptions' ? 'sources' : id);
 /** 「应用与维护」之下的子页：升级后的修复与迁移。不进配置分区页签，从「自动修复」进入，页头画面包屑。 */
 export const REPAIR_CENTER_PATH = '/settings/maintenance/repairs' as const;
+export const CHATGPT_SETTINGS_PATH = '/settings/ai?connection=chatgpt' as const;
 /** 设置分区那一层的地址（`/settings/<分区>`）；分区之下的子页不算。 */
 export const isSettingsSectionPath = (path: string): boolean => /^\/settings\/[^/]+$/.test(path);
 export function configurationSection(path: string): string {

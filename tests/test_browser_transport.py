@@ -671,6 +671,19 @@ class WebSocketTests(unittest.TestCase):
                 ws.call("Page.navigate", url="about:blank")
         self.assertIn("no target", str(caught.exception))
 
+    def test_cdp_event_callback_receives_an_event_before_the_call_returns(self):
+        server = FakeCdp(lambda method, params: {})
+        self.addCleanup(server.close)
+        ws = _WebSocket(f"ws://127.0.0.1:{server.port}/devtools/page/T1")
+        self.addCleanup(ws.close)
+        event = {"method": "Network.loadingFinished", "params": {"requestId": "access-token"}}
+        observed = []
+        ws.on_event = observed.append
+        frames = [json.dumps(event), json.dumps({"id": 1, "result": {"value": "ready"}})]
+        with patch.object(ws, "recv", side_effect=frames):
+            self.assertEqual(ws.call("Runtime.evaluate", expression="true"), {"value": "ready"})
+        self.assertEqual(observed, [event])
+
 
     def test_a_page_that_keeps_sending_events_cannot_hold_a_call_past_its_deadline(self):
         """回包永远不到、事件却一直推来：期限按整次调用算，到期抛超时并丢掉这条连接。"""

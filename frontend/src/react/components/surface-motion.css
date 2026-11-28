@@ -33,21 +33,29 @@
   }
 }
 
-.peach-react [data-modal-motion] {
-  transition: opacity 200ms var(--ease-out);
-}
+/* BoardUI Modal 独立过渡遮罩与面板，参数见锁定的注册表条目。 */
+.peach-react { --modal-surface-motion: 300ms cubic-bezier(.32, .72, 0, 1); }
+[data-fit-visual-viewport] { top: var(--modal-viewport-top, 0px); }
+.peach-react [data-modal-backdrop] { transition: opacity 300ms ease-out; }
 .peach-react [data-modal-surface] {
-  transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out);
+  transition: opacity var(--modal-surface-motion), scale var(--modal-surface-motion), filter var(--modal-surface-motion);
 }
-.peach-react [data-modal-motion]:is([data-entering], [data-exiting]) { opacity: 0; }
-.peach-react [data-modal-surface]:is([data-entering], [data-exiting]) {
-  transform: scale(.98);
-  opacity: 0;
+.peach-react [data-modal-motion]:is([data-entering], [data-exiting]) > [data-modal-backdrop],
+.peach-react [data-modal-surface]:is([data-entering], [data-exiting]) { opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .peach-react [data-modal-surface]:is([data-entering], [data-exiting]) { scale: .85; filter: blur(4px); }
 }
-.peach-react [data-modal-motion][data-exiting],
-.peach-react [data-modal-surface][data-exiting] { transition-duration: 120ms; }
-.peach-react [data-modal-motion][data-motion-instant],
-.peach-react [data-modal-motion][data-motion-instant] [data-modal-surface] { transition: none; }
+.peach-react [data-modal-motion][data-motion-instant] :is([data-modal-surface], [data-modal-backdrop]) { transition: none; }
+.peach-react [data-modal-side="right"] [data-modal-surface] { transition-property: translate; }
+.peach-react [data-modal-side="right"] [data-modal-surface]:is([data-entering], [data-exiting]) {
+  opacity: 1;
+  scale: none;
+  filter: none;
+  translate: 100% 0;
+}
 @media (prefers-reduced-motion: reduce) {
-  .peach-react [data-modal-motion], .peach-react [data-modal-surface] { transition: none; }
+  .peach-react [data-modal-side="right"] [data-modal-surface] { transition: none; }
 }
+[data-progress-animated] { transition: transform var(--motion-content); }
+.task-stage-change { animation: task-stage-in var(--motion-content) backwards; }
+@keyframes task-stage-in { from { opacity: .65; } to { opacity: 1; } }

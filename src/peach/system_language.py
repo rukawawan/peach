@@ -19,6 +19,16 @@ def interface_language(tag: object) -> str | None:
 
 
 def _candidates() -> Iterator[str]:
+    if sys.platform == "darwin":
+        try:
+            from Foundation import NSLocale
+        except ImportError:
+            pass
+        else:
+            # 从 Finder 启动时，POSIX locale 可能与 macOS 的界面语言不同。
+            if languages := NSLocale.preferredLanguages():
+                yield from languages
+                return
     if sys.platform == "win32":
         # Windows 的显示语言；区域格式（GetUserDefaultLCID）可能和界面语言不同，以显示语言为准。
         try:

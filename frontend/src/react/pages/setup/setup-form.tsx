@@ -16,6 +16,7 @@ import { Switch } from '@/components/base/switch/switch';
 import { Select, SelectItem } from '@/components/base/select/select';
 
 import { randomId } from '../../../core/random-id';
+import { codedText, serverLabel, serverLabelList } from '../../../core/server-text';
 import { Note } from '../../components/note';
 import { ConfigurationChoice, ConfigurationInput } from '../../components/configuration-fields';
 import { busyProps } from '../../settings/busy-props';
@@ -29,6 +30,7 @@ import { PasswordPair } from '../../settings/password-pair';
 import { isLoopbackProxy, ProxyAddressField, ProxyModeSelect } from '../../settings/peach-proxy-fields';
 import { ReportingChoices } from '../../settings/remote-reporting-settings';
 import { Disclosure, ErrorText, ExternalLink, Fact, FactList, Help, SourceMark } from '../../settings/section';
+import { SharingChoice } from '../../settings/sharing-choice';
 import { CardGroup, GroupTitle } from '../auth-card';
 import {
   describeFailure, pickFolder, SetupRequestError, submitSetup,
@@ -110,6 +112,8 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
   const [scanNow, setScanNow] = useState(setup.scan_now);
   const [skipMedia, setSkipMedia] = useState(false);
   const [reporting, setReporting] = useState(setup.remote_reporting);
+  const sharing = setup.library_sharing;
+  const [shareLibrary, setShareLibrary] = useState(false);
   const [proxyMode, setProxyMode] = useState(setup.peach_proxy?.mode ?? 'environment');
   const [proxyAddress, setProxyAddress] = useState('');
   const [languageChoice, setLanguageChoice] = useState<InterfaceLanguageChoice>(() => {
@@ -149,18 +153,57 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
     !question.visible_when || Object.entries(question.visible_when).every(([key, value]) => values[key] === value);
   const setValue = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
 
+  const checkMedia = () => {
+    const missingPath = serverLabel(setup.windows ? 'errors.mediaConfiguration.fullPathRequiredWindows'
+      : 'errors.mediaConfiguration.fullPathRequiredPosix', t('shell:setupForm.fieldRequired'));
+    const rowErrors = skipMedia ? [] : folders.rows.map(row => row.path.trim() ? '' : missingPath);
+    const missingPolicy = skipMedia ? -1 : folders.rows.findIndex(row => row.path.trim() && !row.cost);
+    const rootError = dataRoot?.required && !values[dataRoot.key]?.trim() ? t('shell:setupForm.fieldRequired') : '';
+    folders.setErrors(rowErrors);
+    setTableError('');
+    setRequireReadPolicy(missingPolicy >= 0);
+    if (dataRoot) setErrors(current => ({ ...current, [dataRoot.key]: rootError }));
+    if (rootError || rowErrors.some(Boolean)) {
+      setErrorRound(count => count + 1);
+      return false;
+    }
+    if (missingPolicy >= 0) {
+      form.current?.querySelector<HTMLButtonElement>(`[data-media-read-policy="${missingPolicy}"] button`)?.focus();
+      return false;
+    }
+    return true;
+  };
+
+  const checkAccess = () => {
+    const next: SetupErrors = { access_password: '', access_confirm: '', peach_proxy: '' };
+    for (const question of others) {
+      if (question.required && visible(question)) {
+        next[question.key] = values[question.key]?.trim() ? '' : t('shell:setupForm.fieldRequired');
+      }
+    }
+    if (accessOn) {
+      const length = [...password].length;
+      if (!password) next.access_password = serverLabel('api.pages.passwordRequired', t('shell:setupForm.fieldRequired'));
+      else if (length < 8 || length > 256) next.access_password = t('shell:accessSetup.passwordLength');
+      if (!confirmation) next.access_confirm = t('shell:setupForm.fieldRequired');
+      else if (confirmation !== password) next.access_confirm = t('settings:accessPassword.mismatch');
+    }
+    if (proxyMode === 'proxy' && !proxyAddress.trim() && !setup.peach_proxy?.proxy_saved) {
+      next.peach_proxy = t('shell:setupForm.fieldRequired');
+    }
+    setErrors(current => ({ ...current, ...next }));
+    if (!Object.values(next).some(Boolean)) return true;
+    if (ADVANCED_KEYS.some(key => next[key])) setAdvancedOpenings(count => count + 1);
+    setErrorRound(count => count + 1);
+    return false;
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
     if (step < 3) {
+      if ((step === 1 && !checkMedia()) || (step === 2 && !checkAccess())) return;
       move(step + 1);
-      return;
-    }
-    const missing = skipMedia ? -1 : folders.rows.findIndex((row) => !row.cost);
-    if (missing >= 0) {
-      setRequireReadPolicy(true);
-      move(1);
-      requestAnimationFrame(() => form.current?.querySelector<HTMLButtonElement>(`[data-media-read-policy="${missing}"] button`)?.focus());
       return;
     }
     setBusy(true);
@@ -172,6 +215,7 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
       peach_proxy: { mode: proxyMode, proxy: proxyMode === 'proxy' ? proxyAddress : '' },
       ...(setup.history_guide ? { history_guide: true } : {}),
       ...(reporting ? { remote_reporting: { usage: reporting.usage, errors: reporting.errors } } : {}),
+      ...(sharing && shareLibrary ? { library_sharing: { consent: true, consent_schema: sharing.consent_schema } } : {}),
     };
     // 隐藏的题不提交，服务端按题目默认值补上。
     for (const question of fields) if (visible(question)) submission[question.key] = values[question.key] ?? '';
@@ -187,8 +231,9 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
         setErrors(found);
         if (ADVANCED_KEYS.some((key) => found[key])) setAdvancedOpenings((count) => count + 1);
         if (found.access_password) setAccessOn(true);
+        if (found.library_sharing) setShareLibrary(false);
         move(found.interface_language ? 0
-          : found.media_dir || (dataRoot && found[dataRoot.key]) ? 1 : 2);
+          : found.media_dir || (dataRoot && found[dataRoot.key]) ? 1 : found.library_sharing ? 3 : 2);
         setErrorRound((count) => count + 1);
       } else {
         setFailure(describeFailure(cause));
@@ -322,7 +367,7 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
                   <SourceSelect index={index} value={row.location} options={sources}
                     onChange={(location) => folders.edit(index, { location, cost: location === 'local' ? 'free' : '' })} />
                   <MediaReadPolicy index={index} cost={row.cost ?? ''}
-                    error={requireReadPolicy && !row.cost ? t('shell:setupForm.readPolicyRequired') : undefined}
+                    error={requireReadPolicy && row.path.trim() && !row.cost ? t('shell:setupForm.readPolicyRequired') : undefined}
                     onChange={(cost) => folders.edit(index, { cost })} />
                   {libraries.length > 1 ? <FolderField label={t('shell:setupForm.moveToLibrary')} className="w-full @lg:w-60">
                     <Select className="w-full" aria-label={t('shell:setupForm.directoryLibrary', { index: index + 1 })} selectedKey={row.library_id}
@@ -409,7 +454,7 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
           ? <PasswordPair label={t('shell:shared.accessPassword')} password={password} confirmation={confirmation}
               onPassword={setPassword} onConfirmation={setConfirmation}
               passwordError={announce(text(errors.access_password))} passwordHint={t('shell:accessSetup.passwordLength')}
-              confirmationInvalid={Boolean(errors.access_password)} />
+              confirmationError={announce(text(errors.access_confirm))} />
           : null}
       </CardGroup>
 
@@ -422,7 +467,8 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
         </div>
         {proxyMode === 'proxy'
           ? <ProxyAddressField id="setupProxyAddress" value={proxyAddress} onChange={setProxyAddress}
-              saved={setup.peach_proxy?.proxy_saved} error={announce(text(errors.peach_proxy))} />
+              saved={setup.peach_proxy?.proxy_saved} required={!setup.peach_proxy?.proxy_saved}
+              error={announce(text(errors.peach_proxy))} />
           : errors.peach_proxy ? <ErrorText key={errorRound}>{text(errors.peach_proxy)}</ErrorText> : null}
         {setup.docker && proxyMode === 'proxy' && isLoopbackProxy(proxyAddress)
           ? <Note tone="warning" title={t('shell:setupForm.loopbackProxyTitle')}>{t('shell:setupForm.loopbackProxyBody')}</Note>
@@ -456,10 +502,24 @@ export function SetupForm({ setup, onDone, onRestore }: { setup: SetupQuestions;
       </CardGroup>
 
       {failure ? <ErrorText>{failure}</ErrorText> : null}
-      {reporting ? <CardGroup>
-        <GroupTitle>{t('shell:setupForm.reportingTitle')}</GroupTitle>
+      {reporting ? <CardGroup labelledBy="setup-reporting-title">
+        <GroupTitle id="setup-reporting-title">{t('settings:dataSharing.diagnosticsTitle')}</GroupTitle>
         <ReportingChoices value={reporting} onChange={setReporting} />
-        <Help>{t('shell:setupForm.reportingHint')}</Help>
+      </CardGroup> : null}
+      {sharing ? <CardGroup labelledBy="setup-community-title">
+        <GroupTitle id="setup-community-title">{t('settings:dataSharing.communityTitle')}</GroupTitle>
+        <SharingChoice label={t('settings:librarySharing.uploadDetails')} description={t('settings:librarySharing.setupDescription')}
+          selected={shareLibrary} available={sharing.available} onChange={setShareLibrary} />
+        <div className="flex flex-col gap-2">
+          <Disclosure summary={t('settings:librarySharing.fieldsAndRules')}>
+            <ul className="list-disc space-y-2 pl-5">
+              {serverLabelList(sharing.fields, sharing.field_codes).map(field => <li key={field}><Help>{field}</Help></li>)}
+            </ul>
+            <Help>{codedText(sharing, 'notice')}</Help>
+          </Disclosure>
+          <Help>{t('shell:setupForm.librarySharingHelp')}</Help>
+          {errors.library_sharing ? <ErrorText key={errorRound}>{text(errors.library_sharing)}</ErrorText> : null}
+        </div>
       </CardGroup> : null}
       <CardGroup labelledBy="setup-summary-title">
         <GroupTitle id="setup-summary-title">{t('shell:setupForm.summaryTitle')}</GroupTitle>

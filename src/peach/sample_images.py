@@ -55,6 +55,7 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 #: 快照里只认发行方自己那几站给的样张：DMM、MGS 与 amane 桥那一档片商官网。综合索引（javdb、
 #: JavBus、AVBase）与 FC2 存档站转载的图不算官方判据，不自动落。几站都给了时按这个顺序取。
 SITE_ORDER = ("dmm", "mgstage", "prestige", "faleno", "dahlia", "makers", "r18dev", "1pondo", "fc2")
+_OFFICIAL_GALLERIES = {"dmm", "mgstage", "prestige", "faleno", "dahlia", "makers", "1pondo"}
 
 MGS_DETAIL = "https://www.mgstage.com/product/product_detail/{code}/"
 
@@ -169,6 +170,23 @@ def detail_refs(connection: sqlite3.Connection, code: str | None) -> list[dict[s
     return [{"n": int(row[0])} for row in connection.execute(
         f"SELECT position FROM {TABLE} WHERE code=? AND position>0 ORDER BY position LIMIT ?",
         (key, MAX_PER_CODE))]
+
+
+def official_refs(connection: sqlite3.Connection, code: str | None) -> list[tuple[int, str]]:
+    key = code_key(code)
+    if not key or not table_ready(connection):
+        return []
+    rows = connection.execute(f"SELECT position,url,site FROM {TABLE} WHERE code=? AND position>0 "
+                              "ORDER BY position LIMIT ?", (key, MAX_PER_CODE))
+    refs = []
+    for position, url, site in rows:
+        try:
+            origin = source_for(url) if urlsplit(url).scheme == "https" else None
+        except ValueError:
+            continue
+        if (site in _OFFICIAL_GALLERIES and origin == site) or (site == "r18dev" and origin == "dmm"):
+            refs.append((int(position), url))
+    return refs
 
 
 def counts(connection: sqlite3.Connection, codes: Iterable[str]) -> dict[str, tuple[int, str]]:

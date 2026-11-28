@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { showToast } from '../toaster';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/base/buttons/button';
 import { cx } from '@/utils/cx';
 import { cardClass } from './card';
@@ -12,23 +11,32 @@ export function CodeBlock({ code, language, label, maxCharacters, bounded = true
   bounded?: boolean; copyLabel?: string; onCopy?(): void;
 }) {
   const scroll = useOverlayScrollbar<HTMLPreElement>();
-  const [status, setStatus] = useState('');
+  const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
-  useEffect(() => { setStatus(''); setFailed(false) }, [code]);
+  const receipt = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    setCopied(false); setFailed(false);
+    return () => clearTimeout(receipt.current);
+  }, [code]);
   const truncated = maxCharacters !== undefined && code.length > maxCharacters;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);
-      setFailed(false); setStatus(t('shell:shared.copied')); onCopy?.();
-      showToast('code-copy', { html: t('shell:shared.copied'), alert: false, timeout: 4000, action: null });
+      setFailed(false); setCopied(true); onCopy?.();
+      clearTimeout(receipt.current);
+      receipt.current = setTimeout(() => setCopied(false), 4000);
     } catch {
-      setFailed(true); setStatus(t('shell:codeBlock.copyFailed'));
+      clearTimeout(receipt.current);
+      setCopied(false); setFailed(true);
     }
   };
   return <div className={cx(cardClass({ bordered: 'soft', radius: 'plain', padding: 'none' }), 'overflow-hidden bg-background-tertiary-default')} data-code-block>
     <div className="flex min-w-0 items-center justify-between gap-3 border-b border-separator-border px-3 py-2">
       <span className="text-caption-1-medium text-text-secondary">{language.toUpperCase()}</span>
-      <Button variant="secondary" size="small" onClick={() => void copy()}>{copyLabel || (truncated ? t('shell:codeBlock.copyAll') : t('shell:codeBlock.copyCode'))}</Button>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2">
+        <span role="status" className="text-caption-1-regular text-text-secondary empty:sr-only">{copied ? t('shell:shared.copied') : null}</span>
+        <Button variant="secondary" size="small" onClick={() => void copy()}>{copyLabel || (truncated ? t('shell:codeBlock.copyAll') : t('shell:codeBlock.copyCode'))}</Button>
+      </div>
     </div>
     <div className="relative min-w-0">
       <pre ref={scroll} tabIndex={0} aria-label={label}
@@ -36,6 +44,6 @@ export function CodeBlock({ code, language, label, maxCharacters, bounded = true
         <code>{maxCharacters === undefined ? code : code.slice(0, maxCharacters)}</code>
       </pre>
     </div>
-    {status ? <p role={failed ? 'alert' : 'status'} className="m-0 px-3 pb-2 text-caption-1-regular text-text-secondary">{status}</p> : null}
+    {failed ? <p role="alert" className="m-0 px-3 pb-2 text-caption-1-regular text-text-secondary">{t('shell:codeBlock.copyFailed')}</p> : null}
   </div>;
 }

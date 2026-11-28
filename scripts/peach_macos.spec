@@ -44,4 +44,8 @@ app = BUNDLE(collection, name="Peach.app", icon=str(root / "resources" / "peach.
              bundle_identifier=MACOS_BUNDLE_ID,
              info_plist={"CFBundleName": "Peach", "CFBundleDisplayName": "Peach 蜜桃",
                          "CFBundleShortVersionString": version, "CFBundleVersion": version,
+                         "CFBundleDevelopmentRegion": "en",
+                         "CFBundleLocalizations": ["en", "zh-Hans"],
+                         "CFBundleAllowMixedLocalizations": True,
+                         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
                          "LSUIElement": True, "NSHighResolutionCapable": True})

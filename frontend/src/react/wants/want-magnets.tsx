@@ -17,8 +17,8 @@ import { recordWantMagnets, recordFoundWants, invalidateWants } from './wants';
 import { Disclosure } from '../settings/section';
 import { cachedResources, rememberResources, resourcesFresh } from './resource-cache';
 import { providerIcon, ScrapeSourceLabel } from '../components/source-label';
-import { resourceNotice, resourceSize, resourceSourceKey } from './resource-display';
-import { SiteMark } from '../components/site-mark';
+import { resourceSize, resourceSourceKey } from './resource-display';
+import { ResourceWarningNotes, type ResourceWarnings } from './resource-warning-notes';
 import { codedText, serverLabel } from '../../core/server-text';
 import { editionText } from '../../core/jav-title';
 import { t } from '../../i18n';
@@ -31,12 +31,10 @@ export interface MagnetCandidate {
   /** 有译文的来源名带 code（评论区链接的 `source` 是 `javdb-comments`）；`source` 原值仍用来判断条目种类。 */
   source_code?: string;
 }
-export interface MagnetResult {
+export interface MagnetResult extends ResourceWarnings {
   state: 'ready' | 'error' | 'busy' | 'unavailable'; items: MagnetCandidate[];
-  error: string; checked_at: string | null; warnings?: string[];
+  error: string; checked_at: string | null;
   error_code?: string; error_params?: Record<string, unknown>;
-  warning_codes?: (string | null)[]; warning_params?: (Record<string, unknown> | null)[];
-  warning_sources?: string[];
   source_url?: string;
   source_pages?: { source: string; label: string; url: string }[];
   cache_stale?: boolean;
@@ -150,14 +148,6 @@ export function WantMagnets({ want, readOnly, downloads, provider, toast, onSour
   const waiting = query.isFetching || query.data?.state === 'busy';
   const failure = query.error ? errorMessage(query.error) : codedText(query.data, 'error');
   const incomplete = !query.error && query.data?.error_code === 'labels.magnetChain.incomplete';
-  const warnings = query.data?.warnings?.map((warning, index) => {
-    const code = query.data?.warning_codes?.[index] ?? '';
-    const params = query.data?.warning_params?.[index];
-    const source = query.data?.warning_sources?.[index] || (code.startsWith('labels.javdbPublic.') || code === 'labels.magnetChain.staleReused'
-      ? 'javdb' : resourceSourceKey(String(params?.source || '')));
-    return { text: serverLabel(code, resourceNotice(warning), params), source,
-      informational: code === 'labels.javdbPublic.reviewPagesQueried' || resourceNotice(warning) !== warning };
-  }) || [];
   return (
     <div ref={root} data-want-magnets="" className="flex min-w-0 flex-col gap-3 border-t border-separator-border pt-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -168,9 +158,8 @@ export function WantMagnets({ want, readOnly, downloads, provider, toast, onSour
       </div>
       {/* 还没有结果时是整块面板在等，动画大一档摆在正中；已有结果时换一批，等待留在行内。 */}
       {waiting ? <ActivityStatus kind="radar" size={query.data?.items.length ? 'inline' : 'block'} label={t('catalog:wantMagnets.searching')} /> : null}
-      {failure && (!incomplete || !warnings.length) ? <Note tone="error" title={t('catalog:wantMagnets.notFound')}>{failure}</Note> : null}
-      {warnings.map((warning) => <Note key={warning.text} tone={warning.informational ? 'neutral' : 'error'}>
-        <span className="inline-flex items-center gap-1.5">{warning.source ? <SiteMark source={warning.source} /> : null}{warning.text}</span></Note>)}
+      {failure && (!incomplete || !query.data?.warnings?.length) ? <Note tone="error" title={t('catalog:wantMagnets.notFound')}>{failure}</Note> : null}
+      {query.data ? <ResourceWarningNotes result={query.data} /> : null}
       {!onSources && sourcePages.length ? <div className="flex flex-wrap gap-2">{sourcePages.map(page =>
         <ButtonLink key={page.source} data-button-link="" variant="secondary" size="small" trailingIcon={RiExternalLinkLine}
           href={page.url} target="_blank" rel="noopener noreferrer"><ScrapeSourceLabel source={page.source} label={page.label} /></ButtonLink>)}</div> : null}

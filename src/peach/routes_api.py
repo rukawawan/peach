@@ -17,17 +17,19 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
 from browserexport.common import BrowserexportError
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
-from . import push_discovery, web_contract, web_tasks
+from . import web_ai_custom_tasks, web_ai_library, ai_openai_oauth, ai_prompts, web_ai_search, ai_usage, interface_text, push_discovery, web_contract, web_tasks
 from .field_owners import RevisionConflict
 from .folder_rules import FolderRuleConflict
 from .interaction import reveal_path
@@ -35,7 +37,9 @@ from .jobs import TaskRunConflict
 from .update_tasks import UpdateBusy
 from .platform import is_unmapped, translate_ledger_path
 from .providers import ProviderUnavailable
-from .routes_auth import require_auth
+from .routes_auth import authenticated_client, require_auth
+from .system_language import interface_language
+from .web_local_access import local_client, loopback_client, private_ai_client
 from .task_runs import task_label
 from .task_control import Cancelled as TaskCancelled
 from .taste_history import analyze_history, import_history_exports, write_manifest
@@ -49,6 +53,254 @@ LOGGER = logging.getLogger(__name__)
 @router.get("/api/providers")
 def provider_health(request: Request, args: dict[str, str] = Depends(require_auth)):
     return request.app.state.providers.health()
+
+
+def _ai_access(request: Request):
+    site = request.headers.get("sec-fetch-site", "").lower()
+    if site and site != "same-origin":
+        raise HTTPException(403, message_fields("api.auth.submitFromSettings"))
+    if not private_ai_client(request):
+        raise HTTPException(403, message_fields("api.aiLibrary.privateAccess"))
+    if not (site == "same-origin" and loopback_client(request)) and not authenticated_client(request):
+        raise HTTPException(401, "unauthorized")
+
+
+def _ai_admin(request: Request):
+    _ai_access(request)
+    if not local_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+
+
+def _ai_payload(body):
+    # Validation errors for key-carrying routes must never echo arbitrary request bodies.
+    if not isinstance(body, dict):
+        raise HTTPException(400, message_fields("api.aiLibrary.invalid"))
+    return body
+
+
+def _ai_key_payload(request: Request, body):
+    payload = _ai_payload(body)
+    if payload.get("api_key") and request.url.scheme != "https" and not loopback_client(request):
+        raise HTTPException(403, message_fields("api.aiLibrary.credentialTransport"))
+    return payload
+
+
+def _ai_language(request: Request, preferred=None) -> str:
+    return (interface_language(preferred) or interface_language(request.query_params.get("lang"))
+            or interface_text.request_language(request.headers.get("accept-language")))
+
+
+@router.get("/api/ai-library/connections")
+def ai_connections(request: Request, response: Response, _args=Depends(require_auth)):
+    _ai_access(request)
+    response.headers["Cache-Control"] = "no-store"
+    result = web_ai_library.connections(request.app.state)
+    if loopback_client(request):
+        oauth = ai_openai_oauth.status(request.app.state)
+        providers = result["providers"]
+        first_custom = next((index for index, provider in enumerate(providers) if provider.get("custom")), len(providers))
+        providers.insert(first_custom, {"id": "openai-oauth", "label": "ChatGPT", **oauth,
+                                       **web_ai_library.connection_choices("openai-oauth", oauth["model"])})
+    return result
+
+
+@router.post("/api/ai-library/connections")
+def ai_configure(request: Request, response: Response, body: Any = Body(...), _args=Depends(require_auth)):
+    _ai_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return web_ai_library.configure(request.app.state, _ai_key_payload(request, body))
+
+
+@router.get("/api/ai-library/prompts")
+def ai_prompt_settings(request: Request, response: Response, _args=Depends(require_auth)):
+    _ai_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return ai_prompts.settings(request.app.state, _ai_language(request))
+
+
+@router.post("/api/ai-library/prompts")
+def ai_configure_prompt(request: Request, response: Response, body: Any = Body(...), _args=Depends(require_auth)):
+    _ai_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return ai_prompts.configure(request.app.state, _ai_payload(body), _ai_language(request))
+
+
+@router.get("/api/ai-library/custom-tasks")
+def ai_fixed_tasks(request: Request, response: Response, edit: bool = False, _args=Depends(require_auth)):
+    if edit:
+        _ai_admin(request)
+    else:
+        _ai_access(request)
+    response.headers["Cache-Control"] = "no-store"
+    return web_ai_custom_tasks.list_tasks(request.app.state, edit=edit, allow_oauth=loopback_client(request))
+
+
+@router.post("/api/ai-library/custom-tasks")
+def ai_configure_fixed_task(request: Request, response: Response, body: Any = Body(...), _args=Depends(require_auth)):
+    _ai_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return web_ai_custom_tasks.configure(request.app.state, _ai_payload(body), allow_oauth=loopback_client(request))
+
+
+@router.post("/api/ai-library/custom-tasks/run")
+def ai_run_fixed_task(request: Request, response: Response, body: Any = Body(...), _args=Depends(require_auth)):
+    _ai_access(request)
+    payload = _ai_payload(body)
+    response.headers["Cache-Control"] = "no-store"
+    usage = None
+
+    def receive_usage(tokens):
+        nonlocal usage
+        usage = asdict(tokens) if tokens is not None else None
+
+    try:
+        result = web_ai_custom_tasks.run(
+            request.app.state, payload, allow_oauth=loopback_client(request), on_usage=receive_usage,
+            prompt_language=_ai_language(request, payload.get("prompt_language")),
+        )
+        return {**result, "usage": usage}
+    except UserFacingError as exc:
+        return JSONResponse({**error_fields(exc), "usage": usage}, status_code=response_status(exc),
+                            headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/ai-library/usage")
+def ai_usage_summary(request: Request, days: int = Query(30, ge=1, le=90), _args=Depends(require_auth)):
+    _ai_access(request)
+    try:
+        return ai_usage.summary(request.app.state.web_contract.follow_state_root, include_oauth=loopback_client(request), days=days)
+    except (OSError, sqlite3.Error):
+        LOGGER.exception("Could not read library AI usage")
+        raise HTTPException(503, message_fields("api.aiLibrary.usageUnavailable")) from None
+
+
+@router.get("/api/ai-library/account-usage")
+def ai_account_usage(request: Request, provider: str,
+                     days: int = Query(30, ge=1, le=90), _args=Depends(require_auth)):
+    _ai_access(request)
+    return ai_usage.account_usage(request.app.state, provider, days)
+
+
+@router.post("/api/ai-library/search-plan")
+def ai_search_plan(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    _ai_access(request)
+    usage = None
+
+    def receive_usage(tokens):
+        nonlocal usage
+        usage = asdict(tokens) if tokens is not None else None
+
+    try:
+        plan = web_ai_search.plan(request.app.state, body, allow_oauth=loopback_client(request), on_usage=receive_usage,
+                              prompt_language=_ai_language(request, body.get("prompt_language")))
+        return {**plan, "usage": usage}
+    except UserFacingError as exc:
+        return JSONResponse({**error_fields(exc), "usage": usage}, status_code=response_status(exc))
+
+
+@router.get("/api/ai-library/external-search")
+def ai_external_search(request: Request, q: str, _args=Depends(require_auth)):
+    _ai_access(request)
+    try:
+        return web_ai_search.external(request.app.state.web_contract, q)
+    except UserFacingError as exc:
+        return JSONResponse(error_fields(exc), status_code=response_status(exc))
+
+
+@router.get("/api/ai-library/search-models")
+def ai_search_models(request: Request, provider: str, _args=Depends(require_auth)):
+    _ai_access(request)
+    try:
+        if provider != "openai-oauth":
+            return web_ai_library.connection_models(request.app.state, {"provider": provider})
+        if not loopback_client(request):
+            raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+        return web_ai_library.oauth_model_catalog(request.app.state)
+    except UserFacingError as exc:
+        return JSONResponse(error_fields(exc), status_code=response_status(exc))
+    except web_ai_library.InferenceError as exc:
+        return JSONResponse(message_fields("api.aiLibrary." + exc.code, key="error"), status_code=502)
+
+
+@router.post("/api/ai-library/connections/verify")
+def ai_verify_connection(request: Request, body: Any = Body(...), _args=Depends(require_auth)):
+    _ai_admin(request)
+    try:
+        return web_ai_library.verify_connection(request.app.state, _ai_key_payload(request, body))
+    except UserFacingError as exc:
+        return JSONResponse(error_fields(exc), status_code=response_status(exc))
+
+
+@router.post("/api/ai-library/task-profile")
+def ai_task_profile(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    _ai_admin(request)
+    try:
+        return web_ai_library.configure_task(request.app.state, body, allow_oauth=loopback_client(request))
+    except UserFacingError as exc:
+        return JSONResponse(error_fields(exc), status_code=response_status(exc))
+
+
+@router.post("/api/ai-library/connections/models")
+def ai_connection_models(request: Request, body: Any = Body(...), _args=Depends(require_auth)):
+    _ai_admin(request)
+    try:
+        return web_ai_library.connection_models(request.app.state, _ai_key_payload(request, body))
+    except UserFacingError as exc:
+        return JSONResponse(error_fields(exc), status_code=response_status(exc))
+
+
+@router.post("/api/ai-library/openai/oauth")
+def ai_openai_sign_in(request: Request, body: dict = Body(...), _args=Depends(require_auth)):
+    _ai_access(request)
+    if not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    try:
+        if body.get("disconnect") is True:
+            return ai_openai_oauth.disconnect(request.app.state)
+        model = body.get("model", ai_openai_oauth.DEFAULT_MODEL)
+        if not isinstance(model, str):
+            raise web_ai_library.InferenceError("provider")
+        if body.get("set_model") is True:
+            return ai_openai_oauth.set_model(request.app.state, model)
+        result_url = str(request.base_url.replace(path=ai_openai_oauth.RESULT_PATH))
+        return ai_openai_oauth.start(request.app.state, model, result_url=result_url)
+    except web_ai_library.InferenceError as exc:
+        return JSONResponse(message_fields("api.aiLibrary." + exc.code, key="error"), status_code=400)
+
+
+@router.post("/api/ai-library/openai/oauth/models")
+def ai_openai_models(request: Request, _args=Depends(require_auth)):
+    _ai_access(request)
+    if not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    try:
+        return web_ai_library.oauth_model_catalog(request.app.state)
+    except web_ai_library.InferenceError as exc:
+        return JSONResponse(message_fields("api.aiLibrary." + exc.code, key="error"), status_code=502)
+
+
+@router.get("/api/ai-library/assets/{asset_id}")
+def ai_asset_detail(request: Request, asset_id: int, _args=Depends(require_auth)):
+    _ai_access(request)
+    return web_ai_library.detail(request.app.state.web_contract, asset_id)
+
+
+@router.post("/api/ai-library/assets/{asset_id}")
+def ai_asset_suggest(request: Request, asset_id: int, body: dict = Body(...), _args=Depends(require_auth)):
+    _ai_access(request)
+    if body.get("provider") == "openai-oauth" and not loopback_client(request):
+        raise HTTPException(403, message_fields("api.configuration.openOnHost"))
+    try:
+        return web_ai_library.suggest(request.app.state, asset_id, body, allow_oauth=loopback_client(request),
+                                  prompt_language=_ai_language(request, body.get("prompt_language")))
+    except UserFacingError as exc:
+        return JSONResponse(error_fields(exc), status_code=response_status(exc))
+
+
+@router.post("/api/ai-library/assets/{asset_id}/approve")
+def ai_asset_approve(request: Request, asset_id: int, body: dict = Body(...), _args=Depends(require_auth)):
+    _ai_access(request)
+    return web_ai_library.approve(request.app.state.web_contract, asset_id, body)
 
 
 @router.get("/api/sources")
@@ -148,6 +400,11 @@ def reveal(request: Request, body: dict[str, Any] = Body(default_factory=dict), 
     if asset is None or not asset.path:
         return JSONResponse({"error": "not found"}, status_code=404)
     target = translate_ledger_path(asset.path)
+    from .nas_directories import available as desktop_available, file_position
+    if not desktop_available():
+        # 网页目录负责呈现离线、丢失和最后位置，定位入口不先阻塞探测文件。
+        return {"ok": True, **file_position(target, asset.path), "id": asset_id,
+                "location": asset.location}
     if is_unmapped(target):
         return JSONResponse(
             {"error": "source not mapped", "location": asset.location},

@@ -256,7 +256,7 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
       assert.equal(hovered, lifted, '名册格悬停不是格底掺 6% 主文字色');
       const head = await page.evaluate(() => {
         const input = document.querySelector('#index [data-index-search] input')!;
-        const shell = input.closest('[role="presentation"]')!;
+        const shell = input.closest('[data-rac]:not(input)')!;
         const toggle = document.querySelector('#index [data-index-layout]')!;
         return { search: getComputedStyle(shell).height, toggle: getComputedStyle(toggle).height,
           width: getComputedStyle(toggle).width };
@@ -496,7 +496,7 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
       await modal.waitFor();
       await modal.getByRole('textbox', { name: '名称' }).waitFor();
       assert.equal(await modal.locator('[data-modal-surface]').evaluate((node) =>
-        getComputedStyle(node).transitionProperty.includes('transform')), true);
+        getComputedStyle(node).transitionProperty.includes('scale')), true);
       await modal.locator('form').getByRole('button', { name: '取消', exact: true }).click();
       await modal.waitFor({ state: 'detached' });
       await trigger.click();
@@ -1003,17 +1003,17 @@ describe('设计决定：数据管理、索引页与资料页头', () => {
         } }));
         await followTab(opened, '添加关注');
         const before = await page.evaluate(() => document.documentElement.scrollHeight);
-        const input = page.getByRole('textbox', { name: '来源链接、名字或 id' });
+        const input = page.getByRole('combobox', { name: '来源链接、名字或 id' });
         await input.click({ timeout: 5_000 });
         await input.fill('bulging');
-        const menu = page.locator('[aria-label="来源建议"]');
-        await menu.locator('button').nth(29).waitFor({ state: 'attached', timeout: 10_000 });
+        const menu = page.locator('[data-follow-suggest-popover]');
+        await menu.getByRole('option').nth(29).waitFor({ state: 'attached', timeout: 10_000 });
         const measure = () => menu.evaluate((element) => {
           for (const animation of element.getAnimations({ subtree: true })) animation.finish();
           const box = element.getBoundingClientRect();
           const field = element.ownerDocument.querySelector('input[aria-label="来源链接、名字或 id"]')!
             .getBoundingClientRect();
-          const row = element.querySelector('[aria-current="true"]')?.getBoundingClientRect();
+          const row = element.querySelector('[role="option"][aria-selected="true"]')?.getBoundingClientRect();
           return {
             top: box.top, bottom: box.bottom, fieldBottom: field.bottom, viewport: innerHeight,
             overflowing: element.scrollHeight > element.clientHeight,

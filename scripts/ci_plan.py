@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -37,13 +38,17 @@ def browser_matrix(root: Path = ROOT, count: int = 6) -> dict:
                         for index, group in enumerate(groups)]}
 
 
-def validate_results(results: dict, required: list[str], *, phase: str = "complete") -> None:
-    """所选任务全部成功；未选择的任务可以跳过，不能隐藏失败。"""
+def validate_results(results: dict, required: list[str], *, phase: str = "complete",
+                     reused: bool = False) -> None:
+    """所选任务全部成功；未选择的任务可以跳过，不能隐藏失败。
+
+    `reused` 表示计划任务已核对同一内容树上通过的 PR Test，本轮不再执行测试任务。
+    """
     if phase == "frontend":
         required = [name for name in required if name in {"plan", "web-bundle", "web-vendor"}]
         mandatory = {"plan"}
     elif phase == "complete":
-        mandatory = {"plan", "python", "workflow-lint", "frontend-ready"}
+        mandatory = {"plan", "workflow-lint", "frontend-ready"} | (set() if reused else {"python"})
     else:
         raise ValueError(t("ci_plan.unknownPhase", phase=phase))
     if not mandatory.issubset(required):
@@ -63,11 +68,23 @@ def runtime_paths(paths: list[str], contents: dict | None) -> list[str]:
                      and change_impact.kind(path, *contents[path]) == "prose")]
 
 
+#: 前端静态导入、打进 `web/dist` 的语言；其余语言由服务端按需下发，浏览器用例不切换到它们。
+BUNDLED_LOCALES = frozenset({"zh-CN", "en"})
+_LOCALE_PATH = re.compile(r"(?:resources|scripts)/locales/(?!glossary/)(?P<language>[^/]+)/.+"
+                          r"|resources/locales/glossary/(?P<glossary>[^/]+)\.tbx")
+
+
+def translation(path: str) -> bool:
+    """只属于某个回流语言的译文与术语表；源文和英文随前端构建，不在此列。"""
+    match = _LOCALE_PATH.fullmatch(path)
+    return bool(match) and (match["language"] or match["glossary"]) not in BUNDLED_LOCALES
+
+
 def browser_input(path: str, *, root: Path = ROOT) -> bool:
     from . import test_runner as runner
     if path == "tests/test_web_e2e.py" or path.startswith("frontend/e2e/"):
         return True
-    if path.startswith(("tests/", "frontend/test/", "frontend/scripts/", "scripts/")):
+    if path.startswith(("tests/", "frontend/test/", "frontend/scripts/", "scripts/")) or translation(path):
         return False
     return path in {"src/peach/auth.py", "src/peach/server.py"} \
         or path.startswith(("src/peach/web_", "src/peach/routes_")) \
@@ -128,6 +145,21 @@ def github_verified_base(root: Path) -> str:
     return base
 
 
+#: 沿用 PR 证明的主线运行只需要这几个不执行测试的任务。
+REUSED_JOBS = ["plan", "workflow-lint", "frontend-ready"]
+
+
+def reused_run(root: Path, base: str, result: dict, scopes: tuple[str, ...]) -> str:
+    """主线合并提交沿用同一内容树上已通过的 PR Test；取不到或不符时返回空串，照常执行。"""
+    from . import ci_test_evidence
+    try:
+        receipt = ci_test_evidence.merged_pull_request(root, os.environ.get("GITHUB_REPOSITORY", ""), base, result, scopes)
+    except (OSError, KeyError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        print(t("ci_plan.reuseUnavailable", error=error), file=sys.stderr)
+        return ""
+    return str(receipt["url"]) if receipt else ""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=t("ci_plan.description"))
     parser.add_argument("--event", choices=("push", "pull_request", "workflow_dispatch"))
@@ -141,7 +173,8 @@ def main() -> None:
             # plan 没跑到（上游失败或取消）时这里是空串；报出真正失败的上游，而不是 JSON 解析错误。
             upstream = {name: item.get("result") for name, item in results.items() if item.get("result") != "success"}
             raise SystemExit(t("ci_plan.noPlan", jobs=upstream))
-        validate_results(results, json.loads(os.environ["REQUIRED_JOBS"]), phase=args.phase)
+        validate_results(results, json.loads(os.environ["REQUIRED_JOBS"]), phase=args.phase,
+                         reused=bool(os.environ.get("REUSED", "").strip()))
         return
     if not args.event or not args.base:
         parser.error(t("ci_plan.eventAndBaseRequired"))
@@ -152,12 +185,22 @@ def main() -> None:
         if args.event == 'push':
             base = github_verified_base(root)
         paths = runner.changed_files(root, base)
-        result = plan(args.event, paths, runner.changed_contents(root, base, paths), root=root)
+        contents = runner.changed_contents(root, base, paths)
+        result = plan(args.event, paths, contents, root=root)
+        if args.event == 'push':
+            scopes = ('full',) if result['wide'] else runner.scopes_for_changes(paths, contents=contents, root=root)[0]
+            result['reused'] = reused_run(root, base, result, scopes)
     except (OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
         # 首次推送、浅克隆或已删除基线：扩大验证，不能把无 diff 当成无需测试。
         print(t("ci_plan.noVerifiedBase", error=error), file=sys.stderr)
         result = plan("workflow_dispatch", [], root=root)
     result['base'] = base
+    result.setdefault('reused', '')
+    if result['reused']:
+        result['required_jobs'] = REUSED_JOBS
+        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with Path(summary).open("a", encoding="utf-8") as stream:
+                stream.write(t("ci_plan.reusedSummary", url=result['reused']) + "\n")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a", encoding="utf-8") as stream:

@@ -170,3 +170,10 @@ def current_link_label(value: str) -> str:
 def is_performer_marker(value: str) -> bool:
     """这个标签是出演者标记吗（认现在与旧版两种前缀）：输入侧据此拒收，不当内容标签加。"""
     return current_tag(value).startswith(PERFORMER_TAG_PREFIX)
+
+
+# 画面候选使用的馆藏词表分组。
+VISION_CAMERA_TAGS = {"主观视角", "局部特写", "射精特写"}
+VISION_SINGLE_FRAME_TAGS = VISION_CAMERA_TAGS | {"多人", "多女出镜", "性玩具", "M字开腿"}
+VISION_SETTINGS = {"浴室", "户外", "车内", "厨房客厅", "办公室", "教室学校", "公共场所", "温泉"}
+NON_VISUAL_APPEARANCE = {"恋足", "混血", "动漫音", "娃娃音", "敏感体质", "隆胸", "明星脸", "洛丽塔"}

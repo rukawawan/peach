@@ -2,12 +2,10 @@
  * 每个分区各占一格页签，一次只摆一组；本机配置权限与数据库写入权限由服务端分别判定。
  * 设置弹层里的「Peach 配置」入口指到这里。
  *
- * `.ui-configpage` 的第一层：最前面是页签条（`.ui-board-local-nav`），后面每组一个 `h2.ui-configgroup` 小标题
- * 紧跟这一组的根节点，根节点就是那一格页签面板。小标题在样式里不显示，它的字已经写在页签上；
- * 没有内容的组连标题与页签一起省略。页签条第一帧就在，和整页同一次提交画出来。 */
+ * 每个分区的页签面板共用页头。页签条第一帧就在，和整页同一次提交画出来。 */
 import { useQuery } from '@tanstack/react-query';
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
-import { CONFIGURATION_SECTIONS, peachHistory, sectionTitle, shellNavigate, settingsPath } from '@peach/history';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
+import { CONFIGURATION_SECTIONS, configurationDescriptionKey, peachHistory, sectionTitle, shellNavigate, settingsPath } from '@peach/history';
 
 import { errorMessage } from '../../api';
 import { Button } from '@/components/base/buttons/button';
@@ -18,11 +16,9 @@ import { CONFIGURATION_KEY, fetchConfiguration } from './configuration';
 import { DownloadGroup } from './download-settings';
 import { MaintenanceSettings } from './maintenance-settings';
 import { MediaSettings } from './media-settings';
-import { MediaProcessingSettings } from './media-processing-settings';
-import { TaskSpeedSettings } from './service-preferences';
-import { CodePatternSettings } from './code-pattern-settings';
 import { NetworkSettings } from './network-settings';
 import { SourceSettings } from './source-settings';
+import { AILibrarySettings } from './ai-library-settings';
 import { groupRoot } from './configuration-panel';
 import { downloadsShape, maintenanceShape, networkShape } from './configuration-shape';
 import { rememberShape } from '../../configuration-skeleton';
@@ -57,7 +53,9 @@ function ConfigurationIssues({ data, sections, reload, refreshing }: {
   })}</>;
 }
 
-interface Group { id: string; title: string; body(panel: ConfigurationPanel): ReactElement }
+interface Group { id: string; title: string; body(active: boolean): ReactElement | undefined }
+
+const COMPACT_CONFIGURATION = '(max-width:1100px)';
 
 /* 页签与面板的 id 前缀按页签条计数：每画出一条新的页签条领一个号。 */
 let tabSequence = 0;
@@ -99,16 +97,16 @@ function ConfigurationGroups(
     if (!nav || !panel) return;
     const boundary = parseFloat(getComputedStyle(nav).top);
     if (!Number.isFinite(boundary) || nav.getBoundingClientRect().top > boundary + 1) return;
-    const top = matchMedia('(max-width:900px)').matches ? nav.getBoundingClientRect().bottom + 8 : boundary;
+    const top = matchMedia(COMPACT_CONFIGURATION).matches ? nav.getBoundingClientRect().bottom + 8 : boundary;
     window.scrollTo(0, Math.max(0, window.scrollY + panel.getBoundingClientRect().top - top));
   }, [chosen]);
   const choose = (title: string) => {
     setChosen(title);
     shellNavigate(settingsPath(title), { replace: true, state: peachHistory.navigation.location.state });
   };
-  const [narrow, setNarrow] = useState(() => matchMedia('(max-width:900px)').matches);
+  const [narrow, setNarrow] = useState(() => matchMedia(COMPACT_CONFIGURATION).matches);
   useEffect(() => {
-    const media = matchMedia('(max-width:900px)');
+    const media = matchMedia(COMPACT_CONFIGURATION);
     const changed = () => setNarrow(media.matches);
     media.addEventListener('change', changed);
     return () => media.removeEventListener('change', changed);
@@ -121,27 +119,25 @@ function ConfigurationGroups(
     || networkKeys.some(key => data.section_errors?.[key]));
   const downloads = data.downloads;
   const groups: Group[] = [
-    { id: 'library', title: CONFIGURATION_SECTIONS.library, body: (panel) => <div {...groupRoot(panel)}>
+    { id: 'library', title: CONFIGURATION_SECTIONS.library, body: () => <>
       {issues(['media_sources', 'library_count', 'mount_dependencies'])}
-      {!data.section_errors?.media_sources && !data.section_errors?.library_count ? <MediaSettings {...group} /> : null}
-      <CodePatternSettings receipt={receipt} />
-      <MediaProcessingSettings receipt={receipt} />
-      <TaskSpeedSettings receipt={receipt} />
-    </div> },
-    { id: 'sources', title: CONFIGURATION_SECTIONS.subscriptions, body: (panel) => <SourceSettings {...group} panel={panel} issues={issues(['entry_links'])} /> },
+      <MediaSettings {...group} />
+    </> },
+    { id: 'sources', title: CONFIGURATION_SECTIONS.subscriptions, body: active => <SourceSettings {...group} active={active} issues={issues(['entry_links'])} /> },
+    { id: 'ai', title: CONFIGURATION_SECTIONS.ai, body: active => <AILibrarySettings active={active} receipt={receipt} /> },
     ...(downloads || data.section_errors?.downloads ? [{
       id: 'downloads', title: CONFIGURATION_SECTIONS.downloads,
-      body: (panel: ConfigurationPanel) => <DownloadGroup initial={downloads} receipt={receipt} panel={panel} issues={issues(['downloads'])} />,
+      body: (active: boolean) => <DownloadGroup initial={downloads} receipt={receipt} active={active} issues={issues(['downloads'])} />,
     }] : []),
-    ...(network ? [{ id: 'network', title: CONFIGURATION_SECTIONS.network, body: (panel: ConfigurationPanel) => <NetworkSettings {...group} panel={panel} issues={issues(networkKeys)} /> }] : []),
+    ...(network ? [{ id: 'network', title: CONFIGURATION_SECTIONS.network, body: () => <NetworkSettings {...group} issues={issues(networkKeys)} /> }] : []),
     {
       id: 'maintenance', title: CONFIGURATION_SECTIONS.maintenance,
-      body: (panel) => <div {...groupRoot(panel)}>
+      body: (active) => <>
         {issues(['startup', 'uninstall', 'storage', 'remote_reporting', 'library_sharing', 'updates', 'update_job', 'automatic_updates', 'facts'])}
-        <MaintenanceSettings {...group} active={panel.active} reopenTutorial={reopenTutorial} />
-      </div>,
+        <MaintenanceSettings {...group} active={active} reopenTutorial={reopenTutorial} />
+      </>,
     },
-    { id: 'diagnostics', title: CONFIGURATION_SECTIONS.diagnostics, body: panel => <div {...groupRoot(panel)}>{panel.active ? diagnostics : null}</div> },
+    { id: 'diagnostics', title: CONFIGURATION_SECTIONS.diagnostics, body: active => active ? diagnostics : undefined },
   ];
   const at = Math.max(0, groups.findIndex((item) => item.title === sectionTitle(chosen)));
   return (
@@ -152,12 +148,19 @@ function ConfigurationGroups(
           orientation={narrow ? 'horizontal' : 'vertical'} className=""
           onChange={id => choose(groups.find(group => group.id === id)!.title)} />
       </div>
-      {groups.map(({ id, title, body }, i) => (
-        <Fragment key={title}>
-          <h2 className="ui-configgroup">{title}</h2>
-          {body({ index: i, id: `${prefix}-panel-${id}`, labelledBy: `${prefix}-tab-${id}`, active: i === at })}
-        </Fragment>
-      ))}
+      {groups.map(({ id, title, body }, i) => {
+        const panel: ConfigurationPanel = { index: i, id: `${prefix}-panel-${id}`, labelledBy: `${prefix}-tab-${id}`, active: i === at };
+        const description = configurationDescriptionKey(id);
+        return <div key={id} {...groupRoot(panel)}>
+          <header className="flex min-w-0 flex-col gap-1">
+            <h2 className="text-title-2-medium text-text-primary" data-copy-key={`navigation.configurationSections.${id === 'sources' ? 'feeds' : id}`}>{title}</h2>
+            <p className="text-body-2-regular text-text-secondary select-text" data-copy-key={'settings.' + description}>
+              {t('settings:' + description)}
+            </p>
+          </header>
+          {body(panel.active)}
+        </div>;
+      })}
     </div>
   );
 }

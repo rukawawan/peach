@@ -1,19 +1,109 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { Browser } from 'playwright-core';
-import { launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
+import { CONFIGURATION_ROUTE, launch, layout, settle, visit, VIEWPORTS } from './harness.ts';
 
 describe('配置表单与行间距', () => {
   let browser: Browser;
   before(async () => { browser = await launch() });
   after(async () => { await browser?.close() });
+  it('来源登录完成后从服务端刷新凭据状态', async () => {
+    let started = false;
+    let connected = false;
+    const opened = await visit(browser, '/settings/subscriptions', VIEWPORTS[0]!, async page => {
+      await page.route('**/api/follow/credentials', async route => {
+        const report = await (await route.fetch()).json();
+        const row = report.providers.find((provider: { provider: string }) => provider.provider === 'simpcity');
+        Object.assign(row, { browser_login: true, present: connected,
+          fields: connected ? ['cookie'] : [], missing: connected ? [] : ['cookie'] });
+        await route.fulfill({ json: report });
+      });
+      await page.route('**/api/source-browser-login/simpcity', async route => {
+        if (route.request().method() === 'POST') started = true;
+        await route.fulfill({ json: { available: true, state: connected ? 'done' : started ? 'waiting' : 'idle' } });
+      });
+    });
+    try {
+      const row = opened.page.locator('[data-credential-provider="simpcity"]');
+      const details = row.locator('details').first();
+      if (!await details.evaluate(node => (node as HTMLDetailsElement).open)) {
+        await details.locator(':scope > summary').click();
+      }
+      await row.locator('a[href^="https://simpcity.cr/"]').waitFor();
+      await row.getByRole('button', { name: '在浏览器登录并连接' }).click();
+      await row.getByRole('button', { name: '取消', exact: true }).waitFor();
+      connected = true;
+      await row.getByText('已配置', { exact: true }).waitFor();
+    } finally { await opened.close() }
+  });
   for (const viewport of VIEWPORTS) {
+    it(`${viewport.name}：配置分区显示页头并可用本页目录定位正文`, async () => {
+      const opened = await visit(browser, '/settings/library', viewport);
+      const { page } = opened;
+      try {
+        for (const section of ['媒体库与入库', '来源与订阅', 'AI 接入', '下载渠道', '网络与访问', '应用与维护', '系统诊断']) {
+          await page.getByRole('tab', { name: section, exact: true }).click();
+          await page.getByRole('heading', { name: section, exact: true, level: 2 }).waitFor();
+          const toc = page.getByRole('navigation', { name: '本页目录', exact: true });
+          const toggle = toc.getByRole('button', { name: '本页目录', exact: true });
+          if (viewport.mobile) {
+            await toggle.waitFor();
+            assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+            await toggle.click();
+          }
+          const last = toc.getByRole('link').last();
+          await last.waitFor();
+          assert.equal(await toc.locator('[data-section-toc-items]').evaluate(node => getComputedStyle(node).flexDirection), 'row');
+          const href = await last.getAttribute('href');
+          assert.ok(href?.startsWith('#'));
+          const target = page.locator(href);
+          await last.click();
+          await page.waitForURL(url => url.hash === href);
+          await toc.locator(`[href="${href}"][aria-current=location]`).waitFor({ state: 'attached' });
+          await page.waitForFunction(hash => {
+            const top = document.getElementById(hash.slice(1))?.getBoundingClientRect().top;
+            return top !== undefined && top < innerHeight;
+          }, href);
+          if (viewport.mobile) assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+          const anchorBoundary = viewport.mobile ? page.getByRole('tablist', { name: '配置分区' }) : toc;
+          const [nav, content] = await Promise.all([anchorBoundary.boundingBox(), target.boundingBox()]);
+          assert.ok(nav && content && content.y >= nav.y + nav.height - 1 && content.y < viewport.height, section);
+          assert.ok((await layout(page)).scrollWidth <= viewport.width + 1, section);
+        }
+        assert.deepEqual(opened.problems, []);
+      } finally { await opened.close() }
+    });
+    it(`${viewport.name}：手动检查更新同时更新卡片并反馈成功或失败`, async () => {
+      let result = { state: 'current', message: '已是最新版本。' };
+      const opened = await visit(browser, '/settings/maintenance', viewport, async page => {
+        await page.route('**/api/configuration/updates', route => route.fulfill({ json: {
+          current_version: '1.0.0', latest_version: '1.0.0', installation: '源码运行', installation_code: 'source',
+          channel: '测试版', release_url: '', ...result,
+        } }));
+      });
+      const { page } = opened;
+      try {
+        const card = page.getByRole('region', { name: '检查更新', exact: true });
+        const check = card.getByRole('button', { name: '检查更新', exact: true });
+        const toast = page.locator('#toasts [data-sonner-toast]');
+        await check.waitFor();
+        assert.equal(await toast.filter({ hasText: result.message }).count(), 0);
+        await check.click();
+        await card.getByText(result.message, { exact: true }).waitFor();
+        await toast.and(page.locator('[data-type=success]')).filter({ hasText: result.message }).waitFor();
+        result = { state: 'error', message: '未取得发布信息。' };
+        await check.click();
+        await card.getByText(result.message, { exact: true }).waitFor();
+        await toast.and(page.locator('[data-type=error]')).filter({ hasText: result.message }).waitFor();
+        assert.deepEqual(opened.problems, []);
+      } finally { await opened.close() }
+    });
     it(`${viewport.name}：拖动下载版本不会产生横向滚动`, async () => {
       const opened = await visit(browser, '/settings/downloads', viewport);
       const { page } = opened;
       try {
         await page.emulateMedia({ reducedMotion: 'no-preference' });
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
           await route.fulfill({ json: { ...data, downloads: {
             ...data.downloads, media_sources: ['guangya'], token_set: false,
@@ -39,7 +129,7 @@ describe('配置表单与行间距', () => {
         try {
           await page.mouse.move(start.x + 18 + Math.min(120, start.width / 3), target.y + target.height * 0.8);
           assert.equal(await order.locator('[data-dragging]').count(), 1);
-          assert.ok(await order.evaluate(element => element.scrollWidth > element.clientWidth));
+          assert.ok(await order.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
           assert.equal(await horizontalScroll(), 0);
         } finally { await page.mouse.up() }
         assert.equal(await horizontalScroll(), 0);
@@ -51,9 +141,9 @@ describe('配置表单与行间距', () => {
       const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('下载渠道'), viewport);
       const { page } = opened;
       try {
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
-          await route.fulfill({ json: { ...data, downloads: { ...data.downloads, media_sources: ['guangya'], token_set: true,
+          await route.fulfill({ json: { ...data, downloads: { ...data.downloads, media_sources: ['guangya'], token_set: false,
             config: { ...data.downloads.config, clouddrive_address: 'http://127.0.0.1:19798' } } } });
         });
         await page.route('**/api/configuration/downloads/check', route => route.fulfill({ json: {
@@ -63,6 +153,7 @@ describe('配置表单与行间距', () => {
         await page.reload();
         const form = page.getByRole('form', { name: '云下载', exact: true });
         await form.getByRole('button', { name: '检查连接', exact: true }).click();
+        await page.locator('#toasts [data-sonner-toast][data-type=success]').filter({ hasText: 'CloudDrive2 连接检查通过' }).waitFor();
         await settle(page);
         assert.equal(await form.locator('dl').count(), 0);
         assert.equal(await form.locator('.border-t').count(), 1);
@@ -99,7 +190,7 @@ describe('配置表单与行间距', () => {
       const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('应用与维护'), viewport);
       const { page } = opened;
       try {
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
           await route.fulfill({ json: { ...data, updates: { ...data.updates, installation: '独立测试包', installation_code: 'standalone',
             state: 'available', latest_version: '1.0.0', message: '有新版本可下载。', package_kind: 'update',
@@ -122,7 +213,7 @@ describe('配置表单与行间距', () => {
       const { page } = opened;
       try {
         await page.route('**/api/configuration/cloud-proxies', route => route.fulfill({ json: { accounts: [] } }));
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
           await route.fulfill({ json: { ...data, editable: true, windows: true, media_sources: [
             { location: 'onedrive', root: 'O:\\Movies', path: 'O:\\Movies', cost: 'metered' },
@@ -206,7 +297,7 @@ describe('配置表单与行间距', () => {
       const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('下载渠道'), viewport);
       const { page } = opened;
       try {
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
           const body = data.downloads;
           await route.fulfill({ json: { ...data, downloads: { ...body, available: true, media_sources: ['pikpak'],
@@ -229,7 +320,7 @@ describe('配置表单与行间距', () => {
       const opened = await visit(browser, '/settings/library?section=' + encodeURIComponent('应用与维护'), viewport);
       const { page } = opened;
       try {
-        await page.route('**/api/configuration', async route => {
+        await page.route(CONFIGURATION_ROUTE, async route => {
           const data = await (await route.fetch()).json();
           await route.fulfill({ json: { ...data, uninstall: { ...data.uninstall, available: false } } });
         });

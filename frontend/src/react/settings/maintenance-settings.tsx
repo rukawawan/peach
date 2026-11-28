@@ -12,13 +12,11 @@ import type {
 } from '../bundle';
 import { PathLine } from '../components/path-line';
 import { SectionToc, type TocEntry } from '../components/section-toc';
-import { StartupSettings } from './general-settings';
+import { StartupSettingsSection } from './general-settings';
 import { LedgerBackupSettings } from './ledger-backup-settings';
-import { PlaybackTranscodeSettings } from './media-processing-settings';
 import { ReleaseUpdates } from './release-updates';
 import { RetentionSettings } from './retention-settings';
-import { LibrarySharingSettings } from './library-sharing-settings';
-import { SeedSharingSettings } from './seed-sharing-settings';
+import { CommunitySharingSettings } from './community-sharing-settings';
 import { RemoteReportingSettings } from './remote-reporting-settings';
 import { Disclosure, ErrorText, ExternalLink, Fact, FactList, Footer, Help, Rows, Section, Stack } from './section';
 import { StorageSettings } from './storage-settings';
@@ -50,12 +48,11 @@ export function MaintenanceSettings(
     <SectionToc inline label={t('settings:configurationPage.contents')} entries={entries}>
       <MaintenanceGroup entry={updates}>
         {data.updates ? <ReleaseUpdates initial={data.updates} initialJob={data.update_job} /> : null}
-        <UpgradeRepairs />
         {data.automatic_updates ? <AutomaticUpdates initial={data.automatic_updates} receipt={receipt} /> : null}
+        <UpgradeRepairs lastCapacityCheckPassed={data.storage?.budget?.last_check?.paused === false} />
       </MaintenanceGroup>
       <MaintenanceGroup entry={runtime}>
-        {data.startup ? <StartupSettings startup={data.startup} receipt={receipt} /> : null}
-        <PlaybackTranscodeSettings receipt={receipt} />
+        <StartupSettingsSection active={active} initial={data.startup} receipt={receipt} />
         {data.storage ? <StorageSettings initial={data.storage} receipt={receipt} active={active} /> : null}
         <Facts facts={data.facts} receipt={receipt} />
         <TutorialSettings receipt={receipt} reopenTutorial={reopenTutorial} />
@@ -65,13 +62,12 @@ export function MaintenanceSettings(
         <RetentionSettings receipt={receipt} />
       </MaintenanceGroup> : null}
       <MaintenanceGroup entry={privacy}>
-        {data.remote_reporting || data.library_sharing ? <Section id="librarySharing" guide="reporting" title={t('settings:dataSharing.title')}>
-          {data.remote_reporting ? <RemoteReportingSettings initial={data.remote_reporting} receipt={receipt} /> : null}
-          {data.library_sharing ? <div className="border-t border-separator-border">
-            <LibrarySharingSettings initial={data.library_sharing} receipt={receipt} />
-          </div> : null}
+        {data.remote_reporting ? <Section guide="diagnostics-reporting" title={t('settings:dataSharing.diagnosticsTitle')}>
+          <RemoteReportingSettings initial={data.remote_reporting} receipt={receipt} />
         </Section> : null}
-        <SeedSharingSettings receipt={receipt} />
+        <Section id="librarySharing" guide="reporting" title={t('settings:dataSharing.communityTitle')}>
+          <CommunitySharingSettings active={active} receipt={receipt} />
+        </Section>
       </MaintenanceGroup>
       {data.uninstall ? <UninstallSettings uninstall={data.uninstall} receipt={receipt} /> : null}
     </SectionToc>
@@ -109,7 +105,7 @@ export function AutomaticUpdates({ initial, receipt }: { initial: AutomaticUpdat
   return (
     <Section id="automaticUpdates" guide="automatic-updates" title={t('settings:autoUpdate.title')} onSubmit={submit}>
       <Rows>
-        <SettingsRow label={t('settings:autoUpdate.autoCheck')}>
+        <SettingsRow label={t('settings:autoUpdate.autoCheck')} description={t('settings:autoUpdate.autoCheckHelp')}>
           <Switch aria-label={t('settings:autoUpdate.autoCheck')} isSelected={mode !== 'off'} isDisabled={!initial.available}
             onChange={(on) => setMode(on ? 'check' : 'off')} />
         </SettingsRow>

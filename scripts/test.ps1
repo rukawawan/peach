@@ -5,6 +5,8 @@ param(
     [switch]$Fresh,
     [switch]$Resume,
     [string[]]$Focus = @(),
+    # 推送前自查：只跑本次范围里的快速门槛与前端构建、单测，不签发记录。
+    [switch]$Gate,
     # 定向运行失败后把失败文件单独重跑一次；CI 浏览器分片用它消化负载偶发。
     [switch]$RerunFailures,
     [string]$Base = 'master',
@@ -51,6 +53,14 @@ if (-not (Get-Command openssl.exe -ErrorAction SilentlyContinue)) {
     }
 }
 
+# 工具 shell 与开机自启的进程常缺 WinGet Links；用例直接调用 uv 时按 winget 的安装目录补上。
+if (-not (Get-Command uv.exe -ErrorAction SilentlyContinue) -and $env:LOCALAPPDATA) {
+    $PeachUvRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    $PeachUv = Get-ChildItem -Path (Join-Path $PeachUvRoot 'astral-sh.uv*\uv.exe') -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($PeachUv) { $env:PATH = "$($PeachUv.DirectoryName);$env:PATH" }
+}
+
 Push-Location $WorktreeRoot
 try {
     & $Python -X utf8 scripts\test_environment.py $WorktreeRoot $MainRoot
@@ -71,9 +81,13 @@ try {
     if ($Fresh) { $PeachTestExtra += '--fresh' }
     if ($Resume) { $PeachTestExtra += '--resume' }
     if ($RerunFailures) { $PeachTestExtra += '--rerun-failures' }
+    if ($Gate) { $PeachTestExtra += '--gate' }
     foreach ($PeachFocusSelector in $Focus) { $PeachTestExtra += @('--focus', $PeachFocusSelector) }
     & $Python scripts\test_runner.py --scope $Scope --base $Base --shard-index $ShardIndex --shard-count $ShardCount --jobs $Jobs @PeachTestExtra
-    exit $LASTEXITCODE
+    $PeachTestExit = $LASTEXITCODE
+    # 末行固定回显退出码：输出被截断或经管道转交时，成败仍能从最后一行读到。
+    Write-Host "Peach test exit: $PeachTestExit"
+    exit $PeachTestExit
 } finally {
     Pop-Location
     if ($null -eq $PreviousPythonIoEncoding) {

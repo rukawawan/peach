@@ -39,12 +39,15 @@ const flip = (toggle: HTMLInputElement) => act(async () => { toggle.click() });
 
 it('越界的数不提交、标出错误，改对之后错误消失', async () => {
   const { host, apply, input } = await setup('searchHistoryLimitSetting', 10);
+  const descriptions = input().getAttribute('aria-describedby')?.split(' ');
+  expect(descriptions?.map(id => host.querySelector(`[id="${id}"]`)?.textContent)).toEqual(['条', '']);
   await commit(input(), '51');
   expect(apply).not.toHaveBeenCalled();
   expect(input().getAttribute('aria-invalid')).toBe('true');
   const error = host.querySelector<HTMLElement>('[role=status]')!;
   expect(error.hidden).toBe(false);
   expect(error.textContent).toBe('请输入 1–50 的整数（条）');
+  expect(descriptions).toContain(error.id);
   await commit(input(), '17');
   expect(apply).toHaveBeenLastCalledWith(17);
   expect(input().hasAttribute('aria-invalid')).toBe(false);

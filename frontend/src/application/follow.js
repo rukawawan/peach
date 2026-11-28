@@ -16,7 +16,7 @@ import { censorOn, preferencesState, wireDrag } from './preferences.js';
 import { revealSkeleton, wireHorizontalScroller } from '../ui-kit';
 import { followJobProgress } from './../jobs';
 import { enterManagementSurface, renderFollowDrawer, scheduleStickySurfaces, showManagementBody } from './layout.js';
-import { toggleFollowSelection } from './selection.js';
+import { selectCardRectangle, toggleFollowSelection } from './selection.js';
 import { photoLayout, photoSize, storePhotoLayout } from './../appearance/layout';
 import { catalogState } from './catalog.js';
 import { releaseHoverPreviews } from './../card-art/hover';
@@ -26,7 +26,7 @@ import { clearOverlayBackground, holdOverlayBackground, overlayState, takeOverla
 import { presentPost } from '../history/page-title';
 import { loadingState } from './loading.js';
 import { t } from '../i18n';
-export const followState = { followFilter: undefined, followAuthors: undefined, followProviders: undefined, followTags: undefined, followWorks: undefined, followMediaView: undefined, FOLLOW_FEED_SORTS: undefined, FOLLOW_RANDOM_SORT: undefined, followSort: undefined, followDir: undefined, followSeed: undefined, followDurMin: undefined, followDurMax: undefined, followContentSkeletonHtml: undefined, followSkeletonHtml: undefined, followFeedHelpers: undefined, followFeedActions: undefined, followFeedProps: undefined, followFeedShell: undefined, followDetailActions: undefined, FOLLOW_MANAGE_TABS: undefined, followSidebarFilters: undefined };
+export const followState = { followFilter: undefined, followAuthors: undefined, followProviders: undefined, followTags: undefined, followWorks: undefined, followMediaView: undefined, FOLLOW_FEED_SORTS: undefined, FOLLOW_RANDOM_SORT: undefined, followSort: undefined, followDir: undefined, followSeed: undefined, followDurMin: undefined, followDurMax: undefined, followQuery: '', followContentSkeletonHtml: undefined, followSkeletonHtml: undefined, followFeedHelpers: undefined, followFeedActions: undefined, followFeedProps: undefined, followFeedShell: undefined, followDetailActions: undefined, FOLLOW_MANAGE_TABS: undefined, followSidebarFilters: undefined };
 
 export function followCheckToast(report){
   const rows=report.results||[];
@@ -43,7 +43,7 @@ export function readFollowView(){return followState.controller.read()}
 export function followView(){
   return {status:followState.followFilter,media:followState.followMediaView,author:[...followState.followAuthors][0]||'',
     provider:[...followState.followProviders][0]||'',work:[...followState.followWorks][0]||'',tags:[...followState.followTags],
-    durMin:followState.followDurMin,durMax:followState.followDurMax,sort:followState.followSort,dir:followState.followDir,seed:followState.followSeed};
+    durMin:followState.followDurMin,durMax:followState.followDurMax,q:followState.followQuery||'',sort:followState.followSort,dir:followState.followDir,seed:followState.followSeed};
 }
 
 export function adoptFollowView(view){
@@ -52,7 +52,7 @@ export function adoptFollowView(view){
   followState.followProviders=new Set(view.provider?[view.provider]:[]);
   followState.followWorks=new Set(view.work?[view.work]:[]);
   followState.followTags=new Set(view.tags);
-  followState.followDurMin=view.durMin||0;followState.followDurMax=view.durMax||0;
+  followState.followDurMin=view.durMin||0;followState.followDurMax=view.durMax||0;followState.followQuery=view.q||'';
   followState.followSort=view.sort;followState.followDir=view.dir;followState.followSeed=view.seed;
 }
 
@@ -120,6 +120,7 @@ followState.followFeedActions = {
   openDetail:id=>openFollowDetail(id),
   openAuthor:name=>navigationState.navigatePath(entityPath('creator',name)),
   toggleSelection:(id,range)=>toggleFollowSelection(id,range),
+  selectRectangle:selectCardRectangle,
   setImagesOnly:on=>{preferencesState.appSettings.followImagesOnly=!!on;preferencesState.saveSettings();syncPhotoWalls()},
   setPhotoLayout:layout=>{storePhotoLayout(layout);syncPhotoWalls()},
   canFlip:()=>!selectMode&&!censorOn()&&!window.__scrolling&&!catalogState.reduceMotion(),

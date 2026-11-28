@@ -51,3 +51,24 @@ it('撤除页面桩期间的新请求仍被关闭流程中止', async t => {
     assert.equal(blocked, true, '撤桩和关闭上下文之间的请求必须被拦截');
   } finally { await browser.close(); }
 });
+
+it('关上下文与关浏览器时页面先离开站点，关闭期间不再向服务发请求', async () => {
+  const origin = requiredEnv('PEACH_E2E_ORIGIN');
+  const browser = await launch();
+  const left: string[] = [];
+  try {
+    const open = async () => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.route('**/healthz?tick=*', route => route.fulfill({ json: { ok: true } }));
+      await page.goto(origin + '/healthz');
+      // 关闭时页面还在发请求：模拟详情页收尾时才去取的来源图片。
+      await page.evaluate(() => { setInterval(() => { void fetch(`/healthz?tick=${Date.now()}`).catch(() => {}) }, 1) });
+      page.on('close', () => left.push(page.url()));
+      return context;
+    };
+    await (await open()).close();
+    await open();
+  } finally { await browser.close(); }
+  assert.deepEqual(left, ['about:blank', 'about:blank'], '关闭时页面还停在站点上，在途与新发的请求会漏到服务');
+});

@@ -1113,7 +1113,7 @@ class HarvestTests(unittest.TestCase):
         self.assertGreater(float(row["content_aspect"]),
                            MODULE.link_marks.MAX_CONTENT_ASPECT,
                            "内容比照记：那个数就是「这枚其实是字标」的提示")
-        self.assertIn("方形标识未取得，装的是字标", row["evidence"])
+        self.assertIn("没有可用的方形标识", row["evidence"])
 
     def run_wordmark_harvest(self, targets=None, links=None, fetch=None):
         original = MODULE.site_icons.best_mark

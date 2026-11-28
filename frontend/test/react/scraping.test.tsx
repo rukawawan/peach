@@ -14,7 +14,7 @@ import type {
 } from '../../src/react/scraping/scraping';
 
 import {
-  buttonNamed, click, mount, mountRoot, section, settle, submit, type,
+  buttonNamed, click, mount, mountRoot, pending, section, settle, submit, type,
 } from './render';
 
 // 客户端是模块级的单例（所有 React 根共用一个），用例之间不清就互相喂数据。
@@ -127,9 +127,23 @@ it('首屏用 prefetch 缓存画出来源与任务，挂载时不重复请求', 
   // 连接方式是 BoardUI 的 Select，画出来的是按钮；原生 select 是 React Aria 藏在后面
   // 供表单取值的那一个，不是这一行的长相。
   expect(host.querySelector('[aria-haspopup=listbox]')?.textContent?.trim()).toBe('Peach 代理');
-  expect(host.querySelector<HTMLAnchorElement>('a[href="/settings/library#peachProxy"]')?.textContent)
+  expect(host.querySelector<HTMLAnchorElement>('a[href="/settings/network#peachProxy"]')?.textContent)
     .toContain('配置 Peach 代理');
   expect(host.querySelector<HTMLAnchorElement>('a[href="https://www.javbus.com/"]')?.target).toBe('_blank');
+});
+
+it('JavDB 的网站外链和浏览器连接并排保留', async () => {
+  const { host, calls } = await open({
+    ...quiet({ source: 'javdb', label: 'JavDB', login: 'https://javdb.com/' }),
+    'GET /api/scraping/javdb-browser-login': () => ({ body: { available: true, state: 'idle' } }),
+  });
+  expect(calls.some(call => call.path === '/api/scraping/javdb-browser-login')).toBe(false);
+  await click(host.querySelector('#source-javdb summary'));
+  await settle();
+  const link = host.querySelector<HTMLAnchorElement>('a[href="https://javdb.com/login"]');
+  expect(link?.textContent?.trim()).toBe('在 JavDB 登录');
+  expect(link?.target).toBe('_blank');
+  expect(buttonNamed('在浏览器登录并连接', host)).not.toBeNull();
 });
 
 it('走本机浏览器的来源只说明验证怎么过，不画 Cookie 输入', async () => {
@@ -276,11 +290,13 @@ it('首屏读到的旧结果不冒充新结果：不画、也不发回执', asyn
 it('抓封面跟到终态：跑的时候两秒一次，跑完发一次回执就不再问', async () => {
   vi.useFakeTimers();
   const toast = vi.fn();
+  const restart = pending<Reply>();
+  let startingAgain = false;
   const { calls } = serve({
     ...quiet(),
     'GET /api/scraping/cover': coverStates(
       { status: 'idle' }, { status: 'running' }, { status: 'complete', result: '已取得 1600 × 1077 封面' }),
-    'POST /api/scraping/cover': () => ({ body: { status: 'running' } }),
+    'POST /api/scraping/cover': () => startingAgain ? restart.answer : { body: { status: 'running' } },
   });
   await prefetchScraping(new AbortController().signal);
   const host = await mount(page(toast));
@@ -301,6 +317,14 @@ it('抓封面跟到终态：跑的时候两秒一次，跑完发一次回执就�
   await tick(60_000);
   expect(calls.length, '任务已经结束，不必接着敲后台').toBe(asked);
   expect(toast).toHaveBeenCalledTimes(1);
+
+  startingAgain = true;
+  await click(buttonNamed('抓取封面', host));
+  expect(buttonNamed('抓取封面', host)?.querySelector('.ui-geist-spinner')).not.toBeNull();
+  expect(host.textContent).not.toContain('已取得 1600 × 1077 封面');
+  await restart.release({ ok: false, status: 400, body: { detail: '本次抓取未能启动' } });
+  expect(host.textContent).toContain('本次抓取未能启动');
+  expect(host.textContent).not.toContain('已取得 1600 × 1077 封面');
 });
 
 it('卸载之后不再敲后台：轮询跟着这棵根一起走', async () => {
@@ -383,13 +407,15 @@ it('离开页面再回来，全部检查的上一次结果仍在，但不发回�
 it('amane 桥：检查上游只填「上游最新版本」那一行，重建跟到终态并发一次回执', async () => {
   vi.useFakeTimers();
   const toast = vi.fn();
+  const restart = pending<Reply>();
+  let startingAgain = false;
   const bridgeStates = coverStates({ status: 'idle' }, { status: 'running' },
     { status: 'complete', result: 'amane 桥已按 79ecfa763cc7 重建' });
   const { calls } = serve({
     ...quiet(),
     'GET /api/scraping/amane-bridge': () => ({ body: { ...BRIDGE, job: bridgeStates().body } }),
     'POST /api/scraping/amane-bridge/check': () => ({ body: { ok: true, latest: 'v0.17.0' } }),
-    'POST /api/scraping/amane-bridge/rebuild': () => ({ body: { status: 'running' } }),
+    'POST /api/scraping/amane-bridge/rebuild': () => startingAgain ? restart.answer : { body: { status: 'running' } },
   });
   await prefetchScraping(new AbortController().signal);
   const host = await mount(page(toast));
@@ -410,6 +436,14 @@ it('amane 桥：检查上游只填「上游最新版本」那一行，重建跟�
   expect(bridge.textContent).toContain('amane 桥已按 79ecfa763cc7 重建');
   expect(toast).toHaveBeenCalledTimes(1);
   expect(toast).toHaveBeenCalledWith('amane 桥已按 79ecfa763cc7 重建');
+
+  startingAgain = true;
+  await click(buttonNamed('重新安装', bridge));
+  expect(buttonNamed('重新安装', bridge)?.querySelector('.ui-geist-spinner')).not.toBeNull();
+  expect(bridge.textContent).not.toContain('amane 桥已按 79ecfa763cc7 重建');
+  await restart.release({ ok: false, status: 400, body: { detail: '本次重建未能启动' } });
+  expect(bridge.textContent).toContain('本次重建未能启动');
+  expect(bridge.textContent).not.toContain('amane 桥已按 79ecfa763cc7 重建');
 });
 
 it('amane 桥：安装包缺桥文件时卡片写出原因，安装键停用', async () => {

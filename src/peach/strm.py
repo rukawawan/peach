@@ -49,8 +49,16 @@ def read_target(path: Path) -> str:
             raise UserValueError('errors.strm.fileTooLarge')
         lines = [line.strip() for line in content.decode('utf-8-sig').splitlines()
                  if line.strip() and not line.lstrip().startswith('#')]
-    except (OSError, UnicodeError) as error:
+    except FileNotFoundError as error:
+        raise UserValueError('errors.strm.fileMissing') from error
+    except PermissionError as error:
+        raise UserValueError('errors.strm.filePermissionDenied') from error
+    except TimeoutError as error:
+        raise UserValueError('errors.strm.fileTimedOut') from error
+    except OSError as error:
         raise UserValueError('errors.strm.fileUnreadable') from error
+    except UnicodeError as error:
+        raise UserValueError('errors.strm.fileEncodingInvalid') from error
     if len(lines) != 1:
         raise UserValueError('errors.strm.singleUrlRequired')
     return validate_url(lines[0])

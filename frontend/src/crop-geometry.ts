@@ -138,6 +138,16 @@ export function resizeFromCorner(box: CropBox, x: number, y: number, size: CropS
   return clampBox(next, size, aspect, anchor);
 }
 
+/** 调整右下角，保留左上角，并以按键所在的轴决定锁定比例时的尺寸。 */
+export function stepCropCorner(box: CropBox, dx: number, dy: number, size: CropSize,
+                               aspect: number | null): CropBox {
+  const available = { width: size.width - box.x0, height: size.height - box.y0 };
+  const resized = clampBox({
+    x0: 0, y0: 0, x1: box.x1 - box.x0 + dx, y1: box.y1 - box.y0 + dy,
+  }, available, aspect, dx === 0 ? 'height' : 'width');
+  return { ...box, x1: box.x0 + resized.x1, y1: box.y0 + resized.y1 };
+}
+
 /** 源图像素框 → 覆盖层的百分比位置。显示尺寸不参与：百分比是相对图片本身的。 */
 export function boxPercent(box: CropBox, size: CropSize): {
   left: number; top: number; width: number; height: number;

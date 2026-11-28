@@ -201,6 +201,12 @@ def source_performer_refs(contract, connection, actors):
             continue
         ref['gender'] = gender
         actor_id = str(actor.get('id') or '')
+        dmm_id = str(actor.get('dmm_id') or '')
+        if re.fullmatch(r'[0-9]{1,10}', dmm_id):
+            from .feeds import dmm_actress_url
+            ref['source_url'] = dmm_actress_url(dmm_id)
+        elif re.fullmatch(r'[A-Za-z0-9]{1,16}', actor_id):
+            ref['source_url'] = 'https://javdb.com/actors/' + actor_id
         if re.fullmatch(r'[A-Za-z0-9]{1,64}', actor_id):
             ref['source_actor_id'] = actor_id
             ref['source_avatar'] = (bool(actor['has_avatar']) if 'has_avatar' in actor
@@ -238,7 +244,7 @@ def _cover_reason(contract, code) -> dict:
             "cover_message_code": reason['code'], "cover_message_params": reason['params']}
 
 
-def _source_fields(source, decisions):
+def source_tags(source, decisions):
     tags = [str(tag.get("name") or "") if isinstance(tag, dict) else str(tag)
             for tag in source.get("tags", [])]
     tag_refs = []
@@ -249,9 +255,14 @@ def _source_fields(source, decisions):
         label = label or raw
         if label and all(ref["name"] != label for ref in tag_refs):
             tag_refs.append({"name": label, "category": tag_cat(label), "source_name": raw})
+    return [tag for tag in tags if tag], tag_refs
+
+
+def _source_fields(source, decisions):
+    tags, tag_refs = source_tags(source, decisions)
     return {"duration": source.get("duration"), "score": source.get("score"),
             "summary": source.get("summary") or "", "director": source.get("director_name") or "",
-            "publisher": source.get("publisher_name") or "", "tags": [tag for tag in tags if tag],
+            "publisher": source.get("publisher_name") or "", "tags": tags,
             "tag_refs": tag_refs,
             "comments_count": int(source.get("comments_count") or 0)}
 

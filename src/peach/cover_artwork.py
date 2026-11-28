@@ -11,7 +11,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from . import amane_cache_repair, body_parts, jav_poster_crop
-from .face_detect import FaceDetector, FaceModelUnavailable, decode, main_face
+from .face_detect import FaceDetector, FaceModelUnavailable, decode, main_face, read_image
 from .jav_cover_fetch import Unavailable, is_javdb_image
 
 FRONT_START = 0.468
@@ -171,9 +171,7 @@ def text_across_file(path: Path):
 
     def across(cut: int) -> int:
         if cut not in seen:
-            import cv2
-
-            measure = text_across_of(cv2.imread(str(path)))
+            measure = text_across_of(read_image(path))
             seen[cut] = measure(cut) if measure is not None else 0
         return seen[cut]
 

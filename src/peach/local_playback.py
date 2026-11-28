@@ -1,4 +1,4 @@
-"""通过系统文件关联或已安装的播放器打开已授权媒体；mpv、IINA、VLC 接上观看进度回传。"""
+"""通过系统文件关联或本机播放器打开已授权媒体；mpv、IINA、VLC 接上观看进度回传。"""
 from __future__ import annotations
 
 import os
@@ -58,7 +58,9 @@ def _tracked_command(key: str, program: str, path: Path) -> tuple[list[str], Cal
         if key == 'iina':
             if not mac:
                 return None
-            command = [str(Path(program) / 'Contents/MacOS/iina-cli'), f'--mpv-input-ipc-server={address}']
+            # DEVNULL can be mistaken for piped media. Keep the CLI alive for the IPC tracker.
+            command = [str(Path(program) / 'Contents/MacOS/iina-cli'), f'--mpv-input-ipc-server={address}',
+                       '--no-stdin', '--keep-running']
         else:
             binary = str(Path(program) / 'Contents/MacOS/mpv') if mac else program
             command = [binary, f'--input-ipc-server={address}']
@@ -78,6 +80,42 @@ def open_media(path: Path, player: str = 'default', *, track: Track | None = Non
     `extra_args` 只给人工验收用（静音、暂停起播），接口不暴露。
     文件在不在带期限地问（`media_io.bounded`），网盘答不上抛超时（`OSError` 的子类）。
     """
+    path = _media_path(path)
+    chosen = installed().get(player) if player != 'default' else None
+    if player != 'default' and chosen is None:
+        raise UserValueError("errors.localPlayback.playerMissing")
+    program = chosen[1] if chosen else None
+    tracked = _tracked_command(player, program, path) if program and track else None
+    if tracked:
+        command, connect = tracked
+        process = subprocess.Popen([*command, *extra_args, str(path)], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   cwd=str(Path(command[0]).parent))
+        return track(connect, lambda: process.poll() is None)
+    _open_untracked(path, program)
+    return False
+
+
+def open_custom_media(path: Path) -> bool:
+    """选择这次使用的应用程序。取消时不启动播放器。"""
+    from .folder_picker import pick_application
+
+    path = _media_path(path)
+    selected = pick_application()
+    if selected is None:
+        return False
+    program = Path(selected)
+    if sys.platform == 'darwin':
+        valid = program.suffix.lower() == '.app' and program.is_dir()
+    else:
+        valid = program.suffix.lower() == '.exe' and program.is_file()
+    if not program.is_absolute() or not valid:
+        raise UserValueError("errors.localPlayback.invalidCustomPlayer")
+    _open_untracked(path, str(program))
+    return True
+
+
+def _media_path(path: Path) -> Path:
     if not available():
         raise UserValueError("errors.localPlayback.deploymentUnsupported")
     from . import media_io
@@ -87,25 +125,18 @@ def open_media(path: Path, player: str = 'default', *, track: Track | None = Non
         '.mpg', '.mpeg', '.vob', '.iso', '.mp3', '.m4a', '.flac', '.wav', '.ogg', '.opus',
     }:
         raise UserValueError("errors.localPlayback.fileUnsupported")
-    chosen = installed().get(player) if player != 'default' else None
-    if player != 'default' and chosen is None:
-        raise UserValueError("errors.localPlayback.playerMissing")
-    tracked = _tracked_command(player, chosen[1], path) if chosen and track else None
-    if tracked:
-        command, connect = tracked
-        process = subprocess.Popen([*command, *extra_args, str(path)], stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   cwd=str(Path(command[0]).parent))
-        return track(connect, lambda: process.poll() is None)
+    return path
+
+
+def _open_untracked(path: Path, program: str | None) -> None:
     if sys.platform == 'darwin':
         command = ['/usr/bin/open']
-        if chosen:
-            command.extend(['-a', chosen[1]])
+        if program:
+            command.extend(['-a', program])
         subprocess.run([*command, str(path)], check=True, timeout=10, capture_output=True)
-    elif chosen:
-        subprocess.Popen([chosen[1], str(path)], stdin=subprocess.DEVNULL,
+    elif program:
+        subprocess.Popen([program, str(path)], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         cwd=str(Path(chosen[1]).parent))
+                         cwd=str(Path(program).parent))
     else:
         os.startfile(str(path), 'open')
-    return False

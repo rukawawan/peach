@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peach import studio_icons as icons  # noqa: E402
 from peach.config import GENERATED_DIR, REVIEW_DIR, STATE_DIR  # noqa: E402
 from peach.interface_text import dev as t  # noqa: E402
+from peach.migrations import readonly_uri  # noqa: E402
 from peach.review_csv import write_rows  # noqa: E402
 
 ORDER = {icons.OK: 0, icons.PADDED: 1, icons.TOOSMALL: 2, icons.SHARED: 3,
@@ -26,7 +27,7 @@ ORDER = {icons.OK: 0, icons.PADDED: 1, icons.TOOSMALL: 2, icons.SHARED: 3,
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     logo_root = args.logo_root.resolve()
-    connection = sqlite3.connect(f"file:{args.database}?mode=ro", uri=True)
+    connection = sqlite3.connect(readonly_uri(args.database), uri=True)
     connection.row_factory = sqlite3.Row
     try:
         links = icons.studio_links(connection, args.kind)

@@ -15,6 +15,7 @@ export function downloadsShape(data: ConfigurationData): DownloadsShape | null {
     pikpakRoots: state.pikpak_roots.length > 0,
     pikpakLoggedIn: state.pikpak.logged_in,
     browserLogin: state.pikpak_browser.available,
+    localDownload: true,
   };
 }
 
@@ -53,8 +54,6 @@ export function maintenanceShape(data: ConfigurationData): MaintenanceShape {
     storageNotes: storage && !storage.relocation.available ? 1 : 0,
     reporting: Boolean(data.remote_reporting),
     reportingIdle: Boolean(data.remote_reporting && !data.remote_reporting.available),
-    sharing: Boolean(data.library_sharing),
-    sharingNotice: Boolean(data.library_sharing?.notice),
     sharingIdle: Boolean(data.library_sharing && !data.library_sharing.available),
     facts: data.facts.map(fact => fact.term),
     uninstall: Boolean(data.uninstall),

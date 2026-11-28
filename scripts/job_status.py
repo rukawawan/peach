@@ -27,6 +27,7 @@ if str(SRC_DIR) not in sys.path:
 from peach.config import DATABASE_PATH, GENERATED_DIR, STATE_DIR
 from peach.interface_text import dev as t
 from peach.media_sources import SCANNABLE_LOCATIONS
+from peach.migrations import readonly_uri
 from peach.review_csv import read_rows
 
 # 路径由配置解析，不依赖开发机器的盘符与目录布局。
@@ -46,7 +47,7 @@ ARTIFACTS = {
 
 
 def _readonly(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect("file:" + path.resolve().as_posix() + "?mode=ro", uri=True)
+    return sqlite3.connect(readonly_uri(path), uri=True)
 
 
 def _local(text: str) -> str:

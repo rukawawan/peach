@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import type { Browser, Page, Route } from 'playwright-core';
-import { configurationBody, expectBody, launch, layout, requiredEnv, settle, visit, VIEWPORTS, type Visit } from './harness.ts';
+import { CONFIGURATION_ROUTE, configurationBody, expectBody, launch, layout, requiredEnv, settle, visit, VIEWPORTS, type Visit } from './harness.ts';
 
 function forwardingState() {
   const active = new Map<Route, { url: string; phase: string }>();
@@ -142,7 +142,7 @@ describe('普通 HTTP 的配置与播放', () => {
         const alias = await page.request.get(`${service}/configuration`, { maxRedirects: 0 });
         assert.equal(alias.status(), 307);
         assert.equal(alias.headers().location, '/settings/library');
-        await page.route(`${origin}/api/configuration`, route => route.fulfill({ json: { ...configuration, editable: true } }));
+        await page.route(url => url.origin === origin && CONFIGURATION_ROUTE.test(url.pathname), route => route.fulfill({ json: { ...configuration, editable: true } }));
         const writes: { indexers: { key: string; name: string; url: string }[] }[] = [];
         await page.route(`${origin}/api/configuration/indexers`, route => {
           if (route.request().method() === 'GET') return route.fulfill({ json: { indexers: [], max_indexers: 4 } });

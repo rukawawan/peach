@@ -428,7 +428,7 @@ video.video-js{vertical-align:top;font-size:10px;line-height:1;font-family:Arial
 [data-player-stats-button]:focus-visible,[data-stage-close]:focus-visible{outline:0}
 [data-player-stats-button][aria-pressed="true"]{background:var(--hover);color:var(--ink)}
 [data-player-stats-button] svg{position:relative;z-index:1;width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;filter:drop-shadow(0 0 1px rgba(0,0,0,.8))}
-[data-player-stats]{position:absolute;left:11px;top:58px;z-index:8;min-width:320px;max-width:min(520px,calc(100% - 22px));
+[data-player-stats]{position:absolute;left:11px;top:58px;z-index:8;width:min(480px,calc(100% - 22px));
   max-height:calc(100% - 114px);overflow-y:auto;overscroll-behavior:contain;padding:10px 12px;border:1px solid rgba(255,255,255,.18);border-radius:var(--surface-radius);
   background:rgba(2,4,8,.78);color:#eef3f8;box-shadow:0 12px 28px #0008;
   backdrop-filter:saturate(1.25) blur(14px);font-size:var(--fs-xs);line-height:1.5;font-family:inherit}
@@ -440,6 +440,13 @@ video.video-js{vertical-align:top;font-size:10px;line-height:1;font-family:Arial
 [data-player-stats-plot="speed"] i[data-bar]{background:#55b5bd}[data-player-stats-plot="activity"] i[data-bar]{background:#4ba8df}
 [data-player-stats-plot="buffer"] i[data-bar]{background:#d8e98a}[data-player-stats-plot="buffer"] i[data-bar="mid"]{background:#efb55f}[data-player-stats-plot="buffer"] i[data-bar="low"]{background:#e16962}
 [data-player-stats][hidden]{display:none}
+[data-player-waterfall]{margin-block-start:10px;padding-block-start:8px;border-top:1px solid rgba(255,255,255,.18)}
+[data-player-waterfall] h3{margin:0 0 4px;font:inherit;font-weight:600}
+[data-player-waterfall] :is(p,ol){margin:0;padding:0}
+[data-player-waterfall] li{display:grid;grid-template-columns:minmax(0,1fr) minmax(36px,1fr) max-content;align-items:center;gap:8px;font-variant-numeric:tabular-nums}
+[data-player-waterfall] li>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-request-track]{position:relative;height:7px;background:rgba(255,255,255,.12)}
+[data-request-track]>i{position:absolute;inset-block:0;min-width:1px;background:#4ba8df}
 @media(max-width:600px){[data-player-stats] dd[data-player-stats-metric]{grid-template-columns:96px minmax(0,1fr)}}
 [data-player-net]{box-sizing:border-box;position:absolute;left:58px;top:11px;z-index:8;height:40px;min-height:40px;padding:0 11px;
   display:flex;align-items:center;gap:7px;white-space:nowrap;border:0;border-radius:var(--floating-radius);

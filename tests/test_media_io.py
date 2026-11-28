@@ -90,6 +90,45 @@ class MediaIoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             browse(config, str(self.root), offset=-1)
 
+    def test_file_browser_lists_regular_files_without_following_links(self):
+        from peach.nas_directories import list_directory
+        (self.root / 'folder').mkdir()
+        video = self.root / 'movie.mp4'
+        video.write_bytes(b'not video content')
+        if sys.platform != 'win32':
+            (self.root / 'linked.mp4').symlink_to(video)
+        with patch.object(Path, 'open', side_effect=AssertionError('browsing must not read file contents')):
+            page = list_directory(self.root, [str(self.root)], include_files=True)
+        metadata = video.stat()
+        self.assertEqual(page['files'], [{'name': 'movie.mp4', 'size': 17, 'modified_at': metadata.st_mtime,
+                                         'created_at': getattr(metadata, 'st_birthtime', None)}])
+        self.assertEqual([row['name'] for row in page['directories']], ['folder'])
+        self.assertEqual(page['offset'], 0)
+        self.assertIsNone(page['next_offset'])
+        picker = list_directory(self.root, [str(self.root)])
+        self.assertNotIn('files', picker)
+
+    def test_file_browser_locates_the_exact_file_beyond_the_first_page(self):
+        from peach.nas_directories import list_directory
+        metadata = Mock(side_effect=FileNotFoundError)
+        entries = [SimpleNamespace(name=f'{i}.mp4', is_dir=lambda **kw: False,
+                                   is_file=lambda **kw: True, stat=metadata) for i in range(1002)]
+        manager = Mock()
+        manager.__enter__ = Mock(side_effect=lambda: iter(entries))
+        manager.__exit__ = Mock(return_value=False)
+        with patch('peach.nas_directories.os.scandir', return_value=manager):
+            for focus, expected_offset in [('499.mp4', 0), ('500.mp4', 500), ('1001.mp4', 1000)]:
+                with self.subTest(focus=focus):
+                    page = list_directory(self.root, [str(self.root)], include_files=True, focus_name=focus)
+                    self.assertEqual(page['offset'], expected_offset)
+                    self.assertIn({'name': focus, 'size': None, 'modified_at': None, 'created_at': None}, page['files'])
+                    self.assertLessEqual(len(page['files']), 500)
+                    self.assertEqual(page['next_offset'], expected_offset + 500 if expected_offset < 1000 else None)
+            missing = list_directory(self.root, [str(self.root)], include_files=True, focus_name='gone.mp4')
+        self.assertEqual(missing['offset'], 0)
+        self.assertEqual(len(missing['files']), 500)
+        self.assertEqual(missing['next_offset'], 500)
+
     def test_nas_local_directory_does_not_probe_an_unrelated_offline_mount(self):
         from peach.nas_directories import list_directory
         offline = self.root.parent / 'offline-cloud'
@@ -181,6 +220,30 @@ class MediaIoTests(unittest.TestCase):
                 worker.call('stat', str(source))
             process = worker._process
         self.assertIsNotNone(process.poll())
+
+    def test_a_slow_starting_worker_does_not_spend_the_first_call_deadline(self):
+        """解释器启动、导入不碰挂载：卡住的那条换了新子进程之后，下一条健康文件不因起进程慢判超时。"""
+        source = self.root / 'a.mp4'
+        source.write_bytes(b'x')
+        script = ('import sys, time\n'
+                  f'sys.path[:0] = {sys.path!r}\n'
+                  'time.sleep(1.0)\n'
+                  'import peach.media_io as m\n'
+                  'sys.exit(m.main(sys.argv[1:]))\n')
+        children, original_popen = [], subprocess.Popen
+
+        def slow_start(command, **options):
+            if command[-2:] == ['serve', '-']:
+                command = [sys._base_executable, '-c', script, 'serve', '-']
+            child = original_popen(command, **options)
+            children.append(child)
+            return child
+        with patch.object(media_io, 'TIMEOUT_SECONDS', 0.3), \
+                patch.object(media_io.subprocess, 'Popen', side_effect=slow_start), \
+                media_io.MountWorker() as worker:
+            self.assertEqual(worker.call('stat', str(source)).st_size, 1)
+            self.assertEqual(worker.call('stat', str(source)).st_size, 1)
+        self.assertEqual(len(children), 1)
 
     def test_scan_directory_timeout_restarts_the_worker_for_the_next_directory(self):
         from peach.scan_timings import ScanTimings

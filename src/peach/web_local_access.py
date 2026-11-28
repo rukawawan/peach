@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import ipaddress
 import os
+from urllib.parse import urlsplit
 
 from fastapi import Request
 
 from . import distribution, listening, tunnel
+
+from .ai_endpoints import is_private_lan
 
 
 def managed_configuration() -> bool:
@@ -32,6 +35,41 @@ def loopback_client(request: Request) -> bool:
                 and listening.is_loopback(request.url.hostname or ""))
     except ValueError:
         return False
+
+
+def _ai_local_address(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_link_local or is_private_lan(address)
+
+
+def private_ai_client(request: Request) -> bool:
+    """Saved AI connections require a direct private peer and a private entry point."""
+    if (not request.client or not _ai_local_address(request.client.host) or tunnel_forwarded(request)
+            or any(header == "forwarded" or header.startswith(("x-forwarded-", "cf-")) for header in request.headers)):
+        return False
+    settings = request.app.state.settings
+    mdns = (getattr(settings, "mdns_name", "") or "").lower().rstrip(".").removesuffix(".local")
+    public = (getattr(settings, "tunnel_hostname", "") or "").lower().rstrip(".")
+
+    def private_host(host):
+        host = (host or "").lower().rstrip(".")
+        return host != public and (host == "localhost" or (bool(mdns) and host == mdns + ".local") or _ai_local_address(host))
+
+    try:
+        if not private_host(request.url.hostname):
+            return False
+        for header in ("origin", "referer"):
+            value = request.headers.get(header)
+            if value and value != "null" and not private_host(urlsplit(value).hostname):
+                return False
+    except ValueError:
+        return False
+    return True
 
 
 def local_client(request: Request) -> bool:

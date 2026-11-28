@@ -12,7 +12,7 @@ it('来源图片只在点击后请求，失败可以重试，换来源要重新�
   expect(host.querySelector('[role=status][data-skeleton]')?.getAttribute('aria-label')).toContain('正在加载图片');
   await act(async () => { host.querySelector('img')!.dispatchEvent(new Event('error')) });
   expect(host.querySelector('img')).toBeNull();
-  expect(host.textContent).toContain('未取得来源图片');
+  expect(host.textContent).toContain('来源图片加载失败');
   await click(host.querySelector('button'));
   await act(async () => { host.querySelector('img')!.dispatchEvent(new Event('load')) });
   expect(host.querySelector('[role=status]')).toBeNull();

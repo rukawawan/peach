@@ -71,6 +71,7 @@ export function attachOverlayScrollbar(
     const track=document.createElement('div');
     // 两个类名写全，别拼 `ov-${axis}`：样式表的选择器要能在源码里查到消费者。
     track.className=`ovtrack ${axis==='y'?'ov-y':'ov-x'}${variant?` ${variant}`:''}`;
+    track.dataset.overlayScrollbarAxis=axis;
     track.dataset.overlayTrack=axis;
     track.hidden=true;
     const thumb=document.createElement('div');

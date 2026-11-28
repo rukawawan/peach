@@ -23,6 +23,8 @@
 @source "../components/note.tsx";
 @source "../components/segmented.tsx";
 @source "../components/configuration-fields.tsx";
+@source "../components/modal-frame.tsx";
+@source "../feedback/feedback.tsx";
 @source "../settings/library-icon-picker.tsx";
 @source "../settings/library-policy-settings.tsx";
 @source "../boardui/components/base/";
@@ -33,6 +35,17 @@
 body.peach-react {
   min-height: 100dvh;
   background-color: var(--color-background-full);
+}
+
+/* 灯箱在独立页面也使用主界面的滑轨、圆角和字号。 */
+body.peach-react [data-photo-lightbox] {
+  --inset: var(--color-background-tertiary-default);
+  --pill-radius: 999px;
+  --surface-radius: var(--radius-lg);
+  --floating-radius: var(--radius-2-5xl);
+  --fs-xs: var(--text-caption-1-regular);
+  --fs-sm: 0.8125rem;
+  --fs-md: var(--text-body-regular);
 }
 
 /* 共用 Collapse（`src/ui-kit/collapse.ts`）的高度过渡，同 `src/ui-kit/collapse.css`。 */

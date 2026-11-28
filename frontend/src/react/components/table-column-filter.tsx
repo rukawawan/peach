@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useRef, useState, type ComponentProps, type PointerEvent, type ReactNode } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Popover, Pressable } from 'react-aria-components';
+import { Popover } from 'react-aria-components';
 import { Checkbox } from '@/components/base/checkbox/checkbox';
 import { Button } from '@/components/base/buttons/button';
 import { LinkButton } from '@/components/base/buttons/link-button';
@@ -11,14 +11,22 @@ import { errorMessage } from '../../api';
 import { columnValueSelected, toggleColumnValue, type ColumnSelection } from '../../column-filters';
 import { IndexSearch } from '../index/index-search';
 import { MenuDialog } from './menu-dialog';
+import { FILTER_TOOLBAR_POPOVER_OFFSET } from './filter-glass';
+import { FilterMenuScroll } from './filter-menu-scroll';
 import { Note } from './note';
 import { ActivityStatus } from './activity-motion';
 import { t } from '../../i18n';
 
+export type ToolbarFieldDragProps = Pick<ComponentProps<'button'>, 'style' | 'aria-keyshortcuts' | 'onPointerDown'
+  | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onLostPointerCapture' | 'onKeyDown' | 'onDragStart'> & {
+    'data-tab': string; 'data-dragging'?: '';
+  };
+export const ToolbarFieldDrag = createContext<ToolbarFieldDragProps | null>(null);
+
 export interface ColumnFilterOption { id: string; label: string; content?: ReactNode; count?: number; leading?: ReactNode | (() => ReactNode); searchTerms?: readonly string[]; disabled?: boolean; title?: string }
 export interface ColumnFilterPage { items: ColumnFilterOption[]; nextOffset?: number }
 interface ColumnFilterProps {
-  id: string; label: string; values?: ColumnSelection; options?: readonly ColumnFilterOption[] | (() => readonly ColumnFilterOption[]);
+  id: string; label: string; copyKey?: string; values?: ColumnSelection; options?: readonly ColumnFilterOption[] | (() => readonly ColumnFilterOption[]);
   queryKey?: readonly unknown[]; searchable?: boolean;
   load?(signal: AbortSignal, search: string, offset: number): Promise<ColumnFilterPage>;
   onChange(values: ColumnSelection | undefined): void;
@@ -26,38 +34,56 @@ interface ColumnFilterProps {
 
 /** 列头菜单只在展开时挂载查询，关闭后取消未完成请求并回收短期缓存。 */
 export function TableColumnFilter(props: ColumnFilterProps) {
-  return <ColumnFilterPopover id={props.id} label={props.label} active={props.values !== undefined}>
-    {() => <ColumnFilterMenu {...props} />}
+  return <ColumnFilterPopover id={props.id} label={props.label} copyKey={props.copyKey} active={props.values !== undefined}>
+    {() => <MenuDialog aria-label={t('catalog:columnFilter.label', { column: props.label })} className="outline-none">
+      <ColumnFilterFields {...props} />
+    </MenuDialog>}
   </ColumnFilterPopover>;
 }
 
-export function ColumnFilterPopover({ id, label, active, shouldCloseOnInteractOutside, children }: {
-  id: string; label: string; active: boolean;
+export function ColumnFilterPopover({ id, label, copyKey, active, view, toolbar, shouldCloseOnInteractOutside, children }: {
+  id: string; label: string; copyKey?: string; active: boolean;
+  orderKey?: string;
+  toolbar?: boolean;
+  view?: { anchor: boolean; onPointerEnter(event: PointerEvent<HTMLButtonElement>): void; onOpenChange(open: boolean): void };
   shouldCloseOnInteractOutside?(element: Element): boolean;
   children(close: () => void): ReactNode;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const inToolbar = toolbar || !!view;
+  const drag = useContext(ToolbarFieldDrag);
+  const changeOpen = (next: boolean) => { setOpen(next); view?.onOpenChange(next) };
+  const Trigger = inToolbar ? 'button' : LinkButton;
+  const appearance = inToolbar ? {} : { variant: active ? 'primary' as const : 'secondary' as const, size: 'xs' as const, trailingIcon: MenuChevron };
   return <>
-    <Pressable onPress={() => setOpen(true)}>
-    <LinkButton ref={trigger} variant={active ? 'primary' : 'secondary'} size="xs" trailingIcon={MenuChevron}
+    <Trigger {...appearance} {...(inToolbar ? drag : null)} ref={trigger} type="button" data-filter-field={inToolbar ? '' : undefined}
       data-table-column-filter={id} data-filter-active={active ? '' : undefined}
-      className="min-w-0 max-w-full justify-start [&>span]:min-w-0"
+      data-catalog-view={inToolbar ? id : undefined} data-glide-anchor={view?.anchor ? '' : undefined}
+      data-entity-press={inToolbar ? '' : undefined} onPointerEnter={view?.onPointerEnter}
+      className={inToolbar ? undefined : 'min-w-0 max-w-full justify-start [&>span]:min-w-0'}
       aria-label={t('catalog:columnFilter.label', { column: label })} aria-haspopup="dialog" aria-expanded={open}
-      ><span className="truncate">{label}</span></LinkButton>
-    </Pressable>
-    <Popover triggerRef={trigger} isOpen={open} onOpenChange={setOpen} placement="bottom start" offset={4}
+      onKeyDown={inToolbar ? drag?.onKeyDown : event => {
+        if (event.altKey || (event.key !== 'Enter' && event.key !== ' ')) return;
+        // 表头的导航会处理 Enter 与空格。焦点在筛选键上时由筛选键打开自己的菜单。
+        event.preventDefault();
+        event.stopPropagation();
+        changeOpen(true);
+      }}
+      onClick={event => { if (event.altKey) return; event.stopPropagation(); changeOpen(true) }}>
+      <span className="truncate" data-copy-key={copyKey}>{label}</span>
+    </Trigger>
+    <Popover triggerRef={trigger} isOpen={open} onOpenChange={changeOpen} placement="bottom start" offset={inToolbar ? FILTER_TOOLBAR_POPOVER_OFFSET : 4}
       shouldCloseOnInteractOutside={shouldCloseOnInteractOutside}
       className={cx(MENU_POPOVER_SURFACE, 'peach-react w-80 overflow-hidden p-0')}>
-      {children(() => setOpen(false))}
+      {children(() => changeOpen(false))}
     </Popover>
   </>;
 }
 
-function ColumnFilterMenu({ id, label, values, options = [], queryKey, searchable = true, load, onChange }: ColumnFilterProps) {
+export function ColumnFilterFields({ id, label, values, options = [], queryKey, searchable = true, load, onChange }: ColumnFilterProps) {
   const [search, setSearch] = useState('');
   const [visible, setVisible] = useState(24);
-  const scroll = useRef<HTMLDivElement>(null);
   const result = useInfiniteQuery({
     queryKey: [...(queryKey || ['table-column-filter', id]), search], enabled: !!load,
     initialPageParam: 0,
@@ -76,17 +102,17 @@ function ColumnFilterMenu({ id, label, values, options = [], queryKey, searchabl
   const partial = !all && (!Array.isArray(values) || values.length > 0);
   const pending = !!load && result.isPending;
   const rowClass = cx(MENU_ITEM, !searchable && 'min-h-8 py-0.5');
-  return <MenuDialog aria-label={t('catalog:columnFilter.label', { column: label })} className="flex flex-col gap-2 outline-none">
+  return <div className="flex flex-col gap-2">
     {searchable ? <div className="px-3 pt-3">
       <IndexSearch label={t('catalog:columnFilter.search', { column: label })}
         placeholder={t('catalog:columnFilter.search', { column: label })} value={search}
-        onQuery={next => { setSearch(next); setVisible(24); if (scroll.current) scroll.current.scrollTop = 0 }} />
+        onQuery={next => { setSearch(next); setVisible(24) }} />
     </div> : null}
     {load && result.isError ? <Note tone="error" action={<Button size="xs" variant="ghost"
       onClick={() => void (result.isFetchNextPageError ? result.fetchNextPage() : result.refetch())}>{t('shell:shared.retry')}</Button>}>
       {errorMessage(result.error)}</Note> : null}
-    <div ref={scroll} role="group" aria-label={label} data-column-filter-options=""
-      className={cx(MENU_ITEMS_CONTAINER, 'max-h-72 overflow-y-auto px-3 pb-3', !searchable && 'pt-3')}
+    <FilterMenuScroll key={search} role="group" aria-label={label} data-column-filter-options=""
+      className={cx(MENU_ITEMS_CONTAINER, 'pb-3', !searchable && 'pt-3')}
       onScroll={event => {
         const node = event.currentTarget;
         if (load && result.hasNextPage && !result.isFetching && node.scrollHeight - node.scrollTop - node.clientHeight < 100)
@@ -118,8 +144,8 @@ function ColumnFilterMenu({ id, label, values, options = [], queryKey, searchabl
         onClick={() => void result.fetchNextPage({ cancelRefetch: false })}>
         {t('catalog:shared.loadMore')}</Button> : !load && rows.length > visible
           ? <Button variant="secondary" size="small" onClick={() => setVisible(current => current + 24)}>{t('catalog:shared.loadMore')}</Button> : null}
-    </div>
+    </FilterMenuScroll>
     {!pending && !(load && result.isError) && !rows.length
       ? <span role="status" className="px-3 pb-3 text-caption-1-regular text-text-secondary">{t('catalog:columnFilter.noOptions')}</span> : null}
-  </MenuDialog>;
+  </div>;
 }

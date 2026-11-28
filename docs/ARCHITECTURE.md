@@ -21,7 +21,7 @@ Peach 是一个 FastAPI 模块化单体：逻辑上前后端分离，部署时�
 7. **Profile**：默认单用户，数据模型预留 user/profile，不引入完整账号体系。
 8. **追更来源**：RSS/Atom 等协议返回的条目先转换为统一资料格式；原始资料、人工确认和数据库写入分别处理。「想要」清单 `want_item` 按番号登记库外作品，扫描登记影片时按番号自动匹配清单（ADR-0090）。
 9. **任务系统**：来源成本、磁盘闸门、进程归属、进度和来源证据由 Peach 自己定义；HTTP、调度、媒体探测、图片与协议解析用成熟组件。
-10. **下载**：Peach 只把磁力交给网盘离线（115 经 CloudDrive2 gRPC，PikPak 直连），文件落地后仍由推送发现与扫描登记入库（ADR-0089）。
+10. **下载**：Peach 把磁力交给网盘离线（115 经 CloudDrive2 gRPC，PikPak 直连）或本地 qBittorrent Web API；文件落地后仍由推送发现、下载对账与扫描登记入库（ADR-0089、ADR-0174）。
 11. **HTTP / 搜索**：网络适配器默认共用长生命周期的 HTTPX transport。例外有三个，都有证据登记：FANBOX 公开 `post.info` 用固定版本的 `curl_cffi` 保留 Firefox TLS/HTTP2 传输特征，但不求解质询、不登录、不读付费内容；Cloudflare 后面的来源经 `peach.browser_transport` 驱动本机浏览器取页（ADR-0065）；115 云下载经 CloudDrive2 的 gRPC 接口提交，`grpcio` 精确固定版本（ADR-0089）。作品全文搜索用 SQLite FTS5 trigram，短查询回退 LIKE。
 
 ## 数据流
@@ -36,7 +36,7 @@ AI/外部元数据 -> 经复核的候选 -> ledger
 
 - 微服务、消息总线、PostgreSQL
 - 一次性整站重写前端（只按 ADR-0031 逐页迁移）
-- 抓取或保存 ChatGPT/Claude OAuth token
+- 从 ChatGPT、Codex 或 Claude 的现有会话提取 OAuth 凭据。Peach 自己发起的 ChatGPT 订阅授权见 [ADR-0180](adr/0180-ai-library-tasks-and-official-connections.md)。
 - 把 Stash 私有目录或 GPL 构建当作 Peach 的稳定打包依赖
 
 Stash 遗留的数据缺陷与许可证边界见 [docs/STASH.md](STASH.md)；复用与自研的边界、旧脚本的继任关系见 [docs/REUSE.md](REUSE.md)。

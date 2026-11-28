@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   createColumnHelper, flexRender, rowPaginationFeature, rowSelectionFeature, rowSortingFeature,
-  columnVisibilityFeature, tableFeatures, useTable, type RowSelectionState,
+  columnOrderingFeature, columnVisibilityFeature, tableFeatures, useTable, type RowSelectionState,
 } from '@tanstack/react-table';
 import { cardArtwork, relayoutCovers } from '@peach/card-art';
 import { fmtDur, fmtSize, requestErrorMessage } from '@peach/legacy/core';
@@ -33,13 +33,14 @@ import { CatalogRating, catalogTableDate } from './catalog-table-controls';
 import { CatalogColumnFilter, CatalogColumnRangeFilter } from './catalog-column-filter';
 import { isColumnRangeKey } from '../../column-filters';
 import { TableColumnControls, TableColumnResizer } from '../components/table-column-controls';
+import { TableToolbar } from '../components/table-toolbar';
 import { TableSelectionHeader } from '../components/table-selection-header';
 import { joinList, t } from '../../i18n';
 import { codedText } from '../../core/server-text';
 import { MediaRowActions, useMediaContextMenu } from '../components/media-actions';
 import './catalog-list.css';
 
-const features = tableFeatures({ rowSortingFeature, rowSelectionFeature, rowPaginationFeature, columnVisibilityFeature });
+const features = tableFeatures({ rowSortingFeature, rowSelectionFeature, rowPaginationFeature, columnVisibilityFeature, columnOrderingFeature });
 const COLUMN_ORDER = catalogColumns.map(column => column.id);
 const sortOptions = [
   { id: 'name', label: t('catalog:catalogList.sortName') }, { id: 'dur', label: t('catalog:catalogList.duration') }, { id: 'size', label: t('catalog:catalogList.size') },
@@ -56,6 +57,8 @@ export function CatalogListPage(props: CatalogGridProps & {
   const contextProps = (item: MediaItem) => ({ item, actions: props.actions, selected: props.selected.has(item.id),
     onOpen: props.filters?.state === 'trash' ? props.actions.openResource : props.actions.open });
   const preferences = useCatalogTablePreferences();
+  const tableTop = useRef<HTMLDivElement>(null);
+  const filterHost = props.mode === 'entity' ? '#index' : props.filters?.state === 'trash' ? '#trashFilter' : '#catalogFilter';
   const tints = useLibraryTints();
   const params = catalogParams(props.filters || {}, false);
   const scope = catalogListScope(props);
@@ -86,6 +89,8 @@ export function CatalogListPage(props: CatalogGridProps & {
     },
   });
   const items = result.data?.items || [];
+  const watchArtwork = useCatalogArtworkWindow();
+  const artworkWindow = items.length >= 50 && typeof IntersectionObserver !== 'undefined' ? watchArtwork : undefined;
   const total = Number(result.data?.total || 0);
   const missing = props.filters?.state === 'trash' ? [] : missingPreviewIds(items, props.layout.javImage);
   const metered = props.filters?.state === 'trash' ? [] : meteredPreviewIds(items, props.layout.javImage);
@@ -117,7 +122,7 @@ export function CatalogListPage(props: CatalogGridProps & {
         isDisabled={result.isPlaceholderData}
         isSelected={row.getIsSelected()} onChange={on => row.toggleSelected(on)} /> }),
       helper.accessor(item => item.name || '', { id: 'name', header: t('catalog:shared.video'), enableSorting: true,
-        cell: ({ row }) => <ListIdentity item={row.original} props={props} disabled={result.isPlaceholderData} /> }),
+        cell: ({ row }) => <ListIdentity item={row.original} props={props} disabled={result.isPlaceholderData} watchArtwork={artworkWindow} /> }),
       helper.display({ id: 'library', header: t('catalog:shared.library'), cell: ({ row }) => <ListLibrary item={row.original} /> }),
       helper.display({ id: 'actions', header: t('catalog:mediaActions.label'), cell: ({ row }) =>
         <MediaRowActions {...contextProps(row.original)} disabled={result.isPlaceholderData} /> }),
@@ -158,11 +163,12 @@ export function CatalogListPage(props: CatalogGridProps & {
       helper.accessor(item => item.release_date, { id: 'release', header: t('catalog:catalogList.releaseDate'), enableSorting: true,
         cell: ({ row }) => row.original.release_date || '—' }),
     ]).sort((a, b) => COLUMN_ORDER.indexOf(a.id!) - COLUMN_ORDER.indexOf(b.id!));
-  }, [props.helpers, props.actions, props.layout, props.selectMode, props.filters?.state, props.selected, result.isPlaceholderData]);
+  }, [props.helpers, props.actions, props.layout, props.selectMode, props.filters?.state, props.selected, result.isPlaceholderData, artworkWindow]);
   const table = useTable({
     features, columns, data: items, getRowId: item => String(item.id),
     manualSorting: true, manualPagination: true, rowCount: total,
-    state: { sorting, pagination, rowSelection, columnVisibility: { ...preferences.visibility, select: props.selectMode } },
+    state: { sorting, pagination, rowSelection, columnOrder: preferences.columnOrder,
+      columnVisibility: { ...preferences.visibility, select: props.selectMode } },
     onColumnVisibilityChange: preferences.change,
     onSortingChange: updater => setState(now => ({
       ...now,
@@ -193,18 +199,20 @@ export function CatalogListPage(props: CatalogGridProps & {
       if (item && !result.isPlaceholderData) context.onKeyDown(event, contextProps(item), row);
     }}>
     {context.menu}
-    <div className="flex flex-wrap justify-end gap-2" role="toolbar" aria-label={t('catalog:catalogList.toolbar')}>
+    <TableToolbar className="flex flex-wrap justify-end gap-2" label={t('catalog:catalogList.toolbar')}>
       <div data-toolbar-actions="">
       <TableColumnControls preferences={preferences} />
       <DataTableSort label={t('catalog:catalogList.listLabel')} options={sortOptions} sorting={sorting}
         onChange={next => table.setSorting(next)} />
       </div>
-    </div>
+    </TableToolbar>
     {result.isPending
       ? completionReserved ? <i data-completion-skeleton="" aria-hidden="true" className="skeleton-sheen" /> : null
       : <LibraryCompletionPrompt className="" assetIds={missing} meteredIds={metered} />}
     {result.isError ? <RetryNote message={requestErrorMessage(result.error)} onRetry={() => void result.refetch()} /> : null}
-    <DataTableFrame follow preferences={preferences} onRowClick={props.selectMode ? id => { if (!result.isPlaceholderData) props.actions.toggleSelection(Number(id), false) } : undefined}>
+    <DataTableFrame ref={tableTop} follow preferences={preferences} onRowClick={props.selectMode ? id => { if (!result.isPlaceholderData) props.actions.toggleSelection(Number(id), false) } : undefined}
+      rectangleSelecting={props.selectMode} onRectangle={!result.isPlaceholderData && items.length > 0 && props.actions.selectCardRectangle
+        ? (keys, add) => props.actions.selectCardRectangle?.(keys.map(Number), add) : undefined}>
       <Table aria-label={t('catalog:catalogList.listLabel')} size="sm"
         sortDescriptor={sort ? { column: sort.id, direction: sort.desc ? 'descending' : 'ascending' } : undefined}
         onSortChange={next => table.setSorting([{ id: String(next.column), desc: next.direction === 'descending' }])}>
@@ -223,7 +231,7 @@ export function CatalogListPage(props: CatalogGridProps & {
                 : flexRender(header.column.columnDef.header, header.getContext())}
               {header.column.getCanSort() ? <span data-sort-indicator data-direction={sortDirection || undefined}><ChevronSortDown /></span> : null}
             </span>
-            <TableColumnResizer preferences={preferences} id={header.id} />
+            <TableColumnResizer preferences={preferences} id={header.id} fixedDivider={header.id === 'actions'} />
             </>}
           </TableColumn>)}
           <TableColumn id="remaining-space" aria-label={t('catalog:catalogList.rowSpacer')} data-table-space="" width={preferences.spaceWidth} minWidth={0} />
@@ -240,6 +248,7 @@ export function CatalogListPage(props: CatalogGridProps & {
             data-guide-video={(!row.original.medium || row.original.medium === 'video') && row.original.location !== 'online' && !String(row.original.name || '').toLowerCase().endsWith('.iso') ? '' : undefined}
             data-library={tints.get(row.original.library_id || '')?.color ? row.original.library_id : undefined}
             data-board-selected={row.getIsSelected() || undefined}
+            {...(props.selectMode || result.isPlaceholderData ? undefined : context.touchProps)}
             onContextMenu={event => { if (!result.isPlaceholderData) context.onContextMenu(event, contextProps(row.original)) }}>
             {row.getVisibleCells().map(cell => <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>)}
             <TableCell data-table-space="" />
@@ -248,12 +257,37 @@ export function CatalogListPage(props: CatalogGridProps & {
       </Table>
     </DataTableFrame>
     {result.data ? <DataTableFooter label={t('catalog:catalogList.listLabel')} total={total} pagination={pagination}
+      scrollTarget={tableTop} stickyHeader={() => document.querySelector<HTMLElement>(`${filterHost} [data-filter-frame]`)}
       onChange={next => table.setPagination(next)} unit={t('catalog:catalogList.footerUnit')} pageUnit={t('catalog:catalogList.footerPageUnit')} /> : null}
   </div>;
 }
 
-function ListIdentity({ item, props, disabled }: { item: MediaItem; props: CatalogGridProps; disabled: boolean }) {
-  const artwork = cardArtwork(item, 'small', false, props.layout.javImage);
+type WatchArtwork = (node: HTMLElement, onChange: (visible: boolean) => void) => () => void;
+
+/** 表格保留文字和按键位置，只有视口附近的行挂载封面。Ctrl+F 与方向键使用原来的行。 */
+function useCatalogArtworkWindow(): WatchArtwork {
+  const callbacks = useRef(new WeakMap<Element, (visible: boolean) => void>());
+  const observer = useRef<IntersectionObserver | null>(null);
+  return useCallback((node, onChange) => {
+    const watching = observer.current ??= new IntersectionObserver(entries => {
+      for (const entry of entries) callbacks.current.get(entry.target)?.(entry.isIntersecting);
+    }, { rootMargin: '480px 0px' });
+    callbacks.current.set(node, onChange);
+    watching.observe(node);
+    return () => { callbacks.current.delete(node); watching.unobserve(node) };
+  }, []);
+}
+
+function ListIdentity({ item, props, disabled, watchArtwork }: {
+  item: MediaItem; props: CatalogGridProps; disabled: boolean; watchArtwork?: WatchArtwork | undefined;
+}) {
+  const picture = useRef<HTMLSpanElement>(null);
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    if (picture.current && watchArtwork) return watchArtwork(picture.current, setNear);
+  }, [watchArtwork]);
+  const showArtwork = !watchArtwork || near;
+  const artwork = showArtwork ? cardArtwork(item, 'small', false, props.layout.javImage) : null;
   /* 与卡片同一判据：按画幅筛时组里只剩这一卷或这一个版本，就按单个文件写。 */
   const parts = Number(item.part_group?.count) > 1 ? item.part_group || null : null;
   const editions = Number(item.edition_group?.count) > 1 ? item.edition_group || null : null;
@@ -273,9 +307,10 @@ function ListIdentity({ item, props, disabled }: { item: MediaItem; props: Catal
     opener(item, event.currentTarget);
   };
   return <div data-list-identity="">
-    <button type="button" data-list-open="" disabled={disabled} tabIndex={-1} aria-hidden="true" onClick={open}>
-      <span data-list-picture="">{artwork.html
-        ? <ArtSlot artwork={artwork} relayout={root => relayoutCovers(root, 'small')} /> : <span>{t('catalog:catalogList.noPreview')}</span>}
+    <button type="button" data-list-open="" data-rectangle-trigger="" disabled={disabled} tabIndex={-1} aria-hidden="true" onClick={open}>
+      <span ref={picture} data-list-picture="">{artwork?.html
+        ? <ArtSlot artwork={artwork} relayout={root => relayoutCovers(root, 'small')} />
+        : showArtwork ? <span>{t('catalog:catalogList.noPreview')}</span> : null}
         {parts && !editions ? <span data-media-group="">{t('catalog:catalogList.partCount', { count: Number(parts.count) })}</span> : null}
         {editions ? <span data-media-group="" title={editionNames(editions)}>{t('catalog:catalogList.editionCount', { count: Number(editions.count) })}</span> : null}
         {watched > 0
@@ -293,7 +328,7 @@ function ListIdentity({ item, props, disabled }: { item: MediaItem; props: Catal
           : null}</span>
     </button>
     <span data-list-text="">
-      <button type="button" data-list-name="" disabled={disabled} title={name} aria-label={t('catalog:catalogList.openItem', { name })} onClick={open}
+      <button type="button" data-list-name="" data-rectangle-trigger="" disabled={disabled} title={name} aria-label={t('catalog:catalogList.openItem', { name })} onClick={open}
         dangerouslySetInnerHTML={{ __html: titleHtml }} />
     </span>
   </div>;

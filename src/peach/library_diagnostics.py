@@ -10,8 +10,12 @@ from contextlib import closing
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from filelock import FileLock
+
 from . import interface_text
 from .catalog_rules import release_code_from_text
+from .fsutil import atomic_write_text
+from .user_messages import UserValueError
 from .western_artwork import artwork_key
 from .metadata_policy import MAKER_SOURCES
 from .metadata_routes import AMANE_STAGE, ROUTES
@@ -128,7 +132,36 @@ def _library_item(row):
             "path": str(path or ""), "duration": duration, "size": size}
 
 
-def library(settings, config, filters=None):
+def _ignored_path(config):
+    return config.directory("state") / "library-health-ignored.json"
+
+
+def _ignored(path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    return {key: set(data.get(key, [])) for key in GROUP_CODES if key in data}
+
+
+def change_ignored(config, group_key, asset_ids, ignore):
+    if (not isinstance(group_key, str) or group_key not in GROUP_CODES or type(ignore) is not bool
+            or not isinstance(asset_ids, list) or not 0 < len(asset_ids) <= LIMIT
+            or any(type(value) is not int or not 0 < value < 2**63 for value in asset_ids)):
+        raise UserValueError("api.configuration.invalidLibraryHealthSelection")
+    path = _ignored_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(path) + ".lock"):
+        state = _ignored(path)
+        ids = state.setdefault(group_key, set())
+        if ignore:
+            ids.update(asset_ids)
+        else:
+            ids.difference_update(asset_ids)
+        atomic_write_text(path, json.dumps({key: sorted(values) for key, values in state.items() if values}))
+
+
+def library(settings, config, filters=None, *, show_ignored=False):
     groups = {key: group(key) for key in GROUP_CODES}
     try:
         with closing(sqlite3.connect(settings.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
@@ -139,8 +172,14 @@ def library(settings, config, filters=None):
     except (sqlite3.Error, OSError):
         return {"groups": groups, "issue_at": None}
     assets = {row[0]: _library_item(row) for row in rows}
+    ignored = _ignored(_ignored_path(config))
+
     def grouped(key, items):
-        return group(key, items, config=config, filters=(filters or {}).get(key))
+        ids = ignored.get(key, set())
+        ignored_count = sum(item["id"] in ids for item in items)
+        visible = [item for item in items if (item["id"] in ids) == show_ignored]
+        return {**group(key, visible, config=config, filters=(filters or {}).get(key)),
+                "ignored_count": ignored_count}
     groups["duration"] = grouped("duration", [assets[row[0]] for row in rows if not row[2] or row[2] <= 0])
     covers, posters = inventory(settings.cover_root), inventory(settings.poster_root)
     if covers is not None and posters is not None:

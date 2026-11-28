@@ -47,26 +47,39 @@ describe('视频退出续播', () => {
         await page.route((url) => ['/api/activity', '/api/follow/activity', '/api/follow/play'].includes(url.pathname),
           (route) => route.fulfill({ json: { ok: true } }));
         const key = kind === 'item' ? `item:${ITEM.plain}` : `follow:${DETAIL.collection}:main`;
-        await page.evaluate((key) => localStorage.setItem(`peach.playback-position.v1:${key}`, '0'), key);
+        let saved = { seconds: 0, updated_at: 1 };
+        await page.route(url => url.pathname === '/api/player/memory' && url.searchParams.get('video') === key, route => {
+          if (route.request().method() === 'PUT') saved = route.request().postDataJSON().position;
+          return route.fulfill({ json: { position: saved } });
+        });
         await page.reload({ waitUntil: 'load' });
         await metadata(page);
-        await page.locator(VIDEO).evaluate((video: HTMLVideoElement) => new Promise<void>((resolve) => {
-          video.addEventListener('seeked', () => resolve(), { once: true });
-          video.currentTime = .7;
-        }));
+        await page.locator(VIDEO).evaluate(async (video: HTMLVideoElement) => {
+          video.muted = true;
+          await video.play();
+          video.pause();
+        });
+        await Promise.all([
+          page.waitForResponse(response => {
+            const url = new URL(response.url());
+            const request = response.request();
+            return url.pathname === '/api/player/memory' && url.searchParams.get('video') === key
+              && request.method() === 'PUT' && Math.abs(request.postDataJSON().position.seconds - .7) < .1;
+          }),
+          page.locator(VIDEO).evaluate((video: HTMLVideoElement) => new Promise<void>((resolve) => {
+            video.addEventListener('seeked', () => resolve(), { once: true });
+            video.currentTime = .7;
+          })),
+        ]);
         await metadata(page);
-        const saved = () => page.evaluate((key) => localStorage.getItem(`peach.playback-position.v1:${key}`), key);
-        const diagnostic = () => page.evaluate(() => ({ storage: Object.entries(localStorage),
-          time: document.querySelector<HTMLVideoElement>('#stage video')?.currentTime,
-          ready: document.querySelector<HTMLVideoElement>('#stage video')?.readyState }));
-        assert.ok(Math.abs(Number(await saved()) - .7) < .1, `定位后未保存：${JSON.stringify(await diagnostic())}`);
+        assert.ok(Math.abs(saved.seconds - .7) < .1, `实例保存的位置：${saved.seconds}`);
         await page.locator('#closeStage').click();
         await page.locator('#stage[open]').waitFor({ state: 'detached' });
-        assert.ok(Math.abs(Number(await saved()) - .7) < .1, `关闭后位置异常：${await saved()}`);
+        assert.ok(Math.abs(saved.seconds - .7) < .1, `关闭后位置异常：${saved.seconds}`);
         await page.goto(new URL(path, page.url()).toString(), { waitUntil: 'load' });
         await metadata(page);
         const current = () => page.locator(VIDEO).evaluate((video: HTMLVideoElement) => video.currentTime);
-        assert.ok(Math.abs(await current() - .7) < .1, `重新进入秒数 ${await current()}，存储 ${await saved()}`);
+        assert.ok(Math.abs(await current() - .7) < .1, `重新进入秒数 ${await current()}，实例记录 ${saved.seconds}`);
         await page.reload({ waitUntil: 'load' });
         await metadata(page);
         assert.ok(Math.abs(await current() - .7) < .1, '刷新没有恢复秒数');

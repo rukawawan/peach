@@ -14,7 +14,7 @@ import { useRef, type MouseEvent } from 'react';
 import { Button } from '@/components/base/buttons/button';
 
 import { JUNK_KIND_OPTIONS, junkPath, junkSummaryLabel, junkViewLink } from '../../junk-queue';
-import { FilterGlassRows, SelectAllButton } from '../components/filter-glass';
+import { FilterGlassRows, FilterSearch, SelectAllButton } from '../components/filter-glass';
 import { CatalogViewToggle } from '../catalog-grid/catalog-view-toggle';
 import { SortKeys } from '../entity-filter/entity-filter-page';
 import type { EntitySortKey } from '../entity-filter/entity-filter';
@@ -35,9 +35,11 @@ function Badge({ scope, count }: { scope: string; count: number }) {
 /** 下排「全选」：这一屏已取回的那几张。 */
 export interface JunkPickAll { loaded: number[]; picked: number; onChange(on: boolean): void }
 
-export function JunkCount({ route, page, failed, pickAll, sorts, onSort, onNavigate, onDisposeAll }: {
+export function JunkCount({ route, page, failed, pickAll, sorts, onSort, onNavigate, onDisposeAll, search, onSearch }: {
+  /** 浮层下排的查找词，并进发给服务端的同一份筛选。 */
+  search: string; onSearch(q: string): void;
   route: JunkRoute; page: JunkPage | undefined; failed: boolean; pickAll: JunkPickAll | null;
-  sorts: readonly EntitySortKey[]; onSort(key: string): void; onNavigate(path: string): void;
+  sorts: readonly EntitySortKey[]; onSort(key: string, dir: 'asc' | 'desc'): void; onNavigate(path: string): void;
   /** 「全部移入回收站」：只在待判断视图、这一类有条目时给。 */
   onDisposeAll?(): void;
 }) {
@@ -82,6 +84,7 @@ export function JunkCount({ route, page, failed, pickAll, sorts, onSort, onNavig
             {junkSummaryLabel(view)} · <AsyncText text={figure} busy={figure === undefined} placeholder={<span data-skeleton="count"
               aria-hidden className="relative inline-block h-3.5 w-12 rounded-md align-middle skeleton-sheen" />} />
           </span>
+          <FilterSearch label={t('cleanup:junk.search')} value={search} onQuery={onSearch} />
           {pickAll && pickAll.loaded.length ? <SelectAllButton label={t('cleanup:junk.selectAll', { count: pickAll.loaded.length })}
             picked={pickAll.picked} total={pickAll.loaded.length} onChange={pickAll.onChange} /> : null}
           {/* 同回收站的「清空回收站」那一档：危险操作用实底红键，件数写在确认框里。 */}

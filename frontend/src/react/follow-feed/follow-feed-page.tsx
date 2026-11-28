@@ -19,7 +19,8 @@ import { EmptyState } from '../components/empty-state';
 
 import { apiGet, apiSend } from '../../api';
 import { LoadMore } from '../catalog-grid/catalog-grid-page';
-import { FilterGlassRows, FilterPill } from '../components/filter-glass';
+import { FilterGlassRows, FilterSearch, FilterTagStrip, FilterToolbarControls } from '../components/filter-glass';
+import { FilterDropdown } from '../components/filter-dropdown';
 import { LibraryShortcuts } from '../library-shortcuts/shortcut-controls';
 import { AsyncText } from '../components/async-text';
 import { RetryNote } from '../components/grid-reveal';
@@ -42,12 +43,13 @@ import { authorAvatarHtml, followAuthorEntity, followAuthorName, sourceMark } fr
 import {
   FOLLOW_AUTO_LOAD_LIMIT, FOLLOW_CREDENTIALS_KEY, FOLLOW_FEED_SORTS, FOLLOW_FILTERS, FOLLOW_TAGS_FIRST,
   FOLLOW_WORKS_FIRST,
-  collectionItems, dropCondition, fetchFollowCredentials, followConditions, followFeedQuery, groupMediaKinds, groupTagType, itemForMedia,
-  mergedPage, nextSort, randomOrder, sortAriaLabel, backfillState, withStatus,
+  collectionItems, dropCondition, fetchFollowCredentials, followConditions, followFeedQuery, groupMediaKinds, itemForMedia,
+  mergedPage, randomOrder, sortAriaLabel, backfillState, withStatus,
   type FollowCondition, type FollowConditionKind, type FollowContext, type FollowDrawer, type FollowFeedProps, type FollowGroup, type FollowPage, type FollowSource,
   type FollowJobState, type FollowView, type FollowWorkRow,
 } from './follow-feed';
 import { t } from '../../i18n';
+import { useRectangleSelection } from '../components/rectangle-selection';
 
 const Sep = () => <span data-entity-sep="" aria-hidden="true" />;
 const SETTINGS = spriteGlyph('settings');
@@ -201,7 +203,7 @@ export function FollowFeedPage(props: FollowFeedProps) {
           onPick={(key) => route({ work: view.work === key ? '' : key })} />
         <Glass facets={facets} view={view} total={total} busy={listPending} props={props} route={route} />
         <Combo conditions={conditions} onDrop={(row) => actions.route(dropCondition(view, row))}
-          onClear={() => route({ author: '', provider: '', work: '', tags: [], durMin: 0, durMax: 0 })} />
+          onClear={() => route({ author: '', provider: '', work: '', tags: [], durMin: 0, durMax: 0, q: '' })} />
         {facets.broken.length ? <BrokenNote count={facets.broken.length} /> : null}
         <List retryKey={result.dataUpdatedAt} pending={listPending} facets={facets} data={data} context={context}
           props={props} checkAction={<Button size="small" variant="secondary" aria-label={t('follow:followFeed.checkAllSources')} aria-busy={job.busy || undefined}
@@ -400,9 +402,8 @@ function Works({ rows, pressed, props, onPick }: {
 
 /* ── 筛选玻璃 ──
  * 上排由粗到细，和资料页那条同一个次序：最左端是视频／图片——这一页现在摆的是哪一类东西；隔一道
- * 竖线是四枚状态，恒有一枚生效，滑动的那块玻璃跟着它走；再隔一道才是来源和标签这些可加可不加的
- * 筛选。媒体那一档另有一块圆玻璃：它和状态问的不是同一件事，共用一块的话，点一下图片，玻璃会从
- * 「未看」那儿飞过来。下排左端读数，右端换一批、图片墙上的布局与「仅显示图片」，然后是排序键。 */
+ * 竖线是四枚状态，恒有一枚生效，滑动的那块玻璃跟着它走，再往右是快捷标签。
+ * 下排在图标工具之后放来源、标签下拉和排序。 */
 function Glass({ facets, view, total, busy, props, route }: {
   facets: Facets; view: FollowView; total: number; busy: boolean; props: FollowFeedProps;
   route(patch: Partial<FollowView>): void;
@@ -423,7 +424,8 @@ function Glass({ facets, view, total, busy, props, route }: {
     helpers.wireScroller(tagRow.current);
   }, [helpers]);
   const providers = [...facets.providers];
-  const extras = providers.length + facets.tagRows.length > 0;
+  const tagChoices = facets.tagRows.map(([id, count]) => ({ id, label: tagLabel(id), count, selected: view.tags.includes(id) }));
+  const toggleTag = (id: string) => route({ tags: view.tags.includes(id) ? view.tags.filter(key => key !== id) : [...view.tags, id] });
   const images = view.media === 'images';
   return (
     <FilterGlassRows label={t('follow:followFeed.filterAndSort')} topLabel={showMedia ? t('follow:followFeed.mediaAndFollowFilters') : t('follow:followFeed.followFilters')}
@@ -460,24 +462,10 @@ function Glass({ facets, view, total, busy, props, route }: {
                 {label}
               </button>
             ))}
-            {extras ? <Sep /> : null}
+            {tagChoices.length ? <Sep /> : null}
           </div>
           <div ref={tagRow} data-entity-tags="">
-            {providers.map(([key, label]) => (
-              <button key={key} type="button" data-follow-provider={key} data-entity-press=""
-                aria-pressed={facets.provider === key} title={label} aria-label={t('follow:followFeed.sourceLabel', { source: label })}
-                onClick={() => route({ provider: facets.provider === key ? '' : key })}
-                dangerouslySetInnerHTML={{ __html: sourceMark(key, label) }} />
-            ))}
-            {providers.length && facets.tagRows.length ? <Sep /> : null}
-            {facets.tagRows.map(([tag, n]) => (
-              <FilterPill key={tag} data-follow-tag={tag} data-entity-press=""
-                data-tag-cat={`r34-${groupTagType(facets.groups, tag)}`} pressed={view.tags.includes(tag)}
-                onPress={() => route({ tags: view.tags.includes(tag) ? view.tags.filter((key) => key !== tag) : [...view.tags, tag] })}>
-                {tagLabel(tag)}
-                {n ? <span data-count-badge={tag}>{String(n)}</span> : null}
-              </FilterPill>
-            ))}
+            <FilterTagStrip choices={tagChoices} onSelect={toggleTag} />
           </div>
         </div>
       </>}
@@ -486,7 +474,9 @@ function Glass({ facets, view, total, busy, props, route }: {
           <AsyncText text={t('follow:followFeed.updatesReadout', { count: total, shown: facets.visible.length })} busy={busy} />
         </h3>
         <LibraryShortcuts currentHref={() => location.pathname + location.search} kind="creator" />
-        <span data-entity-sorts="">
+        <FilterSearch label={t('follow:followFeed.search')} value={view.q || ''}
+          onQuery={(q) => { if (q !== (view.q || '')) route({ q }) }} />
+        <FilterToolbarControls tools={<>
           <Shuffle onPress={actions.shuffle} />
           {images ? (
             <>
@@ -499,13 +489,18 @@ function Glass({ facets, view, total, busy, props, route }: {
               </button>
             </>
           ) : null}
-          <SortKeys group="follow" follow sorts={FOLLOW_FEED_SORTS.map(([key, label]) => ({
+        </>} fields={providers.length || tagChoices.length ? <>
+          {providers.length ? <FilterDropdown id="follow-source" orderKey="source" label={t('follow:searchResults.source')}
+            choices={providers.map(([id, label]) => ({ id, label, selected: facets.provider === id,
+              leading: <span aria-hidden className="size-4 shrink-0 [&>img]:size-full"
+                dangerouslySetInnerHTML={{ __html: sourceMark(id, label) }} /> }))}
+            onSelect={id => route({ provider: facets.provider === id ? '' : id })}
+            onClear={facets.provider ? () => route({ provider: '' }) : undefined} /> : null}
+          {tagChoices.length ? <FilterDropdown id="follow-tags" orderKey="tags" label={t('catalog:shared.tags')}
+            choices={tagChoices} onSelect={toggleTag} onClear={view.tags.length ? () => route({ tags: [] }) : undefined} /> : null}
+        </> : null} sorts={<SortKeys group="follow" follow sorts={FOLLOW_FEED_SORTS.map(([key, label]) => ({
             key, label, pressed: view.sort === key, dir: view.dir, ariaLabel: sortAriaLabel(key, label, view.sort, view.dir),
-          }))} onSort={key => {
-            const next = nextSort(key, view.sort, view.dir);
-            if (next) route(next);
-          }} />
-        </span>
+          }))} onSort={(sort, dir) => route({ sort: sort as FollowView['sort'], dir })} />} />
       </>}
     />
   );
@@ -575,6 +570,8 @@ function Cards({ facets, data, context, props, images, retryKey, checkAction }: 
   retryKey: number; checkAction: ReactNode;
 }) {
   const { view, actions } = props;
+  const rectangle = useRectangleSelection(facets.visible.length && actions.selectRectangle
+    ? (keys, add) => actions.selectRectangle?.(keys.map(Number), add) : undefined, { selecting: props.selectMode });
   const write = useFollowWrite(props);
   const wall = images ? { 'data-size': props.photoSize, 'data-layout': props.photoLayout, 'data-images-only': String(props.imagesOnly) } : {};
   const wallRef = useMasonryGrid(images && props.photoLayout === 'masonry',
@@ -593,12 +590,12 @@ function Cards({ facets, data, context, props, images, retryKey, checkAction }: 
       );
     });
   } else {
-    body = <Empty data={data} filtered={!!(view.status || facets.author || facets.provider || view.work || view.tags.length || view.durMin || view.durMax)}
-      checkAction={checkAction} clear={() => actions.route({ ...view, status: '', author: '', provider: '', work: '', tags: [], durMin: 0, durMax: 0,
+    body = <Empty data={data} filtered={!!(view.status || facets.author || facets.provider || view.work || view.tags.length || view.durMin || view.durMax || view.q)}
+      checkAction={checkAction} clear={() => actions.route({ ...view, status: '', author: '', provider: '', work: '', tags: [], durMin: 0, durMax: 0, q: '',
         media: data.groups.length ? (data.groups.some(group => groupMediaKinds(group).has('video')) ? 'videos' : 'images') : view.media })} />;
   }
   return (
-    <div ref={wallRef} data-follow-list="" data-follow-wall={images ? '' : undefined} {...wall}>
+    <div ref={wallRef} data-follow-list="" data-follow-wall={images ? '' : undefined} {...wall} {...rectangle}>
       {body}
     </div>
   );

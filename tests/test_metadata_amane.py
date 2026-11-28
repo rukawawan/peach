@@ -415,13 +415,13 @@ class PreparationTests(unittest.TestCase):
         with patch("httpx.Client", lambda **kw: Client(200, {"tag_name": "v0.17.0"})):
             self.assertEqual(metadata_amane.latest_upstream_tag({"trust_env": False}), "v0.17.0")
         with patch("httpx.Client", lambda **kw: Client(403, {"message": "rate limited"})):
-            self.assertEqual(metadata_amane.latest_upstream_tag({"trust_env": False}), "未取得")
+            self.assertEqual(metadata_amane.latest_upstream_tag({"trust_env": False}), "查询失败")
 
         def explode(**kw):
             raise OSError("no network")
 
         with patch("httpx.Client", explode):
-            self.assertEqual(metadata_amane.latest_upstream_tag({"trust_env": False}), "未取得")
+            self.assertEqual(metadata_amane.latest_upstream_tag({"trust_env": False}), "查询失败")
 
 
 class ProxyArgumentTests(unittest.TestCase):
@@ -692,6 +692,41 @@ class PayloadTests(unittest.TestCase):
             "actresses": [{"japanese_name": "女優"}], "genres": ["a", "b"], "plot": "",
         })
 
+    def test_date_report_requires_the_full_code_and_matching_studio_for_avsox(self):
+        code = '040221_001'
+        for site, number, maker, studio, accepted in (
+            ('avsox', code, '一本道', '1Pondo', True),
+            ('avsox', code, '厂牌乙', '1Pondo', False),
+            ('avsox', code, '一本道', None, False),
+            ('avsox', code, '', '1Pondo', False),
+            ('avsox', '040221-001', '一本道', '1Pondo', False),
+            ('freejavbt', '040221-001', '一本道', '1Pondo', False),
+            ('freejavbt', code, '一本道', None, True),
+        ):
+            with self.subTest(site=site, number=number, maker=maker, studio=studio):
+                document = json.loads(report(**{site: {'status': 'found', 'metadata': {
+                    **FOUND['metadata'], 'number': number, 'studio': maker,
+                }}}))
+                found, failures = metadata_amane.split_report(code, document, studio=studio)
+                self.assertEqual(bool(found), accepted)
+                if not accepted:
+                    self.assertEqual(failures[site].kind, 'unavailable')
+                    self.assertEqual(failures[site].detail, 'identity_ambiguous')
+
+    def test_unverified_date_candidates_do_not_block_collection_or_supply_auto_apply(self):
+        from peach.library_processing import _answered_sources
+        from peach.metadata_auto_apply import _evidence_candidates
+        code = '040221_001'
+        candidate = {'source': 'avsox', 'value': '厂牌甲', 'display_value': '厂牌甲'}
+        for checked in (False, True):
+            with self.subTest(checked=checked):
+                current = {**candidate, 'date_identity_checked': True} if checked else candidate
+                group = {'code': code, 'candidates_json': json.dumps([current])}
+                self.assertEqual(_answered_sources({'asset:1:studio': group}, 'asset:1', ('studio',)),
+                                 {'avsox'} if checked else set())
+                self.assertEqual(_evidence_candidates({'code': code, 'candidates': [current]}, 'studio'),
+                                 [current] if checked else [])
+
     def test_split_report_keeps_hits_that_identify_the_code_and_files_the_rest(self):
         wrong = {"status": "found", "metadata": {**FOUND["metadata"], "number": "FC2-PPV-7654321", "source_url": "https://freejavbt.com/FC2-PPV-7654321"}}
         found, failures = metadata_amane.split_report("FC2-PPV-1234567", json.loads(report(
@@ -888,7 +923,7 @@ class ProviderStageTests(unittest.TestCase):
                     with self.assertRaises(Unavailable) as caught:
                         provider.amane(code, route=("avsox",))
                 self.assertEqual(prepare.call_count, 1)
-        self.assertIn("amane 运行环境未取得", str(caught.exception))
+        self.assertIn("amane 运行环境不可用", str(caught.exception))
 
     def test_a_route_without_bridge_sites_is_not_found_without_a_subprocess(self):
         provider = self.provider(report())

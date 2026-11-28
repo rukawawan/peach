@@ -4,21 +4,21 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
  * ==============================================================================
  * Claude Design System (CDS) - RichComposerWithMentions.tsx
  * 
- * 逆向还原自官方 Claude Desktop / Web 核心输入组件:
- * - `cd5a31703-B4nKQMBN.js` (isComposing / Suggestion / Mention / Popover)
- * - `cb6930dae-Q_S3-FcC.js` (leadingSlashCommand / MentionPills / FileMentions)
- * - `c6a992d55-C0zTICcS.css` (static-composer-actions, cds-shadow-popover)
+ * 逆向还原自官方 Claude Desktop / Web 核心输入组件 (REA v6.5.0 取证):
+ * - `shared-frame-BfjMqbuN.js` (Lm/Rm/zm/Bm/Um WebKit 500ms Post-Composition Delta Guard)
+ * - `cb6930dae-BD0W5ZM9.js` (Qo/ar/Xo/as Slash & Mention Tokenizer with 256 file cap)
+ * - `frame-shell-chrome-CAw-tYzh.js` (field-sizing fallback, max-h-[min(40svh,24rem)])
  * 
- * 核心工程机制:
- * 1. 严格 CJK 输入法合成守卫 (IME Composition Guard):
- *    全面监听 compositionstart / compositionend，拦截 keyCode === 229 与 isComposing，
- *    杜绝中文/日文/韩文在输入法候选词确认回车时误发送消息。
- * 2. 双触发符指令与引用建议系统 (Dual Trigger Suggestions):
- *    - '/' 触发 Slash Command (如 /help, /clear, /model, /plan, /compact)
- *    - '@' 触发上下文与文件引用 (Projects, Files, Git branches)
- * 3. 焦点漫游 (Roving Focus) 与悬浮窗坐标计算:
- *    ArrowUp / ArrowDown / Enter / Tab / Escape 闭环操作，支持高亮索引循环导航。
- * 4. 弹性高度自适应与 Token 计量预测条。
+ * 核心生产级工程机制:
+ * 1. WebKit 500ms 赛跑合成后卫 (Post-Composition Delta Guard):
+ *    Safari 与 macOS Electron 在 compositionend 后会派发一个带有 isComposing=false 的虚假 Enter 键。
+ *    Anthropic 记录 compositionend 的 timeStamp (Fm)，并在 KeyDown 中施加:
+ *    Lm() && Math.abs(e.timeStamp - Fm) < 500 守卫，杜绝中文/日文确认候选词时误发消息！
+ * 2. 严苛标点剥离正则 (Punctuation Stripper):
+ *    $o = /[.,;:!?'"\u3001\u3002\uFF0C\uFF1B\uFF1A\uFF01\uFF1F\u2026]+$/
+ *    自动剥离中日韩全角句号、逗号、问号与英文标点。
+ * 3. 256 个文件引用防御熔断 (Cap 256 Mentions) 与 1024 路径限制。
+ * 4. 弹性高度自适应与 field-sizing: content 幽灵元素降级支持。
  * ==============================================================================
  */
 
@@ -53,6 +53,16 @@ const DEFAULT_MENTIONS: MentionItem[] = [
   { id: 'branch-main', name: 'main', kind: 'branch', badge: 'Git' },
 ];
 
+// REA 取证：标点剥离与路径合法性校验
+const TRAILING_PUNCTUATION_REGEX = /[.,;:!?'"\u3001\u3002\uFF0C\uFF1B\uFF1A\uFF01\uFF1F\u2026]+$/;
+const FILE_EXT_REGEX = /\.[a-z][^/]*$/i;
+const MAX_PATH_LENGTH = 1024;
+const MAX_FILE_MENTIONS = 256;
+
+function isAppleWebKit(): boolean {
+  return typeof window !== 'undefined' && /Apple Computer/.test(window.navigator.vendor);
+}
+
 export interface RichComposerProps {
   placeholder?: string;
   onSubmit?: (content: { text: string; slashCommand?: string; mentions: MentionItem[] }) => void;
@@ -76,8 +86,10 @@ export const RichComposerWithMentions: React.FC<RichComposerProps> = ({
   const [suggestionQuery, setSuggestionQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  // REA WebKit 500ms 赛跑后卫：记录上次合成结束时间戳
+  const lastCompositionEndTimeRef = useRef<number>(-1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const composerContainerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // 1. 过滤建议列表
   const filteredSlashCommands = useMemo(() => {
@@ -96,49 +108,55 @@ export const RichComposerWithMentions: React.FC<RichComposerProps> = ({
 
   const activeItemsCount = suggestionMode === 'slash' ? filteredSlashCommands.length : filteredMentions.length;
 
-  // 2. 自适应高度调整
+  // 2. 自适应高度调整 (降级计算 scrollHeight)
   const adjustTextareaHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    const nextHeight = Math.min(Math.max(el.scrollHeight, 44), 240);
-    el.style.height = `${nextHeight}px`;
+    const nextH = Math.min(Math.max(el.scrollHeight, 44), 384);
+    el.style.height = `${nextH}px`;
   }, []);
 
-  // 3. 实时解析光标前的触发字符 (/ 或 @)
+  // 3. 监听输入流并触发指令/引用嗅探
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setText(val);
+    const nextVal = e.target.value;
+    setText(nextVal);
     adjustTextareaHeight();
 
-    const cursor = e.target.selectionStart ?? val.length;
-    const textBeforeCursor = val.slice(0, cursor);
+    if (isComposing) return;
 
-    // 匹配光标前的触发词
+    const cursorPos = e.target.selectionStart || nextVal.length;
+    const textBeforeCursor = nextVal.slice(0, cursorPos);
+
+    // 检查 Slash Command
     const slashMatch = textBeforeCursor.match(/(?:^|\s)\/([a-zA-Z0-9_\-]*)$/);
-    const mentionMatch = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_\-./]*)$/);
-
-    if (slashMatch && !activeSlashCommand) {
+    if (slashMatch) {
       setSuggestionMode('slash');
       setSuggestionQuery(slashMatch[1]);
       setSelectedIndex(0);
-    } else if (mentionMatch) {
-      setSuggestionMode('mention');
-      setSuggestionQuery(mentionMatch[1]);
-      setSelectedIndex(0);
-    } else {
-      setSuggestionMode(null);
-      setSuggestionQuery('');
+      return;
     }
+
+    // 检查 Mention
+    const mentionMatch = textBeforeCursor.match(/(?:^|\s)@([^\s`]*)$/);
+    if (mentionMatch) {
+      let rawQuery = mentionMatch[1].replace(TRAILING_PUNCTUATION_REGEX, '');
+      if (rawQuery.length <= MAX_PATH_LENGTH) {
+        setSuggestionMode('mention');
+        setSuggestionQuery(rawQuery);
+        setSelectedIndex(0);
+        return;
+      }
+    }
+
+    setSuggestionMode(null);
+    setSuggestionQuery('');
   };
 
   // 4. 选择 Slash 指令
   const applySlashCommand = useCallback((cmd: SlashCommandItem) => {
     setActiveSlashCommand(cmd);
-    // 从输入文本中去除触发词
-    setText((prev) => {
-      return prev.replace(/(?:^|\s)\/[a-zA-Z0-9_\-]*$/, '').trimStart();
-    });
+    setText((prev) => prev.replace(/(?:^|\s)\/[a-zA-Z0-9_\-]*$/, '').trimStart());
     setSuggestionMode(null);
     textareaRef.current?.focus();
     setTimeout(adjustTextareaHeight, 0);
@@ -146,20 +164,30 @@ export const RichComposerWithMentions: React.FC<RichComposerProps> = ({
 
   // 5. 插入 Mention 胶囊
   const applyMention = useCallback((mention: MentionItem) => {
-    setAttachedMentions((prev) => (prev.some((m) => m.id === mention.id) ? prev : [...prev, mention]));
-    // 替换光标前的 @query 为普通空格
-    setText((prev) => {
-      return prev.replace(/(?:^|\s)@[a-zA-Z0-9_\-./]*$/, ' ');
+    setAttachedMentions((prev) => {
+      if (prev.length >= MAX_FILE_MENTIONS) return prev;
+      return prev.some((m) => m.id === mention.id) ? prev : [...prev, mention];
     });
+    setText((prev) => prev.replace(/(?:^|\s)@[^\s`]*$/, ' '));
     setSuggestionMode(null);
     textareaRef.current?.focus();
     setTimeout(adjustTextareaHeight, 0);
   }, [adjustTextareaHeight]);
 
-  // 6. 核心键盘交互状态机与 IME 守卫
+  // 6. 核心生产键盘交互状态机与 WebKit 500ms 后卫
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // 官方 Claude 核心断言: 如果正在进行输入法合成 (CJK) 或 keyCode 为 229，绝对放行并终止响应
+    // 基础守卫：原生合成中或 keyCode 229 拦截
     if (isComposing || e.nativeEvent.isComposing || e.keyCode === 229) {
+      return;
+    }
+
+    // REA 核心发明：WebKit 500ms post-composition 虚假回车防护
+    // 仅拦截 Safari/WebKit 在输入法候选词确认 (compositionend) 后派发的虚假回车事件，
+    // 避免误触提交；同时重置时间戳防止误吞后续快速键入的正常字符。
+    const timeSinceCompositionEnd = Math.abs(e.nativeEvent.timeStamp - lastCompositionEndTimeRef.current);
+    if (isAppleWebKit() && (e.key === 'Enter' || e.keyCode === 13) && timeSinceCompositionEnd < 500) {
+      lastCompositionEndTimeRef.current = -1;
+      e.preventDefault();
       return;
     }
 
@@ -220,193 +248,207 @@ export const RichComposerWithMentions: React.FC<RichComposerProps> = ({
     setActiveSlashCommand(null);
     setAttachedMentions([]);
     setSuggestionMode(null);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = '44px';
-    }
+    setTimeout(adjustTextareaHeight, 0);
   };
 
-  // 移除 Mention 标签
-  const removeMention = (id: string) => {
-    setAttachedMentions((prev) => prev.filter((m) => m.id !== id));
-  };
-
-  // 估算 Token 数量 (基于 Math.ceil(rawLen * 0.7)，折合 ~1.43 字符/token，适度向上对齐中英文混合平均密度)
+  // 8. 估算 Token
   const estimatedTokens = useMemo(() => {
-    const rawLen = text.length;
-    let tokens = Math.ceil(rawLen * 0.7);
-    if (activeSlashCommand) tokens += 10;
-    tokens += attachedMentions.length * 25;
-    return tokens;
+    const charLen = text.length;
+    const slashWeight = activeSlashCommand ? 12 : 0;
+    const mentionWeight = attachedMentions.length * 30;
+    return Math.ceil(charLen * 0.75) + slashWeight + mentionWeight;
   }, [text, activeSlashCommand, attachedMentions]);
+
+  const tokenUsageRatio = Math.min(1, estimatedTokens / maxTokens);
+  const isNearLimit = tokenUsageRatio > 0.85;
 
   return (
     <div
-      ref={composerContainerRef}
-      className="relative w-full rounded-2xl bg-[var(--cds-bg-surface,#ffffff)] dark:bg-[var(--cds-bg-surface,#1e1e1e)] border border-[var(--cds-border-subtle,#e5e5e5)] dark:border-[var(--cds-border-subtle,#2e2e2e)] shadow-[0_2px_8px_rgba(0,0,0,0.04)] focus-within:border-[var(--cds-border-accent,#d97757)] focus-within:ring-1 focus-within:ring-[var(--cds-border-accent,#d97757)] transition-all duration-200"
+      ref={containerRef}
+      data-cds="ChatComposer"
+      className="relative w-full max-w-[42rem] mx-auto font-sans"
     >
-      {/* 建议弹层 (Slash / Mention Popover) */}
+      {/* 浮动建议弹窗 */}
       {suggestionMode && activeItemsCount > 0 && (
         <div
           role="listbox"
-          className="absolute bottom-full left-0 mb-2 w-72 max-h-60 overflow-y-auto rounded-xl bg-[var(--cds-bg-surface,#ffffff)] dark:bg-[var(--cds-bg-surface-elevated,#262626)] border border-[var(--cds-border-subtle,#e5e5e5)] dark:border-[var(--cds-border-subtle,#333333)] shadow-[0_12px_24px_-4px_rgba(0,0,0,0.12),0_4px_8px_-2px_rgba(0,0,0,0.06)] p-1 z-50 animate-[cds-fade-in_150ms_ease-out]"
+          aria-label={suggestionMode === 'slash' ? 'Slash Commands' : 'Context Mentions'}
+          className="absolute bottom-full left-0 mb-2 w-full max-w-md rounded-2xl border border-[var(--cds-border,#e5e5e3)] dark:border-[var(--cds-border,#2e2e2c)] bg-[var(--cds-surface-1,#ffffff)] dark:bg-[var(--cds-surface-1,#1f1e1d)] shadow-[0_12px_32px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.4)] overflow-hidden z-50 animate-fade"
         >
-          <div className="px-2 py-1 text-[11px] font-medium text-[var(--cds-text-muted,#8c8c8c)] uppercase tracking-wider">
-            {suggestionMode === 'slash' ? '常用指令' : '引用上下文 / 文件'}
+          <div className="px-3.5 py-2 border-b border-[var(--cds-border,#e5e5e3)] dark:border-[var(--cds-border,#2e2e2c)] text-[11px] font-semibold text-[var(--cds-text-secondary,#6b6b6b)] flex justify-between items-center select-none">
+            <span>{suggestionMode === 'slash' ? '⚡ 快捷指令 (Slash Commands)' : '📁 上下文与文件引用 (@ Mentions)'}</span>
+            <span className="text-[10px] opacity-70">↑↓ 导航 · Enter/Tab 选择</span>
           </div>
 
-          {suggestionMode === 'slash' &&
-            filteredSlashCommands.map((cmd, idx) => (
-              <button
-                key={cmd.id}
-                type="button"
-                role="option"
-                aria-selected={idx === selectedIndex}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
-                  idx === selectedIndex
-                    ? 'bg-[var(--cds-bg-selected,#f3ece7)] dark:bg-[var(--cds-bg-selected,#3a2c27)] text-[var(--cds-text-accent,#d97757)]'
-                    : 'text-[var(--cds-text-primary,#1a1a1a)] dark:text-[var(--cds-text-primary,#f0f0f0)] hover:bg-[var(--cds-bg-hover,#f5f5f5)] dark:hover:bg-[var(--cds-bg-hover,#2a2a2a)]'
-                }`}
-                onClick={() => applySlashCommand(cmd)}
-              >
-                <span className="text-sm shrink-0">{cmd.icon ?? '⚡'}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold leading-tight">/{cmd.name}</div>
-                  <div className="truncate text-[11px] text-[var(--cds-text-muted,#8c8c8c)]">{cmd.description}</div>
-                </div>
-              </button>
-            ))}
-
-          {suggestionMode === 'mention' &&
-            filteredMentions.map((item, idx) => (
-              <button
-                key={item.id}
-                type="button"
-                role="option"
-                aria-selected={idx === selectedIndex}
-                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
-                  idx === selectedIndex
-                    ? 'bg-[var(--cds-bg-selected,#f3ece7)] dark:bg-[var(--cds-bg-selected,#3a2c27)] text-[var(--cds-text-accent,#d97757)]'
-                    : 'text-[var(--cds-text-primary,#1a1a1a)] dark:text-[var(--cds-text-primary,#f0f0f0)] hover:bg-[var(--cds-bg-hover,#f5f5f5)] dark:hover:bg-[var(--cds-bg-hover,#2a2a2a)]'
-                }`}
-                onClick={() => applyMention(item)}
-              >
-                <div className="min-w-0 flex-1 truncate pr-2">
-                  <div className="font-medium truncate">{item.name}</div>
-                  {item.path && <div className="text-[10px] text-[var(--cds-text-muted,#8c8c8c)] truncate">{item.path}</div>}
-                </div>
-                {item.badge && (
-                  <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--cds-alpha-1,rgba(0,0,0,0.05))] text-[var(--cds-text-secondary,#666666)]">
-                    {item.badge}
+          <div className="max-h-60 overflow-y-auto p-1.5 space-y-0.5">
+            {suggestionMode === 'slash' &&
+              filteredSlashCommands.map((cmd, idx) => (
+                <div
+                  key={cmd.id}
+                  role="option"
+                  aria-selected={idx === selectedIndex}
+                  onClick={() => applySlashCommand(cmd)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs cursor-pointer select-none transition-colors ${
+                    idx === selectedIndex
+                      ? 'bg-[var(--cds-fill-ghost-selected,rgba(217,119,87,0.1))] text-[var(--cds-clay,#d97757)] font-medium'
+                      : 'hover:bg-[var(--cds-fill-ghost-hover,rgba(0,0,0,0.04))] dark:hover:bg-[var(--cds-fill-ghost-hover,rgba(255,255,255,0.05))] text-[var(--cds-text-primary,#1a1a1a)] dark:text-[var(--cds-text-primary,#f0f0f0)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-sm">{cmd.icon || '⚡'}</span>
+                    <span className="font-mono font-semibold">/{cmd.name}</span>
+                  </div>
+                  <span className="text-[11px] text-[var(--cds-text-secondary,#6b6b6b)] dark:text-[var(--cds-text-secondary,#9e9e9e)] truncate max-w-[200px]">
+                    {cmd.description}
                   </span>
-                )}
-              </button>
+                </div>
+              ))}
+
+            {suggestionMode === 'mention' &&
+              filteredMentions.map((m, idx) => (
+                <div
+                  key={m.id}
+                  role="option"
+                  aria-selected={idx === selectedIndex}
+                  onClick={() => applyMention(m)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs cursor-pointer select-none transition-colors ${
+                    idx === selectedIndex
+                      ? 'bg-[var(--cds-fill-ghost-selected,rgba(217,119,87,0.1))] text-[var(--cds-clay,#d97757)] font-medium'
+                      : 'hover:bg-[var(--cds-fill-ghost-hover,rgba(0,0,0,0.04))] dark:hover:bg-[var(--cds-fill-ghost-hover,rgba(255,255,255,0.05))] text-[var(--cds-text-primary,#1a1a1a)] dark:text-[var(--cds-text-primary,#f0f0f0)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs">@</span>
+                    <span className="font-medium">{m.name}</span>
+                    {m.path && (
+                      <span className="text-[10px] text-[var(--cds-text-secondary,#8a8a8a)] font-mono truncate max-w-[160px]">
+                        {m.path}
+                      </span>
+                    )}
+                  </div>
+                  {m.badge && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-neutral-200/60 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
+                      {m.badge}
+                    </span>
+                  )}
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* 输入框主卡片 */}
+      <div
+        className="relative flex flex-col w-full rounded-[20px] bg-[var(--cds-surface-1,#ffffff)] dark:bg-[var(--cds-surface-1,#1f1e1d)] border border-[var(--cds-border,#e5e5e3)] dark:border-[var(--cds-border,#2e2e2c)] p-[0.875rem] gap-y-2 cursor-text transition-all duration-200 shadow-card-ring focus-within:border-[var(--cds-clay,#d97757)] focus-within:shadow-focus"
+      >
+        {/* 顶部标签条：激活的 Slash 指令与 Mention 胶囊 */}
+        {(activeSlashCommand || attachedMentions.length > 0) && (
+          <div className="flex flex-wrap items-center gap-1.5 pb-1 select-none">
+            {activeSlashCommand && (
+              <span
+                data-cds="SlashCommandPill"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-clay/10 text-clay text-xs font-semibold font-mono border border-clay/30"
+              >
+                <span>{activeSlashCommand.icon || '⚡'}</span>
+                <span>/{activeSlashCommand.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveSlashCommand(null)}
+                  className="hover:opacity-75 ml-0.5 cursor-pointer"
+                  title="Remove command"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+
+            {attachedMentions.map((m) => (
+              <span
+                key={m.id}
+                data-cds="FileMentionPill"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--cds-surface-2,#f0eee9)] dark:bg-[var(--cds-surface-2,#282725)] text-neutral-800 dark:text-neutral-200 text-xs font-medium border border-neutral-300/50 dark:border-neutral-700/50"
+              >
+                <span className="text-neutral-400">@</span>
+                <span>{m.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttachedMentions((prev) => prev.filter((item) => item.id !== m.id))}
+                  className="hover:opacity-75 ml-0.5 cursor-pointer"
+                  title="Remove mention"
+                >
+                  ×
+                </button>
+              </span>
             ))}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* 顶部标签区: 已激活的 Slash Command 与 Attached Mentions */}
-      {(activeSlashCommand || attachedMentions.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-3 pb-1 border-b border-[var(--cds-border-subtle,#e5e5e5)] dark:border-[var(--cds-border-subtle,#2e2e2e)]">
-          {activeSlashCommand && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--cds-fill-brand-subtle,#fbebe6)] dark:bg-[var(--cds-fill-brand-subtle,#38221b)] text-[var(--cds-text-accent,#d97757)] text-xs font-semibold">
-              <span>/{activeSlashCommand.name}</span>
-              <button
-                type="button"
-                aria-label="移除指令"
-                className="hover:opacity-75 p-0.5"
-                onClick={() => setActiveSlashCommand(null)}
-              >
-                ✕
-              </button>
-            </div>
-          )}
-
-          {attachedMentions.map((m) => (
-            <div
-              key={m.id}
-              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--cds-alpha-1,rgba(0,0,0,0.05))] dark:bg-[var(--cds-alpha-1,rgba(255,255,255,0.08))] text-[var(--cds-text-primary,#1a1a1a)] dark:text-[var(--cds-text-primary,#f0f0f0)] text-xs font-medium"
-            >
-              <span className="text-[var(--cds-text-muted,#8c8c8c)]">@</span>
-              <span className="truncate max-w-[140px]">{m.name}</span>
-              <button
-                type="button"
-                aria-label={`移除 ${m.name}`}
-                className="hover:opacity-75 text-[10px] text-[var(--cds-text-muted,#8c8c8c)]"
-                onClick={() => removeMention(m.id)}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 核心富文本输入区 */}
-      <div className="relative px-3.5 pt-2.5 pb-2">
+        {/* 核心文本域：支持 field-sizing: content 与回退 */}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           onCompositionStart={() => setIsComposing(true)}
-          onCompositionEnd={() => {
+          onCompositionEnd={(e) => {
             setIsComposing(false);
-            adjustTextareaHeight();
+            // REA 取证：记录 WebKit 500ms 赛跑时间戳
+            lastCompositionEndTimeRef.current = e.nativeEvent.timeStamp;
           }}
-          disabled={disabled}
           placeholder={placeholder}
           rows={1}
-          className="w-full bg-transparent text-sm leading-relaxed text-[var(--cds-text-primary,#1a1a1a)] dark:text-[var(--cds-text-primary,#f0f0f0)] placeholder-[var(--cds-text-muted,#8c8c8c)] resize-none outline-none border-none p-0 overflow-y-auto max-h-[240px]"
-          style={{ minHeight: '44px' }}
+          disabled={disabled}
+          className="w-full min-h-[44px] max-h-[min(40svh,24rem)] bg-transparent border-none outline-none resize-none text-[15px] leading-[1.4] text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 pl-2 focus:ring-0 select-text font-sans"
+          style={{ fieldSizing: 'content' as any }}
         />
-      </div>
 
-      {/* 底部操作工具栏 */}
-      <div className="flex items-center justify-between px-3 pb-2.5 pt-1 text-xs">
-        <div className="flex items-center gap-2 text-[var(--cds-text-muted,#8c8c8c)]">
-          {/* 上传附件按钮 */}
-          <button
-            type="button"
-            className="p-1.5 rounded-lg hover:bg-[var(--cds-bg-hover,#f5f5f5)] dark:hover:bg-[var(--cds-bg-hover,#2a2a2a)] transition-colors"
-            title="添加附件或图片"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-            </svg>
-          </button>
-
-          {/* 指令说明快捷键提示 */}
-          <span className="hidden sm:inline-block text-[11px] select-none">
-            按 <kbd className="px-1 py-0.5 rounded border border-[var(--cds-border-subtle,#e5e5e5)] dark:border-[var(--cds-border-subtle,#333)] font-mono text-[10px]">Enter</kbd> 发送，
-            <kbd className="px-1 py-0.5 rounded border border-[var(--cds-border-subtle,#e5e5e5)] dark:border-[var(--cds-border-subtle,#333)] font-mono text-[10px]">Shift+Enter</kbd> 换行
-          </span>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {/* Token 计量指示器 */}
-          <div
-            className={`text-[11px] font-mono tabular-nums select-none ${
-              estimatedTokens > maxTokens * 0.9
-                ? 'text-[var(--cds-fill-danger,#ef4444)] font-bold'
-                : 'text-[var(--cds-text-muted,#8c8c8c)]'
-            }`}
-            title="当前消息预估消耗 Token"
-          >
-            ~{estimatedTokens} tok
+        {/* 底部操作与指示栏 */}
+        <div className="flex items-center justify-between pt-1 select-none">
+          {/* 左侧附加操作 */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+            >
+              <span className="text-sm">+</span>
+              <span>Add content</span>
+            </button>
           </div>
 
-          {/* 发送按钮 */}
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={disabled || (!text.trim() && !activeSlashCommand && attachedMentions.length === 0)}
-            aria-label="发送消息"
-            className="flex items-center justify-center size-8 rounded-lg bg-[var(--cds-fill-brand,#d97757)] text-white hover:bg-[var(--cds-fill-brand-hover,#c86849)] active:scale-95 disabled:opacity-30 disabled:pointer-events-none transition-all duration-150 shadow-sm"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-            </svg>
-          </button>
+          {/* 右侧：Token 动态计量与发送按钮 */}
+          <div className="flex items-center gap-3">
+            {/* Token 动态计量指示器 */}
+            {estimatedTokens > 0 && (
+              <div
+                className="flex items-center gap-1.5 text-[11px] font-mono select-none"
+                title={`预估单次交互 Tokens: ~${estimatedTokens}`}
+              >
+                <span
+                  className={`size-2 rounded-full ${
+                    isNearLimit
+                      ? 'bg-clay animate-pulse'
+                      : 'bg-emerald-500'
+                  }`}
+                />
+                <span className="text-neutral-500 dark:text-neutral-400 tabular-nums">
+                  ~{estimatedTokens} tok
+                </span>
+              </div>
+            )}
+
+            {/* 发送按钮 */}
+            <button
+              type="button"
+              disabled={disabled || (!text.trim() && !activeSlashCommand && attachedMentions.length === 0)}
+              onClick={handleSend}
+              className="size-8 rounded-lg flex items-center justify-center transition-all duration-150 disabled:opacity-30 disabled:cursor-not-allowed bg-[var(--cds-fill-brand,#c6613f)] hover:bg-[#b05232] text-white cursor-pointer active:scale-95 shadow-2xs"
+              title="发送 (Enter)"
+            >
+              <svg className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>

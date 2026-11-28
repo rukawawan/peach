@@ -190,11 +190,13 @@ class HttpxTransport:
     #: 最多跟几跳。站点正常只跳一两次，再多就是环。
     MAX_REDIRECTS = 5
 
-    def __init__(self, client: httpx.Client | None = None, *, owns_client: bool = False):
+    def __init__(self, client: httpx.Client | None = None, *, owns_client: bool = False,
+                 follow_redirects: bool = True):
         self._client = client
         self._client_lock = threading.Lock()
         self._closed = False
         self._owns_client = client is None or owns_client
+        self._redirect_statuses = _REDIRECT_STATUSES if follow_redirects else frozenset()
 
     @property
     def client(self):
@@ -232,7 +234,7 @@ class HttpxTransport:
                 follow_redirects=False,
             ) as response:
                 location = response.headers.get("location")
-                if response.status_code not in _REDIRECT_STATUSES or not location:
+                if response.status_code not in self._redirect_statuses or not location:
                     return HttpResponse(
                         response.status_code,
                         dict(response.headers),

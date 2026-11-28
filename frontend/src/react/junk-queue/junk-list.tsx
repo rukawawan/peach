@@ -70,6 +70,7 @@ export function JunkList({ items, view, selected, selecting, actions, order, cop
       sort={{ options: order.sorts.map(({ key, label }) => ({ id: key, label })), sorting: order.sorting, onChange: order.setSorting }}
       rowLabel={(item) => t('cleanup:junk.selectFile', { name: item.name || t('cleanup:junk.untitled') })}
       onPick={(item) => actions.toggleSelection(item.id, false)}
+      onRectangle={(ids, add) => actions.selectRectangle?.(ids, add)}
       onPickAll={(on) => actions.selectAll(items.map((item) => item.id), on)}
       cells={{
         name: (item) => <JunkName item={item} view={view} actions={actions} copies={copies?.(item)} />,

@@ -7,9 +7,12 @@ import { launch, VIEWPORTS } from './harness.ts';
 
 async function hoverClearance(page: Page, longHover: boolean) {
   const row = page.locator('#stage [data-related-row]');
+  await row.scrollIntoViewIfNeeded();
   await row.evaluate(node => { node.scrollLeft = 0 });
   const card = row.locator('[data-media-card]').first();
-  await card.hover();
+  const bounds = await card.boundingBox();
+  assert.ok(bounds, '首张推荐卡不可见');
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   const edges = await card.evaluate(node => {
     const card = node.getBoundingClientRect();
     const row = node.closest('[data-related-row]')!.getBoundingClientRect();
@@ -51,6 +54,8 @@ async function hoverClearance(page: Page, longHover: boolean) {
       node.getAnimations().forEach(animation => animation.finish());
     });
   }
+  await row.evaluate(node => { node.scrollLeft = 0 });
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
 }
 
 describe('详情底部的队列与推荐', () => {
@@ -100,7 +105,11 @@ describe('详情底部的队列与推荐', () => {
       const opened = kind === 'local'
         ? await openItemPage(browser, `/assets/${ITEM.part}?parts=${ITEM.part}`, viewport)
         : await openFollowFeed(browser, `/posts/${DETAIL.collection}`, viewport,
-          { ready: '#stage [data-follow-queue]' });
+          {
+            ready: '#stage [data-follow-queue]',
+            prepare: page => page.route(url => url.pathname === '/api/library-processing',
+              route => route.fulfill({ json: { status: 'idle' } })),
+          });
       try {
         const page = opened.page;
         await page.locator('#stage [data-related-row] [data-media-card]').first().waitFor({ timeout: 15_000 });
@@ -133,8 +142,6 @@ describe('详情底部的队列与推荐', () => {
           assert.ok(Math.abs(bigCover - boxes.covers.queue.height) <= .5, `大图比例的推荐封面高度需相同：${bigCover}`);
         }
         await hoverClearance(page, kind === 'local' && !viewport.mobile);
-        await page.locator('#stage [data-related-row]').evaluate(node => { node.scrollLeft = 0 });
-        await page.locator('#stage [data-related-row] [data-media-card]').first().hover();
         await page.locator('#stage').screenshot({ path: `../build/detail-hover-avatar/${kind}-${viewport.name}.png` });
         assert.deepEqual(opened.problems.filter(problem => !problem.includes('VIDEOJS')), []);
       } finally { await opened.close() }

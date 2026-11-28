@@ -52,11 +52,31 @@ ICON_MEANINGS = {
     "sparkle": "generic new feature (retired)",
     "translate": "interface language",
     "download": "downloads and intake",
+    "assistant": "AI assistant and AI-assisted library work",
+    "feedback": "in-app feedback and issue reporting",
 }
 #: 说不清含义的泛用图标，`RULES_SINCE` 起不再使用。
 GENERIC_ICONS = frozenset({"sparkle"})
 
 NOTICES: dict[str, dict] = {
+    "0.63.0": {
+        "level": "notice",
+        "features": [
+            {"id": "library-ai", "refs": ["#393"], "icon": "assistant", "route": "/settings/ai"},
+            {"id": "file-management", "refs": ["#376"], "icon": "library"},
+            {"id": "in-app-feedback", "refs": ["#882", "#885"], "icon": "feedback"},
+            {"id": "list-search", "refs": ["#880"], "icon": "filter", "route": "/jav"},
+        ],
+    },
+    "0.62.0": {
+        "level": "notice",
+        "features": [
+            {"id": "qbittorrent-intake", "refs": ["#240"], "icon": "download",
+             "route": "/settings/downloads"},
+            {"id": "server-media-browse", "refs": ["#376"], "icon": "server"},
+            {"id": "drag-to-select", "refs": ["#855"], "icon": "select", "route": "/"},
+        ],
+    },
     "0.61.0": {
         "level": "notice",
         "features": [

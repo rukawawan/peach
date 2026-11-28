@@ -20,13 +20,14 @@ const LABELS: Record<string, string> = { pending: t('settings:upgradeRepairs.pen
 /** 一格读数：滚动的数字加「项」。 */
 const itemCount = (value: number) => translateWithNodes('settings:upgradeRepairs.itemCount', { count: value }, { value: <AnimatedNumber value={value} /> });
 
-export function UpgradeRepairs() {
+export function UpgradeRepairs({ lastCapacityCheckPassed = false }: { lastCapacityCheckPassed?: boolean } = {}) {
   const { snapshot } = useClientUpdates();
   const [saved, setSaved] = useState<ClientUpdates['repairs'] | null>(null);
   const action = useAction();
   useEffect(() => setSaved(null), [snapshot]);
   const data = saved ?? snapshot?.repairs;
   const state = data?.state || 'pending';
+  const readyToRetry = data?.message_code === 'labels.upgradeRepairs.mediaPaused' && lastCapacityCheckPassed;
   const pending = data?.items.reduce((count, row) => count + (row.pending || 0), 0) || 0;
   const failed = data?.items.reduce((count, row) => count + (row.failed || 0), 0) || 0;
   const deferred = data?.items.reduce((count, row) => count + (row.deferred || 0), 0) || 0;
@@ -46,7 +47,8 @@ export function UpgradeRepairs() {
       {deferred ? <Fact term={t('settings:upgradeRepairs.deferred')}><span>{itemCount(deferred)}</span></Fact> : null}
       <Fact term={t('settings:upgradeRepairs.toReview')}><span>{itemCount(review)}</span></Fact>
     </FactList>
-    {data?.message || action.error ? <Stack><ErrorText>{action.error || codedText(data, 'message')}</ErrorText></Stack> : null}
+    {readyToRetry && !action.error ? <Stack><Help>{t('settings:upgradeRepairs.capacityReady')}</Help></Stack>
+      : data?.message || action.error ? <Stack><ErrorText>{action.error || codedText(data, 'message')}</ErrorText></Stack> : null}
     {state === 'running' ? <Stack><Help>{t('settings:upgradeRepairs.runningHelp')}</Help><TaskCenterLink /></Stack> : null}
     {state === 'deferred' ? <Stack><Help>{t('settings:upgradeRepairs.deferredHelp')}</Help></Stack> : null}
     <Footer status={review ? <ExternalLink href="/api/configuration/upgrade-repairs/review">{t('settings:upgradeRepairs.downloadReviewLog')}</ExternalLink> : null}>

@@ -63,6 +63,21 @@ class StrmTextTests(unittest.TestCase):
             seconds, result = elapsed(strm.read_target, self.path)
         self.assertLess(seconds, 3)
         self.assertIsInstance(result, ValueError)
+        self.assertEqual(result.code, 'errors.strm.fileTimedOut')
+
+    def test_missing_unreadable_and_invalid_utf8_pointers_report_their_causes(self):
+        with self.assertRaises(ValueError) as caught:
+            strm.read_target(self.path)
+        self.assertEqual(caught.exception.code, 'errors.strm.fileMissing')
+        with patch('peach.media_io.bounded', side_effect=PermissionError('private location')):
+            with self.assertRaises(ValueError) as caught:
+                strm.read_target(self.path)
+        self.assertEqual(caught.exception.code, 'errors.strm.filePermissionDenied')
+        self.assertNotIn('private location', str(caught.exception))
+        self.path.write_bytes(b'\xff')
+        with self.assertRaises(ValueError) as caught:
+            strm.read_target(self.path)
+        self.assertEqual(caught.exception.code, 'errors.strm.fileEncodingInvalid')
 
     def test_strm_and_iso_are_catalogued_without_background_probe(self):
         db = fresh_ledger(self.root)

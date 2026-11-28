@@ -35,7 +35,7 @@ export function localizedConfiguration(data: ConfigurationData): ConfigurationDa
 }
 
 export const fetchConfiguration = async (signal?: AbortSignal) =>
-  localizedConfiguration(await apiGet<ConfigurationData>(CONFIGURATION_URL, signal));
+  localizedConfiguration(await apiGet<ConfigurationData>(`${CONFIGURATION_URL}?include_startup=0`, signal));
 
 /** 首屏：取回来才画。中止时 `fetchQuery` 把 `AbortError` 抛回给挂载方，它据此放弃这一次。 */
 export async function prefetchConfiguration(signal: AbortSignal): Promise<void> {

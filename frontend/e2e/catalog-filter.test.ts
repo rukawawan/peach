@@ -84,7 +84,9 @@ async function openHome(browser: Browser, path = '/', viewport = DESKTOP): Promi
   return { ...opened, counts };
 }
 
-const tag = (page: Page, key: string) => page.locator(`${FILTER} [data-catalog-tag="${key}"]`);
+const tagTrigger = (page: Page) => page.locator(`${FILTER} [data-table-column-filter="home-tags"]`);
+const tagMenu = (page: Page) => page.getByRole('dialog', { name: '标签', exact: true });
+const tag = (page: Page, key: string) => tagMenu(page).locator(`[data-filter-option="${key}"]`);
 const chips = (page: Page) => page.locator('#combo [data-combo-chip]');
 
 describe('首页筛选条', () => {
@@ -124,12 +126,14 @@ describe('首页筛选条', () => {
           if (viewport.mobile) await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
           await page.locator('[data-nav=""]:visible').first().click();
           await pathIs(page, '/');
-          await page.waitForFunction(filter => document.querySelectorAll(`${filter} [data-catalog-tag]`).length > 1, FILTER);
+          await tagTrigger(page).click();
+          await tagMenu(page).locator('[data-filter-option]').last().waitFor();
           await settle(page);
           const queries = counts.facets.slice(before);
           assert.ok(queries.every(url => !url.searchParams.has('scope_kind') && !url.searchParams.has('scope_name')),
             '首页聚合仍带有资料页范围');
-          assert.ok(await page.locator(`${FILTER} [data-catalog-tag]`).count() > 1, '首页只留下资料页的标签');
+          assert.ok(await tagMenu(page).locator('[data-filter-option]').count() > 1, '首页只留下资料页的标签');
+          await page.keyboard.press('Escape');
           if (pass === 0) {
             assert.ok(queries.length > 0, '深链首次返回首页应读取馆藏聚合');
             await page.goBack();
@@ -155,7 +159,7 @@ describe('首页筛选条', () => {
       await page.setViewportSize({ width: 1920, height: 900 });
       await page.reload();
       const frame = page.locator(`${FILTER} [data-catalog-frame]`);
-      await frame.locator('[data-catalog-tag]').first().waitFor();
+      await tagTrigger(page).waitFor();
       assert.equal(await frame.getAttribute('data-single-row'), null);
       assert.equal(await frame.evaluate(node => node.getBoundingClientRect().height), 96);
       release();
@@ -176,7 +180,7 @@ describe('首页筛选条', () => {
       await page.setViewportSize({ width: 1920, height: 900 });
       await page.reload(); await settle(page);
       const frame = page.locator(`${FILTER} [data-catalog-frame]`);
-      await frame.locator('[data-catalog-tag]').first().waitFor();
+      await tagTrigger(page).waitFor();
       await page.locator(`${FILTER} [data-catalog-frame][data-single-row]`).waitFor();
       const wide = await frame.evaluate(element => {
         const top = element.querySelector('[data-filter-row="top"]')!.getBoundingClientRect();
@@ -247,27 +251,27 @@ describe('首页筛选条', () => {
     try {
       const { page, counts } = opened;
       /* 首屏那批标签按种子从四十枚里抽，点屏幕上的第一枚，不点清单里的第一枚。 */
-      const key = (await page.locator(`${FILTER} [data-catalog-tag]`).first().getAttribute('data-catalog-tag'))!;
+      await tagTrigger(page).click();
+      const key = (await tagMenu(page).locator('[data-filter-option]').first().getAttribute('data-filter-option'))!;
       await page.evaluate((filter) => {
         const first = document.querySelector(`${filter} [data-tier-performer]`) as HTMLElement & { __kept?: boolean };
         first.__kept = true;
       }, FILTER);
       const [items, facets, summaries] = [counts.items.length, counts.facets.length, counts.summaries.length];
-      const order = () => page.locator(`${FILTER} [data-catalog-tag]`).evaluateAll((pills) =>
-        pills.map((pill) => pill.getAttribute('data-catalog-tag')));
-      const members = await order();
       /* 计数是标签的附注：隔开一段、字号降一档、字色退一档，不和标签名读成一个词。 */
       const footnote = await tag(page, key).evaluate((pill) => {
         const badge = pill.querySelector('[data-count-badge]')!;
         const [p, b] = [getComputedStyle(pill), getComputedStyle(badge)];
-        return { gap: parseFloat(b.marginLeft), smaller: parseFloat(b.fontSize) < parseFloat(p.fontSize),
+        return { gap: parseFloat(p.columnGap), smaller: parseFloat(b.fontSize) < parseFloat(p.fontSize),
           dimmer: b.color !== p.color, spaced: !/\s$/.test(badge.previousSibling?.textContent ?? '') };
       });
       assert.ok(footnote.gap >= 4, `计数离标签只有 ${footnote.gap}px`);
       assert.deepEqual([footnote.smaller, footnote.dimmer, footnote.spaced], [true, true, true],
         '计数和标签同字号、同色，或者靠空格文本节点隔开');
       await tag(page, key).click();
-      await page.locator(`${FILTER} [data-catalog-tag="${key}"][aria-pressed="true"]`).waitFor({ timeout: 2_000 });
+      await tagTrigger(page).click();
+      assert.equal(await tag(page, key).getAttribute('aria-pressed'), 'true');
+      await page.keyboard.press('Escape');
       await chips(page).filter({ hasText: key }).waitFor();
       await page.locator(READOUT, { hasText: '3 个符合' }).waitFor();
       assert.equal(new URL(page.url()).searchParams.get('tag'), key);
@@ -280,11 +284,11 @@ describe('首页筛选条', () => {
       /* 口径变了两排头像会按新口径再取一次（`getBarsData`），但同一位的那一格原地换数，不拆了重建。 */
       assert.equal(await page.evaluate((filter) => !!(document.querySelector(`${filter} [data-tier-performer]`) as
         (HTMLElement & { __kept?: boolean }) | null)?.__kept, FILTER), true, '加一条筛选把头像条拆了重建');
-      /* 标签条的成员与次序不动：刚点的那枚还在原位，没被挪到最前面去。 */
-      assert.deepEqual(await order(), members, '加一条筛选把标签条重排了');
       await chips(page).filter({ hasText: key }).getByRole('button').click();
       await page.locator(READOUT, { hasText: `${CATALOG.length} 个符合` }).waitFor();
-      await page.locator(`${FILTER} [data-catalog-tag="${key}"][aria-pressed="false"]`).waitFor({ timeout: 2_000 });
+      await tagTrigger(page).click();
+      assert.equal(await tag(page, key).getAttribute('aria-pressed'), 'false');
+      await page.keyboard.press('Escape');
       assert.equal(await chips(page).count(), 0);
       assert.deepEqual(withoutPlayer(opened.problems), []);
     } finally {
@@ -318,13 +322,16 @@ describe('首页筛选条', () => {
     }
   });
 
-  it('排序键：按下态当场到位，网格只重取一次；再点一次同一枚翻方向', { timeout: 60_000 }, async () => {
+  it('排序下拉明确选择方向；打开菜单不重取，选择后网格只重取一次', { timeout: 60_000 }, async () => {
     const opened = await openHome(browser);
     try {
       const { page, counts } = opened;
       const key = page.locator(`${FILTER} [data-entity-sort="new"]`);
       const before = counts.items.length;
       await key.click();
+      await page.locator('[data-sort-direction-menu]').waitFor();
+      assert.equal(counts.items.length, before, '打开排序菜单时不重取作品');
+      await page.locator('[data-sort-direction-menu] [data-filter-option="desc"]').click();
       await page.locator(`${FILTER} [data-entity-sort="new"][aria-pressed="true"]`).waitFor({ timeout: 2_000 });
       await until(() => counts.items.length > before, '换排序之后没有重取列表');
       await settle(page);
@@ -333,6 +340,7 @@ describe('首页筛选条', () => {
       /* 只数第一页：厂牌那排挂上时在右端，续要的那次空页与排序无关。 */
       assert.equal(counts.tops.filter((url) => !url.searchParams.has('page')).length, 1, '换排序不该重取两排头像');
       await key.click();
+      await page.locator('[data-sort-direction-menu] [data-filter-option="asc"]').click();
       await until(() => counts.items.length > before + 1, '翻方向之后没有重取列表');
       await settle(page);
       assert.deepEqual(counts.items.slice(before).map((url) => url.searchParams.get('dir') || ''), ['desc', 'asc']);
@@ -380,7 +388,7 @@ describe('首页筛选条', () => {
       await page.locator(`${FILTER} input[name="jav-layout"]`).first().waitFor({ state: 'attached' });
       assert.ok(await page.locator(`${FILTER} [data-tier-performer]`).count() > 0, 'JAV 没有女优筛选');
       assert.ok(await page.locator(`${FILTER} [data-tier-studio]`).count() > 0, 'JAV 没有厂牌筛选');
-      assert.ok(await page.locator(`${FILTER} [data-catalog-tag]`).count() > 0, 'JAV 没有标签筛选');
+      assert.ok(await tagTrigger(page).isVisible(), 'JAV 没有标签筛选');
       assert.equal(await page.getByRole('textbox', { name: '搜索作品', exact: true }).count(), 0);
       const width = await page.evaluate(() => ({
         grid: document.querySelector('#grid')!.getBoundingClientRect().width,
@@ -404,9 +412,12 @@ describe('首页筛选条', () => {
       if (viewport.mobile) await page.locator('#searchBack').click();
       await page.getByRole('tab', { name: '发现', exact: true }).click();
       await page.getByRole('tab', { name: '发现', exact: true, selected: true }).waitFor();
-      assert.equal(await page.locator('#javLibraryHeader').isVisible(), false);
+      assert.equal(await page.locator('#javLibraryHeader').isVisible(), true, '换分区后页头仍是常驻的那一棵');
+      // 页签在常驻页头里立刻选中，分区正文随后才挂上：等正文到了再换下一个分区。
+      await settle(page);
       await page.getByRole('tab', { name: '想要', exact: true }).click();
       await page.getByRole('tab', { name: '想要', exact: true, selected: true }).waitFor();
+      await settle(page);
       await page.getByRole('tab', { name: '馆藏', exact: true }).click();
       await page.getByRole('tab', { name: '馆藏', exact: true, selected: true }).waitFor();
       await page.locator('#grid [data-media-card]').first().waitFor();
@@ -516,13 +527,16 @@ describe('首页筛选条', () => {
           const { left, width } = node.getBoundingClientRect();
           return { left: Math.round(left), width: Math.round(width) };
         };
+        const glide = document.querySelector(`${filter} [data-view-glide]`);
         return {
-          glide: rect(document.querySelector(`${filter} [data-view-glide]`)),
+          glide: rect(glide),
+          sheen: glide ? getComputedStyle(glide).backgroundImage : '',
           key: rect(document.querySelector(`${filter} [data-catalog-view][aria-pressed="true"]`)),
         };
       }, FILTER);
       assert.ok(back.glide && back.key && Math.abs(back.glide.left - back.key.left) <= 1
         && Math.abs(back.glide.width - back.key.width) <= 1, `玻璃没有垫在当前视图下面 ${JSON.stringify(back)}`);
+      assert.match(back.sheen, /^linear-gradient\(/, '首页滑块使用玻璃高光');
       assert.deepEqual(withoutPlayer(opened.problems), []);
     } finally {
       await opened.close();

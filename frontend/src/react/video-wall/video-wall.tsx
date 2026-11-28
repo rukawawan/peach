@@ -1,8 +1,11 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useDatalistSuggest } from '../search/datalist-suggest';
+import { librarySuggest } from '../search/library-suggest';
 import { useQuery } from '@tanstack/react-query';
-import { motion, useReducedMotion } from 'motion/react';
-import { cardArtwork, coverAnchor } from '@peach/card-art';
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
+import { FocusScope } from 'react-aria/FocusScope';
+import { cardArtwork } from '@peach/card-art';
 import { fmtDur, requestErrorMessage } from '@peach/legacy/core';
 import { setActionBusy, spinnerHtml } from '@peach/legacy/ui';
 import { isOverlayPath, peachHistory } from '@peach/history';
@@ -12,10 +15,14 @@ import { Note } from '../components/note';
 import { ArtSlot } from '../components/art-slot';
 import { busyProps } from '../settings/busy-props';
 import { useWallCamera } from './use-wall-camera';
-import { expandedWallTiles, finiteWallTile, visibleWallTiles, wallTileAt, WallExploration, type WallCamera, type WallTile } from './wall-layout';
-import { WALL_REFLOW_SPRING } from './wall-motion';
+import { useWallAtmosphere } from './use-wall-atmosphere';
+import { useWallProjection } from './use-wall-projection';
+import { finiteWallTile, visibleWallTiles, wallTilesInView, WallExploration, type WallCamera, type WallTile } from './wall-layout';
+import { packWallTiles, WALL_FALLBACK_ASPECT, type WallPlacement } from './wall-packing';
 import { chooseItem, editionLabel, fetchQueue, nextPart, partLabel, queueKey, type QueueItem, type QueueRef } from '../item-detail/item-detail';
 import { WallControls } from './wall-controls';
+import { WallDiscScene, WallOpticalDisc } from './wall-disc-scene';
+import type { WallPageDirection } from './wall-motion';
 import { WallQueue } from './wall-queue';
 import { Shuffle } from '../entity-filter/entity-filter-page';
 import { exitWall, unfilteredWallAddress } from './wall-route';
@@ -43,22 +50,54 @@ interface WallSession { camera: WallCamera; selectedId: number | null; selectedK
 // 页面刷新代次不属于集合身份。只保存界面位置，不保存 Query 中的作品副本。
 const wallSessions = new Map<string, WallSession>();
 
-const WallArtwork = memo(function WallArtwork({ item, image, big = false, ratio = 1 }: { item: MediaItem; image: string; big?: boolean; ratio?: number }) {
+const wallArtworkKey = (id: number, image: string, ratio: number) => `${id}:${image}:${ratio < 1 ? 'front' : 'whole'}`;
+
+const WallArtwork = memo(function WallArtwork({ item, image, big = false, ratio = 1, onAspect }: {
+  item: MediaItem; image: string; big?: boolean; ratio?: number; onAspect?(key: string, aspect: number | null): void;
+}) {
   const source = !item.is_jav && image === 'thumbnail' && item.has_thumb ? { ...item, has_cover: false } : item;
+  // 窄格可用已取得的独立正封。共享素材回落为整图时，墙面同样完整显示。
   const artwork = cardArtwork(source, big || ratio >= 1 ? 'small' : 'big', true, image);
+  const key = wallArtworkKey(item.id, image, ratio);
   const pic = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
-    pic.current?.querySelectorAll<HTMLImageElement>('img.cover').forEach(img => {
-      if (img.complete && img.naturalWidth) coverAnchor(img, ratio);
-    });
-  }, [ratio, artwork.html]);
-  // 比例就是下面写进 `--card-ratio` 的那个数，直接交给取景，免得每格提交后各读一次计算样式。
-  return <span ref={pic} data-media-pic="" style={{ '--card-ratio':String(ratio) } as CSSProperties}>
-    <ArtSlot artwork={artwork} relayout={node => node.querySelectorAll<HTMLImageElement>('img.cover').forEach(img => {
-      if (img.complete && img.naturalWidth) coverAnchor(img, ratio);
-    })} />
+    const img = pic.current?.querySelector('img');
+    if (!onAspect) return;
+    if (!img || img.complete) {
+      onAspect(key, img?.naturalHeight ? img.naturalWidth / img.naturalHeight : null);
+      return;
+    }
+    // 单张慢图不一直挡住整块墙。它后来到达时仍完整显示在原位。
+    const timeout = setTimeout(() => onAspect(key, null), 1000);
+    return () => clearTimeout(timeout);
+  }, [artwork.html, key, onAspect]);
+  return <span ref={pic} data-media-pic="" style={{ '--card-ratio':String(ratio) } as CSSProperties} onLoadCapture={event => {
+    const img = event.target;
+    if (img instanceof HTMLImageElement && img.naturalHeight) onAspect?.(key, img.naturalWidth / img.naturalHeight);
+  }}>
+    <ArtSlot artwork={artwork} onFailed={() => onAspect?.(key, null)} />
   </span>;
 });
+
+const WALL_SUGGEST = librarySuggest(['performer', 'creator', 'studio', 'series', 'tag', 'asset']);
+
+function WallFocusDialog({ children, itemId, playing, covered, direction }: {
+  children: ReactNode; itemId: number; playing: boolean; covered: boolean; direction: WallPageDirection | null;
+}) {
+  const present = useIsPresent();
+  const reduce = useReducedMotion();
+  // 改字工具的来源选择器挂在页面顶层，需要接住焦点。
+  const editing = document.body.hasAttribute('data-peach-copy-mode');
+  return <FocusScope contain={present && !covered && !editing}>
+    <motion.div data-wall-focus="" data-wall-active-id={itemId} data-playing={playing || undefined}
+      data-wall-page-direction={direction ?? undefined}
+      data-wall-closing={!present || undefined} inert={!present} role="dialog" tabIndex={-1}
+      aria-modal="true" aria-labelledby="wall-detail-title"
+      exit={{ opacity:0 }} transition={{ duration:reduce ? 0 : .22 }}>
+      {children}
+    </motion.div>
+  </FocusScope>;
+}
 
 /** 单一播放宿主常驻在墙内，视口裁剪只影响海报磁贴。 */
 export function VideoWall({ items, finite, hasMore, busy, loading = false, error: queryError = '', retry, emptyHtml = '', loadMore, actions, helpers, javImage, sessionKey }: VideoWallProps) {
@@ -71,13 +110,17 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   const moreFlight = useRef(false);
   const [freshFrom, setFreshFrom] = useState<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const caption = useRef<HTMLDivElement>(null);
   const playerFrame = useRef<HTMLDivElement>(null);
+  const detailContent = useRef<HTMLDivElement>(null);
+  const openingCover = useRef<DOMRect | null>(null);
   const codeTitle = useRef<HTMLElement>(null);
   const releasePlayer = useRef<((continuePlaying?: boolean) => void) | null>(null);
   const controller = useRef<AbortController | null>(null);
   const [selected, setSelected] = useState<MediaItem | null>(() => items.find(item => item.id === session?.selectedId) || null);
   const [selectedKey, setSelectedKey] = useState(session?.selectedKey || '');
   const [sourceId, setSourceId] = useState<number | null>(session?.sourceId || null);
+  const [pageDirection, setPageDirection] = useState<WallPageDirection | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
   const groupRef: QueueRef | null = selected?.edition_group
     ? { kind:'editions', seedId:selected.edition_group.seed_id }
@@ -88,7 +131,7 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   });
   const group = groupRef ? groupQuery.data : undefined;
   const activeItem = group?.items.find(item => item.id === chooseItem(group, sourceId || selected?.id || null)) || selected;
-  const camera = useWallCamera(items.length, finite && !!items.length, session?.camera || { x: 0, y: 0, scale: innerWidth < 640 ? .68 : 1 }, !!selected);
+  const camera = useWallCamera(items.length, finite && !!items.length, session?.camera || { x: 0, y: 0, scale: innerWidth < 640 ? .68 : 1 });
   const reducedMotion = useReducedMotion();
   const [entranceDone, setEntranceDone] = useState(!!session);
   useEffect(() => {
@@ -105,6 +148,9 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   const [laterBusy, setLaterBusy] = useState(false);
   const [later, setLater] = useState<{ id: number; on: boolean } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  // 墙上的搜索与顶栏搜的是同一批作品，候选也取同一个补全接口：人、厂牌、系列、标签与作品番号。
+  const [searchText, setSearchText] = useState('');
+  const searchSuggestions = useDatalistSuggest('wall', searchText, WALL_SUGGEST, searchOpen);
   const searchButton = useRef<HTMLButtonElement>(null);
   const [portal] = useState(() => {
     const node = document.createElement('div'); node.className = 'peach-react'; return node;
@@ -116,7 +162,27 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   }, [portal]);
   useEffect(() => () => portal.remove(), [portal]);
   const [covered, setCovered] = useState(() => isOverlayPath(peachHistory.navigation.location.pathname));
+  const sceneReady = !covered && !loading && !!items.length && freshFrom === null;
+  const curved = sceneReady;
+  useWallAtmosphere(camera.viewport, caption, sceneReady);
   const [image, setImage] = useState(session?.image || javImage);
+  const artAspects = useRef(new Map<string, number>());
+  const packedBlocks = useMemo(() => new Map<string, WallTile[]>(), [image, pool, sessionKey]);
+  const detailWall = useRef<{ tiles: WallPlacement[]; width: number; height: number } | null>(null);
+  const aspectFrame = useRef(0);
+  const [, commitAspects] = useState(0);
+  const rememberAspect = useCallback((key: string, aspect: number | null) => {
+    const previous = artAspects.current.get(key);
+    if (previous !== undefined && (aspect === null || Math.abs(previous - aspect) < .01)) return;
+    artAspects.current.set(key, aspect ?? WALL_FALLBACK_ASPECT);
+    if (!aspectFrame.current) aspectFrame.current = requestAnimationFrame(() => {
+      aspectFrame.current = 0;
+      commitAspects(version => version + 1);
+    });
+  }, []);
+  useEffect(() => () => cancelAnimationFrame(aspectFrame.current), []);
+  const [hoveredKey, setHoveredKey] = useState('');
+  const [focusedKey, setFocusedKey] = useState('');
   const tileFocus = useRef<{ key: string; id: number } | null>(null);
   const previousPool = useRef(pool);
   const hasItems = useRef(!!items.length);
@@ -131,14 +197,34 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   };
   useLayoutEffect(saveView);
   const visible = visibleWallTiles(loading ? 12 : finite ? items.length : items.length || hasMore ? 12 : 0,
-    finite && !loading, camera.view.camera, camera.view.size);
+    finite && !loading, camera.view.camera, camera.view.size, !loading);
+  const view = camera.view;
+  const centerX = (view.size.width / 2 - view.camera.x) / view.camera.scale;
+  const centerY = (view.size.height / 2 - view.camera.y) / view.camera.scale;
+  const distance = (tile: WallTile) => (tile.x + tile.width / 2 - centerX) ** 2 + (tile.y + tile.height / 2 - centerY) ** 2;
+  const assigned = loading || finite ? null : new Map(exploration.assign(
+    [...visible].sort((a, b) => distance(a) - distance(b)), items.length, hasMore,
+  ).map(tile => [tile.key, tile.index]));
   /* 重进墙面时作品列表会按首页重读、比已分配的位置短：没有作品的位置先画骨架，续页补齐后再显示，
      不能拿空位去渲染磁贴（窄屏一屏格子多，这样整面墙直接卸掉成黑屏）。 */
-  const tiles = loading ? visible.map(tile => ({ ...tile, index:-1 })) : finite ? visible
-    : exploration.assign(visible, items.length, hasMore).map(tile => tile.index < items.length || (!!selected && tile.key === selectedKey) ? tile : { ...tile, index:-1 });
-  const activeTile = selected && (finite ? wallTileAt(items.length, true, selectedKey) : exploration.tile(selectedKey, items.length));
-  const expanded = activeTile ? expandedWallTiles(items.length, finite, activeTile) : new Map();
-  if (activeTile && !tiles.some(tile => tile.key === activeTile.key)) tiles.push(activeTile);
+  const slots = loading ? visible.map(tile => ({ ...tile, index:-1 })) : finite ? visible
+    : visible.map(tile => {
+      const index = assigned?.get(tile.key) ?? -1;
+      return { ...tile, index: index < items.length ? index : -1 };
+    });
+  const slotRatios = new Map(slots.map(tile => [tile.key, tile.width / tile.height]));
+  const savedWall = selected ? detailWall.current : null;
+  const placements = loading ? slots : packWallTiles(slots, packedBlocks, tile => {
+    const item = items[tile.index];
+    return item && artAspects.current.get(wallArtworkKey(item.id, image, slotRatios.get(tile.key)!));
+  });
+  const tiles: WallPlacement[] = savedWall && savedWall.width === view.size.width && savedWall.height === view.size.height
+    ? savedWall.tiles : wallTilesInView<WallPlacement>(placements, view.camera, view.size, tile => !!tile.preparing);
+  useWallProjection(camera, tiles, curved);
+  const captionKey = focusedKey || hoveredKey;
+  const captionTile = !selected && freshFrom === null && captionKey
+    ? tiles.find(tile => tile.key === captionKey && tile.index >= 0) : undefined;
+  const captionItem = captionTile ? items[captionTile.index] : undefined;
   const stopPlayer = (continuePlaying = false) => {
     controller.current?.abort(); controller.current = null;
     releasePlayer.current?.(continuePlaying); releasePlayer.current = null;
@@ -187,19 +273,26 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
     requestAnimationFrame(() => searchButton.current?.focus({ preventScroll: true }));
   };
   const close = (continuePlaying = true) => {
+    openingCover.current = null;
+    detailWall.current = null;
     stopPlayer(continuePlaying); setPendingPlayback(null); setSelected(null); setSelectedKey(''); setSourceId(null); setQueueOpen(false); setError('');
     const focus = tileFocus.current;
-    if (focus) requestAnimationFrame(() => {
-      const tile = root.current?.querySelector<HTMLButtonElement>(`[data-wall-tile="${focus.key}"]`);
-      tile?.focus({ preventScroll: true });
+    requestAnimationFrame(() => {
+      const tile = focus && root.current?.querySelector<HTMLElement>(`[data-wall-tile="${focus.key}"]`);
+      const target = tile && tile.dataset.wallId === String(focus?.id) ? tile : camera.viewport.current;
+      target?.focus({ preventScroll: true });
     });
   };
-  const choose = (item: MediaItem, tile: WallTile, animate = true) => {
+  const choose = (item: MediaItem, tile?: WallTile, animate = true, direction: WallPageDirection | null = null) => {
+    if (!selected) detailWall.current = { tiles, ...view.size };
     if (selected?.id !== item.id) stopPlayer(false);
-    tileFocus.current = { key: tile.key, id: item.id };
-    setError(''); setPendingPlayback(null); setSelected(item); setSelectedKey(tile.key); setSourceId(null); setQueueOpen(false); setSearchOpen(false);
-    camera.reveal(expandedWallTiles(items.length, finite, tile).get(tile.key) || tile, animate, true);
-    if (!animate) requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>('[data-wall-play]')?.focus({ preventScroll: true }));
+    tileFocus.current = tile ? { key: tile.key, id: item.id } : null;
+    setError(''); setPendingPlayback(null); setSelected(item); setSelectedKey(tile?.key ?? ''); setSourceId(null);
+    setQueueOpen(false); setSearchOpen(false); setPageDirection(direction);
+    openingCover.current = animate && tile
+      ? root.current?.querySelector(`[data-wall-tile="${tile.key}"] [data-wall-hit]`)?.getBoundingClientRect() ?? null
+      : null;
+    if (!direction) requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(animate ? '[data-wall-focus]' : '[data-wall-play]')?.focus({ preventScroll: true }));
   };
   const details = () => {
     if (!activeItem || !root.current) return;
@@ -224,16 +317,32 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   };
   const onEnded = () => {
     const next = nextPart(group || null, playing || 0);
-    if (next) { setSourceId(next.id); void play(next) }
+    if (next) { setPageDirection(null); setSourceId(next.id); void play(next) }
   };
   useEffect(() => {
     if (pendingPlayback == null || selected?.id !== pendingPlayback || covered) return;
     setPendingPlayback(null); void play(selected);
   }, [pendingPlayback, selected?.id, covered]);
   const tracks = group?.items || items;
-  const trackIndex = tracks.findIndex(item => item.id === activeItem?.id);
+  // 页码跟随墙面作品；同一作品的分卷和版本由播放队列单独管理。
+  const catalogIndex = items.findIndex(item => item.id === selected?.id);
+  const pageDetail = (direction: WallPageDirection) => {
+    const item = catalogIndex >= 0 ? items[catalogIndex + direction] : undefined;
+    if (!item) return false;
+    const viewport = camera.viewport.current?.getBoundingClientRect();
+    const tile = tiles.filter(candidate => items[candidate.index]?.id === item.id && !candidate.preparing)
+      .sort((a, b) => distance(a) - distance(b))
+      .find(candidate => {
+        const bounds = root.current?.querySelector(`[data-wall-tile="${candidate.key}"]`)?.getBoundingClientRect();
+        return viewport && bounds && bounds.left < viewport.right && bounds.right > viewport.left
+          && bounds.top < viewport.bottom && bounds.bottom > viewport.top;
+      });
+    choose(item, tile, true, direction);
+    return true;
+  };
   const switchTrack = (item: QueueItem) => {
     setQueueOpen(false);
+    setPageDirection(null);
     if (item.id === activeItem?.id) {
       if (!playing) void play(item);
       else void playerFrame.current?.querySelector('video')?.play().catch(failure => setError(requestErrorMessage(failure)));
@@ -282,6 +391,9 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
   const label = (item: MediaItem) => helpers.displayName(item, String(item.name || item.code || t('catalog:immerse.untitled')));
   const current = activeItem || selected;
   useLayoutEffect(() => {
+    if (detailContent.current) detailContent.current.scrollTop = 0;
+  }, [current?.id]);
+  useLayoutEffect(() => {
     const node = codeTitle.current;
     if (!node || !current?.code) return;
     let live = true, lastWidth = node.clientWidth;
@@ -306,37 +418,89 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
     document.fonts.addEventListener('loadingdone', fit);
     return () => { live = false; observer.disconnect(); document.fonts.removeEventListener('loadingdone', fit) };
   }, [current?.code, selectedKey, playing, starting, covered]);
-  const tileNumber = String((activeTile?.index || 0) + 1).padStart(2, '0');
-  const focusContent = selected && current ? <>
-    <div data-wall-focus-backdrop="" aria-hidden="true"><WallArtwork item={selected} image={image} big /></div>
-    <div data-wall-scene=""><WallArtwork item={selected} image={image} big /></div>
-    <div ref={playerFrame} data-wall-player="" hidden={!playing && !starting} />
-    <div data-wall-expanded-shade="" aria-hidden="true" />
-    <span data-wall-number="">{playing ? t('catalog:videoWall.nowPlaying', { number: tileNumber }) : tileNumber}</span>
-    <div data-wall-focus-head=""><b ref={codeTitle} data-wall-code={current.code ? '' : undefined}>{current.code || label(current)}</b>
-      {current.code ? <strong>{label(current).startsWith(current.code) ? label(current).slice(current.code.length).trim() : label(current)}</strong> : null}
-      <span>{current.performers?.join(' · ') || current.creator || t('catalog:shared.uncredited')}</span>
-      {group ? <small>{[editionLabel(current as QueueItem), partLabel(current as QueueItem)].filter(Boolean).join(' · ')}</small> : null}
-    </div>
-    <button type="button" data-wall-focus-close="" aria-label={t('catalog:videoWall.collapseVideo')} title={t('catalog:shared.collapse')} onClick={() => close()}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x" /></svg></button>
-    {error || (groupRef && groupQuery.error && !group) ? <div data-wall-play-error=""><Note tone="error">{error || requestErrorMessage(groupQuery.error)}</Note>
-      {groupQuery.error && !group ? <Button size="small" variant="ghost" onClick={() => void groupQuery.refetch()}>{t('catalog:shared.retryNow')}</Button> : null}</div> : null}
-    <WallControls item={current} playing={playing} frame={playerFrame} starting={starting} pendingGroup={!!groupRef && groupQuery.isPending}
-      grouped={!!groupRef} queueOpen={queueOpen} queueReady={!!tracks.length && (!groupRef || !!group)}
-      hasPrevious={trackIndex > 0} hasNext={trackIndex >= 0 && trackIndex < tracks.length - 1}
-      later={later?.id === current.id ? later.on : !!current.watch_later} laterBusy={laterBusy}
-      play={() => play()} previous={() => switchTrack(tracks[trackIndex - 1]!)} next={() => switchTrack(tracks[trackIndex + 1]!)}
-      queue={() => setQueueOpen(!queueOpen)} watchLater={() => void addLater()} details={details} ended={onEnded} error={setError} />
-    {queueOpen ? <WallQueue items={tracks} activeId={current.id} kind={group?.kind || 'wall'} label={label} choose={switchTrack} close={() => setQueueOpen(false)} /> : null}
-  </> : null;
+  const title = current ? label(current) : '';
+  const detailTitle = current?.code && title.startsWith(current.code)
+    ? title.slice(current.code.length).trim() || title
+    : title;
+  const version = current ? [editionLabel(current as QueueItem), partLabel(current as QueueItem)].filter(Boolean).join(' · ') : '';
+  const facts = current ? [
+    { key: 'released', label: t('catalog:javDetail.releaseDate'), value: current.release_date },
+    { key: 'duration', label: t('catalog:catalogList.duration'), value: current.duration ? fmtDur(current.duration) : '' },
+    { key: 'edition', label: t('catalog:detailQueue.editions'), value: version },
+  ].filter(fact => fact.value) : [];
+  const focusContent = current ? <WallFocusDialog key="detail" itemId={current.id} playing={!!playing || starting} covered={covered}
+    direction={pageDirection}>
+      <div data-wall-stage-media="">
+        <WallDiscScene key={current.id} origin={openingCover.current} direction={pageDirection}
+          aspect={artAspects.current.get(wallArtworkKey(current.id, 'cover', 1)) ?? WALL_FALLBACK_ASPECT}
+          edition={[title, current.code, version, (current as QueueItem).edition].filter(Boolean).join(' ')}>
+          <WallArtwork item={current} image="cover" big onAspect={rememberAspect} />
+        </WallDiscScene>
+        <div ref={playerFrame} data-wall-player="" hidden={!playing && !starting} />
+      </div>
+      <aside data-wall-details-panel="">
+        <div data-wall-detail-nav="">
+          {catalogIndex >= 0 && items.length > 1 ? <div data-wall-pager="">
+            <button type="button" aria-label={t('catalog:wallControls.previousVideo')} aria-disabled={catalogIndex === 0}
+              onClick={() => pageDetail(-1)}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left" /></svg></button>
+            <button type="button" aria-label={t('catalog:wallControls.nextVideo')} aria-disabled={catalogIndex >= items.length - 1}
+              onClick={() => pageDetail(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-right" /></svg></button>
+            <span>{catalogIndex + 1} / {items.length}</span>
+          </div> : null}
+          <button type="button" data-wall-focus-close="" aria-label={t('catalog:videoWall.collapseVideo')} title={t('catalog:shared.collapse')} onClick={() => close()}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x" /></svg>
+          </button>
+        </div>
+        <div ref={detailContent} data-wall-details-content="">
+          <header data-wall-focus-head="">
+            <div key={`wash:${current.id}`} data-wall-detail-wash="" aria-hidden="true"><WallArtwork item={current} image="cover" big /></div>
+            <div key={`heading:${current.id}`} data-wall-detail-heading="">
+              {playing ? <span data-wall-playing-label="" data-copy-key="videoWall.nowPlaying">{t('catalog:videoWall.nowPlaying')}</span> : null}
+              <h2 id="wall-detail-title">{detailTitle}</h2>
+              {current.performers?.length || current.creator ? <p>{current.performers?.join(' · ') || current.creator}</p> : null}
+              {current.code ? <b ref={codeTitle} data-wall-code="">{current.code}</b> : null}
+            </div>
+            <div key={`cover:${current.id}`} data-wall-detail-cover="" aria-hidden="true"><WallArtwork item={current} image="cover" big /></div>
+          </header>
+          <div key={current.id} data-wall-detail-body="">
+            {queueOpen ? <WallQueue items={tracks} activeId={current.id} kind={group?.kind || 'wall'} label={label} choose={switchTrack} close={() => setQueueOpen(false)} />
+              : <>
+                {facts.length ? <dl data-wall-detail-facts="">{facts.map(fact => <div key={fact.key}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : null}
+                {current.studio ? <dl data-wall-detail-spec=""><dt>{t('catalog:entityHero.studio')}</dt><dd>{current.studio}</dd></dl> : null}
+              </>}
+            {error ? <div data-wall-play-error=""><Note tone="error">{error}</Note></div> : null}
+            {groupRef && groupQuery.error && !group ? <div data-wall-play-error="">
+              <Note tone="error" action={<Button size="small" variant="secondary" {...busyProps(groupQuery.isFetching)}
+                onClick={() => void groupQuery.refetch()}>{t('catalog:shared.retryNow')}</Button>}>
+                {requestErrorMessage(groupQuery.error)}
+              </Note>
+            </div> : null}
+          </div>
+        </div>
+        <WallControls item={current} playing={playing} frame={playerFrame} starting={starting} pendingGroup={!!groupRef && groupQuery.isPending}
+          grouped={!!groupRef} queueOpen={queueOpen} queueReady={!!tracks.length && (!groupRef || !!group)}
+          later={later?.id === current.id ? later.on : !!current.watch_later} laterBusy={laterBusy}
+          play={() => play()}
+          queue={() => setQueueOpen(!queueOpen)} watchLater={() => void addLater()} details={details} ended={onEnded} error={setError} />
+      </aside>
+  </WallFocusDialog> : null;
+  const cameraActive = !loading && !selected && freshFrom === null;
   const wall = <div ref={root} data-video-wall="" data-fullscreen="" data-focused={!!selected || undefined}
     data-refreshing={freshFrom !== null || undefined}
     hidden={covered} onKeyDown={event => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      event.preventDefault(); event.stopPropagation();
-      if (queueOpen) setQueueOpen(false); else if (selected) close(); else if (searchOpen) closeSearch(); else exitWall();
+      if (event.defaultPrevented) return;
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation();
+        if (queueOpen) setQueueOpen(false); else if (selected) close(); else if (searchOpen) closeSearch(); else exitWall();
+        return;
+      }
+      if (!selected || covered || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+      if (!direction || (event.target instanceof Element
+        && event.target.closest('input,textarea,select,[contenteditable],[role="slider"],[data-wall-queue],[data-wall-player]'))) return;
+      if (pageDetail(direction)) { event.preventDefault(); event.stopPropagation() }
     }}>
-    <div data-wall-bar="">
+    <div data-wall-bar="" inert={!!selected}>
       <button type="button" data-wall-back="" aria-label={t('catalog:videoWall.exit')} title={t('catalog:shared.back')} onClick={exitWall}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron-left" /></svg>
       </button>
@@ -359,7 +523,9 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
           onClick={event => { if (!searchOpen) { event.preventDefault(); setSearchOpen(true) } }}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search" /></svg>
         </button>
+        {searchOpen ? searchSuggestions.list : null}
         {searchOpen ? <input type="search" name="q" aria-label={t('catalog:videoWall.searchLabel')} placeholder={t('catalog:videoWall.searchPlaceholder')} autoFocus
+          ref={searchSuggestions.bind} autoComplete="off" onInput={event => setSearchText(event.currentTarget.value)}
           defaultValue={new URLSearchParams(location.search).get('q') || ''}
           onBlur={event => { if (!event.currentTarget.value.trim() && !event.currentTarget.form?.contains(event.relatedTarget as Node | null)) setSearchOpen(false) }} /> : null}
       </form>
@@ -368,14 +534,24 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
         <Button size="small" variant="ghost" onClick={() => peachHistory.push(unfilteredWallAddress())}>{t('catalog:shared.clearFilters')}</Button>
       </aside> : null}
     </div>
-    <div ref={camera.viewport} data-wall-viewport="" tabIndex={0} role="region" aria-label={t('catalog:videoWall.viewportLabel')}
+    <div ref={camera.viewport} data-wall-viewport="" tabIndex={selected ? -1 : 0} role="region" aria-label={t('catalog:videoWall.viewportLabel')}
+      data-wall-depth={curved || undefined}
       aria-busy={loading || freshFrom !== null || (busy && pendingTiles) || undefined} data-skeleton={loading ? 'wall' : undefined}
-      {...(loading || freshFrom !== null ? {} : camera.handlers)} onClick={event => {
-        if (selected && event.target instanceof Element && !event.target.closest('[data-wall-tile]')) {
+      {...(cameraActive ? camera.handlers : {})}
+      onPointerUp={cameraActive ? event => camera.onPointerUp(event, target => {
+        const key = target.closest<HTMLElement>('[data-wall-tile]')?.dataset.wallTile;
+        const tile = key ? tiles.find(placement => placement.key === key) : undefined;
+        if (!tile) return false;
+        const item = items[tile.index];
+        if (!item) return false;
+        choose(item, tile);
+        return true;
+      }) : undefined} onClickCapture={camera.onClickCapture} onClick={event => {
+        if (selected && event.target instanceof Element && !event.target.closest('[data-wall-details-panel],[data-wall-player]')) {
           if (queueOpen) setQueueOpen(false); else close();
         }
       }} onKeyDown={event => {
-        if (freshFrom !== null) return;
+        if (selected || freshFrom !== null) return;
         if (event.target instanceof Element && event.target.closest('button,input,[role="slider"],[data-wall-player],[data-wall-queue]')) return;
         if (event.ctrlKey || event.metaKey || event.altKey) return;
         const zooms: Record<string, number> = { '+': 1.2, '=': 1.2, '-': 1 / 1.2 };
@@ -386,56 +562,70 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
         if (!delta) return;
         event.preventDefault(); camera.pan(...delta);
       }}>
-      <div ref={camera.world} data-wall-world="">
+      <div ref={camera.world} data-wall-world="" inert={!!selected}>
         {tiles.map(tile => {
-          if (tile.index < 0) return <span key={tile.key} data-wall-skeleton="" aria-hidden="true"
+          const item = items[tile.index];
+          if (!item) return <span key={tile.key} data-wall-skeleton="" aria-hidden="true"
             style={{ '--wall-left':`${tile.x}px`, '--wall-top':`${tile.y}px`, '--wall-width':`${tile.width}px`, '--wall-height':`${tile.height}px` } as CSSProperties} />;
-          const focused = !!selected && tile.key === selectedKey;
-          const item = focused ? selected! : items[tile.index]!;
-          const rect = expanded.get(tile.key) || tile;
-          const landing = !entranceDone && !focused;
-          const delay = landing ? Math.min(.34, (Math.max(0, tile.x + camera.view.camera.x / camera.view.camera.scale)
-            + Math.max(0, tile.y + camera.view.camera.y / camera.view.camera.scale)) / 103.36 * .03) : 0;
-          /* 投影只在这一格自己的几何变了的那次提交里量：拖动、平移时整面墙每次重渲染都量一遍
-             全部磁贴和页面滚动位置，量的那一下正赶上刚写完的样式，逐次整树重算。 */
-          return <motion.article key={tile.key} layout layoutDependency={`${rect.x}:${rect.y}:${rect.width}:${rect.height}`}
-            data-wall-tile={tile.key} data-wall-id={item.id}
-            data-wall-focus={focused ? '' : undefined} data-playing={focused && (playing || starting) ? '' : undefined}
-            role={focused ? 'group' : 'button'} tabIndex={focused ? -1 : 0}
-            aria-label={focused ? label(item) : t('catalog:videoWall.expandItem', { title: label(item) })} aria-expanded={focused ? undefined : false}
-            initial={reducedMotion || session ? false : { opacity:0, transform:landing ? 'translateY(-68.4px) scale(.88)' : 'scale(.94)' }}
-            animate={{ opacity:1, transform:'translateY(0px) scale(1)' }}
-            whileHover={hoverable && !reducedMotion && !focused && entranceDone
-              ? { transform:`translateY(0px) scale(${(rect.width + 12.16) / rect.width},${(rect.height + 12.16) / rect.height})` } : undefined}
-            transition={reducedMotion ? { duration:0 } : {
-              layout:WALL_REFLOW_SPRING,
-              transform:landing ? { type:'spring', stiffness:360, damping:24, delay } : { duration:.3, ease:'easeOut' },
-              opacity:{ duration:landing ? .24 : .26, delay },
+          const ready = !tile.preparing;
+          return <motion.article key={tile.key} data-wall-slot={tile.key} data-wall-preparing={tile.preparing}
+            data-wall-tile={ready ? tile.key : undefined} data-wall-id={ready ? item.id : undefined}
+            data-wall-picked={!!selected && selectedKey === tile.key || undefined}
+            role={ready ? 'button' : undefined} tabIndex={ready ? 0 : undefined} aria-haspopup={ready ? 'dialog' : undefined}
+            aria-hidden={tile.preparing} aria-label={ready ? t('catalog:videoWall.expandItem', { title: label(item) }) : undefined}
+            initial={reducedMotion || entranceDone ? false : { opacity:0 }}
+            animate={{ opacity:1 }} transition={{ duration:.24 }}
+            style={{ '--wall-left': `${tile.x}px`, '--wall-top': `${tile.y}px`, '--wall-width': `${tile.width}px`, '--wall-height': `${tile.height}px`,
+              '--wall-jacket-aspect': tile.width / tile.height } as CSSProperties}
+            onPointerEnter={event => {
+              if (!selected && hoverable && event.pointerType === 'mouse') setHoveredKey(tile.key);
             }}
-            style={{ '--wall-left': `${rect.x}px`, '--wall-top': `${rect.y}px`, '--wall-width': `${rect.width}px`, '--wall-height': `${rect.height}px` } as CSSProperties}
+            onPointerLeave={() => setHoveredKey(key => key === tile.key ? '' : key)}
+            onBlur={() => setFocusedKey(key => key === tile.key ? '' : key)}
             onFocus={event => {
-              if (focused || event.target !== event.currentTarget) return;
-              const rect = event.currentTarget.getBoundingClientRect(), box = camera.viewport.current?.getBoundingClientRect();
-              if (box && (rect.left < box.left || rect.right > box.right || rect.top < box.top || rect.bottom > box.bottom)) camera.reveal(tile);
-            }} onClick={event => { if (!focused) choose(item, tile, event.detail !== 0) }}
+              if (selected || event.target !== event.currentTarget || !event.currentTarget.matches(':focus-visible')) return;
+              setFocusedKey(tile.key);
+              const rect = event.currentTarget.querySelector('[data-wall-hit]')?.getBoundingClientRect();
+              const box = camera.viewport.current?.getBoundingClientRect();
+              if (rect && box && (rect.left < box.left || rect.right > box.right || rect.top < box.top || rect.bottom > box.bottom)) camera.reveal(tile);
+            }} onClick={event => choose(item, tile, event.detail !== 0)}
             onKeyDown={event => {
-              if (focused || !['Enter',' '].includes(event.key)) return;
+              if (selected || !['Enter',' '].includes(event.key)) return;
               event.preventDefault(); choose(item, tile, false);
             }}>
-            {focused ? focusContent : <>
-              <WallArtwork item={item} image={image} ratio={rect.width / rect.height} />
-              <span data-wall-tile-shade="" aria-hidden="true" />
-              <span data-wall-number="">{String(tile.index + 1).padStart(2, '0')}</span>
-              <span data-wall-copy=""><b>{item.code || label(item)}</b><span>{item.performers?.join(' · ') || item.creator || item.studio || t('catalog:shared.uncredited')}</span></span>
-              {item.duration ? <span data-wall-duration="">{fmtDur(item.duration)}</span> : null}
-              {Number(item.leave_ratio) > 0 ? <span data-wall-progress="" style={{ '--wall-progress': `${Math.min(100, Number(item.leave_ratio) * 100)}%` } as CSSProperties} aria-label={t('catalog:catalogList.watchProgress')} /> : null}
-              <motion.span data-wall-dim="" animate={{ opacity:selected ? .65 : 0 }} transition={{ duration:reducedMotion ? 0 : .24 }} />
-            </>}
+            <div data-wall-surface=""><div data-wall-hit="">
+              <span data-wall-sleeve="">
+                <WallOpticalDisc edition={`${item.code || ''} ${item.name || ''}`} />
+                <WallArtwork item={item} image={image} ratio={slotRatios.get(tile.key) ?? tile.width / tile.height} onAspect={rememberAspect} />
+              </span>
+            </div></div>
           </motion.article>;
         })}
       </div>
+      <AnimatePresence>{focusContent}</AnimatePresence>
+      <div data-wall-atmosphere="" aria-hidden="true">
+        <div data-wall-air="distant" />
+        <div data-wall-air="near" />
+        <div data-wall-light="" />
+        <div data-wall-pointer="">
+          <svg data-wall-pointer-open="" viewBox="0 0 24 24"><use href="#i-chevron-right" /></svg>
+          <svg data-wall-pointer-drag="" viewBox="0 0 24 24"><use href="#i-hand" /></svg>
+          <svg data-wall-pointer-close="" viewBox="0 0 24 24"><use href="#i-x" /></svg>
+        </div>
+      </div>
     </div>
-    {!loading && queryError ? <div data-wall-error=""><Note tone="error">{queryError}</Note><Button size="small" variant="ghost" onClick={retry}>{t('catalog:shared.retryNow')}</Button></div> : null}
+    {captionItem ? <div ref={caption} data-wall-copy="" data-wall-copy-follow={!focusedKey || undefined} aria-hidden="true">
+      <b>{label(captionItem)}</b>
+      <span data-wall-copy-details="">
+        <span>{captionItem.performers?.join(' · ') || captionItem.creator || captionItem.studio || t('catalog:shared.uncredited')}</span>
+        {captionItem.duration ? <span data-wall-duration="">{fmtDur(captionItem.duration)}</span> : null}
+      </span>
+    </div> : null}
+    {!loading && queryError ? <div data-wall-error="">
+      <Note tone="error" action={<Button size="small" variant="secondary" onClick={retry}>{t('catalog:shared.retryNow')}</Button>}>
+        {queryError}
+      </Note>
+    </div> : null}
     {!loading && !queryError && !items.length ? <div data-wall-empty="" onClick={async event => {
       const control = (event.target as Element).closest('[data-wall-load-more]');
       if (!control || busy || moreFlight.current) return;
@@ -444,7 +634,12 @@ export function VideoWall({ items, finite, hasMore, busy, loading = false, error
     }} dangerouslySetInnerHTML={{ __html:emptyHtml }} /> : null}
     {hasMore && finite && items.length > 0 ? <div data-wall-footer=""><Button size="small" variant="secondary" {...busyProps(busy)} onClick={() => void more()}>
       {busy ? <span dangerouslySetInnerHTML={{ __html:spinnerHtml() }} /> : null}{t('catalog:shared.loadMore')}</Button></div> : null}
-    {moreError ? <div data-wall-error=""><Note tone="error">{moreError}</Note><Button size="small" variant="ghost" {...busyProps(busy)} onClick={() => void more()}>{t('catalog:shared.retryNow')}</Button></div> : null}
+    {moreError ? <div data-wall-error="">
+      <Note tone="error" action={<Button size="small" variant="secondary" {...busyProps(busy)} onClick={() => void more()}>
+        {t('catalog:shared.retryNow')}</Button>}>
+        {moreError}
+      </Note>
+    </div> : null}
   </div>;
   return createPortal(wall, portal);
 }

@@ -69,7 +69,7 @@ class ConfigurationIsolationTests(unittest.TestCase):
                 self.assertEqual(list(result["section_errors"]), [failed])
                 issue = result["section_errors"][failed]
                 self.assertEqual(len(issue["error_id"]), 32)
-                self.assertTrue(issue["title"].endswith("未取得"))
+                self.assertTrue(issue["title"].startswith("无法读取"))
                 self.assertEqual(issue["title"], interface_text.text(f"server:{issue['title_code']}", issue["title_params"]))
                 self.assertEqual(issue["title_params"]["section"], interface_text.text(f"server:{issue['section_code']}"))
                 self.assertEqual(issue["message"], interface_text.text(f"server:{issue['message_code']}"))
@@ -108,6 +108,19 @@ class ConfigurationIsolationTests(unittest.TestCase):
                 self.assertEqual(result["port"], 8900)
                 for key in {"tunnel", "automatic_updates", "push_discovery", "downloads"} - {failed}:
                     self.assertIn(key, result)
+
+    def test_settings_can_read_startup_separately_without_probing_it_in_the_main_snapshot(self):
+        from peach import routes_configuration as routes
+
+        startup = {"available": True, "enabled": False, "silent": True}
+        with (patch.object(routes.desktop_startup, "snapshot", return_value=startup) as probe,
+              patch.object(routes.settings_file, "load_config", return_value=self.config),
+              patch.object(routes, "local_only")):
+            lightweight = routes.snapshot(self.config, include_startup=False)
+            self.assertNotIn("startup", lightweight)
+            probe.assert_not_called()
+            self.assertEqual(routes.read_startup(object()), startup)
+            probe.assert_called_once_with(self.config)
 
     def test_generated_push_discovery_origins_support_ipv6_and_actual_ports(self):
         from peach import routes_configuration as routes

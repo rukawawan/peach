@@ -13,11 +13,8 @@
 > [!WARNING]
 > **Please upgrade both the client and backend to v0.15.0 to keep using SakuraMedia. Versions before v0.15.0 no longer work.**
 
-> [!WARNING]
-> **请将前后端同步升级至 v0.15.0 才能正常使用；v0.15.0 之前的版本已无法正常使用。**
-
 <p align="center">
-  <a href="https://github.com/tinypinglite/sakuramedia/releases/latest"><strong>Download the client</strong></a>
+  <a href="https://github.com/tinypinglite/sakuramedia/releases"><strong>Download the client</strong></a>
   ·
   <a href="https://tinypinglite.github.io/sakuramedia/guide/quick-start"><strong>Deploy the backend</strong></a>
   ·
@@ -27,7 +24,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/tinypinglite/sakuramedia/releases/latest"><img src="https://img.shields.io/github/v/release/tinypinglite/sakuramedia?style=flat-square" alt="Latest release" /></a>
   <a href="https://github.com/tinypinglite/sakuramedia/stargazers"><img src="https://img.shields.io/github/stars/tinypinglite/sakuramedia?style=flat-square" alt="GitHub stars" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue?style=flat-square" alt="License" /></a>
 </p>
@@ -62,7 +58,7 @@ From finding and downloading movies to watching and organizing them, the current
 ### Watching and keeping
 
 - 🎬 **Playback and moments**: The thumbnail timeline takes you straight to a frame; mark moments; cut a stretch of video into a standalone clip; variable speed, subtitles, resume, and external players.
-- 🥽 **VR playback**: Play VR movies in an external player; multi-part sources can be merged into continuous playback; experimental support for using devices such as Pico in 2D.
+- 🥽 **VR playback**: Play VR movies in an external player; multi-part sources can be merged into continuous playback.
 - 🖼️ **Image search**: Use a thumbnail, a scene still, or a text description to find similar frames in other movies; results with a playable source jump straight to the matching timestamp (optional, needs a separately deployed embedding service; it only searches images already indexed in your media library).
 - ❤️ **Favorites and organization**: Playlists, moment collections, and clip collections; use collections to group what you want to rewatch.
 
@@ -82,7 +78,7 @@ From finding and downloading movies to watching and organizing them, the current
 - 🗂️ **Media library management**: Spot duplicate files, multiple versions, and dead media; fingerprint sampling reads only a few fragments to detect duplicates across libraries and storage. Migrate local movies to a cloud drive through 115 rapid upload while keeping media records and playback progress; files that don't match are skipped and the originals kept.
 - 🔔 **Tasks and notifications**: The task center shows downloads, imports, and background jobs; notifications keep you posted, and notification channels are extensible.
 - 🧩 **Plugin extensions**: Storage, download, rankings, subtitles, and actor metadata completion are all delivered through plugins.
-- 💻 **Multiple clients**: Windows / macOS / Android / iOS. Desktop handles configuration and central management; mobile is for browsing and watching. The available entry points vary by platform.
+- 💻 **Multiple clients**: Windows / macOS / Linux (Beta) / Android / iOS. Desktop handles configuration and central management; mobile is for browsing and watching. The available entry points vary by platform.
 
 ## Screenshots
 
@@ -178,16 +174,23 @@ A NAS is optional: the backend runs on any machine that can keep Docker running 
 
 ## Download and install
 
-Get the client from [GitHub Releases](https://github.com/tinypinglite/sakuramedia/releases/latest). The Windows installer is currently unsigned; the macOS installer is signed with a fixed self-signed certificate and is not notarized by Apple, so the system may warn about an unidentified developer. Once you've confirmed where the download came from, follow the system prompt to allow it.
+Get the client from [GitHub Releases](https://github.com/tinypinglite/sakuramedia/releases). The Windows installer is currently unsigned; the macOS installer is signed with a fixed self-signed certificate and is not notarized by Apple, so the system may warn about an unidentified developer. Once you've confirmed where the download came from, follow the system prompt to allow it.
+
+The Linux client is currently **Beta**. It is distributed as an x86_64 Flatpak, requires Flatpak on the system, and does not support in-app provider web sign-in; use the provider's manual login fields when required.
 
 | Platform | Installer | Notes |
 | --- | --- | --- |
 | Windows | `sakuramedia-windows-*-setup-unsigned.exe` | Unsigned; when SmartScreen appears, choose "More info → Run anyway" |
 | macOS | `sakuramedia-macos-<tag>.dmg` | Fixed self-signed certificate; not notarized. If macOS warns, allow it under "Privacy & Security" |
-| Android | `sakuramedia-android-*-release-signed.apk` | Install directly; the system may warn about unknown sources |
+| Linux (Beta) | `sakuramedia-linux-<tag>-x86_64.flatpak` | Requires Flatpak; install with `flatpak install --user <file>` |
+| Android | `sakuramedia-android-<tag>-release-signed.apk` | Install directly; the system may warn about unknown sources |
 | iOS | `sakuramedia-ios-*-sidestore-ready.ipa` | Requires iOS 15.0+ and installs through SideStore or a self-signing tool; if you haven't sideloaded before, start with the desktop client |
 
 > If SakuraMedia has been useful to you, [a star](https://github.com/tinypinglite/sakuramedia/stargazers) helps more people find it.
+
+## Build from source
+
+The client is a Flutter app. Development uses Flutter 3.47.9; the release workflow is pinned to 3.47.2. After `flutter pub get` and `flutter gen-l10n`, run the full test suite with `./scripts/test.sh`, then build with `flutter build <platform>`. Platform-specific packaging steps are in `.github/workflows/release-*.yml`.
 
 ## Who it's for
 
@@ -207,10 +210,10 @@ Get the client from [GitHub Releases](https://github.com/tinypinglite/sakuramedi
 
 - [Star the project](https://github.com/tinypinglite/sakuramedia/stargazers) so more people find it.
 - Help improve the [Wiki](https://tinypinglite.github.io/sakuramedia/) and the docs.
-- Build plugins: see the [plugin development guide](https://tinypinglite.github.io/sakuramedia/guide/plugin-development); to list one in the plugin market, send a PR to [sakuramedia-plugin-market](https://github.com/tinypinglite/sakuramedia-plugin-market).
-- Send PRs for bug fixes or new features. The client is built with Flutter, currently on 3.47.2; after `flutter pub get`, run the tests with `./scripts/test.sh -j 4`.
+- Build plugins: see the [plugin development guide](https://tinypinglite.github.io/sakuramedia/guide/plugin-development); list one in the [plugin market](https://github.com/tinypinglite/sakuramedia-plugin-market).
+- Send PRs for bug fixes or new features; the client source is in this repository.
 
-The project doesn't need donations; stars, docs, plugins, and PRs are all help.
+The project doesn't need donations; stars, docs, and plugins are all help.
 
 ## Risks and disclaimer
 

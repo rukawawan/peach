@@ -179,6 +179,7 @@ class _WebSocket:
             raise ConnectionError("browser refused the debugging connection")
         self.buffer = head.split(b"\r\n\r\n", 1)[1]
         self.next_id = 0
+        self.on_event: Callable[[dict], None] | None = None
         #: 正在进行的 `call` 的期限；读取按剩余时间等。
         self._deadline: float | None = None
 
@@ -226,7 +227,7 @@ class _WebSocket:
                 raise ConnectionError("browser closed the debugging connection")
 
     def call(self, method: str, timeout: float = 30.0, **params):
-        """发一条 CDP 命令，等它的回包；中途到的事件跳过。
+        """发一条 CDP 命令，等它的回包；中途到的事件转给已登记的监听器。
 
         `timeout` 是整次调用的期限，不是单次读取的：页面一直推事件时，每次读取都等得到数据，
         按单次读取计就永远等不到头。过期抛超时并关掉连接，连接上剩下的半截帧不能再用。
@@ -247,6 +248,8 @@ class _WebSocket:
                     if "error" in message:
                         raise RuntimeError(f"{method}: {message['error'].get('message', message['error'])}")
                     return message.get("result", {})
+                if self.on_event is not None and "method" in message:
+                    self.on_event(message)
         except TimeoutError:
             self.close()
             raise
@@ -276,11 +279,12 @@ class _Browser:
     def __init__(self, executable: str, profile: Path, flags: tuple[str, ...], *,
                  popen: Callable[..., subprocess.Popen] = subprocess.Popen,
                  targets: Callable[[int], list[dict]] = _targets, sleep: Callable[[float], None] = time.sleep,
-                 attended: bool = False, headless: bool = False):
+                 attended: bool = False, headless: bool = False, standard_login: bool = False):
         self.executable, self.profile, self.flags = executable, Path(profile), tuple(flags)
         self._popen, self._targets, self._sleep = popen, targets, sleep
         self.attended = attended
         self.headless = headless and not attended
+        self.standard_login = standard_login
         self.process: subprocess.Popen | None = None
         self.socket: _WebSocket | None = None
         self.window_id = None
@@ -292,11 +296,10 @@ class _Browser:
         port_file = self.profile / "DevToolsActivePort"
         port_file.unlink(missing_ok=True)
         command = [self.executable, f"--user-data-dir={self.profile}", "--remote-debugging-port=0",
-                   # 带远程调试口时 Chromium 会把 `navigator.webdriver` 置真，Turnstile 据此拒绝连人工点击；关掉这个标记。
-                   # 它是「不受支持的标志」，浏览器会在每个窗口顶上挂一条警告；`--test-type` 让它不挂。
-                   "--disable-blink-features=AutomationControlled", "--test-type",
                    "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-sync",
                    f"--window-size={WINDOW_SIZE[0]},{WINDOW_SIZE[1]}", *self.flags]
+        if not self.standard_login:
+            command.extend(("--disable-blink-features=AutomationControlled", "--test-type"))
         if self.headless:
             # 屏幕外坐标和最小化仍会创建 GUI，macOS 会把窗口放回桌面；headless 不创建窗口。
             command.append("--headless=new")
@@ -554,7 +557,7 @@ class BrowserTransport:
         placed = False
 
         def wait_for_click(reason: str) -> float:
-            _set_attention(host, f"{host} verification needs a click; open the browser window from the taskbar")
+            _set_attention(host, f"{host} is waiting for manual verification in the scraping browser on the computer running Peach")
             LOGGER.warning("%s verification page %s; waiting for the user to click", host, reason)
             return self._clock()
 

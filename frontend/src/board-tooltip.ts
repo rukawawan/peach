@@ -65,8 +65,10 @@ export function initBoardTooltip() {
   const place = (next: HTMLElement) => {
     const rect = anchorRect(next), box = tip.getBoundingClientRect();
     if (!rect) return;
+    const above = rect.top >= box.height + 16;
+    tip.dataset.side = above ? 'top' : 'bottom';
     tip.style.left = `${Math.max(8, Math.min(innerWidth - box.width - 8, rect.left + (rect.width - box.width) / 2))}px`;
-    tip.style.top = `${rect.top >= box.height + 16 ? rect.top - box.height - 8 : Math.min(innerHeight - box.height - 8, rect.bottom + 8)}px`;
+    tip.style.top = `${above ? rect.top - box.height - 8 : Math.min(innerHeight - box.height - 8, rect.bottom + 8)}px`;
   };
   const hide = () => {
     clearTimeout(exitTimer);
@@ -97,7 +99,6 @@ export function initBoardTooltip() {
       const copyKey = next.getAttribute('data-tooltip-copy-key');
       if (copyKey) tip.setAttribute('data-copy-key', copyKey);
       else tip.removeAttribute('data-copy-key');
-      tip.style.pointerEvents = editableTip() ? 'auto' : '';
       tip.hidden = false; tip.showPopover(); place(next);
       next.setAttribute('aria-describedby', [described, tip.id].filter(Boolean).join(' '));
     }, delay);
@@ -112,21 +113,19 @@ export function initBoardTooltip() {
     if (event.pointerType === 'mouse') resting = { x: event.clientX, y: event.clientY };
   }, true);
   document.addEventListener('pointerover', event => {
+    if (tip.contains(event.target as Node)) { clearTimeout(exitTimer); return; }
     if (unmoved(event)) return;
-    if (editableTip()) {
-      if (target?.contains(event.target as Node)) clearTimeout(exitTimer);
-      if (tip.contains(event.target as Node)) { clearTimeout(exitTimer); return; }
-    }
+    if (target?.contains(event.target as Node)) clearTimeout(exitTimer);
     show(event.target, 400);
   });
   document.addEventListener('pointerout', event => {
-    if (!target || target.contains(event.relatedTarget as Node | null)) return;
-    // 锚点自己在静止的指针下消失时照样收起，别处补发的离开不算。
-    if (unmoved(event) && !target.contains(event.target as Node)) return;
-    if (editableTip()) {
-      if (tip.contains(event.relatedTarget as Node | null) || editingTip()) return;
-      clearTimeout(exitTimer); exitTimer = setTimeout(hide, 250);
-    } else hide();
+    if (!target || editingTip() || unmoved(event)) return;
+    const left = event.target as Node, entered = event.relatedTarget as Node | null;
+    if (!target.contains(left) && !tip.contains(left)) return;
+    if (target.contains(entered) || tip.contains(entered)) return;
+    if (!target.isConnected || tip.hidden) { hide(); return; }
+    clearTimeout(exitTimer);
+    exitTimer = setTimeout(hide, 250);
   });
   document.addEventListener('pointerdown', event => {
     if (!editableTip() || !tip.contains(event.target as Node)) return;

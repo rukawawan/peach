@@ -83,13 +83,13 @@ export function NavigationOrderMenu({ order }: { order: NavigationOrder }) {
   </>;
 }
 
-export function NavigationOrderRows({ order, labels, render, fixed = [], reset = true }: {
-  order: NavigationOrder; labels: Readonly<Record<string, string>>; fixed?: readonly string[]; reset?: boolean;
+export function NavigationOrderRows({ order, labels, render, fixed = [], reset = true, dropOnRow = false }: {
+  order: NavigationOrder; labels: Readonly<Record<string, string>>; fixed?: readonly string[]; reset?: boolean; dropOnRow?: boolean;
   /** 行内显示的内容；缺省只写名字。读屏与按钮说明仍用 `labels`。 */
   render?: (key: string) => ReactNode;
 }) {
   const list = useRef<HTMLDivElement>(null);
-  const reorder = useSidebarReorder(list, order.keys, order.commit, () => {}, 'y', 'tab', fixed);
+  const reorder = useSidebarReorder(list, order.keys, order.commit, () => {}, 'y', 'tab', fixed, dropOnRow ? 'row' : undefined);
   const move = (index: number, delta: number) => {
     const next = [...order.keys];
     next.splice(index + delta, 0, next.splice(index, 1)[0]);
@@ -97,6 +97,7 @@ export function NavigationOrderRows({ order, labels, render, fixed = [], reset =
   };
   return <div className="flex flex-col gap-3">
     <div ref={list} data-navigation-order="settings" data-navigation-axis="y" data-navigation-rows=""
+      data-drop-on-row={dropOnRow ? '' : undefined}
       data-reordering={reorder.picked ? '' : undefined} onClickCapture={reorder.clickCapture}>
       {order.keys.map((key, index) => <div key={key} data-tab={key} role="group" tabIndex={0}
         aria-label={labels[key]} aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"

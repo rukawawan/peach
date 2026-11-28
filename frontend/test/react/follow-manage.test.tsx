@@ -5,11 +5,12 @@
  * `getComputedStyle` 断言；这里只看结构、文字与请求。 */
 import { act } from 'react';
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as legacyUi from '@peach/legacy/ui';
 
 import { JOB_RUNNING_POLL_MS } from '../../src/react/background-job';
 import { queryClient } from '../../src/react/query';
+import { rememberPageSize } from '../../src/react/components/page-size-preferences';
 import {
   authorAvatar, authorGroups, authorInitial, authorName, checkReceipt, checkSummary, errorHeadline, feedIntervalText, FEEDS_CHECK_URL, FEED_SOURCE_URL,
   FEEDS_LOOKUP_URL, FEEDS_URL, FOLLOW_CHECK_URL, FOLLOW_MANAGE_KEY,
@@ -27,6 +28,7 @@ import { actionOrder, buttonNamed, choose, click, linkNamed, mountRoot, pending,
 
 // 客户端是模块级的单例（所有 React 根共用一个），用例之间不清就互相喂数据。
 afterEach(() => queryClient.clear());
+beforeEach(() => rememberPageSize('jav-feeds', 20));
 
 /* Query 派发更新用的是它自己抓住的那个真 `setTimeout(0)`，假时钟推不动它：推完时钟
    断言到的还是上一帧的 DOM。用例里改成当场派发。 */
@@ -99,7 +101,8 @@ interface Plan {
   /** 订阅源的开关、移除与按名字登记。回 `refuse(...)` 就是这一次被服务端挡回来。 */
   feedWrite?: (body: { action: string; id?: number; name?: string; ids?: string[] }) => unknown;
   /** 按女优名到 JavDB 搜演员卡的结果。回 `refuse(...)` 就是这一趟被服务端挡回来。 */
-  lookup?: (q: string) => FeedLookup | ReturnType<typeof refuse>;
+  lookup?: (q: string) => FeedLookup | ReturnType<typeof refuse> | Promise<FeedLookup>;
+  performerSuggest?: (q: string) => { groups: { items: { value: string; entity_id: number; has_image?: boolean }[] }[] };
 }
 
 /** 按端点分流的假 fetch。写操作各回一个最小成功体。 */
@@ -113,8 +116,12 @@ function serve(plan: Plan = {}) {
     if (url === FEED_SOURCE_URL || url === FEEDS_CHECK_URL) return ok({ ok: true });
     if (url.startsWith(`${FEEDS_LOOKUP_URL}?`)) {
       const q = new URL(url, 'http://peach.test').searchParams.get('q') || '';
-      const found = plan.lookup ? plan.lookup(q) : { q, url: '', candidates: [], suggested: [], known: null };
+      const found = plan.lookup ? await plan.lookup(q) : { q, url: '', candidates: [], suggested: [], known: null };
       return 'candidates' in found ? ok(found) : found;
+    }
+    if (url.startsWith('/api/suggest?')) {
+      const q = new URL(url, 'http://peach.test').searchParams.get('q') || '';
+      return ok(plan.performerSuggest?.(q) ?? { groups: [] });
     }
     if (url === FOLLOW_CREDENTIALS_URL) return ok(plan.creds ?? credentials());
     if (url === FOLLOW_CREDENTIAL_URL) return ok({});
@@ -721,8 +728,9 @@ it('订阅源频率：一小时以内按分钟，两天以内按小时，再长�
 
 it('一条来源都没有时说清这里会显示什么', async () => {
   const { host } = await open({ data: follow({ sources: [] }) });
+  expect(host.querySelectorAll('[data-empty-state]')).toHaveLength(1);
   expect(host.textContent).toContain('还没有关注来源');
-  expect(host.textContent).toContain('关注来源及其检查状态会显示在这里。');
+  expect(host.textContent).toContain('添加创作者来源或 JAV 订阅，在这里管理更新。');
 });
 
 it('关注列表空状态直接切换添加页签并保留页面宿主', async () => {
@@ -996,16 +1004,11 @@ it('移除末页的最后一个订阅源会显示有效页', FULL_PAGE, async ()
   expect(host.textContent).toContain('1–20 / 20 个订阅源');
 });
 
-it('订阅列表卡片包含标题、空态和状态栏', async () => {
-  const { host, props } = await open({}, { tab: 'list' });
-  const panel = host.querySelector('section[aria-label="JAV 订阅列表"]')!;
-  expect([...panel.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['JAV 订阅源', '还没有订阅源']);
-  expect(panel.textContent).toContain('在「添加关注」按女优名添加，或在人物页点「订阅新作」。');
-  expect(panel.querySelector('footer')?.textContent).toContain('未看 0 · 已启用 0 / 0');
-  expect(buttonNamed('立即拉取', host)).not.toBeNull();
-  await click(buttonNamed('添加订阅', panel));
-  expect(props.route).toHaveBeenCalledWith(expect.objectContaining({ tab: 'add' }));
-  expect(nameField(host)).not.toBeNull();
+it('有创作者关注时直接显示列表，无需占一张空的 JAV 订阅卡', async () => {
+  const { host } = await open({}, { tab: 'list' });
+  expect(host.querySelector('section[aria-label="JAV 订阅列表"]')).toBeNull();
+  expect(host.querySelectorAll('[data-empty-state]')).toHaveLength(0);
+  expect(buttonLabelled(host, '检查全部')).not.toBeNull();
 });
 
 // ── 添加 JAV 订阅：按名字搜演员卡、勾选、登记 ─────────────────────────────
@@ -1021,12 +1024,36 @@ function nameField(root: ParentNode): HTMLInputElement {
 const actorPanel = (root: ParentNode) => root.querySelector('section[aria-label="添加 JAV 订阅"]')!;
 
 const card = (id: string, names: string[], record = '', held_by: { id: number; name: string } | null = null) =>
-  ({ id, names, record, url: `https://javdb.com/actors/${id}`, held_by, matched: [] });
+  ({ id, names, record, url: `https://javdb.com/actors/${id}`, held_by, matched: [], subscription: 'missing' as const });
 
 const LOOKUP: FeedLookup = {
   q: '瀬戸環奈', url: 'https://javdb.com/search?f=actor&q=x', known: null, suggested: ['Kn01', 'Kn02'],
   candidates: [card('Kn01', ['瀬戸環奈', '瀨戶環奈']), card('Kn02', ['瀬戸環奈'], '無碼'), card('Zz99', ['別人さん'])],
 };
+
+it('JAV 联想显示头像，按键盘提交后往返期间显示进度并随后交接给结果表', async () => {
+  vi.useFakeTimers();
+  let finish!: (result: FeedLookup) => void;
+  const lookup = vi.fn(() => new Promise<FeedLookup>(resolve => { finish = resolve }));
+  const { host } = await open({ lookup, performerSuggest: () => ({
+    groups: [{ items: [{ value: '瀬戸環奈', entity_id: 9, has_image: true }] }],
+  }) }, { tab: 'add' });
+  const input = nameField(host);
+  await focus(input);
+  await type(input, '瀬戸');
+  await tick(SUGGEST_DEBOUNCE_MS);
+  await settle();
+  const menu = document.querySelector('[aria-label="艺人查找建议"]')!;
+  expect(menu.querySelector('img')?.getAttribute('src')).toContain('id=9');
+  await press(input, 'ArrowDown');
+  await press(input, 'Enter');
+  expect(lookup).toHaveBeenCalledWith('瀬戸環奈');
+  expect(actorPanel(host).querySelector('[role="status"]')?.textContent).toBe('正在搜索 JavDB 和 DMM');
+  await act(async () => { finish(LOOKUP) });
+  await settle();
+  expect(actorPanel(host).querySelector('[data-task-progress]')).toBeNull();
+  expect(actorPanel(host).querySelector('a[href="https://javdb.com/actors/Kn01"]')).not.toBeNull();
+});
 
 it('关注列表展示已有 JAV 订阅并沿用订阅源开关', async () => {
   const { host, fetcher } = await open({ feeds: FEEDS });
@@ -1071,14 +1098,14 @@ it('添加关注可以查女优并订阅，成功后进入含新订阅的关注�
   await click(buttonNamed('添加订阅（2）', host));
   await settle();
   expect(sentBody(fetcher, FEED_SOURCE_URL)).toEqual([
-    { action: 'follow-name', name: '瀬戸環奈', ids: ['Kn01', 'Kn02'] },
+    { action: 'follow-pages', name: '瀬戸環奈', ids: ['Kn01', 'Kn02'], dmm_ids: [] },
   ]);
   expect(props.route).toHaveBeenCalledWith(expect.objectContaining({ tab: 'list' }));
   expect(host.querySelector('section[aria-label="JAV 订阅列表"]')).not.toBeNull();
 });
 
 const boxNamed = (root: ParentNode, text: string) =>
-  [...root.querySelectorAll('label')].find((label) => label.textContent?.includes(text))
+  [...root.querySelectorAll('[role="row"]')].find((row) => row.textContent?.includes(text))
     ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
 
 it('按名字查找列出每张演员卡，同一个人的两张先勾上；说清会新建，添加后送 id、Toast 点名并重取清单', async () => {
@@ -1091,7 +1118,7 @@ it('按名字查找列出每张演员卡，同一个人的两张先勾上；说�
   await click(buttonNamed('查找', actorPanel(host)));
   await settle();
   expect(lookup).toHaveBeenCalledWith('瀬戸環奈');
-  expect(boxNamed(host, '瀬戸環奈、瀨戶環奈')?.checked).toBe(true);
+  expect(boxNamed(host, '瀨戶環奈')?.checked).toBe(true);
   expect(boxNamed(host, '無碼')?.checked).toBe(true);
   expect(boxNamed(host, '別人さん')?.checked).toBe(false);
   expect(host.textContent).toContain('数据库里还没有「瀬戸環奈」，会新建一位');
@@ -1103,7 +1130,7 @@ it('按名字查找列出每张演员卡，同一个人的两张先勾上；说�
   expect(actionOrder(buttonNamed('添加订阅（1）', host)!.parentElement)).toEqual(['关闭', '添加订阅（1）']);
   await click(buttonNamed('添加订阅（1）', host));
   await settle();
-  expect(feedWrite).toHaveBeenCalledWith({ action: 'follow-name', name: '瀬戸環奈', ids: ['Kn01'] });
+  expect(feedWrite).toHaveBeenCalledWith({ action: 'follow-pages', name: '瀬戸環奈', ids: ['Kn01'], dmm_ids: [] });
   expect(props.toast).toHaveBeenCalledWith('已新建「瀬戸環奈」并订阅她的新作');
   expect(feedReads(fetcher)).toBeGreaterThan(before);
   // 订阅成功回到关注列表。
@@ -1122,32 +1149,87 @@ it('回车也是查找；勾的卡已在数据库里谁名下就说会挂给谁�
     nameField(host).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   });
   await settle();
-  expect(host.textContent).toContain('已在「甲」名下');
-  expect(host.textContent).toContain('勾选她的演员卡');
+  expect(host.querySelector('a[href="https://javdb.com/actors/Kn01"]')?.closest('[role="row"]')?.textContent).toContain('甲');
+  expect(host.textContent).toContain('勾选要订阅的来源页。');
   await click(boxNamed(host, '無碼'));
   expect(host.textContent).toContain('会登记到「乙」名下');
   expect(buttonNamed('添加订阅（1）', host)?.disabled).toBe(false);
-  await click(boxNamed(host, '瀬戸環奈'));
-  expect(host.textContent).toContain('所勾的卡分属数据库里不同的人：甲、乙');
+  await click(boxNamed(host, '甲'));
+  expect(host.textContent).toContain('所选页面分属不同的人：甲、乙');
   expect(buttonNamed('添加订阅（2）', host)?.disabled).toBe(true);
   expect(sentBody(fetcher, FEED_SOURCE_URL)).toEqual([]);
 });
 
+it('JavDB 有结果时仍列出已关联的 DMM 页，源站名和订阅状态随各自行显示', async () => {
+  const urls = ['https://video.dmm.co.jp/av/list/?actress=123', 'https://video.dmm.co.jp/av/list/?actress=124'];
+  const lookup = (): FeedLookup => ({ ...LOOKUP, suggested: ['Kn01', 'Kn02'], candidates: [
+    { ...card('Kn01', ['源站名字'], '', { id: 5, name: '瀬戸環奈' }), subscription: 'enabled' },
+    card('Kn02', ['另一个演员']),
+  ], known: { id: 5, name: '瀬戸環奈', subscribable: true, following: true, sources: [
+    { id: 'Kn01', provider: 'javdb', url: LOOKUP.candidates[0]!.url, names: ['源站名字'], subscription: 'enabled' },
+    { id: '123', provider: 'dmm', url: urls[0]!, names: ['旧艺名'], subscription: 'paused' },
+    { id: '124', provider: 'dmm', url: urls[1]!, names: ['现艺名'], subscription: 'missing' },
+  ] } });
+  const { host } = await open({ feeds: FEEDS, lookup }, { tab: 'add' });
+  await type(nameField(host), '瀬戸環奈');
+  await click(buttonNamed('查找', actorPanel(host)));
+  await settle();
+  const rows = (url: string) => actorPanel(host).querySelector(`a[href="${url}"]`)?.closest('[role="row"]');
+  expect(rows(LOOKUP.candidates[0]!.url)?.textContent).toContain('已订阅');
+  expect(rows(LOOKUP.candidates[0]!.url)?.querySelector('input')?.disabled).toBe(true);
+  expect(rows(LOOKUP.candidates[0]!.url)?.querySelector('input')?.checked).toBe(true);
+  expect(rows(LOOKUP.candidates[1]!.url)?.querySelector('input')?.checked).toBe(false);
+  expect(actorPanel(host).querySelectorAll(`a[href="${LOOKUP.candidates[0]!.url}"]`)).toHaveLength(1);
+  expect(rows(urls[0]!)?.textContent).toContain('已暂停');
+  expect(rows(urls[0]!)?.textContent).toContain('旧艺名');
+  expect(rows(urls[1]!)?.textContent).toContain('未订阅');
+  expect(rows(urls[1]!)?.textContent).toContain('现艺名');
+  await click(rows(urls[0]!)?.querySelector('input'));
+  await click(rows(urls[1]!)?.querySelector('input'));
+  expect(buttonNamed('添加订阅（2）', host)?.disabled).toBe(false);
+});
+
 it('JavDB 搜不成时，库里已有编号的她可以直接订，原因照样说明', async () => {
   const lookup = vi.fn(() => ({ ...LOOKUP, suggested: [], candidates: [], unavailable: 'JavDB 没有搜成：来源正在冷却',
-    known: { id: 5, name: '瀬戸環奈', subscribable: true, following: false } }));
-  const feedWrite = vi.fn(() => ok({ ok: true, entity_id: 5, following: true, sources: [7] }));
+    known: { id: 5, name: '瀬戸環奈', subscribable: true, following: false,
+      sources: [{ id: '123', provider: 'dmm' as const, url: 'https://video.dmm.co.jp/av/list/?actress=123',
+        names: [], subscription: 'missing' as const }] } }));
+  const feedWrite = vi.fn(() => ok({ ok: true, entity_id: 5, entity_name: '瀬戸環奈', created: false, sources: [7] }));
   const { host, props } = await open({ feeds: FEEDS, lookup, feedWrite }, { tab: 'add' });
   await type(nameField(host), '瀬戸環奈');
   await click(buttonNamed('查找', actorPanel(host)));
   await settle();
   expect(host.textContent).toContain('JavDB 没有搜成：来源正在冷却');
-  expect(host.textContent).toContain('数据库里的「瀬戸環奈」已有 JavDB 或 DMM 编号，可以直接订阅。');
-  expect(host.textContent).not.toContain('JavDB 上没有搜到这个名字。');
-  await click(buttonNamed('订阅「瀬戸環奈」', host));
+  expect(host.textContent).toContain('未订阅');
+  expect(host.textContent).not.toContain('JavDB 和 DMM 均未找到匹配的艺人。');
+  expect(host.querySelector('a[href="https://video.dmm.co.jp/av/list/?actress=123"]')).not.toBeNull();
+  await click(boxNamed(host, '未订阅'));
+  await click(buttonNamed('添加订阅（1）', host));
   await settle();
-  expect(feedWrite).toHaveBeenCalledWith({ action: 'follow', entity_id: 5, enabled: true });
+  expect(feedWrite).toHaveBeenCalledWith({ action: 'follow-pages', name: '瀬戸環奈', ids: [], dmm_ids: ['123'] });
   expect(props.toast).toHaveBeenCalledWith('已订阅「瀬戸環奈」的新作');
+});
+
+it('馆藏没有这位艺人时可勾选网上找到的 DMM 页面', async () => {
+  const url = 'https://video.dmm.co.jp/av/list/?actress=1099472';
+  const lookup = (): FeedLookup => ({
+    ...LOOKUP, known: null, candidates: [], suggested: [], dmm_selection: 'lookup-selection',
+    dmm_candidates: [{ id: '1099472', names: ['瀬戸環奈'], url, subscription: 'missing', held_by: null }],
+  });
+  const feedWrite = vi.fn(() => ok({ ok: true, entity_id: 9, entity_name: '瀬戸環奈', created: true, sources: [7] }));
+  const { host } = await open({ feeds: FEEDS, lookup, feedWrite }, { tab: 'add' });
+  await type(nameField(host), '瀬戸環奈');
+  await click(buttonNamed('查找', actorPanel(host)));
+  await settle();
+  const row = actorPanel(host).querySelector(`a[href="${url}"]`)?.closest('[role="row"]');
+  expect(row?.textContent).toContain('未订阅');
+  expect(row?.querySelector('input')?.checked).toBe(false);
+  await click(row?.querySelector('input'));
+  await click(buttonNamed('添加订阅（1）', host));
+  await settle();
+  expect(feedWrite).toHaveBeenCalledWith({
+    action: 'follow-pages', name: '瀬戸環奈', ids: [], dmm_ids: ['1099472'], dmm_selection: 'lookup-selection',
+  });
 });
 
 it('查找被服务端挡回时原因摆在卡里，没有候选时直说', async () => {
@@ -1163,7 +1245,7 @@ it('查找被服务端挡回时原因摆在卡里，没有候选时直说', asyn
   await type(nameField(none.host), '乙');
   await click(buttonNamed('查找', actorPanel(none.host)));
   await settle();
-  expect(none.host.textContent).toContain('JavDB 上没有搜到这个名字。');
+  expect(none.host.textContent).toContain('JavDB 和 DMM 均未找到匹配的艺人。');
   expect(buttonNamed('关闭', none.host)).not.toBeNull();
 });
 
@@ -1185,10 +1267,8 @@ it('只读的这台说清楚、指向写入端，写操作一律停用', async (
 
 // ── 添加关注：查找、候选与登记 ───────────────────────────────────────────────
 
-/** 查找框。BoardUI 的 `Input` 把无障碍名称落在外层字段上，输入框在它里面。 */
 function lookupField(root: ParentNode): HTMLInputElement {
-  const named = root.querySelector('[aria-label="来源链接、名字或 id"]');
-  const field = named instanceof HTMLInputElement ? named : named?.querySelector('input');
+  const field = root.querySelector<HTMLInputElement>('input[role="combobox"][aria-label="来源链接、名字或 id"]');
   if (!field) throw new Error('查找框没有画出来');
   return field;
 }
@@ -1201,7 +1281,7 @@ const focus = (el: HTMLElement) => act(async () => { el.focus() });
 
 /** 一条候选的勾选框，按它那一行的文字找。 */
 const candidateBox = (root: ParentNode, text: string) =>
-  [...root.querySelectorAll('label')].find((label) => label.textContent?.includes(text))
+  [...root.querySelectorAll('[role="row"]')].find((row) => row.textContent?.includes(text))
     ?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? null;
 
 const lookups = (fetcher: ReturnType<typeof serve>) => sentBody(fetcher, FOLLOW_RESOLVE_URL);
@@ -1324,10 +1404,31 @@ it('查完先列候选、默认勾上，已经关注的列出来但勾不动，�
   expect(candidateBox(panel, 'kou · Kemono')?.checked).toBe(true);
   expect(candidateBox(panel, 'kou · Fanbox')?.disabled).toBe(true);
   expect(candidateBox(panel, 'kou · Fanbox')?.checked).toBe(false);
-  expect(candidateBox(panel, 'kou · Fanbox')?.closest('label')?.textContent).toContain('已经关注');
+  expect(candidateBox(panel, 'kou · Fanbox')?.closest('[role="row"]')?.textContent).toContain('已经关注');
+  expect(panel.querySelector('a[href="https://kemono.test/kou"]')).not.toBeNull();
   expect(sentBody(fetcher, FOLLOW_SOURCE_URL)).toEqual([]);
 
-  await click(candidateBox(panel, 'kou · Pawchive'));
+  const frame = panel.querySelector<HTMLElement>('[data-board-data-table]')!;
+  const rows = [...frame.querySelectorAll<HTMLTableRowElement>('tbody tr')];
+  vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 120));
+  rows.forEach((row, index) => {
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, index * 40, 300, 40));
+  });
+  frame.setPointerCapture = vi.fn();
+  const drag = (row: HTMLTableRowElement, start: number, end: number) => act(async () => {
+    const cell = row.cells[1]!;
+    cell.setPointerCapture = vi.fn();
+    const pointer = (type: string, clientX: number, clientY: number, buttons: number) =>
+      new PointerEvent(type, { pointerId: 1, pointerType: 'mouse', bubbles: true, buttons, clientX, clientY });
+    cell.dispatchEvent(pointer('pointerdown', 60, start, 1));
+    frame.dispatchEvent(pointer('pointermove', 90, end, 1));
+    frame.dispatchEvent(pointer('pointerup', 90, end, 0));
+  });
+  await drag(rows[2]!, 100, 55);
+  expect(candidateBox(panel, 'kou · Pawchive')?.checked).toBe(true);
+  expect(candidateBox(panel, 'kou · Kemono')?.checked).toBe(false);
+  expect(candidateBox(panel, 'kou · Fanbox')?.checked).toBe(false);
+  await drag(rows[0]!, 10, 30);
   await click(buttonNamed('添加选中（1）', host));
   await settle();
   // 当初是按谁查的一起写回去：同一个人在几个站上的来源靠它归成一组。
@@ -1358,22 +1459,26 @@ it('登记失败的那几条原因留在页面上，清单重取也冲不掉', a
   expect(props.toast).not.toHaveBeenCalled();
 });
 
-it('站内查不到时先说为什么，再给一条能点的外部搜索', async () => {
+it('F95zone 拒绝访问时只报一次原因，并给出外部搜索链接', async () => {
   const job = lookupJob();
   const { host } = await open({ resolve: job.resolve }, { tab: 'add' });
   job.finish([{
     line: 'kou',
     candidates: [],
+    failures: { f95zone: 'f95zone 拒绝访问（HTTP 403）' },
     external_searches: [{
+      provider: 'f95zone', provider_label: 'F95zone',
       label: 'Google', query: 'site:f95zone.to kou', url: 'https://www.google.com/search?q=kou',
-      evidence: 'F95 站内搜索要登录',
+      evidence: 'F95zone 站内索引未命中',
     }],
   }]);
   await lookUp(host, 'kou');
-  expect(host.textContent).toContain('站内没有查到来源');
+  expect(host.textContent).not.toContain('站内索引未命中');
+  expect(host.textContent).not.toContain('站内没有查到来源');
+  expect(host.textContent?.match(/HTTP 403/g)).toHaveLength(1);
   const link = [...host.querySelectorAll('a')].find((a) => a.textContent?.includes('Google：site:f95zone.to kou'))!;
   expect(link.getAttribute('href')).toBe('https://www.google.com/search?q=kou');
-  const why = [...host.querySelectorAll('small')].find((node) => node.textContent === 'F95 站内搜索要登录')!;
+  const why = [...host.querySelectorAll('p')].find((node) => node.textContent === 'f95zone 拒绝访问（HTTP 403）')!;
   expect(why.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
@@ -1442,7 +1547,7 @@ const suggestCalls = (fetcher: ReturnType<typeof serve>) => fetcher.mock.calls
   .map(([input]) => String(input)).filter((url) => url.startsWith(`${FOLLOW_SUGGEST_URL}?`));
 
 /** 建议下拉挂在浮层容器里，不在页面那棵根下面，从整个文档找。 */
-const suggestMenu = () => document.querySelector<HTMLElement>('[aria-label="来源建议"]');
+const suggestMenu = () => document.querySelector<HTMLElement>('[role="listbox"][aria-label="来源建议"]');
 
 async function typeAndWait(host: HTMLElement, text: string) {
   await focus(lookupField(host));
@@ -1469,17 +1574,27 @@ it('建议按服务端给的分组和次序列出，上下键选中再回车就�
   vi.useFakeTimers();
   const { host, fetcher } = await open({ suggest: () => SUGGESTED }, { tab: 'add' });
   await typeAndWait(host, 'strau');
+  const input = lookupField(host);
+  const list = suggestMenu()!;
+  expect(input.getAttribute('aria-expanded')).toBe('true');
+  expect(input.getAttribute('aria-controls')).toBe(list.id);
   // 行首是名字本身，见到它的站和站方分类只作旁注；组名每组只出现一次。
   // 只数下拉的直接子行：react-aria 还在末尾垫了一枚给读屏器的隐藏 Dismiss 键。
-  expect([...suggestMenu()!.querySelectorAll(':scope > button')].map((row) => row.textContent))
+  expect([...list.querySelectorAll('[role="option"]')].map(row => [...row.children]
+    .filter(child => !child.hasAttribute('data-column-filter-avatar')).map(child => child.textContent).join('')))
     .toEqual(['strauzek', 'Mr_Strauzkemono', 'strauss角色1,234', 'strausberg标签56']);
-  expect([...suggestMenu()!.querySelectorAll(':scope > div')]
-    .filter((row) => !row.querySelector('button')).map((row) => row.textContent))
+  expect([...list.querySelectorAll('[role="group"]')].map(group => (
+    document.getElementById(group.getAttribute('aria-labelledby')!)?.textContent
+  )))
     .toEqual(['已关注', '归档站的创作者', 'Rule34.xxx 标签']);
 
-  await press(lookupField(host), 'ArrowDown');
-  await press(lookupField(host), 'ArrowDown');
-  await press(lookupField(host), 'Enter');
+  await press(input, 'ArrowDown');
+  await press(input, 'ArrowDown');
+  const active = document.getElementById(input.getAttribute('aria-activedescendant')!);
+  expect(active).toBe(list.querySelectorAll('[role="option"]')[1]);
+  expect(active?.getAttribute('aria-selected')).toBe('true');
+  expect(document.activeElement).toBe(input);
+  await press(input, 'Enter');
   await settle();
   expect(lookups(fetcher)).toEqual([{ lines: ['Mr_Strauz'], background: true }]);
 });
@@ -1488,7 +1603,7 @@ it('鼠标点建议时查找框不失焦，点中的那个名字直接去查', a
   vi.useFakeTimers();
   const { host, fetcher } = await open({ suggest: () => SUGGESTED }, { tab: 'add' });
   await typeAndWait(host, 'strau');
-  const row = suggestMenu()!.querySelector('button')!;
+  const row = suggestMenu()!.querySelector('[role="option"]')!;
   const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
   await act(async () => { row.dispatchEvent(down) });
   expect(down.defaultPrevented).toBe(true);
@@ -1535,8 +1650,42 @@ it('站点还没回话时下拉里是一行等待，回车查的是框里敲的�
   vi.useFakeTimers();
   const { host, fetcher } = await open({ suggest: () => new Promise<SuggestData>(() => {}) }, { tab: 'add' });
   await typeAndWait(host, 'strau');
-  expect(suggestMenu()?.textContent).toContain('正在查找建议');
+  expect(document.querySelector('[data-copy-key="follow.addCreatorSource.findingSuggestions"]')?.textContent)
+    .toContain('正在查找建议');
+  expect(suggestMenu()?.getAttribute('aria-busy')).toBe('true');
+  expect(suggestMenu()?.querySelector('[role="option"]')).toBeNull();
   await press(lookupField(host), 'ArrowDown');
+  await press(lookupField(host), 'Enter');
+  await settle();
+  expect(lookups(fetcher)).toEqual([{ lines: ['strau'], background: true }]);
+});
+
+it('停手前清掉旧建议，回车使用当前输入', async () => {
+  vi.useFakeTimers();
+  const { host, fetcher } = await open({ suggest: () => SUGGESTED }, { tab: 'add' });
+  await typeAndWait(host, 'strau');
+  const input = lookupField(host);
+  await press(input, 'ArrowDown');
+  expect(input.hasAttribute('aria-activedescendant')).toBe(true);
+
+  await type(input, 'strauz');
+  expect(suggestCalls(fetcher)).toEqual([`${FOLLOW_SUGGEST_URL}?q=strau`]);
+  expect(suggestMenu()?.querySelector('[role="option"]')).toBeNull();
+  expect(input.hasAttribute('aria-activedescendant')).toBe(false);
+  await press(input, 'Enter');
+  await settle();
+  expect(lookups(fetcher)).toEqual([{ lines: ['strauz'], background: true }]);
+});
+
+it.each([
+  { suggest: () => ({ q: 'strau', groups: [] }), message: '没有匹配的建议' },
+  { suggest: () => { throw new Error('unavailable') }, message: '无法获取建议，仍可直接查找' },
+])('建议请求结束后提示「$message」，仍可直接查找', async ({ suggest, message }) => {
+  vi.useFakeTimers();
+  const { host, fetcher } = await open({ suggest }, { tab: 'add' });
+  await typeAndWait(host, 'strau');
+  expect(suggestMenu()?.previousElementSibling?.textContent).toBe(message);
+  expect(suggestMenu()?.querySelector('[role="option"]')).toBeNull();
   await press(lookupField(host), 'Enter');
   await settle();
   expect(lookups(fetcher)).toEqual([{ lines: ['strau'], background: true }]);
@@ -1551,7 +1700,7 @@ it('Escape 收起下拉并放掉选中，回车查框里的字；再敲一个字
   expect(suggestMenu()).toBeNull();
   // 焦点一直在输入框里，上下键把它叫回来，但不顺手选中一行。
   await press(lookupField(host), 'ArrowDown');
-  expect(suggestMenu()?.querySelector('[aria-current="true"]')).toBeNull();
+  expect(suggestMenu()?.querySelector('[aria-selected="true"]')).toBeNull();
   await press(lookupField(host), 'Escape');
   await typeAndWait(host, 'strauz');
   expect(suggestMenu()).not.toBeNull();

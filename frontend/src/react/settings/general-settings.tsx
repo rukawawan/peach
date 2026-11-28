@@ -1,16 +1,42 @@
 /* 「应用与维护」中的开机自启与桌面快捷方式。 */
 import { useState, type FormEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 import { SettingsRow } from '@/components/application/settings/settings-rows';
 import { Button } from '@/components/base/buttons/button';
 import { Switch } from '@/components/base/switch/switch';
 
-import { apiSend } from '../../api';
+import { apiGet, apiSend, errorMessage } from '../../api';
 import { codedText } from '../../core/server-text';
 import type { StartupState } from '../bundle';
+import { Note } from '../components/note';
 import { ErrorText, Footer, Help, Rows, Section, Stack } from './section';
 import { busyProps, useAction } from './use-action';
 import { t } from '../../i18n';
+
+const STARTUP_URL = '/api/configuration/startup';
+
+export function StartupSettingsSection({ active, initial, receipt }: {
+  active: boolean; initial?: StartupState; receipt(message: string): void;
+}) {
+  const query = useQuery({
+    queryKey: ['configuration', 'startup'],
+    queryFn: ({ signal }) => apiGet<StartupState>(STARTUP_URL, signal),
+    enabled: active,
+    initialData: initial,
+  });
+  if (query.data) return <StartupSettings startup={query.data} receipt={receipt} />;
+  if (!active) return null;
+  return <Section guide="startup" title={t('settings:startup.title')}>
+    {query.isError ? <Note tone="error" action={
+      <Button variant="secondary" size="small" {...busyProps(query.isFetching)} onClick={() => void query.refetch()}>
+        {t('settings:shared.reload')}
+      </Button>
+    }>{errorMessage(query.error)}</Note> : <div role="status" aria-busy="true" className="px-4 py-3">
+      <span className="block h-4 w-36 rounded-md bg-background-tertiary-default" />
+    </div>}
+  </Section>;
+}
 
 export function StartupSettings({ startup, receipt }: { startup: StartupState; receipt(message: string): void }) {
   const [enabled, setEnabled] = useState(startup.enabled);
@@ -26,14 +52,14 @@ export function StartupSettings({ startup, receipt }: { startup: StartupState; r
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!startup.available) return;
-    void action.run('save', (signal) => apiSend('/api/configuration/startup', { enabled, silent, desktop }, 'POST', signal),
+    void action.run('save', (signal) => apiSend(STARTUP_URL, { enabled, silent, desktop }, 'POST', signal),
       () => receipt(t('settings:shared.settingsSaved')));
   };
 
   return (
     <Section guide="startup" title={t('settings:startup.title')} onSubmit={submit}>
       <Rows>
-        <SettingsRow label={t('settings:startup.launchAtStartup')}>
+        <SettingsRow label={t('settings:startup.launchAtStartup')} description={t('settings:startup.launchAtStartupHelp')}>
           <Switch aria-label={t('settings:startup.launchAtStartup')} isSelected={enabled} isDisabled={!startup.available} onChange={setEnabled} />
         </SettingsRow>
         <SettingsRow label={t('settings:startup.trayOnly')} description={t('settings:startup.trayOnlyHelp')}>

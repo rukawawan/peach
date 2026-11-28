@@ -27,8 +27,7 @@ from .release_tag import MASTER_WRITER
 WORKTREE_ROOT = "peach-worktrees"
 
 #: Claude Code 内置工作树的落点。分支集成后它自己不收：目录留在主检出里，成了一份看不出
-#: 区别的旧副本（见 CLAUDE.md）。`tests/test_repo_hygiene.py` 拦得住，但拦住之后没有任何
-#: 入口能清掉已经在那儿的，只能让人手删——`prune --apply` 顺带扫掉这块。
+#: 区别的旧副本（见 CLAUDE.md）。`create` 开工时报出未登记的目录，`prune --apply` 扫掉空的。
 BUILTIN_WORKTREES = Path(".claude") / "worktrees"
 
 #: `create` 加锁写的原因。锁只在 `integrate` 合入该分支时解开；批量集成、GitHub 上合入、
@@ -121,9 +120,37 @@ def create(repo: Path, agent: str, task: str, root: Path | None = None) -> dict[
         "branch": branch,
         "base": _git(target, "rev-parse", "HEAD").stdout.strip(),
         "main_dirty": bool(_git(main, "status", "--porcelain").stdout.strip()),
+        "unregistered": unregistered_directories(main),
         "orphan_processes": found if isinstance(found, str) else
                             [row for row in found if row["orphan"]],
     }
+
+
+def unregistered_directories(main: Path) -> list[str]:
+    """两个工作树落点里未登记的目录，开工时随 `create` 报出。
+
+    工作树被回收后目录可能留在原地，成了一份看不出区别的旧副本：在里面跑 git 全部作用于
+    主检出的 master。这是本机的目录状态，不是某次改动的内容，所以在开工入口提醒、由 `prune`
+    处理，不放进每次交付都要过的测试。同一落点里别的仓库登记的工作树不算。
+    """
+    registered = {Path(item["path"]).resolve() for item in _worktree_entries(main)}
+    found: list[str] = []
+    for root in _worktree_roots(main):
+        if not root.is_dir():
+            continue
+        for path in sorted(root.iterdir()):
+            if path.is_dir() and path.resolve() not in registered and not _registered_in_own_repository(path):
+                found.append(str(path))
+    return found
+
+
+def _registered_in_own_repository(path: Path) -> bool:
+    if not (path / ".git").exists():
+        return False
+    try:
+        return path.resolve() in {Path(item["path"]).resolve() for item in _worktree_entries(path)}
+    except WorkspaceError:
+        return False
 
 
 def _scheduled_prune(main: Path) -> dict[str, object] | None:
@@ -161,6 +188,7 @@ def _worker_delivery(repo: Path, target_branch: str) -> dict[str, object]:
         raise WorkspaceError("branch has no commits")
     worker_files = set(_lines(_git(repo, "diff", "--name-only", f"{base}..HEAD")))
     target_files = set(_lines(_git(repo, "diff", "--name-only", f"{base}..{target_branch}")))
+    behind = len(_lines(_git(repo, "rev-list", f"HEAD..{target_branch}")))
     return {
         "branch": branch,
         "base": base,
@@ -168,13 +196,17 @@ def _worker_delivery(repo: Path, target_branch: str) -> dict[str, object]:
         "commits": commits,
         "files": sorted(worker_files),
         "same_file_changes": sorted(worker_files & target_files),
+        # 落后目标分支不挡预检与 ready：`integrate` 取得锁后 rebase、补验并推送，
+        # 在锁外自己 rebase 再验证，常被后到先合的任务挤掉重来。
+        "behind": behind,
+        **({"note": t("agent_worktree.behindTarget", count=behind, branch=target_branch)} if behind else {}),
     }
 
 
 def preflight(repo: Path, target_branch: str = "master") -> dict[str, object]:
     """快速核对当前交付提交；不读取或签发测试证明，也不查询 PR。"""
     report = _worker_delivery(repo, target_branch)
-    if require_metadata(repo, target_branch) != report["head"]:
+    if require_metadata(repo, target_branch, allow_behind=True) != report["head"]:
         raise WorkspaceError(t("agent_worktree.branchChangedPreflight"))
     return {"ok": True, "action": "preflight", **report,
             "metadata": "passed", "tests": "not_checked", "pull_request": "not_checked"}
@@ -182,18 +214,21 @@ def preflight(repo: Path, target_branch: str = "master") -> dict[str, object]:
 
 def ready(repo: Path, target_branch: str = "master", *, ci_run: int | None = None) -> dict[str, object]:
     report = _worker_delivery(repo, target_branch)
-    proof = require_verified(repo, target_branch, set(report["files"]), ci_run=ci_run)
+    proof = require_verified(repo, target_branch, set(report["files"]), ci_run=ci_run, allow_behind=True)
     if _git(repo, "rev-parse", "HEAD").stdout.strip() != report["head"]:
         raise WorkspaceError(t("agent_worktree.branchChangedVerification"))
-    return {"ok": True, "action": "ready", **report, "verification": proof}
+    return {"ok": True, "action": "ready", **report, "verification": proof,
+            "pull_request": _published_text(repo, str(report["branch"]), str(report["base"]))}
 
 
-def require_metadata(worker: Path, target_branch: str) -> str:
-    """干净交付内容、目标祖先与提交声明的共用判据。"""
+def require_metadata(worker: Path, target_branch: str, *, allow_behind: bool = False) -> str:
+    """干净交付内容、目标祖先与提交声明的共用判据。合入前必须已纳入目标分支；
+    预检与 ready 允许落后，由 `integrate` 在锁内 rebase 并补验。"""
     head = _git(worker, "rev-parse", "HEAD").stdout.strip()
     if _git(worker, "status", "--porcelain").stdout.strip():
         raise WorkspaceError(t("agent_worktree.worktreeMustBeClean"))
-    if _git(worker, "merge-base", "--is-ancestor", target_branch, "HEAD", check=False).returncode:
+    if not allow_behind and _git(worker, "merge-base", "--is-ancestor", target_branch, "HEAD",
+                                 check=False).returncode:
         raise WorkspaceError(t("agent_worktree.targetAdvanced"))
     problems = (co_author.check(worker, target_branch)
                 + commit_subject.check(worker, target_branch))
@@ -206,16 +241,18 @@ def require_metadata(worker: Path, target_branch: str) -> str:
 
 
 def require_verified(worker: Path, target_branch: str, paths: Iterable[str], *,
-                     ci_run: int | None = None) -> dict:
-    head = require_metadata(worker, target_branch)
-    scopes, _ = test_runner.scopes_for_changes(paths, contents=test_runner.changed_contents(worker, target_branch, paths),
+                     ci_run: int | None = None, allow_behind: bool = False) -> dict:
+    head = require_metadata(worker, target_branch, allow_behind=allow_behind)
+    # 内容差异与协议改动都只算分支自己的那一段；已纳入目标分支时共同祖先就是目标分支。
+    base = _git(worker, "merge-base", target_branch, "HEAD").stdout.strip()
+    scopes, _ = test_runner.scopes_for_changes(paths, contents=test_runner.changed_contents(worker, base, paths),
                                               root=worker)
     from . import ci_test_evidence
     proof, ci_error = None, None
     try:
         run_id = ci_run if ci_run is not None else ci_test_evidence.remembered(worker)
         if run_id is not None:
-            proof = ci_test_evidence.verify(worker, run_id, scopes, target_branch)
+            proof = ci_test_evidence.verify(worker, run_id, scopes, base)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         ci_error = error
     if proof is None and ci_run is None:
@@ -302,6 +339,51 @@ def require_public_text(repo: Path, texts: dict[str, str]) -> None:
                                hint=check_public_text.insider_hint()))
 
 
+def _commit_texts(repo: Path, base: str, head: str) -> dict[str, str]:
+    commits = _git(repo, "log", "--format=%h%x00%B%x1e", f"{base}..{head}").stdout
+    return {t("agent_worktree.commitLabel", sha=sha): message for sha, _, message in
+            (entry.strip().partition("\0") for entry in commits.split("\x1e") if entry.strip())}
+
+
+def _published_text(worker: Path, branch: str, base: str) -> str:
+    """`ready` 顺带核对已公开的文字：PR 开了就查正文，提交说明总是查。
+
+    `integrate` 用同一判据拦截；放到这里是为了在等合入之前就改掉，不必到最后一步才被拒。
+    PR 还没开或 GitHub 一时取不到时只查提交说明，返回值写明 PR 正文有没有查到。
+    """
+    texts = _commit_texts(worker, base, "HEAD")
+    state = "not_found"
+    try:
+        result = subprocess.run(["gh", "pr", "view", branch, "--json", "body", "--jq", ".body"], cwd=worker,
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        if result.returncode == 0:
+            texts[t("agent_worktree.prBodyLabel")] = result.stdout
+            state = "checked"
+    except (OSError, subprocess.TimeoutExpired):
+        state = "unavailable"
+    require_public_text(worker, texts)
+    return state
+
+
+def require_test_not_failed(worker: Path, head: str) -> None:
+    """PR 头上最近一次 Test 已经失败时不合入。
+
+    本机记录只覆盖本机这一个平台；别的平台在 PR 上已经红了还合进去，主线跟着红，之后每个
+    PR 都连带失败。仍在运行、被取消或还没有运行的不拦：证明由本机记录或 `--ci-run` 给出，
+    这里只挡已经摆在眼前的失败。GitHub 取不到时同样不拦。偶发失败只重跑失败作业即可放行。
+    """
+    from . import ci_test_evidence
+    try:
+        repo = ci_test_evidence.repository(worker)
+        listing = ci_test_evidence.api(worker, f"repos/{repo}/actions/workflows/test.yml/runs"
+                                               f"?head_sha={head}&event=pull_request&per_page=20")
+        runs = sorted(listing["workflow_runs"], key=lambda run: (run["created_at"], run["id"]))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return
+    if runs and runs[-1].get("status") == "completed" and runs[-1].get("conclusion") == "failure":
+        raise WorkspaceError(t("agent_worktree.pullRequestTestFailed", url=runs[-1].get("html_url", "")))
+
+
 def merge_message(branch: str, pull_request: dict[str, object]) -> str:
     """合并提交带 PR 号与 issue 关联行，从 `git log` 就能追到交付与反馈。"""
     number = str(pull_request["url"]).rsplit("/", 1)[1]
@@ -351,14 +433,21 @@ def _refresh_worker(main: Path, worker_branch: str, target_branch: str, *,
     old_base = _git(worker, "merge-base", target_branch, "HEAD").stdout.strip()
     moved = set(_lines(_git(worker, "diff", "--name-only", old_base, target_branch)))
     overlap = sorted(moved & set(_lines(_git(worker, "diff", "--name-only", old_base, "HEAD"))))
-    if overlap:
-        # 两边改了同一个文件要人看过再合，不能让 rebase 把重叠悄悄抹平。
-        raise WorkspaceError("same-file review required: " + ", ".join(overlap))
-    if _git(worker, "rebase", target_branch, check=False).returncode:
+    bundle = [path for path in overlap if path.startswith(BUNDLE)]
+    review = [path for path in overlap if path not in bundle and not _merges_by_union(worker, path)]
+    if review:
+        # 两边改了同一个文件要人看过再合，不能让 rebase 把重叠悄悄抹平。按并集合并的变更日志
+        # 和由源码构建出来的前端产物不在此列：前者两边的行都留下，后者 rebase 之后照源码重建。
+        raise WorkspaceError("same-file review required: " + ", ".join(review))
+    # 产物冲突先取工作者一侧让 rebase 走完，内容随后整份重建；源码没有重叠，这个选项碰不到别的文件。
+    if _git(worker, "rebase", *(("-X", "theirs") if bundle else ()), target_branch, check=False).returncode:
         _git(worker, "rebase", "--abort", check=False)
         raise WorkspaceError(t("agent_worktree.rebaseConflict"))
+    relocked = "frontend/package-lock.json" in moved
+    if bundle:
+        _rebuild_bundle(worker, before, install=relocked)
     print(t("agent_worktree.rebasedReverifying", branch=target_branch), file=sys.stderr, flush=True)
-    _verify_worker(main, worker, frontend="frontend/package-lock.json" in moved)
+    _verify_worker(main, worker, frontend=relocked and not bundle)
     after = _git(worker, "rev-parse", "HEAD").stdout.strip()
     pushed = _git(worker, "push", f"--force-with-lease={worker_branch}:{before}", "origin",
                   f"{worker_branch}:{worker_branch}", check=False)
@@ -366,6 +455,44 @@ def _refresh_worker(main: Path, worker_branch: str, target_branch: str, *,
         raise WorkspaceError(t("agent_worktree.rebasedPushFailed", error=(pushed.stderr or pushed.stdout).strip()))
     _await_pull_request_head(worker, worker_branch, after)
     return {"from": before, "to": after}
+
+
+#: 提交进仓库的前端构建产物（ADR-0022）。两个改前端的分支必然都改到它。
+BUNDLE = "web/dist/"
+
+
+def bundle_subject() -> str:
+    """重建提交的主题。提交历史用源语言写，不跟本机界面语言走。"""
+    from peach import interface_text
+    return interface_text.text("dev:agent_worktree.bundleSubject", {}, interface_text.SOURCE_LANGUAGE,
+                               root=interface_text.DEV_LOCALES)
+
+
+def _merges_by_union(repo: Path, path: str) -> bool:
+    return _git(repo, "check-attr", "merge", "--", path).stdout.strip().endswith(": union")
+
+
+def _rebuild_bundle(worker: Path, before: str, *, install: bool) -> None:
+    """rebase 之后照合并后的源码重建前端产物，有变化就补一个提交，署名沿用分支头。
+
+    产物是源码的函数：两边各自构建的文件逐行合并没有意义，重建一次才是合并后的那一份。
+    依赖没装或锁文件随主线变了先 `npm ci`。构建失败时分支留在 rebase 之后的状态，不推送。
+    """
+    npm = shutil.which("npm") or "npm"
+    steps = [[npm, "--prefix", "frontend", "run", "build", "--silent"]]
+    if install or not (worker / "frontend" / "node_modules").is_dir():
+        steps.insert(0, [npm, "--prefix", "frontend", "ci"])
+    log = worker / "build" / "integrate-rebuild.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("w", encoding="utf-8") as stream:
+        for command in steps:
+            if subprocess.run(command, cwd=worker, stdout=stream, stderr=subprocess.STDOUT, check=False).returncode:
+                raise WorkspaceError(t("agent_worktree.rebuildFailed", log=log))
+    if not _git(worker, "status", "--porcelain", "--", BUNDLE).stdout.strip():
+        return
+    authors = "\n".join(f"Co-Authored-By: {value}" for value in co_author.values(worker, before))
+    _git(worker, "add", "--all", "--", BUNDLE)
+    _git(worker, "commit", "-m", bundle_subject(), *(("-m", authors) if authors else ()))
 
 
 def _venv_python(root: Path) -> Path:
@@ -382,7 +509,8 @@ def _verify_worker(main: Path, worker: Path, *, frontend: bool) -> None:
     starter = _venv_python(worker) if _venv_python(worker).is_file() else _venv_python(main)
     steps = [[str(starter), "-X", "utf8", "scripts/test_environment.py", str(worker), str(main)]]
     if frontend:
-        steps.append([shutil.which("npm") or "npm", "--prefix", "frontend", "ci"])
+        # 先装再让环境准备核对：锁文件随主线变了，旧的 node_modules 会被它当成对不上而拦下。
+        steps.insert(0, [shutil.which("npm") or "npm", "--prefix", "frontend", "ci"])
     steps.append([str(_venv_python(worker)), "scripts/test_runner.py", "--scope", "auto",
                   "--jobs", "auto", "--full-lock-held"])
     log = worker / "build" / "integrate-verify.log"
@@ -433,7 +561,8 @@ def _integrate_locked(repo: Path, worker_branch: str,
     base = _git(main, "merge-base", target_branch, worker_branch).stdout.strip()
     worker_files = set(_lines(_git(main, "diff", "--name-only", f"{base}..{worker_branch}")))
     target_files = set(_lines(_git(main, "diff", "--name-only", f"{base}..{target_branch}")))
-    overlap = sorted(worker_files & target_files)
+    # 按并集合并的文件两边的行都留下，不算需要复核的重叠。
+    overlap = sorted(path for path in worker_files & target_files if not _merges_by_union(main, path))
     if overlap:
         raise WorkspaceError("same-file review required: " + ", ".join(overlap))
     workers = [Path(item["path"]) for item in _worktree_entries(main)
@@ -443,10 +572,9 @@ def _integrate_locked(repo: Path, worker_branch: str,
     worker_head = _git(main, "rev-parse", worker_branch).stdout.strip()
     require_verified(workers[0], target_branch, worker_files)
     pull_request = require_pull_request(workers[0], worker_branch, target_branch, worker_head)
-    commits = _git(main, "log", "--format=%h%x00%B%x1e", f"{base}..{worker_head}").stdout
-    require_public_text(main, {t("agent_worktree.prBodyLabel"): str(pull_request.get("body") or ""), **{
-        t("agent_worktree.commitLabel", sha=sha): message for sha, _, message in
-        (entry.strip().partition("\0") for entry in commits.split("\x1e") if entry.strip())}})
+    require_public_text(main, {t("agent_worktree.prBodyLabel"): str(pull_request.get("body") or ""),
+                               **_commit_texts(main, base, worker_head)})
+    require_test_not_failed(workers[0], worker_head)
     if _git(main, "rev-parse", worker_branch).stdout.strip() != worker_head or \
             _git(workers[0], "rev-parse", "HEAD").stdout.strip() != worker_head:
         raise WorkspaceError(t("agent_worktree.branchChangedVerification"))

@@ -7,7 +7,7 @@ import { entityDisplayName, setNameLanguage, setNameLocale } from '../core/entit
 import { orientLabel } from '../core/stored-values';
 import { playUiSound, setUiSoundsEnabled, wireUiSounds } from '../ui-kit/sounds';
 import { applyTheme, watchSystemTheme } from './../appearance/theme';
-import { applyAccent, applyGlassFaces, applyHomeGlow, paintHomeGlowNow } from './../appearance/glow';
+import { applyAccent, applyGlassFaces, applyHomeGlow, paintHomeGlowNow, wireHomeGlowIdle } from './../appearance/glow';
 import { navigationState } from './navigation.js';
 import { $, LOC, esc, icon, isCatalogPath } from '../core';
 import { peachHistory, shellNavigate } from './../history/index';
@@ -31,6 +31,7 @@ import { rereadPlaylists } from './playlists.js';
 import { receiptsState } from './receipts.js';
 import { dropBars } from './../catalog-bars';
 import { applicationEffects } from './effects';
+import { syncPhotoWalls } from './entity.js';
 export const preferencesState = { sourceOnline: undefined, sourceProblems: undefined, sourceOffline: undefined, OFFLINE_HINT: undefined, OFFLINE_REASON: undefined, offlineReason: undefined, settingsStore: undefined, appSettings: undefined, saveSettings: undefined, catalogLoadWaiters: undefined, nextCatalogLoad: undefined, handOff: undefined, settingsEffects: undefined, syncGlassOptics: undefined, placeSidebarHead: undefined, SRCICON: undefined, srcBadge: undefined, emptyState: undefined, CENSOR_KEY: undefined };
 
 export async function loadSourceStatus(){
@@ -167,6 +168,7 @@ wireGestureSettings(preferencesState.settingsStore);
 setNameLocale(interfaceLanguage);
 setNameLanguage(preferencesState.appSettings.performerNameLanguage);
 preferencesState.saveSettings = ()=>preferencesState.settingsStore.save();
+applicationEffects.listen(window,'peach:preferences-save-failed',event=>receiptsState.toast(event.detail,{warn:true}));
 document.documentElement.style.setProperty('--hover-delay',`${preferencesState.appSettings.hoverDelaySeconds}s`);
 setUiSoundsEnabled(preferencesState.appSettings.uiSounds);
 wireUiSounds();
@@ -174,11 +176,27 @@ applyTheme();
 watchSystemTheme();
 paintHomeGlowNow();
 applyGlassFaces();
+applicationEffects.own(peachHistory.listen(wireHomeGlowIdle(() => location.pathname === '/', applicationEffects.signal)));
 applyAccent();
 preferencesState.catalogLoadWaiters = [];
 preferencesState.nextCatalogLoad = ()=>new Promise(resolve=>preferencesState.catalogLoadWaiters.push(resolve));
 preferencesState.handOff = loading=>{preferencesState.catalogLoadWaiters.splice(0).forEach(resolve=>resolve(loading));return loading};
 preferencesState.settingsEffects = {
+  browsePreferences:keys=>{
+    const has=key=>keys.includes(key);
+    if(has('theme'))applyTheme();
+    if(has('accent'))applyAccent();
+    if(has('homeGlow')){applyHomeGlow();applyGlassFaces()}
+    if(has('photoLayout'))syncPhotoWalls();
+    if(has('homeTiers'))syncCatalogFilterScreen();
+    if(has('feedNewRows'))syncHomeFeedSetting(state.browse==='folders');
+    else if(has('feedLimit'))refreshFeedRows();
+    if(has('homePreviewOnly'))preferencesState.settingsEffects.homePreviewOnly();
+    if((has('defaultSort')||has('defaultSortDirection'))&&!new URLSearchParams(location.search).has('sort')&&location.pathname==='/'){
+      preferencesState.settingsEffects.defaultSort();
+    }else if((has('homeShortsLimit')||has('batchSize'))&&isCatalogPath(location.pathname))loadCatalog();
+    if(has('followLayout')||has('followPageSize')||has('queueSort'))notifyShell();
+  },
   performerNameLanguage:()=>{
     setNameLanguage(preferencesState.appSettings.performerNameLanguage);
     loadingState.syncPageTitle(location.href);
@@ -237,7 +255,9 @@ preferencesState.settingsEffects = {
     state.thumb=preferencesState.appSettings.homePreviewOnly?'1':'0';notifyShell();
     paintCatalogFilter({previewOnly:state.thumb==='1'});replaceCatalogAddress();
   },
+  containHomeScroll:()=>document.documentElement.toggleAttribute('data-contain-home-scroll',preferencesState.appSettings.containHomeScroll),
 };
+preferencesState.settingsEffects.containHomeScroll();
 preferencesState.syncGlassOptics = ()=>{};
 preferencesState.placeSidebarHead = ()=>{};
 preferencesState.SRCICON = {

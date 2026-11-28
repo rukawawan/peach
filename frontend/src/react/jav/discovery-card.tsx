@@ -1,12 +1,15 @@
 import { useState, useSyncExternalStore, type ReactNode } from 'react';
-import { entityPath } from '@peach/legacy/core';
+import { hasSelectionModifier } from '../../selection';
 import { RiExternalLinkLine } from '@remixicon/react';
 import { Button, ButtonLink } from '@/components/base/buttons/button';
+import { fmtDur } from '@peach/legacy/core';
 import { relayoutCovers } from '../../card-art/framing';
+import { entityDisplayName } from '../../core/entity-names';
 import { textLang } from '../../core/text-lang';
 import { ArtSlot } from '../components/art-slot';
 import { busyProps, useAction } from '../settings/use-action';
-import { DiscoveryFaces } from './discovery-faces';
+import { DiscoveryCastMore, DiscoveryFaces, DiscoveryPerformerName, type DiscoveryPerson } from './discovery-faces';
+import { SiteLabel } from '../components/source-label';
 import { useJavSelection } from './jav-selection';
 import { suppressShiftTextSelection } from '../components/row-click';
 import { COVER_STATE_TITLE, coverFetchingHtml, coverReason, coverStateAction, coverUrl } from '@peach/card-art';
@@ -15,7 +18,9 @@ import type { DownloadPrefill } from '../activity/cloud-download-dialog';
 import { coverArrived, coverFetching, discoveryArtwork, fetchCoverNow, type Discovery } from './jav';
 import { joinList, t } from '../../i18n';
 import { useWorkContextMenu } from '../components/work-context-menu';
+import { useEntityNames } from '../use-entity-names';
 import { discoveryContext } from './discovery-context';
+import { StudioFilterLabel } from './jav-facets';
 
 /** 「查找资源」弹窗的预填：本机有封面用本机那张，否则用来源地址。 */
 export const resourcePrefill = (item: Discovery): DownloadPrefill =>
@@ -51,65 +56,87 @@ function CoverWait({ item, readOnly }: { item: Discovery; readOnly: boolean }) {
 
 /** 「发现」与「新作」共用的库外作品卡：封面、出演、发行日、标签与想要／查找资源。
  *  `badge` 是标签行最前面那一枚（发现分区放推荐分），没有就不占位。 */
-export function DiscoveryCard({ item, layout, javImage, readOnly, navigate, tag, onTag, wanting, onWant, onResource, badge }: {
+export function DiscoveryCard({ item, layout, javImage, readOnly, navigate, tag = '', onTag, wanting, onWant, onResource, badge,
+  onFilterPerson, studioFilter }: {
   item: Discovery; layout: 'big' | 'small'; javImage: unknown; readOnly: boolean; navigate(path: string): void;
-  tag: string | readonly string[]; onTag(tag: string): void; wanting: boolean; onWant(): void; onResource(): void; badge?: ReactNode;
+  tag?: string | readonly string[]; onTag?(tag: string): void; wanting?: boolean; onWant?(): void; onResource?(): void;
+  badge?: ReactNode; onFilterPerson?(person: DiscoveryPerson): void;
+  studioFilter?: { selected: boolean; onPress(): void };
 }) {
-  const selection = useJavSelection();
+  useEntityNames();
+  const online = !!onFilterPerson;
+  const worksSelection = useJavSelection();
+  const selection = item.code ? worksSelection : null;
   const context = useWorkContextMenu();
-  const menuContext = discoveryContext(item, { selection, readOnly, wanting, navigate, onWant, onResource });
+  const menuContext = !online && onWant && onResource
+    ? discoveryContext(item, { selection, readOnly, wanting: !!wanting, navigate, onWant, onResource }) : null;
   const selected = selection?.selected.has(item.code);
-  const compact = Boolean(selection?.dense);
+  const compact = !online && Boolean(worksSelection?.dense);
   const performers = item.performer_refs?.length ? joinList(item.performer_refs.map(person => person.name)) : item.performers;
+  const person = item.performer_refs?.[0];
+  const name = person ? entityDisplayName('performer', person.name, person.id) : performers.split(/[,，、;/]/)[0] || '';
+  const duration = online && item.duration ? fmtDur(item.duration) : '';
   const artwork = discoveryArtwork(item, layout, javImage);
-  const href = item.asset_id ? `/assets/${item.asset_id}` : `/works/${encodeURIComponent(item.code)}`;
-  return <article data-media-card="" data-jav-card="" data-selected={selected ? '' : undefined} onMouseDown={suppressShiftTextSelection}
-    onContextMenu={event => context.onContextMenu(event, menuContext)} onKeyDown={event => context.onKeyDown(event, menuContext)}
+  const href = item.asset_id ? `/assets/${item.asset_id}` : item.code ? `/works/${encodeURIComponent(item.code)}` : item.link;
+  const external = !item.code && !!item.link;
+  const open = () => {
+    if (external) window.open(href, '_blank', 'noopener');
+    else navigate(href);
+  };
+  return <article data-media-card="" data-jav-card="" data-rectangle-key={item.code || undefined} data-selected={selected ? '' : undefined} onMouseDown={suppressShiftTextSelection}
+    onContextMenu={menuContext ? event => context.onContextMenu(event, menuContext) : undefined}
+    onKeyDown={menuContext ? event => context.onKeyDown(event, menuContext) : undefined}
     onClickCapture={event => {
       if ((event.target as Element).closest('[data-work-context-menu]')) return;
-      if (selection && (selection.mode || event.shiftKey || event.ctrlKey || event.metaKey)) {
+      if (selection && (selection.mode || hasSelectionModifier(event))) {
         event.preventDefault(); event.stopPropagation(); selection.toggle(item, event.shiftKey);
       }
     }} onClick={event => {
-    if (!(event.target as HTMLElement).closest('a,button,input')) navigate(href);
+    if (!(event.target as HTMLElement).closest('a,button,input,[role="dialog"]')) open();
   }}>
     {context.menu}
-    {artwork ? <a href={href} aria-label={t('catalog:javDiscovery.viewDetails', { code: item.code })}
-      onClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) { event.preventDefault(); navigate(href) } }}
+    {artwork ? <a href={href} aria-label={t('catalog:javDiscovery.viewDetails', { code: item.code || item.title })}
+      {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      onClick={event => { if (!external && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) { event.preventDefault(); open() } }}
       data-media-pic="" data-jav-cover-box="" className={COVER_BOX}>
       <ArtSlot artwork={{ kind: 'cover', html: artwork }} identity={discoveryArtwork(item, 'small', javImage)}
         relayout={root => relayoutCovers(root, layout)} />
+      {duration ? <span data-media-duration="">{duration}</span> : null}
     </a>
       // 没有图时这一格放状态与动作键，不能是链接：键放在 `<a>` 里一按就跟着跳进详情。点空处仍由卡片自己进详情。
       : <div data-media-pic="" data-jav-cover-box="" className={COVER_BOX}><CoverWait item={item} readOnly={readOnly} /></div>}
     {selection?.mode ? <button type="button" data-media-check="" aria-label={t('catalog:javDiscovery.select', { code: item.code })} aria-pressed={Boolean(selected)}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check" /></svg></button> : null}
     <div data-media-meta="">
-      <DiscoveryFaces item={item} />
+      <DiscoveryFaces item={item} limit={online ? 3 : undefined} />
       <div data-media-text="">
         <h3 data-jav-title="" data-media-title="" title={`${item.code} · ${item.title || t('catalog:javDiscovery.titleNotFound')}`}><b>{item.code}</b> {item.title ? <span lang={textLang(item.title)}>{item.title}</span> : t('catalog:javDiscovery.titleNotFound')}</h3>
         <div data-media-byline="">
-          {item.performer_refs?.[0]?.id ? <a data-media-who="" href={entityPath('performer', item.performer_refs[0].name)} title={performers}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-user-round" /></svg><span>{item.performer_refs[0].name}</span></a>
-            : <span data-media-who="" title={performers}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-user-round" /></svg><span>{item.performer_refs?.[0]?.name || performers}</span></span>}
-          {(item.performer_refs?.length || 0) > 1 ? <span data-media-who-more="">{t('catalog:javDiscovery.morePeople', { count: item.performer_refs!.length - 1, total: item.performer_refs!.length })}</span> : null}
-          {item.release_date ? <span data-media-facts=""><time data-media-release="" dateTime={item.release_date}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-calendar" /></svg>{item.release_date}</time></span> : null}
+          <DiscoveryPerformerName person={person} name={name} title={performers} onFilter={onFilterPerson} icon />
+          <DiscoveryCastMore people={item.performer_refs || []} onFilter={onFilterPerson} />
+          {item.release_date || studioFilter && item.studio_ref ? <span data-media-facts="">
+            {item.release_date ? <time data-media-release="" dateTime={item.release_date}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-calendar" /></svg>{item.release_date}</time> : null}
+            {studioFilter && item.studio_ref ? <button data-media-who="" type="button" aria-pressed={studioFilter.selected}
+              title={item.studio_ref.name} onClick={studioFilter.onPress}><StudioFilterLabel studio={item.studio_ref} /></button> : null}
+          </span> : null}
         </div>
         <div data-jav-tags="" data-media-tags="">
           {badge}
           {(item.tags || []).slice(0, 4).map(name =>
             <button type="button" data-media-tag="" key={name} aria-pressed={typeof tag === 'string' ? tag === name : tag.includes(name)}
-              onClick={() => onTag(tag === name ? '' : name)}>{name}</button>)}
+              onClick={() => onTag?.(tag === name ? '' : name)}>{name}</button>)}
         </div>
       </div>
     </div>
     {!selection?.mode ? <div data-jav-actions="" data-compact={compact ? '' : undefined} data-has-source={item.link ? '' : undefined} className="flex flex-wrap gap-2">
       {item.link ? <ButtonLink data-button-link="" data-jav-source="" variant="secondary" size={compact ? 'small' : 'medium'}
         iconOnly={compact} aria-label={t('catalog:shared.viewOnSite')} title={t('catalog:shared.viewOnSite')} leadingIcon={compact ? RiExternalLinkLine : undefined}
-        trailingIcon={compact ? undefined : RiExternalLinkLine} href={item.link} target="_blank" rel="noopener noreferrer">{compact ? null : t('catalog:shared.viewOnSite')}</ButtonLink> : null}
-      <Button variant="ghost" size={compact ? 'small' : 'medium'} disabled={readOnly || item.wanted || !!item.asset_id} {...busyProps(wanting)} onClick={onWant}>
-        {item.asset_id ? t('catalog:javWant.imported') : item.wanted ? t('catalog:javWant.wanted') : t('catalog:javWant.want')}</Button>
-      <Button variant="secondary" size={compact ? 'small' : 'medium'} onClick={onResource}>{t('catalog:shared.searchTorrents')}</Button>
+        trailingIcon={compact ? undefined : RiExternalLinkLine} href={item.link} target="_blank" rel="noopener noreferrer">
+        {compact ? null : online ? <SiteLabel site="dmm" label="DMM" /> : t('catalog:shared.viewOnSite')}
+      </ButtonLink> : null}
+      {onWant ? <Button variant="ghost" size={compact ? 'small' : 'medium'} disabled={readOnly || item.wanted || !!item.asset_id} {...busyProps(!!wanting)} onClick={onWant}>
+        {item.asset_id ? t('catalog:javWant.imported') : item.wanted ? t('catalog:javWant.wanted') : t('catalog:javWant.want')}</Button> : null}
+      {onResource ? <Button variant="secondary" size={compact ? 'small' : 'medium'} onClick={onResource}>{t('catalog:shared.searchTorrents')}</Button> : null}
     </div> : null}
   </article>;
 }

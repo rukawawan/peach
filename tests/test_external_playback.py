@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from peach.external_playback import TTL_SECONDS, issue, valid
 from peach import local_playback
 from peach import playback_tracking as tracking
+from peach.user_messages import UserValueError
 from support.stalls import stalled_mount
 
 
@@ -34,6 +35,48 @@ class ExternalPlaybackTests(unittest.TestCase):
         self.assertTrue(valid(b'key', 1, ticket, origin='https://public.example', now=101))
         self.assertFalse(valid(b'key', 1, ticket, origin='https://other.example', now=101))
         self.assertFalse(valid(b'key', 1, ticket, now=101))
+
+    def test_custom_player_launches_the_native_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            media = root / 'sample video.mp4'
+            media.write_bytes(b'video')
+            exe = root / 'portable player.exe'
+            exe.touch()
+            app = root / 'portable player.app'
+            app.mkdir()
+            for platform, program in [('win32', exe), ('darwin', app)]:
+                with self.subTest(platform=platform), \
+                        patch.object(local_playback.sys, 'platform', platform), \
+                        patch.dict(os.environ, {'PEACH_HEADLESS_MANAGED': '0'}), \
+                        patch('peach.folder_picker.pick_application', return_value=str(program)), \
+                        patch.object(local_playback.subprocess, 'Popen') as popen, \
+                        patch.object(local_playback.subprocess, 'run') as run:
+                    self.assertTrue(local_playback.open_custom_media(media))
+                    if platform == 'win32':
+                        self.assertEqual(popen.call_args.args[0], [str(exe), str(media)])
+                        self.assertEqual(popen.call_args.kwargs['cwd'], str(root))
+                        run.assert_not_called()
+                    else:
+                        run.assert_called_once_with(
+                            ['/usr/bin/open', '-a', str(app), str(media)],
+                            check=True, timeout=10, capture_output=True,
+                        )
+                        popen.assert_not_called()
+
+    def test_custom_player_does_not_launch_after_cancel_or_invalid_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory).resolve() / 'sample.mp4'
+            media.write_bytes(b'video')
+            with patch.object(local_playback.sys, 'platform', 'win32'), \
+                    patch.dict(os.environ, {'PEACH_HEADLESS_MANAGED': '0'}), \
+                    patch('peach.folder_picker.pick_application', side_effect=[None, str(media)]), \
+                    patch.object(local_playback.subprocess, 'Popen') as launch:
+                self.assertFalse(local_playback.open_custom_media(media))
+                with self.assertRaises(UserValueError) as rejected:
+                    local_playback.open_custom_media(media)
+                self.assertEqual(rejected.exception.code, 'errors.localPlayback.invalidCustomPlayer')
+                launch.assert_not_called()
 
     def test_default_player_uses_windows_file_association(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -144,6 +187,7 @@ class ExternalPlaybackTests(unittest.TestCase):
                 command = launch.call_args.args[0]
                 self.assertEqual(Path(command[0]).as_posix(), '/Applications/IINA.app/Contents/MacOS/iina-cli')
                 self.assertRegex(command[1], r'^--mpv-input-ipc-server=.+peach-mpv-[0-9a-f]{24}\.sock$')
+                self.assertEqual(command[2:], ['--no-stdin', '--keep-running', str(media)])
                 self.assertFalse(local_playback.open_media(media, 'vlc', track=track))
                 self.assertEqual(opened.call_args.args[0], ['/usr/bin/open', '-a', '/Applications/VLC.app', str(media)])
                 self.assertEqual(track.call_count, 1)

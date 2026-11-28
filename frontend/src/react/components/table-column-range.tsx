@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
@@ -18,6 +18,7 @@ const sliderScales = {
   size: { step: MiB, initialMax: 10 * GiB, extension: 5 * GiB },
   count: { step: 1, initialMax: 10, extension: 1 },
   score: { step: 0.1, initialMax: 5, extension: 0 },
+  taste: { step: 0.01, initialMax: 1, extension: 0 },
 };
 
 function extendSlider(maximum: number, bound: number, extension: number): number {
@@ -45,6 +46,7 @@ function asBound(kind: RangeKind, input: string, through: boolean, unit: SizeUni
   const value = Number(text.replace(',', '.'));
   if (kind === 'size') return value * unitBytes[unit];
   if (kind === 'duration') return value * 60;
+  if (kind === 'taste') return value / 100;
   return kind === 'count' && !Number.isInteger(value) ? NaN : value;
 }
 
@@ -53,6 +55,7 @@ function inputText(kind: RangeKind, value: RangeScalar | undefined, through: boo
   if (kind === 'timestamp') return dateText(new Date((Number(value) - Number(through)) * 1000));
   if (kind === 'size') return String(Number(value) / unitBytes[unit]);
   if (kind === 'duration') return String(Number(value) / 60);
+  if (kind === 'taste') return String(Math.round(Number(value) * 10000) / 100);
   return String(value);
 }
 
@@ -102,8 +105,8 @@ function presets(kind: RangeKind): { label: string; range: RangeBounds }[] {
 }
 
 interface RangeFilterProps {
-  id: string;
   label: string;
+  copyKey?: string;
   kind: RangeKind;
   value?: ColumnRange;
   rangeValues?: readonly RangeScalar[];
@@ -111,15 +114,21 @@ interface RangeFilterProps {
   onChange(value: ColumnRange | undefined): void;
 }
 
-export function TableColumnRange(props: RangeFilterProps) {
+export function outsideTableDateBound(element: Element): boolean {
+  return !element.closest('[data-trigger="table-date-bound"]');
+}
+
+export function TableColumnRange(props: RangeFilterProps & { id: string }) {
   const dates = props.kind === 'date' || props.kind === 'timestamp';
-  return <ColumnFilterPopover id={props.id} label={props.label} active={!!props.value}
-    shouldCloseOnInteractOutside={dates ? element => !element.closest('[data-trigger="table-date-bound"]') : undefined}>
-    {close => <RangeMenu {...props} onChange={value => { props.onChange(value); close() }} />}
+  return <ColumnFilterPopover id={props.id} label={props.label} copyKey={props.copyKey} active={!!props.value}
+    shouldCloseOnInteractOutside={dates ? outsideTableDateBound : undefined}>
+    {close => <MenuDialog aria-label={t('catalog:columnFilter.label', { column: props.label })} className="outline-none">
+      <TableRangeFields {...props} onChange={value => { props.onChange(value); close() }} />
+    </MenuDialog>}
   </ColumnFilterPopover>;
 }
 
-function RangeMenu({ label, kind, value, rangeValues, rangeQuery, onChange }: RangeFilterProps) {
+export function TableRangeFields({ label, kind, value, rangeValues, rangeQuery, onChange }: RangeFilterProps) {
   const dates = kind === 'date' || kind === 'timestamp';
   const slider = dates ? undefined : sliderScales[kind];
   const [manualBound, setManualBound] = useState(() => slider?.extension
@@ -157,7 +166,8 @@ function RangeMenu({ label, kind, value, rangeValues, rangeQuery, onChange }: Ra
   const minLabel = t(dates ? 'catalog:rangeFilter.start' : units ? 'catalog:rangeFilter.minWithUnit' : 'catalog:rangeFilter.min', { unit: units });
   const maxLabel = t(dates ? 'catalog:rangeFilter.end' : units ? 'catalog:rangeFilter.maxWithUnit' : 'catalog:rangeFilter.max', { unit: units });
   const noLimit = t('catalog:rangeFilter.noLimit');
-  const sliderUnit = kind === 'size' ? unitBytes[unit] : kind === 'duration' ? 60 : 1;
+  const sliderUnit = kind === 'size' ? unitBytes[unit] : kind === 'duration' ? 60 : kind === 'taste' ? 0.01 : 1;
+  const fixedScale = kind === 'score' || kind === 'taste';
   // 计数轨末端额外留一格表示「不限」，仍然可以选中实际最大值。
   const baseMaximum = kind === 'count' && values ? largestCount + 1 : slider?.initialMax ?? 0;
   const sliderMaximum = slider?.extension ? extendSlider(baseMaximum, manualBound, slider.extension) : baseMaximum;
@@ -166,6 +176,16 @@ function RangeMenu({ label, kind, value, rangeValues, rangeQuery, onChange }: Ra
     typeof bound === 'number' && Number.isFinite(bound) && bound >= 0 ? Math.min(bound, sliderMaximum) / sliderUnit : fallback;
   const lower = position(range.min, 0);
   const upper = Math.max(lower, position(range.max, sliderEnd));
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const readNumber = (number: number) => units ? `${number.toLocaleString()} ${units}` : number.toLocaleString();
+  const lowerText = readNumber(lower);
+  const upperText = !fixedScale && upper === sliderEnd ? noLimit : readNumber(upper);
+  useLayoutEffect(() => {
+    // 计数范围载入后 React Aria 会更新滑块数值，即使读屏文字仍是「不限」。
+    const thumbs = sliderRef.current?.querySelectorAll('input[type="range"]');
+    thumbs?.[0]?.setAttribute('aria-valuetext', lowerText);
+    thumbs?.[1]?.setAttribute('aria-valuetext', upperText);
+  }, [lowerText, upperText, sliderEnd]);
   const changeBound = (text: string, upperBound: boolean) => {
     (upperBound ? setMax : setMin)(text);
     if (!slider?.extension) return;
@@ -179,8 +199,7 @@ function RangeMenu({ label, kind, value, rangeValues, rangeQuery, onChange }: Ra
     if (Number.isFinite(range.max)) setMax(inputText(kind, range.max, true, next));
     setUnit(next);
   };
-  return <MenuDialog aria-label={t('catalog:columnFilter.label', { column: label })} className="max-h-80 overflow-y-auto outline-none">
-    <form className="flex flex-col gap-3 p-3" noValidate data-copy-interact=""
+  return <form className="flex max-h-80 flex-col gap-3 overflow-y-auto p-3" noValidate data-copy-interact=""
       onSubmit={event => { event.preventDefault(); if (valid) onChange({ range }) }}>
       {choices.length ? <div className="inline-grid grid-cols-2 gap-1.5" role="group" aria-label={t('catalog:rangeFilter.presets')}>
         {choices.map(preset => {
@@ -194,17 +213,19 @@ function RangeMenu({ label, kind, value, rangeValues, rangeQuery, onChange }: Ra
           variant={choice === unit ? 'primary' : 'secondary'} aria-pressed={choice === unit}
           onClick={() => chooseUnit(choice)}>{choice}</Button>)}
       </div> : null}
-      {slider ? <div className="px-2.5">
-        <RangeSlider aria-label={label} thumbLabels={[minLabel, maxLabel]} showTooltip={false}
+      {slider ? <div ref={sliderRef} className="px-2.5">
+        <RangeSlider aria-label={label} thumbLabels={[
+          t('catalog:rangeFilter.min'), t('catalog:rangeFilter.max'),
+        ]} showTooltip={false}
           minValue={0} maxValue={sliderEnd} step={slider.step / sliderUnit} value={[lower, upper]} isDisabled={loadingScale}
           onChange={([nextMin, nextMax]) => {
             if (nextMin !== lower) setMin(nextMin === 0 ? '' : String(nextMin));
-            if (nextMax !== upper) setMax(kind !== 'score' && nextMax === sliderEnd ? '' : String(nextMax));
+            if (nextMax !== upper) setMax(!fixedScale && nextMax === sliderEnd ? '' : String(nextMax));
           }} />
         <div aria-hidden="true" className="flex justify-between text-caption-1-regular text-text-secondary tabular-nums">
           <span>0</span>
           {kind !== 'count' || sliderEnd > 1 ? <span>{kind === 'count' ? Math.floor(sliderEnd / 2) : sliderEnd / 2}</span> : null}
-          <span>{kind === 'score' ? sliderEnd : noLimit}</span>
+          <span>{fixedScale ? sliderEnd : noLimit}</span>
         </div>
       </div> : null}
       <div className="inline-grid grid-cols-2 gap-2">
@@ -227,6 +248,5 @@ function RangeMenu({ label, kind, value, rangeValues, rangeQuery, onChange }: Ra
         <Button type="button" variant="ghost" size="small" disabled={!value} onClick={() => onChange(undefined)}>{t('catalog:rangeFilter.clear')}</Button>
         <Button type="submit" variant="primary" size="small" disabled={!valid}>{t('catalog:rangeFilter.apply')}</Button>
       </div>
-    </form>
-  </MenuDialog>;
+  </form>;
 }

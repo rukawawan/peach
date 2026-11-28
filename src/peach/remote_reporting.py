@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from filelock import Timeout as FileLockTimeout
+
 from . import interface_text
 from .reporting_identity import event_metadata, machine_facts
 from .diagnostic_exceptions import media_details
@@ -46,7 +48,7 @@ LOCAL_EXCEPTION_TYPES = frozenset({
     ("peach.transcodes", "TranscodeCancelled"), ("peach.segments", "SegmentCancelled"),
     ("peach.browser_transport", "BrowserUnavailable"), ("peach.browser_transport", "ChallengeUnsolved"),
     ("peach.face_detect", "FaceModelUnavailable"), ("peach.avatar_watermark", "WatermarkModelUnavailable"),
-    ("starlette.requests", "ClientDisconnect"), ("filelock._error", "Timeout"),
+    ("starlette.requests", "ClientDisconnect"),
     ("httpx", "TimeoutException"),
 })
 # 磁盘与文件系统层的 SQLite 错误，以及下一轮会重试的锁争用。
@@ -247,10 +249,19 @@ def _new_client(target, *, envelope_gate=None, delivery_callback=None):
 
     return Client(dsn=target, transport=transport_class(gate, delivery_callback), default_integrations=False,
                   auto_enabling_integrations=False, auto_session_tracking=False,
-                  send_default_pii=False, include_local_variables=False, include_source_context=False,
+                  data_collection={
+                      "user_info": False, "http_bodies": [],
+                      "http_headers": {"request": {"mode": "off"}, "response": {"mode": "off"}},
+                      "cookies": {"mode": "off"}, "url_query_params": {"mode": "off"},
+                      "graphql": {"document": False, "variables": False},
+                      "gen_ai": {"inputs": False, "outputs": False},
+                      "mcp": {"inputs": False, "outputs": False},
+                      "database_query_data": False, "queues": False,
+                      "stack_frame_variables": False, "frame_context_lines": 0,
+                  },
                   send_client_reports=False, enable_backpressure_handling=False,
-                  enable_logs=False, enable_metrics=False, traces_sample_rate=0,
-                  profiles_sample_rate=0, transport_queue_size=10, shutdown_timeout=0,
+                  attach_stacktrace=False, traces_sample_rate=None,
+                  profile_session_sample_rate=0, transport_queue_size=10, shutdown_timeout=0,
                   before_send=final_event)
 
 
@@ -519,7 +530,7 @@ def _expected_failure(stage, error, fields):
         return True
     if stage == "browser" and fields.get("error_name") == "AbortError":
         return True
-    if kinds & LOCAL_EXCEPTION_TYPES:
+    if isinstance(error, FileLockTimeout) or kinds & LOCAL_EXCEPTION_TYPES:
         return True
     if ("peach.sources.base", "SourceFailure") in kinds:
         return str(error.reason) in {"cloudflare_challenge", "ip_banned", "geo_restricted", "account_suspended", "auth_required",

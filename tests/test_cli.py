@@ -797,6 +797,15 @@ class PackagedEntryTests(unittest.TestCase):
         self.assertIn("status", subcommands)
         self.assertEqual(subcommands, self.entry.cli_commands())
 
+    def test_packaged_help_lists_cli_subcommands(self):
+        for flag in ("-h", "--help"):
+            with self.subTest(flag=flag), mock.patch.object(self.entry, "_prepare_console"), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+                with self.assertRaises(SystemExit) as result:
+                    self.entry.main(["Peach.exe", flag])
+                self.assertEqual(result.exception.code, 0)
+                self.assertIn("ledger-sync", output.getvalue())
+
     def test_windows_redirected_console_accepts_chinese_startup_messages(self):
         output = io.BytesIO()
         stream = io.TextIOWrapper(output, encoding="cp1252", newline="\n")

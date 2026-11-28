@@ -1,5 +1,6 @@
 /* 作品列表的列定义与本机列偏好的存放位置。不依赖 React：壳的首屏骨架与列表岛读同一份。 */
 import { t } from '../../i18n';
+import { orderTableColumns, tableLayoutSnapshot } from '../../table-column-order';
 
 export const CATALOG_COLUMN_WIDTHS_KEY = 'peach.catalog-column-widths.v1';
 export const CATALOG_COLUMN_VISIBILITY_KEY = 'peach.catalog-column-visibility.v1';
@@ -33,27 +34,19 @@ const labels: Record<string, string> = { select: t('catalog:catalogList.selectCo
 export const catalogColumns = ['select', 'name', 'actions', 'people', 'library', 'tags', 'dur', 'rating', 'plays', 'new', 'release', 'played', 'o', 'resolution', 'size', 'code']
   .map(id => ({ id, label: labels[id]!, ...columnSizes[id]!, flex: id === 'name', required: id === 'select' || id === 'name' || id === 'actions', visible: defaultColumnVisibility[id] !== false }));
 
-function stored(key: string): Record<string, unknown> {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(key) || '{}');
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  } catch { return {} }
-}
-
 export interface SnapshotColumn { id: string; label: string; width: number; min: number; max: number; flex: boolean; required: boolean; visible: boolean }
 export type TableSnapshot = { id: string; label: string; width: number | null; min: number }[];
 
-/** 首屏骨架按当前列偏好排版：只读存下来的宽度与可见性，与表格的取值规则一致；
+/** 首屏骨架按当前列偏好排版：读取存下来的宽度、可见性与顺序，与表格的取值规则一致；
  *  `width` 为空的是承接剩余宽度的那一列，`min` 是它不再缩小的宽度。勾选列只在选择模式出现，不画。 */
 export function catalogTableSnapshot(): TableSnapshot {
-  return tableSnapshot(catalogColumns, CATALOG_COLUMN_WIDTHS_KEY, CATALOG_COLUMN_VISIBILITY_KEY);
+  return tableSnapshot(catalogColumns, CATALOG_COLUMN_WIDTHS_KEY, CATALOG_COLUMN_VISIBILITY_KEY, 'catalog');
 }
 
 /** 同上，给别的表（JAV 新作列表）按它自己的列定义与偏好键取一份。 */
-export function tableSnapshot(columns: readonly SnapshotColumn[], widthsKey: string, visibilityKey: string): TableSnapshot {
-  const widths = stored(widthsKey);
-  const shown = stored(visibilityKey);
-  return columns
+export function tableSnapshot(columns: readonly SnapshotColumn[], widthsKey: string, visibilityKey: string, table: string): TableSnapshot {
+  const { widths = {}, visibility: shown = {}, order } = tableLayoutSnapshot(table, { widths: widthsKey, visibility: visibilityKey });
+  return orderTableColumns(columns, order)
     .filter(column => column.id !== 'select'
       && (column.required || (typeof shown[column.id] === 'boolean' ? shown[column.id] === true : column.visible)))
     .map(column => {

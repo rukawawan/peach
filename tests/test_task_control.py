@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -34,12 +35,72 @@ for _ in range(int(sys.argv[2])):
 """
 
 
+@contextmanager
+def idle_clock_after_first_output(chunks):
+    """`task_control` 读到的单调时钟扣掉子进程「已拉起、还没有第一段输出（`chunks` 为空）」那一段。
+
+    空闲期限按产品语义从起进程算起；测试子进程的解释器启动（venv 转发器、site 导入）在本机
+    满载时要 1～2 秒，与被测的「输出续命」「暂停不计时」无关。拉起之前和第一段输出之后都按
+    真实时间走，输出间隔与暂停时长照实计。
+    """
+    real, spawn = time.monotonic, subprocess.Popen
+    launched, first = [], []
+
+    def popen(*args, **kwargs):
+        if not launched:
+            launched.append(real())
+        return spawn(*args, **kwargs)
+
+    def monotonic():
+        now = real()
+        if not launched:
+            return now
+        if not chunks:
+            return launched[0]
+        if not first:
+            first.append(now)
+        return now - (first[0] - launched[0])
+    clock = types.ModuleType('time')
+    clock.__dict__.update(time.__dict__)
+    clock.monotonic = monotonic
+    with patch.object(task_control, 'time', clock), patch.object(subprocess, 'Popen', popen):
+        yield
+
+
+@contextmanager
+def clock_by_output(chunks, step=.5):
+    """`task_control` 读到的单调时钟只随收到的输出前进：每段 `step` 秒，没有输出时停着。
+
+    只用于不挂任务控制的 `run`：等待循环每轮最多交一段输出给回调，空闲判定因此只看输出段数，
+    与起进程、机器负载无关。
+    """
+    clock = types.ModuleType('time')
+    clock.__dict__.update(time.__dict__)
+    clock.monotonic = lambda: step * len(chunks)
+    with patch.object(task_control, 'time', clock):
+        yield
+
+
 class TaskControlTests(unittest.TestCase):
     def test_output_activity_allows_a_process_to_outlive_the_idle_timeout(self):
+        # 子进程等回调确认上一行才打印下一行，一行一段；八段共 4 秒，超过 0.8 秒的空闲期限，
+        # 而相邻两段只隔 0.5 秒。输出不续命的话第二段之后就判超时。
+        acks = self.root / 'acks'
+        acks.mkdir()
         command = [sys.executable, '-u', '-c',
-                   "import time; [(print(i, flush=True), time.sleep(.15)) for i in range(8)]"]
+                   "import sys, time\nfrom pathlib import Path\n"
+                   "for i in range(8):\n"
+                   "    print(i, flush=True)\n"
+                   "    while not (Path(sys.argv[1]) / str(i)).exists(): time.sleep(.01)\n", str(acks)]
         chunks = []
-        result = task_control.run(command, capture_output=True, idle_timeout=.8, on_stdout=chunks.append)
+
+        def received(chunk):
+            chunks.append(chunk)
+            for line in b''.join(chunks).split():
+                (acks / line.decode()).touch()
+        with clock_by_output(chunks):
+            result = task_control.run(command, capture_output=True, idle_timeout=.8, on_stdout=received)
+        self.assertGreater(.5 * len(chunks), .8)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(b''.join(chunks), result.stdout)
         self.assertEqual(len(result.stdout.splitlines()), 8)
@@ -91,8 +152,9 @@ class TaskControlTests(unittest.TestCase):
     def test_output_monitor_keeps_the_text_result_and_binary_callback_contracts(self):
         chunks = []
         command = [sys.executable, '-u', '-c', "print('sample')"]
-        result = task_control.run(command, capture_output=True, text=True, encoding='utf-8',
-                                  idle_timeout=1, on_stdout=chunks.append)
+        with clock_by_output(chunks):
+            result = task_control.run(command, capture_output=True, text=True, encoding='utf-8',
+                                      idle_timeout=1, on_stdout=chunks.append)
         self.assertEqual(result.stdout, 'sample\n')
         self.assertEqual(b''.join(chunks).replace(b'\r\n', b'\n'), b'sample\n')
         with self.assertRaisesRegex(ValueError, 'capture_output'):
@@ -145,7 +207,7 @@ class TaskControlTests(unittest.TestCase):
                    "import time; [(print(i, flush=True), time.sleep(.15)) for i in range(200)]"]
         def work(_job, _identity):
             task_control.run(command, capture_output=True, idle_timeout=.8, on_stdout=chunks.append)
-        with self.record_child():
+        with self.record_child(), idle_clock_after_first_output(chunks):
             job, original = self.start(work)
             self.wait_until(lambda: len(chunks) >= 2)
             run_id = original['run_id']

@@ -1,26 +1,20 @@
-/* 添加 JAV 订阅：输入女优名，到 JavDB 搜她的演员卡，勾选后登记到她名下并订上（ADR-0083）。
- *
- * 查找只是列出候选、不写任何东西：同名的人站上可能不止一位，替用户决定「就是这个」是错的。
- * 名字对得上、又只有一个人的那几张先勾上，其余的要用户自己点。地址仍由服务端按勾选的 id 拼，
- * 页面从头到尾不送地址。这位在数据库里不存在也可以订：服务端会新建她。
- *
- * 数据库里认得出、又已有 JavDB 演员页或 DMM 编号的人不必靠搜索：JavDB 冷却搜不成或搜不到时，
- * 照样给出「订阅库里的她」，和人物页的开关是同一个动作。 */
-import { useState } from 'react';
-import type { KeyboardEvent } from 'react';
-import { RiSearchLine } from '@remixicon/react';
+/* 添加 JAV 订阅：JavDB、DMM 和已关联的订阅页一起显示。 */
+import { useEffect, useRef, useState } from 'react';
 
 import { Chip } from '@/components/base/badges/chip';
 import { Button } from '@/components/base/buttons/button';
-import { Checkbox } from '@/components/base/checkbox/checkbox';
-import { Input } from '@/components/base/input/input';
 
+import { apiGet } from '../../api';
+import type { FaceRef } from '../../card-art/markup';
 import { cardClass } from '../components/card';
 import { Note } from '../components/note';
-import { ExternalLink, FieldLabel, Help } from '../settings/section';
+import { TaskProgress } from '../components/task-progress';
+import { FieldLabel, Help } from '../settings/section';
 import { busyProps, useAction } from '../settings/use-action';
-import { composingKey } from '../components/ime';
-import { followFeedByName, followFeedEntity, lookupFeedActor, type FeedCandidate, type FeedLookup } from './follow-manage';
+import { followFeedPages, lookupFeedActor, suggestFeedActors, type FeedLookup, type FeedSubscription } from './follow-manage';
+import { FollowSearch, type SuggestOption } from './follow-search';
+import { SearchResults, type SearchResult } from './search-results';
+import { FeedPageAlias } from './source-view';
 import { serverLabel } from '../../core/server-text';
 import { joinList, t } from '../../i18n';
 
@@ -29,16 +23,19 @@ const TITLE = t('follow:addJavFeed.title');
 
 export interface AddFeedProps {
   readOnly: boolean;
+  initialName?: string;
   toast(message: string): void;
   /** 订上之后让清单重取。 */
   onAdded(): void;
 }
 
-/** 勾下去会登记到谁名下：先看勾选的卡已经在谁名下，再看数据库里按名字认得出谁，都没有就新建。 */
-function destination(result: FeedLookup, picked: ReadonlySet<string>): { text: string; blocked: boolean } {
+type FeedRow = SearchResult & { sourceId: string; provider: 'javdb' | 'dmm'; owner?: { id: number; name: string } };
+
+/** 根据勾选的来源与已关联身份确定登记对象。 */
+function destination(result: FeedLookup, pages: FeedRow[]): { text: string; blocked: boolean } {
   const holders = new Map<number, string>();
-  for (const card of result.candidates) {
-    if (picked.has(card.id) && card.held_by) holders.set(card.held_by.id, card.held_by.name);
+  for (const { owner } of pages) {
+    if (owner) holders.set(owner.id, owner.name);
   }
   if (holders.size > 1) {
     return { text: t('follow:addJavFeed.cardsSplitAcrossPeople', { names: joinList([...holders.values()]) }), blocked: true };
@@ -49,44 +46,108 @@ function destination(result: FeedLookup, picked: ReadonlySet<string>): { text: s
   return { text: t('follow:addJavFeed.willCreate', { name: result.q }), blocked: false };
 }
 
-function CandidateRow({ card, picked, onPick }: { card: FeedCandidate; picked: boolean; onPick(on: boolean): void }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Checkbox isSelected={picked} onChange={onPick}>
-        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="min-w-0 break-words">{joinList(card.names)}</span>
-          {card.record ? <Chip variant="caption" color="neutral">{card.record}</Chip> : null}
-          {card.held_by ? (
-            <small className="text-caption-1-regular text-text-secondary">{t('follow:addJavFeed.alreadyUnder', { name: card.held_by.name })}</small>
-          ) : null}
-        </span>
-      </Checkbox>
-      <ExternalLink href={card.url}>{card.id}</ExternalLink>
-    </div>
-  );
+async function performerSuggestions(term: string, signal: AbortSignal): Promise<SuggestOption[]> {
+  type Performer = FaceRef & { value: string; matched?: string; entity_id: number };
+  const params = new URLSearchParams({ q: term, kind: 'performer', limit: '8' });
+  const { groups } = await apiGet<{ groups: { items: Performer[] }[] }>(`/api/suggest?${params}`, signal);
+  return groups.flatMap(group => group.items.map(item => ({
+    group: t('follow:addJavFeed.librarySuggestions'), value: item.value, matched: item.matched,
+    portrait: { ...item, id: item.entity_id },
+  })));
 }
 
-export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
-  const [name, setName] = useState('');
+async function onlineSuggestions(term: string, signal: AbortSignal): Promise<SuggestOption[]> {
+  const { items } = await suggestFeedActors(term, signal);
+  return items.map(item => ({
+    group: t('follow:addJavFeed.onlineSuggestions'), value: item.name,
+    matched: item.provider, portrait: { source_avatar_url: item.avatar_url, name: item.name },
+  }));
+}
+
+function PageDetails({ name, names, record, subscription }: {
+  name: string; names: string[]; record?: string; subscription: FeedSubscription;
+}) {
+  const aliases = names.filter(written => written !== name);
+  const label = subscription === 'enabled' ? t('follow:addJavFeed.sourceSubscribed')
+    : subscription === 'paused' ? t('follow:shared.paused') : t('follow:addJavFeed.sourceNotSubscribed');
+  return <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+    {aliases.length ? <FeedPageAlias name={joinList(aliases)} /> : null}
+    {record ? <Chip variant="caption" color="neutral">{record}</Chip> : null}
+    <Chip variant="caption" color={subscription === 'enabled' ? 'lime' : 'neutral'}>{label}</Chip>
+  </div>;
+}
+
+function feedResults(result: FeedLookup, picked: ReadonlySet<string>): FeedRow[] {
+  const known = result.known;
+  const linked = new Map((known?.sources || []).map(source => [source.url, source]));
+  const confirmed: FeedRow[] = [];
+  const other: FeedRow[] = [];
+  const online = [
+    ...result.candidates.map(card => ({ ...card, provider: 'javdb' as const, providerLabel: 'JavDB' })),
+    ...(result.dmm_candidates ?? []).map(card => ({ ...card, provider: 'dmm' as const, providerLabel: 'DMM', record: '' })),
+  ];
+  for (const card of online) {
+    const id = `${card.provider}:${card.id}`;
+    const name = card.held_by?.name || card.names[0] || card.id;
+    const names = card.names.length ? card.names : linked.get(card.url)?.names || [];
+    const linkedCard = linked.delete(card.url) || (known && card.held_by?.id === known.id);
+    (linkedCard ? confirmed : other).push({
+      id, sourceId: card.id, owner: card.held_by ?? undefined, name,
+      selectionName: [names[0] || name, card.record].filter(Boolean).join(' · '),
+      provider: card.provider, providerLabel: card.providerLabel, url: card.url,
+      avatar: card.avatar_url, portrait: card.portrait ?? undefined,
+      selectable: card.subscription !== 'enabled', picked: card.subscription === 'enabled' || picked.has(id),
+      details: <PageDetails name={name} names={names} record={card.record} subscription={card.subscription} />,
+    });
+  }
+  if (known) {
+    for (const source of linked.values()) {
+      const id = `${source.provider}:${source.id}`;
+      confirmed.push({
+        ...source, id, sourceId: source.id, owner: known, name: known.name, selectionName: source.names[0] || source.id,
+        portrait: known.portrait, providerLabel: source.provider === 'dmm' ? 'DMM' : 'JavDB',
+        selectable: source.subscription !== 'enabled', picked: source.subscription === 'enabled' || picked.has(id),
+        details: <PageDetails name={known.name} names={source.names} subscription={source.subscription} />,
+      });
+    }
+  }
+  return [...confirmed, ...other];
+}
+
+export function AddFeed({ readOnly, toast, onAdded, initialName = '' }: AddFeedProps) {
+  const [name, setName] = useState(initialName);
   const [result, setResult] = useState<FeedLookup | null>(null);
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set<string>());
   const action = useAction();
+  const section = useRef<HTMLElement>(null);
+  const opened = useRef('');
 
-  const search = () => {
-    const q = name.trim();
-    if (!q || readOnly) return;
+  const search = (q: string) => {
+    setResult(null);
+    setPicked(new Set());
     void action.run('lookup', (signal) => lookupFeedActor(q, signal), (found) => {
       setResult(found);
-      setPicked(new Set(found.suggested));
+      const suggested = new Set(found.suggested);
+      const linkedCards = found.known?.sources.filter(source => source.provider === 'javdb') ?? [];
+      setPicked(new Set(found.candidates
+        .filter(card => card.subscription !== 'enabled' && suggested.has(card.id)
+          && (!linkedCards.length || card.held_by?.id === found.known?.id || linkedCards.some(source => source.url === card.url)))
+        .map(card => `javdb:${card.id}`)));
     });
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && !composingKey(event.nativeEvent)) { event.preventDefault(); search() }
-  };
   const close = () => { setResult(null); setPicked(new Set()); action.setError('') };
+  useEffect(() => {
+    if (!initialName || opened.current === initialName) return;
+    opened.current = initialName;
+    section.current?.scrollIntoView({ block: 'start' });
+    setName(initialName);
+    search(initialName);
+  }, [initialName]); // eslint-disable-line react-hooks/exhaustive-deps
   const add = () => {
-    if (!result) return;
-    void action.run('follow', (signal) => followFeedByName(result.q, [...picked], signal), (done) => {
+    if (!result || !where || where.blocked) return;
+    const ids = selected.filter(row => row.provider === 'javdb').map(row => row.sourceId);
+    const dmmIds = selected.filter(row => row.provider === 'dmm').map(row => row.sourceId);
+    void action.run('follow', signal => followFeedPages(result.q, ids, dmmIds, result.dmm_selection, signal), (done) => {
       toast(done.created
         ? t('follow:addJavFeed.createdAndSubscribed', { name: done.entity_name })
         : t('follow:addJavFeed.subscribed', { name: done.entity_name }));
@@ -96,65 +157,45 @@ export function AddFeed({ readOnly, toast, onAdded }: AddFeedProps) {
     });
   };
 
-  const followKnown = () => {
-    const known = result?.known;
-    if (!known) return;
-    void action.run('known', (signal) => followFeedEntity(known.id, signal), () => {
-      toast(t('follow:addJavFeed.subscribed', { name: known.name }));
-      setName('');
-      close();
-      onAdded();
-    });
-  };
-
-  const where = result ? destination(result, picked) : null;
-  /* 没有可勾的卡（搜不成或搜不到）时，库里能直接订的她就是这一次的去处。 */
-  const direct = result && !result.candidates.length && result.known?.subscribable ? result.known : null;
+  const rows = result ? feedResults(result, picked) : [];
+  const selected = rows.filter(row => row.selectable && row.picked);
+  const where = result && selected.length ? destination(result, selected) : null;
+  const canSelect = rows.some(row => row.selectable);
 
   return (
     /* 和「添加关注」那一块同一个形：一张填充卡，标题在卡里。 */
-    <section aria-label={TITLE} className={cardClass({ padding: 'none', className: 'flex flex-col gap-4 px-6 py-5 max-sm:px-4' })}>
+    <section id="add-jav-subscription" ref={section} aria-label={TITLE}
+      className={cardClass({ padding: 'none', className: 'flex scroll-mt-24 flex-col gap-4 px-6 py-5 max-sm:px-4' })}>
       <h3 className="text-title-2-medium text-text-primary">{TITLE}</h3>
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="min-w-64 grow">
-          <Input aria-label={t('follow:addJavFeed.actressName')} placeholder={PLACEHOLDER} value={name} leadingIcon={RiSearchLine}
-            enterKeyHint="search" isDisabled={readOnly} onChange={setName} onKeyDown={onKeyDown} />
-        </div>
-        <Button variant="primary" disabled={readOnly || !name.trim()} {...busyProps(action.busy === 'lookup')}
-          onClick={search}>{t('follow:shared.search')}</Button>
-      </div>
+      <FollowSearch label={t('follow:addJavFeed.actressName')} placeholder={PLACEHOLDER}
+        suggestionsLabel={t('follow:addJavFeed.suggestions')} value={name} setValue={setName} search={search}
+        kind="performer" suggest={performerSuggestions} suggestOnline={onlineSuggestions}
+        readOnly={readOnly} busy={Boolean(action.busy)} />
+
+      {action.busy === 'lookup' ? <TaskProgress embedded kind="radar" label={t('follow:addJavFeed.searching')} /> : null}
 
       {action.error ? <Note tone="error" title={t('follow:addJavFeed.notCompleted')}>{action.error}</Note> : null}
 
       {result ? (
         <div className="flex flex-col gap-3">
           {result.unavailable ? <Note tone="warning" title={t('follow:addJavFeed.javdbSearchFailed')}>{serverLabel(result.unavailable_code ?? '', result.unavailable, result.unavailable_params)}</Note> : null}
-          <FieldLabel>{t('follow:addJavFeed.javdbCards')}</FieldLabel>
-          {result.candidates.length ? result.candidates.map((card) => (
-            <CandidateRow key={card.id} card={card} picked={picked.has(card.id)}
-              onPick={(on) => setPicked((now) => {
-                const next = new Set(now);
-                if (on) next.add(card.id); else next.delete(card.id);
-                return next;
-              })} />
-          )) : <Help>{result.unavailable ? t('follow:addJavFeed.noCardsThisTime') : t('follow:addJavFeed.noJavdbMatch')}</Help>}
-          {result.candidates.length ? (
-            <Help role="status">{picked.size ? where!.text : t('follow:addJavFeed.pickCardsHint')}</Help>
-          ) : null}
-          {direct ? (
-            <Help role="status">{direct.following
-              ? t('follow:addJavFeed.alreadySubscribed', { name: direct.name })
-              : t('follow:addJavFeed.canSubscribeDirectly', { name: direct.name })}</Help>
-          ) : null}
+          {result.dmm_unavailable ? <Note tone="warning" title={t('follow:addJavFeed.dmmSearchFailed')}>
+            {serverLabel(result.dmm_unavailable.error_code ?? '', result.dmm_unavailable.error, result.dmm_unavailable.error_params)}
+          </Note> : null}
+          {rows.length ? <>
+            <FieldLabel>{t('follow:addCreatorSource.results')}</FieldLabel>
+            <SearchResults label={t('follow:addJavFeed.searchResults')} items={rows} onPick={(id, on) => setPicked(now => {
+              const next = new Set(now);
+              if (on) next.add(id); else next.delete(id);
+              return next;
+            })} />
+          </> : !result.unavailable && !result.dmm_unavailable ? <Help>{t('follow:addJavFeed.noMatch')}</Help> : null}
+          {canSelect ? <Help role="status">{where?.text ?? t('follow:addJavFeed.pickCardsHint')}</Help> : null}
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="small" onClick={close}>{t('follow:shared.close')}</Button>
-            {result.candidates.length ? (
-              <Button variant="primary" size="small" disabled={readOnly || !picked.size || where!.blocked}
-                {...busyProps(action.busy === 'follow')} onClick={add}>{t('follow:addJavFeed.subscribePicked', { count: picked.size })}</Button>
-            ) : null}
-            {direct && !direct.following ? (
-              <Button variant="primary" size="small" disabled={readOnly}
-                {...busyProps(action.busy === 'known')} onClick={followKnown}>{t('follow:addJavFeed.subscribeTo', { name: direct.name })}</Button>
+            {canSelect ? (
+              <Button variant="primary" size="small" disabled={readOnly || !where || where.blocked}
+                {...busyProps(action.busy === 'follow')} onClick={add}>{t('follow:addJavFeed.subscribePicked', { count: selected.length })}</Button>
             ) : null}
           </div>
         </div>

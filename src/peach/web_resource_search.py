@@ -10,7 +10,8 @@ _SEARCH = Search()
 
 def _merged_error(direct: dict, indexed: dict) -> dict:
     """两路都没给出结果时用后备索引器那一句报错，连同它的 code 一起交给界面；有结果时报错为空。"""
-    if direct["items"] or indexed.get("ok"):
+    if direct["items"] or indexed.get("state") == "ready" or (
+            indexed.get("state") == "unavailable" and direct.get("complete")):
         return {"error": ""}
     return {"error": indexed.get("error", ""),
             **{key: indexed[key] for key in ("error_code", "error_params") if key in indexed}}
@@ -53,22 +54,34 @@ def q_resource_search(contract, args, *, edition_preferences: tuple[str, ...] = 
     if edition_preferences:
         options["priority"] = lambda row: edition_rank(row, code, edition_preferences)
     indexed = _SEARCH.run(Indexers(service.credentials).load(), code, filters, sorted(excluded), **options)
+    return _combine_search_results(direct, indexed, code, filters.goal, edition_preferences)
+
+
+def _combine_search_results(direct: dict, indexed: dict, code: str, goal: str,
+                            edition_preferences: tuple[str, ...]) -> dict:
     combined = list(direct["items"])
     for row in indexed.get("items", ()):
         combined.append({
             **row, "size_text": "", "files": "", "file_count": 0, "file_list": [],
             "promo_files": 0, "source_url": "", "watermark_check": "pending",
         })
-    warnings = direct["warnings"] + list(indexed.get("warnings") or ())
+    indexer_warnings = list(indexed.get("warnings") or ())
+    warnings = direct["warnings"] + indexer_warnings
+    indexer_state = indexed.get("state", "error")
+    ready = bool(direct["items"]) or indexer_state == "ready" or (
+        indexer_state == "unavailable" and direct.get("complete") is True)
     return {
         "ok": bool(direct["items"]) or indexed.get("ok", False),
-        "state": "ready" if direct["items"] or indexed.get("state") == "ready" else indexed.get("state", "error"),
-        "items": rank_candidates(combined, filters.goal, code=code, edition_preferences=edition_preferences),
+        "state": "ready" if ready else indexer_state,
+        "items": rank_candidates(combined, goal, code=code, edition_preferences=edition_preferences),
         "warnings": warnings, **parallel("warning", warnings),
+        "warning_sources": (direct.get("warning_sources") or [""] * len(direct["warnings"])) + [""] * len(indexer_warnings),
         "trace": direct["trace"] + (["indexer fallback: queried"] if indexed.get("state") != "unavailable" else []),
         "next_sources": direct["next_sources"], "reference_only": direct["reference_only"],
         # 后备索引器答复了也补不上直连来源没查成的那部分：浏览器添加据此等来源恢复，不记成无资源。
         "unfetched_sources": list(direct.get("unfetched_sources") or ()),
+        "source_failures": [*(direct.get("source_failures") or ()), *(indexed.get("failures") or ())],
+        "connection_checks": list(direct.get("connection_checks") or ()),
         **_merged_error(direct, indexed),
         "retry_after": max((value for value in (direct.get('retry_after'), indexed.get('retry_after'))
                             if value is not None), default=None),

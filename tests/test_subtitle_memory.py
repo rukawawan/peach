@@ -69,11 +69,12 @@ class SubtitleMemoryTests(unittest.TestCase):
         store = SubtitleMemory(self.root, "item:1")
         store.update("file:local", {"key": "file:local", "name": "字幕.srt", "text": VTT})
         with ThreadPoolExecutor() as executor:
-            list(executor.map(store.patch, [{"rotation": 90}, {"rate": 1.75},
+            list(executor.map(store.patch, [{"rotation": 90}, {"rate": 1.75}, {"quality_pixels": 720},
                                            {"caption_style": {"size": "150"}},
                                            {"caption_style": {"color": "yellow"}}]))
         saved = SubtitleMemory(self.root, "item:1").read()
         self.assertEqual((saved["rotation"], saved["rate"]), (90, 1.75))
+        self.assertEqual(saved["quality_pixels"], 720)
         self.assertEqual(saved["caption_style"], {"size": "150", "color": "yellow"})
         self.assertEqual(saved["selected"], "file:local")
         self.assertEqual(store.track_path(saved["tracks"][0]["file"]).read_text(encoding="utf-8"), VTT)
@@ -89,11 +90,43 @@ class SubtitleMemoryTests(unittest.TestCase):
         saved = store.manifest.read_bytes()
         for patch in ({}, {"rotation": True}, {"rotation": 45}, {"rate": True}, {"rate": 0},
                       {"rate": float("nan")}, {"rate": float("inf")}, {"rate": 3.1},
+                      {"quality_pixels": -1}, {"quality_pixels": True}, {"quality_pixels": 1.5},
                       {"caption_style": {"color": "url(private)"}}, {"caption_style": {"size": []}},
-                      {"caption_style": {"unknown": "white"}}, {"tracks": []}):
+                      {"caption_style": {"unknown": "white"}}, {"tracks": []},
+                      {"position": {"seconds": float("nan"), "updated_at": 1}},
+                      {"position": {"seconds": 12, "updated_at": 0}}):
             with self.subTest(patch=patch), self.assertRaises(ValueError):
                 store.patch(patch)
             self.assertEqual(store.manifest.read_bytes(), saved)
+
+    def test_resume_keeps_the_latest_position_across_devices_and_resets(self):
+        store = SubtitleMemory(self.root, "item:1")
+        patches = [{"position": {"seconds": 27.5, "updated_at": 2}},
+                   {"position": {"seconds": 410.25, "updated_at": 3}},
+                   {"position": {"seconds": 12, "updated_at": 1}, "rate": 1.5}]
+        with ThreadPoolExecutor() as executor:
+            list(executor.map(store.patch, patches))
+        reopened = SubtitleMemory(self.root, "item:1")
+        self.assertEqual(reopened.read()["position"], {"seconds": 410.25, "updated_at": 3})
+        self.assertEqual(reopened.read()["rate"], 1.5)
+        reopened.patch({"position": {"seconds": 0, "updated_at": 4}})
+        self.assertEqual(store.patch(patches[1])["position"], {"seconds": 0, "updated_at": 4})
+        self.assertNotIn("position", SubtitleMemory(self.root, "item:2").read())
+
+    def test_subtitle_offsets_merge_per_track_and_reset_without_rewriting_subtitles(self):
+        store = SubtitleMemory(self.root, "item:1")
+        store.update("file:local", {"key": "file:local", "name": "subtitle.vtt", "text": VTT})
+        store.patch({"subtitle_offsets": {"file:local": -500}})
+        store.patch({"subtitle_offsets": {"sidecar:2": 500}})
+        reopened = SubtitleMemory(self.root, "item:1")
+        self.assertEqual(reopened.read()["subtitle_offsets"], {"file:local": -500, "sidecar:2": 500})
+        for invalid in ({"file:local": True}, {"file:local": 60_001}, {"other": 500}):
+            with self.assertRaises(ValueError):
+                reopened.patch({"subtitle_offsets": invalid})
+        reopened.patch({"subtitle_offsets": {"file:local": 0}})
+        self.assertEqual(reopened.read()["subtitle_offsets"], {"sidecar:2": 500})
+        self.assertEqual(reopened.track_path(reopened.read()["tracks"][0]["file"]).read_text(encoding="utf-8"), VTT)
+        self.assertNotIn("subtitle_offsets", SubtitleMemory(self.root, "item:2").read())
 
 
 class SubtitleMemoryApiTests(unittest.TestCase):

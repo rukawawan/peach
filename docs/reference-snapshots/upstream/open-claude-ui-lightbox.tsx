@@ -92,8 +92,7 @@ function clamp(val: number, max: number): number {
 
 /** 计算可用视口溢出量 */
 function calcOverflow(size: number, viewportSize: number): number {
-  const effectiveSize = Math.min(size, viewportSize * DAMPING_RATIO);
-  return Math.max(0, (size + viewportSize) / 2 - effectiveSize);
+  return Math.max(0, (size - viewportSize) / 2);
 }
 
 /** 动态计算允许平移的最大边界 maxTx / maxTy */

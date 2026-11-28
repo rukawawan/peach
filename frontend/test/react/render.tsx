@@ -114,6 +114,12 @@ export async function choose(trigger: Element | null | undefined, option: string
   await click([...document.querySelectorAll('[role="option"]')].find((node) => node.textContent?.trim() === option));
 }
 
+export async function chooseFilter(trigger: Element | null | undefined, option: string) {
+  await click(trigger);
+  await click([...document.querySelectorAll('[data-filter-option]')]
+    .find(node => node.getAttribute('data-filter-option') === option));
+}
+
 type FetchCall = [string, RequestInit | undefined];
 export const fetchMock = (status: number, body: unknown) => vi.fn<(...call: FetchCall) => Promise<unknown>>(
   async () => ({ ok: status < 400, status, json: async () => body }),

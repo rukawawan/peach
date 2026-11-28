@@ -175,10 +175,9 @@ export function rollPlaceholder(input:any,next:string,host:any=input&&input.pare
    所以记在这里，键由调用方给的范围加徽标自己的键拼成。 */
 const badgeCounts=new Map<string,string>();
 /**
- * 一排计数徽标里值真变了的那几枚弹一下，其余的不动。
+ * 一排计数徽标里只给值变了的那几枚加淡入。
  *
- * 首次见到某一枚不弹：那是它第一次出现在这个范围里，整排一起弹是一屏烟花，而它要说的
- * 是「这一枚刚变了」。`scope` 区分同一个键在不同排里的计数（顶部筛选条和抽屉各有一份）。
+ * 首次出现直接显示。`scope` 区分同一个键在不同排里的计数。
  */
 export function popBadges(root:any,scope=''):void{
   if(!root)return;
@@ -188,9 +187,9 @@ export function popBadges(root:any,scope=''):void{
     badgeCounts.set(key,next);
     el.classList.add('countbadge');
     if(previous===undefined||previous===next)return;
-    el.classList.add('popped');
+    el.classList.add('fading');
     el.getBoundingClientRect();
-    el.classList.remove('popped');
+    el.classList.remove('fading');
   });
 }
 

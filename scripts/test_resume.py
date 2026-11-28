@@ -101,10 +101,10 @@ class ImpactPlan:
             self.scopes[name] = scope_units(self.root, name, self.select)
         return self.scopes[name]
 
-    def path(self, path, kind):
-        key = (path, kind)
+    def path(self, path, kind, contents=None):
+        key = (path, kind, contents)
         if key not in self.paths:
-            invalid = self.calculate(path, kind)
+            invalid = self.calculate(path, kind, contents)
             invalid.update(name for name in self.all_units if name.startswith('case:') and owner(name) in invalid)
             if kind != 'unsafe' and (path.startswith(SETUP_PREFIXES) or path in PAGE_BUNDLES):
                 # 独立页面不加载主应用；Python 契约、打包、组件与 setup 浏览器检查仍执行。
@@ -114,7 +114,7 @@ class ImpactPlan:
             self.paths[key] = invalid
         return self.paths[key]
 
-    def calculate(self, path, kind):
+    def calculate(self, path, kind, contents):
         if kind not in {'unsafe', 'prose'} and path.startswith('tests/test_') and path.endswith('.py'):
             if self.graph is None:
                 self.graph = import_graph(self.root)
@@ -123,18 +123,37 @@ class ImpactPlan:
         if kind != 'unsafe' and path.startswith(tuple(EXTERNAL)) and path.endswith(('.test.ts', '.test.tsx')):
             return ({path, owner(path), 'test_frontend_build.py'} | self.scope('checks')
                     | {'case:' + case for case in CONTAINERS if path in container_files(self.root, case)})
-        scopes, _ = self.resolve([path], kinds={path: kind} if kind else {})
+        scopes, _ = self.resolve([path], kinds={path: kind} if kind else {},
+                                 contents={path: contents} if contents is not None else None)
         return set().union(*(self.scope(scope) for scope in scopes))
+
+
+LocaleContents = tuple[str | None, str | None]
+
+
+def locale_change(path: str, kind: str | None, before: dict, after: dict) -> tuple[str, LocaleContents | None]:
+    """区分新增、删除与无法读取应当存在的快照内容。"""
+    if kind == 'unsafe':
+        return kind, None
+    sources = change_impact.recorded_locale_source(before, path), change_impact.recorded_locale_source(after, path)
+    if any(source is None and manifest['files'].get(path) not in (None, 'deleted')
+           for source, manifest in zip(sources, (before, after))):
+        return 'unsafe', None
+    return 'logic', sources
 
 
 def affected(root: Path, record: dict, context: dict, all_units: set[str], resolve, select, *, plan=None) -> set[str]:
     if record.get('environment') != context['environment']:
         return set(all_units)
-    paths, kinds = change_impact.delta(record['manifest'], context['manifest'])
+    before, after = record['manifest'], context['manifest']
+    paths, kinds = change_impact.delta(before, after)
     plan = plan or ImpactPlan(root, all_units, resolve, select)
     invalid = set()
     for path in paths:
-        invalid.update(plan.path(path, kinds.get(path)))
+        kind, contents = kinds.get(path), None
+        if change_impact.locale_file(path):
+            kind, contents = locale_change(path, kind, before, after)
+        invalid.update(plan.path(path, kind, contents))
     return invalid & all_units
 
 

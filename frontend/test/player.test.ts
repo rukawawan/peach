@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountPlayerMediaSession, mountPlayerQualityControl, mountPlayerSubtitles } from '../src/player/controls';
 import { FIRST_FRAME_MS } from '../src/player/decode-support';
 import { configurePlayer, type PlayerHost } from '../src/player/host';
-import { averageBitrate, bufferedAhead, fmtLoadRate, pushPlayerStat } from '../src/player/stats';
+import { averageBitrate, bufferedAhead, fmtLoadRate, playerRequestWaterfall, pushPlayerStat } from '../src/player/stats';
 import {
   cancelDetailStream, detailStreamSource, detailStreamSession, directStreamSource, playableStreamSource, streamFallbackChain,
 } from '../src/player/stream';
@@ -16,8 +16,24 @@ import type { QualityLevel, QualityLevelList, VjsPlayer } from '../src/player/ty
 import * as videojsLoader from '../src/player/videojs';
 import { mountPlayerPipControl } from '../src/player/pip';
 import { createV10Player } from '../src/player/v10-player';
+import { playerMemory } from '../src/player/memory';
 
 type FetchCall = { url: string; init: RequestInit | undefined };
+
+it('播放请求按同一时间尺度画出交叠，只显示同源路由与已取得的状态', () => {
+  const entry = (name: string, startTime: number, duration: number, responseStatus: number) =>
+    ({ name, startTime, duration, responseStatus }) as PerformanceResourceTiming;
+  const panel = document.createElement('div');
+  panel.innerHTML = playerRequestWaterfall([
+    entry(`${location.origin}/stream/hls/7/2.ts?session=private`, 125, 75, 206),
+    entry('https://unrelated.invalid/hidden.ts', 110, 200, 200),
+    entry(`${location.origin}/stream/hls/7/1.ts?session=private`, 100, 50, 0),
+  ]);
+  const bars = [...panel.querySelectorAll<HTMLElement>('li i')];
+  expect(bars.map(bar => [bar.style.insetInlineStart, bar.style.width])).toEqual([['0%', '50%'], ['25%', '75%']]);
+  expect([...panel.querySelectorAll('li > span:first-child')].map(cell => cell.textContent)).toEqual(['1.ts', '2.ts · HTTP 206']);
+  expect(panel.innerHTML).not.toContain('private');
+});
 
 function stubFetch(reply: (url: string) => unknown): FetchCall[] {
   const calls: FetchCall[] = [];
@@ -77,12 +93,13 @@ describe('片源判据', () => {
     vi.spyOn(videojsLoader, 'ensureVideojs').mockRejectedValueOnce(new Error('播放器未加载'));
     let deliver!: (response: Response) => void;
     const plan = new Promise<Response>((resolve) => { deliver = resolve });
-    const fetcher = vi.fn(() => plan);
+    const fetcher = vi.fn((input: unknown) => String(input).startsWith('/api/player/memory')
+      ? Promise.resolve(new Response('{"selected":null,"tracks":[]}'))
+      : plan);
     vi.stubGlobal('fetch', fetcher);
     const video = document.createElement('video');
     const release = mountPlayer(video, { kind: 'item', item: { id: 3 }, chrome: false });
-    await flush(); await flush();
-    expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/api/stream-plan?id=3'), expect.anything());
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/api/stream-plan?id=3'), expect.anything()));
     release();
     deliver(new Response(JSON.stringify({ src: '/stream?id=3', protocol: 'range' }), {
       headers: { 'Content-Type': 'application/json' },
@@ -458,7 +475,7 @@ it('画中画入口保持占位，媒体就绪后启用，浏览器不支持时�
 });
 
 describe('播放器清晰度', () => {
-  function menu(entries: QualityLevel[], selectedIndex = 0, size: { width?: number; height?: number } = { width: 3840, height: 2160 }) {
+  function menu(entries: QualityLevel[], selectedIndex = 0, size: { width?: number; height?: number } = { width: 3840, height: 2160 }, playbackKey?: string) {
     configurePlayer(host());
     const root = document.createElement('div'), bar = document.createElement('div'), video = document.createElement('video');
     bar.className = 'vjs-control-bar';
@@ -472,13 +489,14 @@ describe('播放器清晰度', () => {
     } }) as QualityLevelList;
     Object.assign(player, { el: () => root, qualityLevels: () => levels,
       paused: () => true, ended: () => false, isFullscreen: () => false, muted: () => false, volume: () => 1, trigger: () => {} });
+    if (playbackKey) player.peachPlaybackKey = playbackKey;
     mountPlayerQualityControl(player, video, size);
     const open = () => {
       bar.querySelector<HTMLButtonElement>('.vjs-peach-settings-toggle')!.click();
       bar.querySelector<HTMLButtonElement>('[data-player-quality-view]')!.click();
     };
     const labels = () => [...bar.querySelectorAll('[data-player-quality-option]')].map((node) => node.textContent);
-    return { bar, video, levels, open, labels, change: () => events.get('change')?.(), notify: (name: string) => events.get(name)?.(),
+    return { player, bar, video, levels, open, labels, change: () => events.get('change')?.(), notify: (name: string) => events.get(name)?.(),
       close: () => { fire('dispose'); root.remove() } };
   }
 
@@ -533,6 +551,24 @@ describe('播放器清晰度', () => {
       view.notify('addqualitylevel');
       expect(view.labels()).toEqual(['自动', '360p', '1080p']);
       expect(view.bar.querySelector('[data-player-quality-option="auto"]')?.getAttribute('aria-checked')).toBe('true');
+    } finally { view.close() }
+  });
+
+  it('记住同一视频选的分辨率，轨道次序变化时按像素重新定位', async () => {
+    const writes: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') writes.push(JSON.parse(String(init.body)));
+      return new Response('{"selected":null,"tracks":[],"quality_pixels":1080}');
+    }));
+    const view = menu([{ width: 1920, height: 1080, enabled: true }, { width: 640, height: 360, enabled: true }], 0, undefined, 'item:9');
+    try {
+      await playerMemory(view.player).load();
+      expect(Array.from(view.levels, level => level.enabled)).toEqual([true, false]);
+      view.open();
+      expect(view.bar.querySelector('[data-player-quality-option="0"]')?.getAttribute('aria-checked')).toBe('true');
+      view.bar.querySelector<HTMLButtonElement>('[data-player-quality-option="auto"]')!.click();
+      expect(Array.from(view.levels, level => level.enabled)).toEqual([true, true]);
+      await vi.waitFor(() => expect(writes).toEqual([{ quality_pixels: 0 }]));
     } finally { view.close() }
   });
 

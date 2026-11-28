@@ -1,11 +1,11 @@
 import { apiGet } from '../../api';
 import { useLibraryFilterOptions } from '../components/library-filter-options';
-import { TableColumnFilter, type ColumnFilterOption, type ColumnFilterPage } from '../components/table-column-filter';
+import { ColumnFilterFields, TableColumnFilter, type ColumnFilterOption, type ColumnFilterPage } from '../components/table-column-filter';
 import { ColumnFilterAvatar } from '../components/column-filter-avatar';
 import { RatingStars } from '../components/rating-stars';
 import type { FaceRef } from '../../card-art/markup';
 import { columnRangeKinds, readColumnFilters, writeColumnFilters, type ColumnFilters, type ColumnRangeKey, type RangeScalar } from '../../column-filters';
-import { TableColumnRange } from '../components/table-column-range';
+import { TableColumnRange, TableRangeFields } from '../components/table-column-range';
 import { entityDisplayName, entityWriting } from '../../core/entity-names';
 import { useEntityNames } from '../use-entity-names';
 import { t } from '../../i18n';
@@ -13,6 +13,7 @@ import type { MediaItem } from './types';
 
 interface CatalogFilterState {
   label: string;
+  embedded?: boolean;
   filters: Readonly<Record<string, string>>;
   onChange(filters: Record<string, string>): void;
 }
@@ -27,7 +28,7 @@ function catalogSelection<K extends keyof ColumnFilters>(
   return updated;
 }
 
-export function CatalogColumnRangeFilter({ column, label, filters, scope, revision, onChange }: CatalogFilterState & {
+export function CatalogColumnRangeFilter({ column, label, filters, scope, revision, embedded, onChange }: CatalogFilterState & {
   column: ColumnRangeKey;
   scope: Readonly<Record<string, string>>;
   revision: number;
@@ -52,13 +53,13 @@ export function CatalogColumnRangeFilter({ column, label, filters, scope, revisi
       return row ? [(column === 'plays' ? row.play_count : row.o_count) ?? 0] : [];
     },
   } : undefined;
-  return <TableColumnRange id={column} label={label} kind={kind}
-    value={selected[column]} rangeQuery={rangeQuery}
-    onChange={next => onChange(catalogSelection(filters, column, next))} />;
+  const range = { label, kind, value: selected[column], rangeQuery,
+    onChange: (next: ColumnFilters[ColumnRangeKey]) => onChange(catalogSelection(filters, column, next)) };
+  return embedded ? <TableRangeFields {...range} /> : <TableColumnRange id={column} {...range} />;
 }
 
 /** 筛选口径沿用作品请求，列内切换时保留其余列的条件。 */
-export function CatalogColumnFilter({ column, label, filters, scope, revision, tagLabel, onChange }: CatalogFilterState & {
+export function CatalogColumnFilter({ column, label, filters, scope, revision, tagLabel, embedded, onChange }: CatalogFilterState & {
   column: 'people' | 'library' | 'tags' | 'rating' | 'resolution';
   scope: Readonly<Record<string, string>>; revision: number; tagLabel(tag: string): string;
 }) {
@@ -99,8 +100,9 @@ export function CatalogColumnFilter({ column, label, filters, scope, revision, t
     return { items: column === 'people' ? [...unowned, ...options] : options.map(row => ({ ...row, id: row.id.slice(4) })),
       nextOffset: data.next_offset ?? undefined };
   };
-  return <TableColumnFilter id={column} label={label} values={selected[column]} searchable={column !== 'rating'}
-    options={[...libraries.values()]}
-    load={column === 'library' ? undefined : load} queryKey={['table-column-filter', String(params), revision]}
-    onChange={next => onChange(catalogSelection(filters, column, next))} />;
+  const choices = { id: column, label, values: selected[column], searchable: column !== 'rating',
+    options: [...libraries.values()], load: column === 'library' ? undefined : load,
+    queryKey: ['table-column-filter', String(params), revision],
+    onChange: (next: ColumnFilters[typeof column]) => onChange(catalogSelection(filters, column, next)) };
+  return embedded ? <ColumnFilterFields {...choices} /> : <TableColumnFilter {...choices} />;
 }
